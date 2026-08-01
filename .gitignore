@@ -1,0 +1,5 @@
+*.o
+/qela
+/stage2
+/stage3
+/tests/out/
