@@ -14,7 +14,7 @@ static void phdr(Buf *f, u32 flags, i64 off, u64 vaddr, i64 filesz, i64 memsz) {
 void write_elf(const char *path, Image *img) {
 	isize text = img->code.n + img->rodata.n;
 	isize rw = img->data.n + img->bss_size;
-	int   nph = rw > 0 ? 2 : 1;
+	int   nph = img->nph;
 	isize hdr = EHDR_SZ + PHDR_SZ * nph;
 
 	isize data_off = hdr + text;
