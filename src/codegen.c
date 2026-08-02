@@ -41,6 +41,14 @@ struct Loop {
 	Loop *prev;
 	List  brk;
 	List  cont;
+	int   depth;
+};
+
+typedef struct DeferScope DeferScope;
+struct DeferScope {
+	DeferScope *prev;
+	Node       *list;
+	int         depth;
 };
 
 static Buf   code;
@@ -49,6 +57,9 @@ static Buf   data;
 static isize bss_size;
 static int   depth;
 static Loop *cur_loop;
+static Func *cur_func;
+static DeferScope *cur_defers;
+static int         defer_depth;
 
 static CallFixup *calls;
 static int ncalls, calls_cap;
@@ -340,6 +351,7 @@ static void gen_addr(Node *n) {
 	switch (n->kind) {
 	case ND_VAR:
 		if (n->var->is_global) add_dataref(n->var);
+		else if (n->var->by_ref) ld_local(RAX, n->var->offset);
 		else lea_local(RAX, n->var->offset);
 		return;
 	case ND_DEREF:
@@ -444,6 +456,12 @@ static void gen_lvalue(Node *n) {
 	if (!is_aggregate(n->ty)) load(n->ty);
 }
 
+static void copy_rsi_rdi(int size) {
+	mov_reg_imm(RCX, size);
+	b1(0xf3);
+	b1(0xa4);
+}
+
 static void copy_aggregate(int size) {
 	pop_reg(RDI);
 	mov_reg_reg(RSI, RAX);
@@ -454,25 +472,37 @@ static void copy_aggregate(int size) {
 	pop_reg(RAX);
 }
 
-static int arg_words(Type *ty) {
-	if (!is_aggregate(ty)) return 1;
-	return ty->size > 8 ? 2 : 1;
-}
+static bool by_ref_ty(Type *ty) { return is_aggregate(ty) && ty->size > 16; }
 
-static void gen_args(Node *n, const int *regs, bool first_in_rax) {
+static void gen_args(Node *n, const int *regs, bool first_in_rax, int hidden) {
 	int dest[14];
 	int nd = 0, ri = 0;
 
+	if (hidden >= 0) {
+		lea_local(RAX, hidden);
+		push_reg(RAX);
+		dest[nd++] = regs[ri++];
+	}
+
 	for (Node *a = n->args; a; a = a->next) {
 		gen_expr(a);
-		int w = arg_words(a->ty);
-		if (is_aggregate(a->ty)) {
+		if (by_ref_ty(a->ty)) {
+			mov_reg_reg(RSI, RAX);
+			lea_local(RDI, a->tmp->offset);
+			copy_rsi_rdi(a->ty->size);
+			lea_local(RAX, a->tmp->offset);
+			push_reg(RAX);
+			dest[nd++] = regs[ri++];
+		} else if (is_aggregate(a->ty)) {
 			push_at_rax(0);
-			if (w == 2) push_at_rax(8);
+			int r = first_in_rax && nd == 0 ? RAX : regs[ri++];
+			dest[nd++] = r;
+			if (a->ty->size > 8) {
+				push_at_rax(8);
+				dest[nd++] = regs[ri++];
+			}
 		} else {
 			push_reg(RAX);
-		}
-		for (int k = 0; k < w; k++) {
 			if (first_in_rax && nd == 0) dest[nd++] = RAX;
 			else dest[nd++] = regs[ri++];
 		}
@@ -620,6 +650,22 @@ static void gen_expr(Node *n) {
 		store(n->lhs->ty);
 		return;
 	}
+	case ND_ENUMLIT: {
+		int off = n->tmp->offset;
+		mov_reg_imm(RAX, n->variant->tag);
+		st_local(off, RAX);
+
+		Member *f = n->variant->fields;
+		for (Node *a = n->args; a; a = a->next, f = f->next) {
+			lea_local(RDI, off - f->offset);
+			push_reg(RDI);
+			gen_expr(a);
+			if (is_aggregate(f->ty)) copy_aggregate(f->ty->size);
+			else store(f->ty);
+		}
+		lea_local(RAX, off);
+		return;
+	}
 	case ND_COMMA:
 		gen_expr(n->lhs);
 		gen_expr(n->rhs);
@@ -642,12 +688,13 @@ static void gen_expr(Node *n) {
 		setcc(0x94);
 		return;
 	case ND_SYSCALL:
-		gen_args(n, sys_regs, true);
+		gen_args(n, sys_regs, true, -1);
 		b1(0x0f);
 		b1(0x05);
 		return;
 	case ND_CALL: {
-		gen_args(n, call_regs, false);
+		bool ret_mem = is_aggregate(n->ty) && n->ty->size > 16;
+		gen_args(n, call_regs, false, ret_mem ? n->tmp->offset : -1);
 		bool odd = depth & 1;
 		if (odd) {
 			b1(0x48);
@@ -662,7 +709,7 @@ static void gen_expr(Node *n) {
 			modrm(3, 0, RSP);
 			b1(8);
 		}
-		if (is_aggregate(n->ty)) {
+		if (is_aggregate(n->ty) && !ret_mem) {
 			int off = n->tmp->offset;
 			st_local(off, RAX);
 			if (n->ty->size > 8) st_local(off - 8, RDX);
@@ -711,10 +758,71 @@ static void gen_expr(Node *n) {
 	}
 }
 
+static void run_defers(DeferScope *ds) {
+	for (Node *d = ds->list; d; d = d->els) gen_stmt(d->lhs);
+}
+
+static void unwind_to(int target) {
+	for (DeferScope *ds = cur_defers; ds && ds->depth > target; ds = ds->prev)
+		run_defers(ds);
+}
+
+static void gen_match(Node *n) {
+	int soff = n->tmp->offset;
+	gen_addr(n->cond);
+	st_local(soff, RAX);
+
+	List ends = {0};
+	for (Node *arm = n->body; arm; arm = arm->next) {
+		isize miss = -1;
+		if (arm->name.n) {
+			ld_local(RAX, soff);
+			b1(0x48);
+			b1(0x83);
+			modrm(0, 7, RAX);
+			b1((u8)arm->variant->tag);
+			miss = jump(0x85);
+		}
+
+		Member *f = arm->variant ? arm->variant->fields : NULL;
+		for (Node *b = arm->args; b; b = b->next, f = f->next) {
+			lea_local(RDI, b->var->offset);
+			push_reg(RDI);
+			ld_local(RAX, soff);
+			add_rax_imm(f->offset);
+			if (is_aggregate(f->ty)) {
+				copy_aggregate(f->ty->size);
+			} else {
+				load(f->ty);
+				store(f->ty);
+			}
+		}
+
+		gen_stmt(arm->body);
+		if (arm->next) list_push(&ends, jump(0));
+		if (miss >= 0) patch_here(miss);
+	}
+	for (int i = 0; i < ends.n; i++) patch_here(ends.p[i]);
+}
+
 static void gen_stmt(Node *n) {
 	switch (n->kind) {
-	case ND_BLOCK:
+	case ND_BLOCK: {
+		DeferScope ds = {.prev = cur_defers, .depth = ++defer_depth};
+		cur_defers = &ds;
 		for (Node *s = n->body; s; s = s->next) gen_stmt(s);
+		run_defers(&ds);
+		cur_defers = ds.prev;
+		defer_depth--;
+		return;
+	}
+	case ND_DEFER:
+		if (!cur_defers) error_at(n->pos, "'defer' outside of a block");
+		n->els = cur_defers->list;
+		cur_defers->list = n;
+		return;
+	case ND_MATCH:
+		gen_match(n);
 		return;
 	case ND_EXPRSTMT:
 		if (n->lhs) gen_expr(n->lhs);
@@ -723,11 +831,27 @@ static void gen_stmt(Node *n) {
 		if (n->lhs) {
 			gen_expr(n->lhs);
 			if (is_aggregate(n->lhs->ty)) {
-				if (n->lhs->ty->size > 8) ld_at_rax(RDX, 8);
-				ld_at_rax(RAX, 0);
+				if (cur_func->ret_slot) {
+					mov_reg_reg(RSI, RAX);
+					ld_local(RDI, cur_func->ret_slot->offset);
+					copy_rsi_rdi(n->lhs->ty->size);
+					ld_local(RAX, cur_func->ret_slot->offset);
+				} else {
+					if (n->lhs->ty->size > 8) ld_at_rax(RDX, 8);
+					ld_at_rax(RAX, 0);
+				}
 			}
 		} else {
 			mov_reg_imm(RAX, 0);
+		}
+		if (cur_defers) {
+			bool wide = n->lhs && is_aggregate(n->lhs->ty) &&
+			            n->lhs->ty->size > 8 && n->lhs->ty->size <= 16;
+			push_reg(RAX);
+			if (wide) push_reg(RDX);
+			unwind_to(0);
+			if (wide) pop_reg(RDX);
+			pop_reg(RAX);
 		}
 		b1(0xc9);
 		b1(0xc3);
@@ -750,7 +874,7 @@ static void gen_stmt(Node *n) {
 	case ND_FOR: {
 		if (n->init) gen_stmt(n->init);
 
-		Loop lp = {.prev = cur_loop};
+		Loop lp = {.prev = cur_loop, .depth = defer_depth};
 		cur_loop = &lp;
 
 		isize top = code.n;
@@ -772,10 +896,12 @@ static void gen_stmt(Node *n) {
 	}
 	case ND_BREAK:
 		if (!cur_loop) error_at(n->pos, "'break' outside of a loop");
+		unwind_to(cur_loop->depth);
 		list_push(&cur_loop->brk, jump(0));
 		return;
 	case ND_CONT:
 		if (!cur_loop) error_at(n->pos, "'continue' outside of a loop");
+		unwind_to(cur_loop->depth);
 		list_push(&cur_loop->cont, jump(0));
 		return;
 	default:
@@ -787,7 +913,10 @@ static void gen_stmt(Node *n) {
 static void gen_func(Func *f) {
 	f->addr = code.n;
 	depth = 0;
+	cur_func = f;
 	cur_loop = NULL;
+	cur_defers = NULL;
+	defer_depth = 0;
 
 	push_reg(RBP);
 	depth--;
@@ -800,10 +929,11 @@ static void gen_func(Func *f) {
 	}
 
 	int ri = 0;
+	if (f->ret_slot) st_local(f->ret_slot->offset, call_regs[ri++]);
 	for (int i = 0; i < f->nparams; i++) {
 		Var *v = f->params[i];
 		st_local(v->offset, call_regs[ri++]);
-		if (is_aggregate(v->ty) && v->ty->size > 8)
+		if (is_aggregate(v->ty) && !v->by_ref && v->ty->size > 8)
 			st_local(v->offset - 8, call_regs[ri++]);
 	}
 
