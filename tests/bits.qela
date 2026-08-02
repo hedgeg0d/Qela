@@ -1,0 +1,16 @@
+// expect-exit: 1
+fn main() int {
+	var ok int = 1;
+	if (6 & 3 != 2) { ok = 0; }
+	if (6 | 3 != 7) { ok = 0; }
+	if (6 ^ 3 != 5) { ok = 0; }
+	if (1 << 10 != 1024) { ok = 0; }
+	if (-16 >> 2 != -4) { ok = 0; }
+	if (~0 != -1) { ok = 0; }
+	var m int = 0xff;
+	m &= 0x0f;
+	m |= 0x30;
+	m <<= 1;
+	if (m != 0x7e) { ok = 0; }
+	return ok;
+}
