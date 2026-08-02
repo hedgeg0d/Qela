@@ -28,12 +28,43 @@ _Noreturn void error_at(isize pos, const char *fmt, ...);
 Token *lex(Str src);
 
 typedef enum {
+	TY_VOID,
+	TY_BOOL,
+	TY_INT,
+	TY_PTR,
+} TypeKind;
+
+typedef struct Type Type;
+struct Type {
+	TypeKind kind;
+	int      size;
+	int      align;
+	bool     is_unsigned;
+	Type    *base;
+	Str      name;
+};
+
+extern Type *ty_void;
+extern Type *ty_bool;
+extern Type *ty_i8, *ty_i16, *ty_i32, *ty_i64;
+extern Type *ty_u8, *ty_u16, *ty_u32, *ty_u64;
+
+Type *type_ptr(Type *base);
+Type *type_lookup(Str name);
+bool  is_integer(Type *t);
+bool  is_numeric(Type *t);
+Str   type_name(Type *t);
+
+typedef enum {
 	ND_NUM,
 	ND_STRLIT,
 	ND_VAR,
 	ND_CALL,
 	ND_SYSCALL,
 	ND_CSTRLEN,
+	ND_ADDR,
+	ND_DEREF,
+	ND_CAST,
 	ND_ADD,
 	ND_SUB,
 	ND_MUL,
@@ -41,6 +72,12 @@ typedef enum {
 	ND_MOD,
 	ND_NEG,
 	ND_NOT,
+	ND_BITAND,
+	ND_BITOR,
+	ND_BITXOR,
+	ND_BITNOT,
+	ND_SHL,
+	ND_SHR,
 	ND_EQ,
 	ND_NE,
 	ND_LT,
@@ -48,8 +85,12 @@ typedef enum {
 	ND_AND,
 	ND_OR,
 	ND_ASSIGN,
+	ND_OPASSIGN,
+	ND_COMMA,
 	ND_IF,
-	ND_WHILE,
+	ND_FOR,
+	ND_BREAK,
+	ND_CONT,
 	ND_RET,
 	ND_BLOCK,
 	ND_EXPRSTMT,
@@ -57,20 +98,25 @@ typedef enum {
 
 typedef struct Var Var;
 struct Var {
-	Str  name;
-	Var *next;
-	int  offset;
+	Str   name;
+	Type *ty;
+	Var  *next;
+	int   offset;
 };
 
 typedef struct Node Node;
 struct Node {
 	NodeKind kind;
+	Type    *ty;
+	bool     typed;
 	Node    *next;
 	Node    *lhs;
 	Node    *rhs;
 	Node    *cond;
 	Node    *then;
 	Node    *els;
+	Node    *init;
+	Node    *step;
 	Node    *body;
 	Node    *args;
 	int      nargs;
@@ -80,16 +126,20 @@ struct Node {
 	isize    pos;
 };
 
+void add_type(Node *n);
+
 typedef struct Func Func;
 struct Func {
 	Str   name;
 	Func *next;
-	Var  *params;
+	Var  *params[6];
 	int   nparams;
 	Var  *locals;
+	Type *ret;
 	int   stack_size;
 	Node *body;
 	i64   addr;
+	isize pos;
 };
 
 typedef struct {
@@ -99,6 +149,10 @@ typedef struct {
 } Unit;
 
 Unit parse(Token *tok);
+Func *find_func(Str name);
+
+#define ELF_BASE 0x400000
+#define ELF_HDR  (64 + 56)
 
 typedef struct {
 	Buf code;

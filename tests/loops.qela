@@ -1,0 +1,13 @@
+// expect-exit: 28
+fn main() int {
+	var sum int = 0;
+	for i in 0..10 {
+		if (i == 3) { continue; }
+		if (i == 8) { break; }
+		sum += i;
+	}
+	for (var j int = 0; j < 3; j += 1) {
+		sum += 1;
+	}
+	return sum;
+}
