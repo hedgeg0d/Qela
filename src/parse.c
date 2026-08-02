@@ -147,6 +147,16 @@ static int intern_str(Str s) {
 
 static Type *parse_type(Token **t) {
 	if (consume(t, "*")) return type_ptr(parse_type(t));
+	if (eq(*t, "[")) {
+		*t = (*t)->next;
+		if ((*t)->kind != TK_NUM) error_at((*t)->pos, "expected an array length");
+		i64 len = (*t)->val;
+		if (len <= 0) error_at((*t)->pos, "an array length must be positive");
+		*t = expect((*t)->next, "]");
+		Type *base = parse_type(t);
+		if (base->size == 0) error_at((*t)->pos, "cannot make an array of that type");
+		return type_array(base, len);
+	}
 	if ((*t)->kind != TK_IDENT) error_at((*t)->pos, "expected a type name");
 	Type *ty = type_lookup((*t)->text);
 	if (!ty) error_at((*t)->pos, "unknown type '%s'", (*t)->text);
@@ -220,6 +230,29 @@ static Node *primary(Token **t) {
 	error_at(tok->pos, "expected an expression");
 }
 
+static Node *postfix(Token **t) {
+	Node *n = primary(t);
+	for (;;) {
+		isize pos = (*t)->pos;
+		if (consume(t, "[")) {
+			Node *idx = expr(t);
+			*t = expect(*t, "]");
+			n = binary(ND_INDEX, n, idx, pos);
+			continue;
+		}
+		if (consume(t, ".")) {
+			if ((*t)->kind != TK_IDENT) error_at((*t)->pos, "expected a field name");
+			Node *m = node(ND_MEMBER, pos);
+			m->lhs = n;
+			m->name = (*t)->text;
+			*t = (*t)->next;
+			n = m;
+			continue;
+		}
+		return n;
+	}
+}
+
 static Node *unary(Token **t) {
 	Token *tok = *t;
 	if (consume(t, "-")) {
@@ -248,7 +281,7 @@ static Node *unary(Token **t) {
 		return n;
 	}
 	if (consume(t, "+")) return unary(t);
-	return primary(t);
+	return postfix(t);
 }
 
 static Node *cast(Token **t) {
@@ -336,7 +369,8 @@ static const struct {
 };
 
 static void check_lvalue(Node *n, isize pos) {
-	if (n->kind != ND_VAR && n->kind != ND_DEREF)
+	if (n->kind != ND_VAR && n->kind != ND_DEREF && n->kind != ND_MEMBER &&
+	    n->kind != ND_INDEX)
 		error_at(pos, "cannot assign to this expression");
 }
 
@@ -537,12 +571,19 @@ static Func *function(Token **t) {
 		Token *name = *t;
 		*t = name->next;
 		Type *ty = parse_type(t);
+		if (is_aggregate(ty))
+			error_at(name->pos,
+			         "an aggregate parameter must be passed by pointer for now");
 		if (f->nparams == 6) error_at(name->pos, "at most 6 parameters are supported");
 		f->params[f->nparams++] = declare(name->text, ty, name->pos);
 	}
 	*t = expect(*t, ")");
 
-	if (!eq(*t, "{")) f->ret = parse_type(t);
+	if (!eq(*t, "{")) {
+		f->ret = parse_type(t);
+		if (is_aggregate(f->ret))
+			error_at(kw->pos, "returning an aggregate by value is not supported yet");
+	}
 
 	f->body = block(t);
 	leave_scope();
@@ -559,6 +600,53 @@ static Func *function(Token **t) {
 	cur_fn = NULL;
 	cur_locals = NULL;
 	return f;
+}
+
+static void struct_decl(Token **t) {
+	*t = expect(*t, "struct");
+	if ((*t)->kind != TK_IDENT) error_at((*t)->pos, "expected a struct name");
+	Token *name = *t;
+	*t = name->next;
+	if (type_lookup(name->text))
+		error_at(name->pos, "redefinition of type '%s'", name->text);
+
+	Type *ty = anew(Type);
+	*ty = (Type){.kind = TY_STRUCT, .align = 1, .name = name->text};
+	type_define(name->text, ty);
+
+	*t = expect(*t, "{");
+	Member head = {0};
+	Member *tail = &head;
+	int off = 0, align = 1;
+
+	while (!eq(*t, "}")) {
+		if (tail != &head) *t = expect(*t, ",");
+		if (eq(*t, "}")) break;
+		if ((*t)->kind != TK_IDENT) error_at((*t)->pos, "expected a field name");
+		Token *fname = *t;
+		*t = fname->next;
+		Type *fty = parse_type(t);
+		if (fty == ty)
+			error_at(fname->pos, "a struct cannot contain itself by value");
+		if (fty->size == 0) error_at(fname->pos, "a field cannot have type 'void'");
+		for (Member *m = head.next; m; m = m->next)
+			if (str_eq(m->name, fname->text))
+				error_at(fname->pos, "duplicate field '%s'", fname->text);
+
+		off = (off + fty->align - 1) & ~(fty->align - 1);
+		Member *m = anew(Member);
+		*m = (Member){.name = fname->text, .ty = fty, .offset = off, .pos = fname->pos};
+		off += fty->size;
+		if (fty->align > align) align = fty->align;
+		tail->next = m;
+		tail = m;
+	}
+	*t = expect(*t, "}");
+
+	if (!head.next) error_at(name->pos, "a struct must have at least one field");
+	ty->members = head.next;
+	ty->align = align;
+	ty->size = (off + align - 1) & ~(align - 1);
 }
 
 static void global_decl(Token **t) {
@@ -580,6 +668,8 @@ static void global_decl(Token **t) {
 		if (!ty) ty = rhs->ty;
 		if (ty->kind == TY_PTR)
 			error_at(name->pos, "a global pointer cannot have an initializer yet");
+		if (is_aggregate(ty))
+			error_at(name->pos, "a global aggregate cannot have an initializer yet");
 		init = trunc_to(eval_const(rhs), ty);
 	} else if (!ty) {
 		error_at(name->pos, "'let' requires an initializer");
@@ -602,6 +692,10 @@ Unit parse(Token *tok) {
 	Func head = {0};
 	Func *tail = &head;
 	while (tok->kind != TK_EOF) {
+		if (eq(tok, "struct")) {
+			struct_decl(&tok);
+			continue;
+		}
 		if (eq(tok, "let") || eq(tok, "var")) {
 			global_decl(&tok);
 			continue;

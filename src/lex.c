@@ -2,7 +2,7 @@
 
 static const char *keywords[] = {"fn",  "let",   "var",      "if",       "else",
                                  "while", "for", "in",       "break",    "continue",
-                                 "return", "as", NULL};
+                                 "return", "as", "struct", NULL};
 
 static bool is_space(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
 static bool is_digit(char c) { return c >= '0' && c <= '9'; }

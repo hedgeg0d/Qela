@@ -57,6 +57,9 @@ static int nstrrefs, strrefs_cap;
 static isize *str_off;
 static DataFixup *datarefs;
 static int ndatarefs, datarefs_cap;
+static List bounds_checks;
+
+bool opt_no_bounds;
 
 static void list_push(List *l, isize v) {
 	if (l->n == l->cap) {
@@ -251,7 +254,7 @@ static void add_call(Str name, isize pos) {
 	b4(0);
 }
 
-static void add_strref(int id) {
+static void add_strref(int reg, int id) {
 	if (nstrrefs == strrefs_cap) {
 		int cap = strrefs_cap ? strrefs_cap * 2 : 32;
 		StrFixup *p = anew_n(StrFixup, cap);
@@ -259,9 +262,9 @@ static void add_strref(int id) {
 		strrefs = p;
 		strrefs_cap = cap;
 	}
-	b1(0x48);
+	rex_w(reg, RBP);
 	b1(0x8d);
-	modrm(0, RAX, RBP);
+	modrm(0, reg, RBP);
 	strrefs[nstrrefs++] = (StrFixup){code.n, id};
 	b4(0);
 }
@@ -284,6 +287,22 @@ static void add_dataref(Var *v) {
 static void gen_expr(Node *n);
 static void gen_stmt(Node *n);
 
+static void add_rax_imm(i64 v) {
+	if (v == 0) return;
+	b1(0x48);
+	if (v >= -128 && v <= 127) {
+		b1(0x83);
+		modrm(3, 0, RAX);
+		b1((u8)v);
+	} else {
+		b1(0x81);
+		modrm(3, 0, RAX);
+		b4((u32)v);
+	}
+}
+
+static void scale_by(int size);
+
 static void gen_addr(Node *n) {
 	switch (n->kind) {
 	case ND_VAR:
@@ -293,9 +312,51 @@ static void gen_addr(Node *n) {
 	case ND_DEREF:
 		gen_expr(n->lhs);
 		return;
+	case ND_MEMBER:
+		if (n->lhs->ty->kind == TY_PTR) gen_expr(n->lhs);
+		else gen_addr(n->lhs);
+		add_rax_imm(n->member->offset);
+		return;
+	case ND_INDEX: {
+		Type *lt = n->lhs->ty;
+		if (lt->kind == TY_ARRAY) gen_addr(n->lhs);
+		else gen_expr(n->lhs);
+		push_reg(RAX);
+		gen_expr(n->rhs);
+		if (lt->kind == TY_ARRAY && !opt_no_bounds) {
+			b1(0x48);
+			b1(0x3d);
+			b4((u32)lt->len);
+			b1(0x0f);
+			b1(0x83);
+			list_push(&bounds_checks, code.n);
+			b4(0);
+		}
+		scale_by(lt->base->size);
+		pop_reg(RDI);
+		rex_w(RDI, RAX);
+		b1(0x01);
+		modrm(3, RDI, RAX);
+		return;
+	}
 	default:
 		error_at(n->pos, "not an addressable expression");
 	}
+}
+
+static void gen_lvalue(Node *n) {
+	gen_addr(n);
+	if (!is_aggregate(n->ty)) load(n->ty);
+}
+
+static void copy_aggregate(int size) {
+	pop_reg(RDI);
+	mov_reg_reg(RSI, RAX);
+	push_reg(RDI);
+	mov_reg_imm(RCX, size);
+	b1(0xf3);
+	b1(0xa4);
+	pop_reg(RAX);
 }
 
 static void gen_cstrlen(void) {
@@ -424,18 +485,19 @@ static void gen_expr(Node *n) {
 		mov_reg_imm(RAX, n->val);
 		return;
 	case ND_STRLIT:
-		add_strref((int)n->val);
+		add_strref(RAX, (int)n->val);
 		return;
 	case ND_VAR:
-		gen_addr(n);
-		load(n->ty);
+	case ND_MEMBER:
+	case ND_INDEX:
+		gen_lvalue(n);
 		return;
 	case ND_ADDR:
 		gen_addr(n->lhs);
 		return;
 	case ND_DEREF:
 		gen_expr(n->lhs);
-		load(n->ty);
+		if (!is_aggregate(n->ty)) load(n->ty);
 		return;
 	case ND_CAST:
 		gen_expr(n->lhs);
@@ -450,7 +512,8 @@ static void gen_expr(Node *n) {
 		gen_addr(n->lhs);
 		push_reg(RAX);
 		gen_expr(n->rhs);
-		store(n->lhs->ty);
+		if (is_aggregate(n->lhs->ty)) copy_aggregate(n->lhs->ty->size);
+		else store(n->lhs->ty);
 		return;
 	case ND_OPASSIGN: {
 		gen_addr(n->lhs);
@@ -670,8 +733,25 @@ static void layout_globals(Var *globals) {
 	bss_size = bss - data.n;
 }
 
+static const char panic_msg[] = "qela: index out of range\n";
+#define PANIC_LEN ((isize)sizeof(panic_msg) - 1)
+
+static void gen_panic_stub(int msg_id) {
+	add_strref(RSI, msg_id);
+	mov_reg_imm(RAX, 1);
+	mov_reg_imm(RDI, 2);
+	mov_reg_imm(RDX, PANIC_LEN);
+	b1(0x0f);
+	b1(0x05);
+	mov_reg_imm(RAX, 60);
+	mov_reg_imm(RDI, 134);
+	b1(0x0f);
+	b1(0x05);
+}
+
 Image codegen(Unit *u) {
-	str_off = anew_n(isize, u->nstrs ? u->nstrs : 1);
+	int panic_id = u->nstrs;
+	str_off = anew_n(isize, u->nstrs + 1);
 	for (int i = 0; i < u->nstrs; i++) {
 		str_off[i] = rodata.n;
 		buf_bytes(&rodata, u->strs[i].p, u->strs[i].n);
@@ -694,6 +774,14 @@ Image codegen(Unit *u) {
 
 	for (Func *f = u->funcs; f; f = f->next) gen_func(f);
 
+	if (bounds_checks.n) {
+		isize panic_addr = code.n;
+		gen_panic_stub(panic_id);
+		for (int i = 0; i < bounds_checks.n; i++)
+			buf_patch32(&code, bounds_checks.p[i],
+			            (u32)(panic_addr - (bounds_checks.p[i] + 4)));
+	}
+
 	for (int i = 0; i < ncalls; i++) {
 		Func *target = find_func(calls[i].name);
 		if (!target) error_at(calls[i].pos, "undefined function '%s'", calls[i].name);
@@ -701,6 +789,11 @@ Image codegen(Unit *u) {
 	}
 
 	isize rodata_at = (code.n + 7) & ~(isize)7;
+	if (bounds_checks.n) {
+		str_off[panic_id] = rodata.n;
+		buf_bytes(&rodata, panic_msg, PANIC_LEN);
+		while (rodata.n & 7) buf_u8(&rodata, 0);
+	}
 	for (int i = 0; i < nstrrefs; i++) {
 		isize target = rodata_at + str_off[strrefs[i].id];
 		buf_patch32(&code, strrefs[i].at, (u32)(target - (strrefs[i].at + 4)));
