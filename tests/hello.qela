@@ -1,1 +1,6 @@
-fn main() int { return 0; }
+// expect-out: Hello, Qela!
+fn main() int {
+	let msg = "Hello, Qela!\n";
+	syscall(1, 1, msg, cstrlen(msg));
+	return 0;
+}
