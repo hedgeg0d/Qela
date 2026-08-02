@@ -1,0 +1,12 @@
+// expect-exit: 3
+fn main() int {
+	var a int = 1;
+	{
+		var a int = 10;
+		a += 5;
+	}
+	{
+		let a = 100;
+	}
+	return a + 2;
+}

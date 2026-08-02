@@ -1,0 +1,12 @@
+// expect-exit: 42
+fn set(p *int, v int) {
+	*p = v;
+}
+
+fn main() int {
+	var x int = 5;
+	var p *int = &x;
+	*p = 40;
+	set(&x, x + 2);
+	return x;
+}
