@@ -1,0 +1,9 @@
+// expect-exit: 7
+fn main() int {
+	var n int = 0;
+	if (1 < 2 && 3 >= 3) { n = n + 1; }
+	if (0 || 5 != 5) { n = n + 100; }
+	if (!0) { n = n + 2; }
+	if (2 > 1 || 1 / 0 == 0) { n = n + 4; }
+	return n;
+}

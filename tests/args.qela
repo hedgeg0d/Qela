@@ -1,0 +1,8 @@
+// expect-exit: 21
+fn add6(a int, b int, c int, d int, e int, f int) int {
+	return a + b + c + d + e + f;
+}
+
+fn main() int {
+	return add6(1, 2, 3, 4, 5, 6);
+}

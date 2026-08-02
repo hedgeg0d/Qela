@@ -9,7 +9,7 @@ CFLAGS := -std=gnu23 -Oz -ffreestanding -fno-stack-protector \
 LDFLAGS := -nostdlib -nostartfiles -static -no-pie \
            -Wl,--gc-sections -Wl,--build-id=none -Wl,-z,noseparate-code
 
-SRC := src/rt.c src/main.c
+SRC := src/rt.c src/diag.c src/lex.c src/parse.c src/codegen.c src/elf.c src/main.c
 OBJ := $(SRC:.c=.o) src/start.o
 BIN := qela
 
@@ -20,7 +20,7 @@ $(BIN): $(OBJ)
 	strip --strip-all $@
 	objcopy --remove-section=.comment $@
 
-%.o: %.c src/qela.h src/sys.h
+%.o: %.c src/qela.h src/sys.h src/comp.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 src/start.o: src/start.S
