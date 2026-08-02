@@ -1,2 +1,2 @@
 CompileFlags:
-  Add: [-std=gnu23, -ffreestanding, -Wno-unused-parameter]
+  Add: [-xc, -std=gnu23, -ffreestanding, -Wno-unused-parameter]
