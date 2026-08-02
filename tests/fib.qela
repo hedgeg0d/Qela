@@ -1,0 +1,15 @@
+// expect-exit: 88
+fn fib(n int) int {
+	if (n < 2) { return n; }
+	return fib(n - 1) + fib(n - 2);
+}
+
+fn main() int {
+	var i int = 0;
+	var sum int = 0;
+	while (i < 10) {
+		sum = sum + fib(i);
+		i = i + 1;
+	}
+	return sum;
+}
