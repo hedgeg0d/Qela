@@ -14,7 +14,6 @@ struct Scope {
 };
 
 static Scope *scope;
-static Var   *cur_locals;
 static Func  *cur_fn;
 static Str   *strs;
 static int    nstrs;
@@ -78,8 +77,8 @@ static Var *declare(Str name, Type *ty, isize pos) {
 	Var *var = anew(Var);
 	*var = (Var){.name = name, .ty = ty};
 	if (cur_fn) {
-		var->next = cur_locals;
-		cur_locals = var;
+		var->next = cur_fn->locals;
+		cur_fn->locals = var;
 	} else {
 		var->is_global = true;
 		var->next = globals;
@@ -149,6 +148,11 @@ static Type *parse_type(Token **t) {
 	if (consume(t, "*")) return type_ptr(parse_type(t));
 	if (eq(*t, "[")) {
 		*t = (*t)->next;
+		if (consume(t, "]")) {
+			Type *base = parse_type(t);
+			if (base->size == 0) error_at((*t)->pos, "cannot make a slice of that type");
+			return type_slice(base);
+		}
 		if ((*t)->kind != TK_NUM) error_at((*t)->pos, "expected an array length");
 		i64 len = (*t)->val;
 		if (len <= 0) error_at((*t)->pos, "an array length must be positive");
@@ -210,14 +214,11 @@ static Node *primary(Token **t) {
 		if (eq(*t, "(")) {
 			NodeKind kind = ND_CALL;
 			if (str_eq(tok->text, S("syscall"))) kind = ND_SYSCALL;
-			else if (str_eq(tok->text, S("cstrlen"))) kind = ND_CSTRLEN;
 			Node *n = node(kind, tok->pos);
 			n->name = tok->text;
 			call_args(t, n);
 			if (kind == ND_SYSCALL && (n->nargs < 1 || n->nargs > 7))
 				error_at(tok->pos, "syscall takes 1 to 7 arguments");
-			if (kind == ND_CSTRLEN && n->nargs != 1)
-				error_at(tok->pos, "cstrlen takes exactly 1 argument");
 			return n;
 		}
 		Var *v = find_var(tok->text);
@@ -235,9 +236,20 @@ static Node *postfix(Token **t) {
 	for (;;) {
 		isize pos = (*t)->pos;
 		if (consume(t, "[")) {
-			Node *idx = expr(t);
+			Node *lo = NULL;
+			if (!eq(*t, "..")) lo = expr(t);
+			if (consume(t, "..")) {
+				Node *s = node(ND_SLICE, pos);
+				s->lhs = n;
+				s->rhs = lo;
+				if (!eq(*t, "]")) s->then = expr(t);
+				*t = expect(*t, "]");
+				n = s;
+				continue;
+			}
+			if (!lo) error_at((*t)->pos, "expected an index");
 			*t = expect(*t, "]");
-			n = binary(ND_INDEX, n, idx, pos);
+			n = binary(ND_INDEX, n, lo, pos);
 			continue;
 		}
 		if (consume(t, ".")) {
@@ -560,20 +572,26 @@ static Func *function(Token **t) {
 	*f = (Func){.name = (*t)->text, .ret = ty_void, .pos = kw->pos};
 	*t = (*t)->next;
 
-	cur_locals = NULL;
 	cur_fn = f;
+	type_set_fn(f);
 	enter_scope();
 
 	*t = expect(*t, "(");
+	int rwords = 0;
 	while (!eq(*t, ")")) {
 		if (f->nparams) *t = expect(*t, ",");
 		if ((*t)->kind != TK_IDENT) error_at((*t)->pos, "expected a parameter name");
 		Token *name = *t;
 		*t = name->next;
 		Type *ty = parse_type(t);
-		if (is_aggregate(ty))
+		if (ty->kind == TY_ARRAY)
+			error_at(name->pos, "an array must be passed by pointer or as a slice");
+		if (is_aggregate(ty) && ty->size > 16)
 			error_at(name->pos,
-			         "an aggregate parameter must be passed by pointer for now");
+			         "an aggregate larger than 16 bytes must be passed by pointer");
+		rwords += is_aggregate(ty) && ty->size > 8 ? 2 : 1;
+		if (rwords > 6)
+			error_at(name->pos, "parameters do not fit in the argument registers");
 		if (f->nparams == 6) error_at(name->pos, "at most 6 parameters are supported");
 		f->params[f->nparams++] = declare(name->text, ty, name->pos);
 	}
@@ -581,24 +599,18 @@ static Func *function(Token **t) {
 
 	if (!eq(*t, "{")) {
 		f->ret = parse_type(t);
-		if (is_aggregate(f->ret))
-			error_at(kw->pos, "returning an aggregate by value is not supported yet");
+		if (f->ret->kind == TY_ARRAY)
+			error_at(kw->pos, "an array cannot be returned by value");
+		if (is_aggregate(f->ret) && f->ret->size > 16)
+			error_at(kw->pos,
+			         "an aggregate larger than 16 bytes must be returned by pointer");
 	}
 
 	f->body = block(t);
 	leave_scope();
 
-	f->locals = cur_locals;
-
-	int off = 0;
-	for (Var *v = f->locals; v; v = v->next) {
-		int size = v->ty->size < 8 ? 8 : v->ty->size;
-		off = (off + size + v->ty->align - 1) & ~(v->ty->align - 1);
-		v->offset = off;
-	}
-	f->stack_size = (off + 15) & ~15;
 	cur_fn = NULL;
-	cur_locals = NULL;
+	type_set_fn(NULL);
 	return f;
 }
 
@@ -709,7 +721,15 @@ Unit parse(Token *tok) {
 	for (Func *f = all_funcs; f; f = f->next) {
 		if (find_func(f->name) != f)
 			error_at(f->pos, "redefinition of function '%s'", f->name);
-		add_type(f->body);
+		type_func(f);
+
+		int off = 0;
+		for (Var *v = f->locals; v; v = v->next) {
+			int size = v->ty->size < 8 ? 8 : v->ty->size;
+			off = (off + size + v->ty->align - 1) & ~(v->ty->align - 1);
+			v->offset = off;
+		}
+		f->stack_size = (off + 15) & ~15;
 	}
 	return (Unit){
 	    .funcs = all_funcs, .globals = globals, .strs = strs, .nstrs = nstrs};
