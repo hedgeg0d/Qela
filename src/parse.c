@@ -69,18 +69,68 @@ static Var *find_var(Str name) {
 	return NULL;
 }
 
+static Var *globals;
+
 static Var *declare(Str name, Type *ty, isize pos) {
 	for (VarScope *v = scope->vars; v; v = v->next)
 		if (str_eq(v->name, name)) error_at(pos, "redeclaration of '%s'", name);
 
 	Var *var = anew(Var);
-	*var = (Var){.name = name, .ty = ty, .next = cur_locals};
-	cur_locals = var;
+	*var = (Var){.name = name, .ty = ty};
+	if (cur_fn) {
+		var->next = cur_locals;
+		cur_locals = var;
+	} else {
+		var->is_global = true;
+		var->next = globals;
+		globals = var;
+	}
 
 	VarScope *vs = anew(VarScope);
 	*vs = (VarScope){.next = scope->vars, .name = name, .var = var};
 	scope->vars = vs;
 	return var;
+}
+
+static i64 trunc_to(i64 v, Type *ty) {
+	switch (ty->size) {
+	case 1: return ty->is_unsigned || ty->kind == TY_BOOL ? (i64)(u8)v : (i64)(i8)v;
+	case 2: return ty->is_unsigned ? (i64)(u16)v : (i64)(i16)v;
+	case 4: return ty->is_unsigned ? (i64)(u32)v : (i64)(i32)v;
+	default: return v;
+	}
+}
+
+static i64 eval_const(Node *n) {
+	switch (n->kind) {
+	case ND_NUM: return n->val;
+	case ND_NEG: return -eval_const(n->lhs);
+	case ND_BITNOT: return ~eval_const(n->lhs);
+	case ND_NOT: return !eval_const(n->lhs);
+	case ND_CAST:
+		return n->ty->kind == TY_BOOL ? (eval_const(n->lhs) != 0)
+		                              : trunc_to(eval_const(n->lhs), n->ty);
+	case ND_ADD: return eval_const(n->lhs) + eval_const(n->rhs);
+	case ND_SUB: return eval_const(n->lhs) - eval_const(n->rhs);
+	case ND_MUL: return eval_const(n->lhs) * eval_const(n->rhs);
+	case ND_BITAND: return eval_const(n->lhs) & eval_const(n->rhs);
+	case ND_BITOR: return eval_const(n->lhs) | eval_const(n->rhs);
+	case ND_BITXOR: return eval_const(n->lhs) ^ eval_const(n->rhs);
+	case ND_SHL: return eval_const(n->lhs) << eval_const(n->rhs);
+	case ND_SHR: return eval_const(n->lhs) >> eval_const(n->rhs);
+	case ND_EQ: return eval_const(n->lhs) == eval_const(n->rhs);
+	case ND_NE: return eval_const(n->lhs) != eval_const(n->rhs);
+	case ND_LT: return eval_const(n->lhs) < eval_const(n->rhs);
+	case ND_LE: return eval_const(n->lhs) <= eval_const(n->rhs);
+	case ND_DIV:
+	case ND_MOD: {
+		i64 d = eval_const(n->rhs);
+		if (d == 0) error_at(n->pos, "division by zero in a constant expression");
+		return n->kind == ND_DIV ? eval_const(n->lhs) / d : eval_const(n->lhs) % d;
+	}
+	default:
+		error_at(n->pos, "initializer must be a constant expression");
+	}
 }
 
 static int intern_str(Str s) {
@@ -506,7 +556,37 @@ static Func *function(Token **t) {
 		v->offset = off;
 	}
 	f->stack_size = (off + 15) & ~15;
+	cur_fn = NULL;
+	cur_locals = NULL;
 	return f;
+}
+
+static void global_decl(Token **t) {
+	Token *kw = *t;
+	bool typed = eq(kw, "var");
+	*t = kw->next;
+
+	if ((*t)->kind != TK_IDENT) error_at((*t)->pos, "expected a variable name");
+	Token *name = *t;
+	*t = name->next;
+
+	Type *ty = NULL;
+	if (typed && !eq(*t, "=")) ty = parse_type(t);
+
+	i64 init = 0;
+	if (consume(t, "=")) {
+		Node *rhs = assign(t);
+		add_type(rhs);
+		if (!ty) ty = rhs->ty;
+		if (ty->kind == TY_PTR)
+			error_at(name->pos, "a global pointer cannot have an initializer yet");
+		init = trunc_to(eval_const(rhs), ty);
+	} else if (!ty) {
+		error_at(name->pos, "'let' requires an initializer");
+	}
+
+	declare(name->text, ty, name->pos)->init = init;
+	*t = expect(*t, ";");
 }
 
 static Func *all_funcs;
@@ -522,6 +602,10 @@ Unit parse(Token *tok) {
 	Func head = {0};
 	Func *tail = &head;
 	while (tok->kind != TK_EOF) {
+		if (eq(tok, "let") || eq(tok, "var")) {
+			global_decl(&tok);
+			continue;
+		}
 		tail->next = function(&tok);
 		tail = tail->next;
 	}
@@ -533,5 +617,6 @@ Unit parse(Token *tok) {
 			error_at(f->pos, "redefinition of function '%s'", f->name);
 		add_type(f->body);
 	}
-	return (Unit){.funcs = all_funcs, .strs = strs, .nstrs = nstrs};
+	return (Unit){
+	    .funcs = all_funcs, .globals = globals, .strs = strs, .nstrs = nstrs};
 }
