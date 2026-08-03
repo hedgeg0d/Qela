@@ -29,6 +29,7 @@ void write_all(int fd, const char *buf, isize n);
 
 // Supports %s (Str), %c (const char *), %d, %u, %x, %%.
 void print(int fd, const char *fmt, ...);
+void vprint(int fd, const char *fmt, __builtin_va_list ap);
 #define out(...) print(1, __VA_ARGS__)
 void eprint(const char *fmt, ...);
 _Noreturn void die(const char *fmt, ...);
