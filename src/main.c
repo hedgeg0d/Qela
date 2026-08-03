@@ -23,6 +23,8 @@ int qmain(int argc, char **argv) {
 		if (str_eq(a, S("-o"))) {
 			if (++i == argc) die("error: -o needs an argument\n");
 			output = argv[i];
+		} else if (str_eq(a, S("--no-bounds-checks"))) {
+			opt_no_bounds = true;
 		} else if (a.n > 0 && a.p[0] == '-') {
 			die("error: unknown option %c\n", argv[i]);
 		} else if (!input) {

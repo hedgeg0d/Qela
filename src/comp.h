@@ -32,16 +32,30 @@ typedef enum {
 	TY_BOOL,
 	TY_INT,
 	TY_PTR,
+	TY_ARRAY,
+	TY_STRUCT,
 } TypeKind;
 
-typedef struct Type Type;
+typedef struct Type   Type;
+typedef struct Member Member;
+
+struct Member {
+	Member *next;
+	Str     name;
+	Type   *ty;
+	int     offset;
+	isize   pos;
+};
+
 struct Type {
 	TypeKind kind;
 	int      size;
 	int      align;
 	bool     is_unsigned;
 	Type    *base;
+	isize    len;
 	Str      name;
+	Member  *members;
 };
 
 extern Type *ty_void;
@@ -50,9 +64,13 @@ extern Type *ty_i8, *ty_i16, *ty_i32, *ty_i64;
 extern Type *ty_u8, *ty_u16, *ty_u32, *ty_u64;
 
 Type *type_ptr(Type *base);
+Type *type_array(Type *base, isize len);
 Type *type_lookup(Str name);
+void  type_define(Str name, Type *ty);
 bool  is_integer(Type *t);
 bool  is_numeric(Type *t);
+bool  is_aggregate(Type *t);
+Type *decayed(Type *t);
 Str   type_name(Type *t);
 
 typedef enum {
@@ -64,6 +82,8 @@ typedef enum {
 	ND_CSTRLEN,
 	ND_ADDR,
 	ND_DEREF,
+	ND_MEMBER,
+	ND_INDEX,
 	ND_CAST,
 	ND_ADD,
 	ND_SUB,
@@ -125,6 +145,7 @@ struct Node {
 	int      nargs;
 	i64      val;
 	Var     *var;
+	Member  *member;
 	Str      name;
 	isize    pos;
 };
@@ -167,6 +188,8 @@ typedef struct {
 	isize bss_size;
 	i64   entry;
 } Image;
+
+extern bool opt_no_bounds;
 
 Image codegen(Unit *u);
 
