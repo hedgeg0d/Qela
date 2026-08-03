@@ -25,19 +25,42 @@ typedef struct {
 	int   id;
 } StrFixup;
 
-static Buf code;
-static Buf rodata;
-static int depth;
-static Func *all_funcs;
+typedef struct {
+	isize *p;
+	int    n;
+	int    cap;
+} List;
+
+typedef struct Loop Loop;
+struct Loop {
+	Loop *prev;
+	List  brk;
+	List  cont;
+};
+
+static Buf   code;
+static Buf   rodata;
+static int   depth;
+static Loop *cur_loop;
 
 static CallFixup *calls;
 static int ncalls, calls_cap;
-static StrFixup  *strrefs;
+static StrFixup *strrefs;
 static int nstrrefs, strrefs_cap;
 static isize *str_off;
 
-static void b1(u8 v) { buf_u8(&code, v); }
+static void list_push(List *l, isize v) {
+	if (l->n == l->cap) {
+		int cap = l->cap ? l->cap * 2 : 8;
+		isize *p = anew_n(isize, cap);
+		memcpy(p, l->p, sizeof(isize) * (usize)l->n);
+		l->p = p;
+		l->cap = cap;
+	}
+	l->p[l->n++] = v;
+}
 
+static void b1(u8 v) { buf_u8(&code, v); }
 static void b4(u32 v) { buf_u32(&code, v); }
 
 static void rex_w(int reg, int rm) {
@@ -92,25 +115,92 @@ static void mov_reg_reg(int dst, int src) {
 	modrm(3, src, dst);
 }
 
-static void mem_rbp(int op, int reg, int off) {
+static void lea_local(int reg, int off) {
 	rex_w(reg, RBP);
-	b1((u8)op);
-	if (off >= -128 && off <= 127) {
+	b1(0x8d);
+	if (-off >= -128 && -off <= 127) {
 		modrm(1, reg, RBP);
-		b1((u8)off);
+		b1((u8)(-off));
 	} else {
 		modrm(2, reg, RBP);
-		b4((u32)off);
+		b4((u32)(-off));
 	}
 }
 
-static void load_local(int reg, int off) { mem_rbp(0x8b, reg, -off); }
-static void store_local(int reg, int off) { mem_rbp(0x89, reg, -off); }
+static void load(Type *ty) {
+	switch (ty->size) {
+	case 1:
+		b1(0x48);
+		b1(0x0f);
+		b1(ty->is_unsigned || ty->kind == TY_BOOL ? 0xb6 : 0xbe);
+		modrm(0, RAX, RAX);
+		return;
+	case 2:
+		b1(0x48);
+		b1(0x0f);
+		b1(ty->is_unsigned ? 0xb7 : 0xbf);
+		modrm(0, RAX, RAX);
+		return;
+	case 4:
+		if (ty->is_unsigned) {
+			b1(0x8b);
+		} else {
+			b1(0x48);
+			b1(0x63);
+		}
+		modrm(0, RAX, RAX);
+		return;
+	default:
+		b1(0x48);
+		b1(0x8b);
+		modrm(0, RAX, RAX);
+		return;
+	}
+}
 
-static void alu_rax_rdi(u8 op) {
-	rex_w(RDI, RAX);
-	b1(op);
-	modrm(3, RDI, RAX);
+static void store(Type *ty) {
+	pop_reg(RDI);
+	switch (ty->size) {
+	case 1: b1(0x88); modrm(0, RAX, RDI); return;
+	case 2: b1(0x66); b1(0x89); modrm(0, RAX, RDI); return;
+	case 4: b1(0x89); modrm(0, RAX, RDI); return;
+	default: b1(0x48); b1(0x89); modrm(0, RAX, RDI); return;
+	}
+}
+
+static void truncate_to(Type *ty) {
+	switch (ty->size) {
+	case 1:
+		b1(0x48);
+		b1(0x0f);
+		b1(ty->is_unsigned || ty->kind == TY_BOOL ? 0xb6 : 0xbe);
+		modrm(3, RAX, RAX);
+		return;
+	case 2:
+		b1(0x48);
+		b1(0x0f);
+		b1(ty->is_unsigned ? 0xb7 : 0xbf);
+		modrm(3, RAX, RAX);
+		return;
+	case 4:
+		if (ty->is_unsigned) {
+			b1(0x89);
+			modrm(3, RAX, RAX);
+		} else {
+			b1(0x48);
+			b1(0x63);
+			modrm(3, RAX, RAX);
+		}
+		return;
+	default:
+		return;
+	}
+}
+
+static void test_rax(void) {
+	b1(0x48);
+	b1(0x85);
+	modrm(3, RAX, RAX);
 }
 
 static void setcc(u8 cc) {
@@ -120,12 +210,6 @@ static void setcc(u8 cc) {
 	b1(0x48);
 	b1(0x0f);
 	b1(0xb6);
-	modrm(3, RAX, RAX);
-}
-
-static void test_rax(void) {
-	b1(0x48);
-	b1(0x85);
 	modrm(3, RAX, RAX);
 }
 
@@ -174,6 +258,20 @@ static void add_strref(int id) {
 }
 
 static void gen_expr(Node *n);
+static void gen_stmt(Node *n);
+
+static void gen_addr(Node *n) {
+	switch (n->kind) {
+	case ND_VAR:
+		lea_local(RAX, n->var->offset);
+		return;
+	case ND_DEREF:
+		gen_expr(n->lhs);
+		return;
+	default:
+		error_at(n->pos, "not an addressable expression");
+	}
+}
 
 static void gen_cstrlen(void) {
 	mov_reg_reg(RDX, RAX);
@@ -207,6 +305,94 @@ static void gen_args(Node *n, const int *regs, bool first_in_rax) {
 	}
 }
 
+static void scale_by(int size) {
+	if (size == 1) return;
+	mov_reg_imm(RDI, size);
+	b1(0x48);
+	b1(0x0f);
+	b1(0xaf);
+	modrm(3, RAX, RDI);
+}
+
+static void gen_binop(Node *n) {
+	Type *t = n->ty;
+	switch (n->kind) {
+	case ND_ADD:
+		rex_w(RDI, RAX);
+		b1(0x01);
+		modrm(3, RDI, RAX);
+		return;
+	case ND_SUB:
+		rex_w(RDI, RAX);
+		b1(0x29);
+		modrm(3, RDI, RAX);
+		return;
+	case ND_MUL:
+		b1(0x48);
+		b1(0x0f);
+		b1(0xaf);
+		modrm(3, RAX, RDI);
+		return;
+	case ND_DIV:
+	case ND_MOD:
+		if (t->is_unsigned) {
+			b1(0x31);
+			modrm(3, RDX, RDX);
+			b1(0x48);
+			b1(0xf7);
+			modrm(3, 6, RDI);
+		} else {
+			b1(0x48);
+			b1(0x99);
+			b1(0x48);
+			b1(0xf7);
+			modrm(3, 7, RDI);
+		}
+		if (n->kind == ND_MOD) mov_reg_reg(RAX, RDX);
+		return;
+	case ND_BITAND:
+		rex_w(RDI, RAX);
+		b1(0x21);
+		modrm(3, RDI, RAX);
+		return;
+	case ND_BITOR:
+		rex_w(RDI, RAX);
+		b1(0x09);
+		modrm(3, RDI, RAX);
+		return;
+	case ND_BITXOR:
+		rex_w(RDI, RAX);
+		b1(0x31);
+		modrm(3, RDI, RAX);
+		return;
+	case ND_SHL:
+	case ND_SHR:
+		mov_reg_reg(RCX, RDI);
+		b1(0x48);
+		b1(0xd3);
+		modrm(3, n->kind == ND_SHL ? 4 : (t->is_unsigned ? 5 : 7), RAX);
+		return;
+	case ND_EQ:
+	case ND_NE:
+	case ND_LT:
+	case ND_LE: {
+		rex_w(RDI, RAX);
+		b1(0x39);
+		modrm(3, RDI, RAX);
+		bool uns = n->lhs->ty->is_unsigned || n->lhs->ty->kind == TY_PTR;
+		u8 cc;
+		if (n->kind == ND_EQ) cc = 0x94;
+		else if (n->kind == ND_NE) cc = 0x95;
+		else if (n->kind == ND_LT) cc = uns ? 0x92 : 0x9c;
+		else cc = uns ? 0x96 : 0x9e;
+		setcc(cc);
+		return;
+	}
+	default:
+		error_at(n->pos, "invalid expression");
+	}
+}
+
 static void gen_expr(Node *n) {
 	switch (n->kind) {
 	case ND_NUM:
@@ -216,17 +402,61 @@ static void gen_expr(Node *n) {
 		add_strref((int)n->val);
 		return;
 	case ND_VAR:
-		load_local(RAX, n->var->offset);
+		gen_addr(n);
+		load(n->ty);
+		return;
+	case ND_ADDR:
+		gen_addr(n->lhs);
+		return;
+	case ND_DEREF:
+		gen_expr(n->lhs);
+		load(n->ty);
+		return;
+	case ND_CAST:
+		gen_expr(n->lhs);
+		if (n->ty->kind == TY_BOOL) {
+			test_rax();
+			setcc(0x95);
+		} else {
+			truncate_to(n->ty);
+		}
 		return;
 	case ND_ASSIGN:
+		gen_addr(n->lhs);
+		push_reg(RAX);
 		gen_expr(n->rhs);
-		store_local(RAX, n->lhs->var->offset);
+		store(n->lhs->ty);
+		return;
+	case ND_OPASSIGN: {
+		gen_addr(n->lhs);
+		push_reg(RAX);
+		load(n->lhs->ty);
+		push_reg(RAX);
+		gen_expr(n->rhs);
+		if (n->lhs->ty->kind == TY_PTR) scale_by(n->lhs->ty->base->size);
+		mov_reg_reg(RDI, RAX);
+		pop_reg(RAX);
+		Node op = {.kind = (NodeKind)n->val, .ty = n->lhs->ty, .lhs = n->lhs, .pos = n->pos};
+		gen_binop(&op);
+		truncate_to(n->lhs->ty);
+		store(n->lhs->ty);
+		return;
+	}
+	case ND_COMMA:
+		gen_expr(n->lhs);
+		gen_expr(n->rhs);
 		return;
 	case ND_NEG:
 		gen_expr(n->lhs);
 		b1(0x48);
 		b1(0xf7);
 		modrm(3, 3, RAX);
+		return;
+	case ND_BITNOT:
+		gen_expr(n->lhs);
+		b1(0x48);
+		b1(0xf7);
+		modrm(3, 2, RAX);
 		return;
 	case ND_NOT:
 		gen_expr(n->lhs);
@@ -243,7 +473,6 @@ static void gen_expr(Node *n) {
 		b1(0x05);
 		return;
 	case ND_CALL: {
-		if (n->nargs > 6) error_at(n->pos, "at most 6 arguments are supported");
 		gen_args(n, call_regs, false);
 		bool odd = depth & 1;
 		if (odd) {
@@ -281,34 +510,24 @@ static void gen_expr(Node *n) {
 		break;
 	}
 
+	Type *lt = n->lhs->ty;
+	Type *rt = n->rhs->ty;
+	bool ptr_diff = (n->kind == ND_SUB && lt->kind == TY_PTR && rt->kind == TY_PTR);
+
 	gen_expr(n->rhs);
+	if (!ptr_diff && lt->kind == TY_PTR && rt->kind != TY_PTR) scale_by(lt->base->size);
 	push_reg(RAX);
 	gen_expr(n->lhs);
 	pop_reg(RDI);
+	gen_binop(n);
 
-	switch (n->kind) {
-	case ND_ADD: alu_rax_rdi(0x01); return;
-	case ND_SUB: alu_rax_rdi(0x29); return;
-	case ND_MUL:
-		b1(0x48);
-		b1(0x0f);
-		b1(0xaf);
-		modrm(3, RAX, RDI);
-		return;
-	case ND_DIV:
-	case ND_MOD:
+	if (ptr_diff) {
+		mov_reg_imm(RDI, lt->base->size);
 		b1(0x48);
 		b1(0x99);
 		b1(0x48);
 		b1(0xf7);
 		modrm(3, 7, RDI);
-		if (n->kind == ND_MOD) mov_reg_reg(RAX, RDX);
-		return;
-	case ND_EQ: alu_rax_rdi(0x39); setcc(0x94); return;
-	case ND_NE: alu_rax_rdi(0x39); setcc(0x95); return;
-	case ND_LT: alu_rax_rdi(0x39); setcc(0x9c); return;
-	case ND_LE: alu_rax_rdi(0x39); setcc(0x9e); return;
-	default: error_at(n->pos, "invalid expression");
 	}
 }
 
@@ -341,17 +560,37 @@ static void gen_stmt(Node *n) {
 		}
 		return;
 	}
-	case ND_WHILE: {
+	case ND_FOR: {
+		if (n->init) gen_stmt(n->init);
+
+		Loop lp = {.prev = cur_loop};
+		cur_loop = &lp;
+
 		isize top = code.n;
-		gen_expr(n->cond);
-		test_rax();
-		isize out_at = jump(0x84);
+		if (n->cond) {
+			gen_expr(n->cond);
+			test_rax();
+			list_push(&lp.brk, jump(0x84));
+		}
 		gen_stmt(n->body);
+
+		for (int i = 0; i < lp.cont.n; i++) patch_here(lp.cont.p[i]);
+		if (n->step) gen_expr(n->step);
 		b1(0xe9);
 		b4((u32)(top - (code.n + 4)));
-		patch_here(out_at);
+
+		for (int i = 0; i < lp.brk.n; i++) patch_here(lp.brk.p[i]);
+		cur_loop = lp.prev;
 		return;
 	}
+	case ND_BREAK:
+		if (!cur_loop) error_at(n->pos, "'break' outside of a loop");
+		list_push(&cur_loop->brk, jump(0));
+		return;
+	case ND_CONT:
+		if (!cur_loop) error_at(n->pos, "'continue' outside of a loop");
+		list_push(&cur_loop->cont, jump(0));
+		return;
 	default:
 		gen_expr(n);
 		return;
@@ -361,6 +600,7 @@ static void gen_stmt(Node *n) {
 static void gen_func(Func *f) {
 	f->addr = code.n;
 	depth = 0;
+	cur_loop = NULL;
 
 	push_reg(RBP);
 	depth--;
@@ -372,8 +612,13 @@ static void gen_func(Func *f) {
 		b4((u32)f->stack_size);
 	}
 
-	int i = 0;
-	for (Var *v = f->params; v; v = v->next) store_local(call_regs[i++], v->offset);
+	for (int i = 0; i < f->nparams; i++) {
+		Var *v = f->params[i];
+		lea_local(RAX, v->offset);
+		push_reg(RAX);
+		mov_reg_reg(RAX, call_regs[i]);
+		store(v->ty);
+	}
 
 	gen_stmt(f->body);
 
@@ -383,8 +628,6 @@ static void gen_func(Func *f) {
 }
 
 Image codegen(Unit *u) {
-	all_funcs = u->funcs;
-
 	str_off = anew_n(isize, u->nstrs ? u->nstrs : 1);
 	for (int i = 0; i < u->nstrs; i++) {
 		str_off[i] = rodata.n;
@@ -399,17 +642,14 @@ Image codegen(Unit *u) {
 	b1(0x0f);
 	b1(0x05);
 
-	bool has_main = false;
-	for (Func *f = u->funcs; f; f = f->next) {
-		if (str_eq(f->name, S("main"))) has_main = true;
-		gen_func(f);
-	}
-	if (!has_main) die("error: no 'main' function\n");
+	Func *main_fn = find_func(S("main"));
+	if (!main_fn) die("error: no 'main' function\n");
+	if (main_fn->nparams) die("error: 'main' must take no parameters\n");
+
+	for (Func *f = u->funcs; f; f = f->next) gen_func(f);
 
 	for (int i = 0; i < ncalls; i++) {
-		Func *target = NULL;
-		for (Func *f = u->funcs; f; f = f->next)
-			if (str_eq(f->name, calls[i].name)) target = f;
+		Func *target = find_func(calls[i].name);
 		if (!target) error_at(calls[i].pos, "undefined function '%s'", calls[i].name);
 		buf_patch32(&code, calls[i].at, (u32)(target->addr - (calls[i].at + 4)));
 	}
