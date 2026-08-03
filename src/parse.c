@@ -19,6 +19,9 @@ static Str   *strs;
 static int    nstrs;
 static int    strs_cap;
 
+static Type *type_vars[6];
+static int   ntype_vars;
+
 static void enter_scope(void) {
 	Scope *s = anew(Scope);
 	*s = (Scope){.next = scope};
@@ -162,6 +165,12 @@ static Type *parse_type(Token **t) {
 		return type_array(base, len);
 	}
 	if ((*t)->kind != TK_IDENT) error_at((*t)->pos, "expected a type name");
+	for (int i = 0; i < ntype_vars; i++)
+		if (str_eq(type_vars[i]->name, (*t)->text)) {
+			Type *tv = type_vars[i];
+			*t = (*t)->next;
+			return tv;
+		}
 	Type *ty = type_lookup((*t)->text);
 	if (!ty) error_at((*t)->pos, "unknown type '%s'", (*t)->text);
 	*t = (*t)->next;
@@ -217,6 +226,16 @@ static Node *primary(Token **t) {
 		return n;
 	}
 
+	if (eq(tok, "sizeof")) {
+		*t = tok->next;
+		*t = expect(*t, "(");
+		Type *ty = parse_type(t);
+		*t = expect(*t, ")");
+		Node *n = node(ND_SIZEOF, tok->pos);
+		n->typeval = ty;
+		return n;
+	}
+
 	if (tok->kind == TK_IDENT) {
 		*t = tok->next;
 		Type *et = type_lookup(tok->text);
@@ -229,6 +248,15 @@ static Node *primary(Token **t) {
 			n->name = (*t)->text;
 			*t = (*t)->next;
 			if (eq(*t, "(")) call_args(t, n);
+			return n;
+		}
+		Type *tt = et;
+		if (!tt)
+			for (int i = 0; i < ntype_vars; i++)
+				if (str_eq(type_vars[i]->name, tok->text)) tt = type_vars[i];
+		if (tt && !eq(*t, "(")) {
+			Node *n = node(ND_TYPEEXPR, tok->pos);
+			n->typeval = tt;
 			return n;
 		}
 		if (eq(*t, "(")) {
@@ -654,9 +682,31 @@ static Func *function(Token **t) {
 
 	*t = expect(*t, "(");
 	int rwords = 0;
+	int saved_ntype_vars = ntype_vars;
 	while (!eq(*t, ")")) {
 		if (f->nparams) *t = expect(*t, ",");
-		if ((*t)->kind != TK_IDENT) error_at((*t)->pos, "expected a parameter name");
+
+		if (eq(*t, "comptime")) {
+			*t = (*t)->next;
+			if ((*t)->kind != TK_IDENT)
+				error_at((*t)->pos, "expected a parameter name after comptime");
+			Token *name = *t;
+			*t = name->next;
+			*t = expect(*t, ":");
+			if (f->nct != f->nparams)
+				error_at(name->pos, "comptime parameters must come first");
+			if (f->nct == 6) error_at(name->pos, "too many comptime parameters");
+			Type *tv = type_new_var(name->text);
+			type_vars[ntype_vars++] = tv;
+			Var *p = declare(name->text, ty_type, name->pos);
+			parse_type(t);
+			f->params[f->nparams++] = p;
+			f->nct++;
+			continue;
+		}
+
+		if ((*t)->kind != TK_IDENT)
+			error_at((*t)->pos, "expected a parameter name");
 		Token *name = *t;
 		*t = name->next;
 		Type *ty = parse_type(t);
@@ -680,6 +730,7 @@ static Func *function(Token **t) {
 
 	f->body = block(t);
 	leave_scope();
+	ntype_vars = saved_ntype_vars;
 
 	cur_fn = NULL;
 	type_set_fn(NULL);
@@ -827,6 +878,16 @@ static void global_decl(Token **t) {
 }
 
 static Func *all_funcs;
+static Func *funcs_tail;
+
+void add_func(Func *f) {
+	if (!all_funcs) {
+		all_funcs = f;
+	} else {
+		funcs_tail->next = f;
+	}
+	funcs_tail = f;
+}
 
 Func *find_func(Str name) {
 	for (Func *f = all_funcs; f; f = f->next)
@@ -889,9 +950,11 @@ Unit parse(Token *tok) {
 	leave_scope();
 
 	all_funcs = head.next;
+	funcs_tail = tail;
 	for (Func *f = all_funcs; f; f = f->next) {
 		if (find_func(f->name) != f)
 			error_at(f->pos, "redefinition of function '%s'", f->name);
+		if (f->nct) continue;
 		type_func(f);
 
 		int off = 0;
