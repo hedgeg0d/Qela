@@ -141,6 +141,7 @@ typedef enum {
 	ND_RET,
 	ND_BLOCK,
 	ND_EXPRSTMT,
+	ND_COMPTIME,
 } NodeKind;
 
 typedef struct Var Var;
@@ -229,5 +230,24 @@ extern bool opt_no_bounds;
 Image codegen(Unit *u);
 
 void write_elf(const char *path, Image *img);
+
+/* ── comptime ── */
+
+typedef enum {
+	CV_INT,
+	CV_STR,
+	CV_TYPE,
+	CV_VOID,
+} CVKind;
+
+typedef struct {
+	CVKind kind;
+	i64    num;
+	Str    str;
+	Type  *ty;
+} ComptimeVal;
+
+ComptimeVal comptime_eval(Node *n);
+bool        comptime_has_side_effects(Node *n);
 
 #endif
