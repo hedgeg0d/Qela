@@ -1,0 +1,10 @@
+// expect-exit: 7
+fn main() int {
+	var x int = 1;
+	var p *int = &x;
+	let q = p + 3;
+	var b u8 = 0;
+	var pb *u8 = &b;
+	let qb = pb + 4;
+	return ((q - p) + (qb - pb)) as int;
+}
