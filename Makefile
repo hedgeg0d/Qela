@@ -9,7 +9,7 @@ CFLAGS := -std=gnu23 -Oz -ffreestanding -fno-stack-protector \
 LDFLAGS := -nostdlib -nostartfiles -static -no-pie \
            -Wl,--gc-sections -Wl,--build-id=none -Wl,-z,noseparate-code
 
-SRC := src/rt.c src/diag.c src/lex.c src/type.c src/parse.c src/codegen.c src/elf.c src/comptime.c src/main.c
+SRC := src/rt.c src/diag.c src/lex.c src/type.c src/parse.c src/codegen.c src/elf.c src/opt.c src/comptime.c src/main.c
 OBJ := $(SRC:.c=.o) src/start.o
 BIN := qela
 
