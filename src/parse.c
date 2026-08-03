@@ -171,6 +171,7 @@ static Type *parse_type(Token **t) {
 
 static Node *expr(Token **t);
 static Node *assign(Token **t);
+static Node *block(Token **t);
 
 static Node *call_args(Token **t, Node *n) {
 	*t = expect(*t, "(");
@@ -206,6 +207,13 @@ static Node *primary(Token **t) {
 		Node *n = node(ND_STRLIT, tok->pos);
 		n->val = intern_str(tok->str);
 		*t = tok->next;
+		return n;
+	}
+
+	if (eq(tok, "comptime")) {
+		*t = tok->next;
+		Node *n = node(ND_COMPTIME, tok->pos);
+		n->body = block(t);
 		return n;
 	}
 
@@ -876,6 +884,7 @@ Unit parse(Token *tok) {
 		}
 		tail->next = function(&tok);
 		tail = tail->next;
+		all_funcs = head.next;
 	}
 	leave_scope();
 
