@@ -1,0 +1,16 @@
+// expect-exit: 1
+fn main() int {
+	var ok int = 1;
+	var b u8 = 200;
+	var pb *u8 = &b;
+	*pb += 100;
+	if (b != 44) { ok = 0; }
+	var s i8 = 200 as i8;
+	if (s != -56) { ok = 0; }
+	var w i32 = 70000;
+	if (w != 70000) { ok = 0; }
+	if (w as i16 != 4464) { ok = 0; }
+	var u u32 = 4000000000 as u32;
+	if (u / 2 != 2000000000) { ok = 0; }
+	return ok;
+}
