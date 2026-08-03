@@ -1,7 +1,8 @@
 #include "comp.h"
 
-#define PRIM(var, kind, sz, uns, nm) \
-	static Type var##_v = {kind, sz, sz, uns, NULL, {nm, sizeof(nm) - 1}}; \
+#define PRIM(var, k, sz, uns, nm)                                                 \
+	static Type var##_v = {.kind = k, .size = sz, .align = sz, .is_unsigned = uns, \
+	                       .name = {nm, sizeof(nm) - 1}};                          \
 	Type *var = &var##_v;
 
 PRIM(ty_void, TY_VOID, 1, false, "void")
@@ -21,6 +22,31 @@ Type *type_ptr(Type *base) {
 	return t;
 }
 
+Type *type_array(Type *base, isize len) {
+	Type *t = anew(Type);
+	*t = (Type){.kind = TY_ARRAY,
+	            .size = (int)(base->size * len),
+	            .align = base->align,
+	            .base = base,
+	            .len = len};
+	return t;
+}
+
+typedef struct Named Named;
+struct Named {
+	Named *next;
+	Str    name;
+	Type  *ty;
+};
+
+static Named *named_types;
+
+void type_define(Str name, Type *ty) {
+	Named *n = anew(Named);
+	*n = (Named){.next = named_types, .name = name, .ty = ty};
+	named_types = n;
+}
+
 Type *type_lookup(Str name) {
 	static const struct {
 		const char *name;
@@ -33,20 +59,46 @@ Type *type_lookup(Str name) {
 	};
 	for (int i = 0; table[i].name; i++)
 		if (str_eq(name, str_from_cstr(table[i].name))) return *table[i].ty;
+	for (Named *n = named_types; n; n = n->next)
+		if (str_eq(n->name, name)) return n->ty;
 	return NULL;
 }
 
 bool is_integer(Type *t) { return t->kind == TY_INT || t->kind == TY_BOOL; }
 bool is_numeric(Type *t) { return is_integer(t) || t->kind == TY_PTR; }
+bool is_aggregate(Type *t) { return t->kind == TY_ARRAY || t->kind == TY_STRUCT; }
+
+Type *decayed(Type *t) { return t->kind == TY_ARRAY ? type_ptr(t->base) : t; }
 
 Str type_name(Type *t) {
-	if (t->kind != TY_PTR) return t->name;
-	Str base = type_name(t->base);
-	char *p = anew_n(char, base.n + 2);
-	p[0] = '*';
-	memcpy(p + 1, base.p, (usize)base.n);
-	p[base.n + 1] = 0;
-	return (Str){p, base.n + 1};
+	if (t->kind == TY_PTR) {
+		Str base = type_name(t->base);
+		char *p = anew_n(char, base.n + 2);
+		p[0] = '*';
+		memcpy(p + 1, base.p, (usize)base.n);
+		p[base.n + 1] = 0;
+		return (Str){p, base.n + 1};
+	}
+	if (t->kind == TY_ARRAY) {
+		Str base = type_name(t->base);
+		char *p = anew_n(char, base.n + 24);
+		isize n = 0;
+		p[n++] = '[';
+		char tmp[20];
+		int  d = 0;
+		isize v = t->len;
+		do {
+			tmp[d++] = (char)('0' + v % 10);
+			v /= 10;
+		} while (v);
+		while (d) p[n++] = tmp[--d];
+		p[n++] = ']';
+		memcpy(p + n, base.p, (usize)base.n);
+		n += base.n;
+		p[n] = 0;
+		return (Str){p, n};
+	}
+	return t->name;
 }
 
 static Type *common(Type *a, Type *b) {
@@ -63,6 +115,21 @@ static Node *cast_to(Node *n, Type *ty) {
 	Node *c = anew(Node);
 	*c = (Node){.kind = ND_CAST, .lhs = n, .ty = ty, .pos = n->pos};
 	return c;
+}
+
+static Node *to_value(Node *n) {
+	return n->ty->kind == TY_ARRAY ? cast_to(n, decayed(n->ty)) : n;
+}
+
+static bool same_type(Type *a, Type *b) {
+	if (a == b) return true;
+	if (a->kind != b->kind) return false;
+	switch (a->kind) {
+	case TY_PTR: return same_type(a->base, b->base);
+	case TY_ARRAY: return a->len == b->len && same_type(a->base, b->base);
+	case TY_STRUCT: return false;
+	default: return a->size == b->size && a->is_unsigned == b->is_unsigned;
+	}
 }
 
 static void usual_conv(Node *n) {
@@ -99,6 +166,8 @@ void add_type(Node *n) {
 
 	case ND_ADD:
 	case ND_SUB: {
+		n->lhs = to_value(n->lhs);
+		n->rhs = to_value(n->rhs);
 		Type *lt = n->lhs->ty, *rt = n->rhs->ty;
 		if (lt->kind == TY_PTR && rt->kind == TY_PTR) {
 			if (n->kind == ND_ADD) error_at(n->pos, "cannot add two pointers");
@@ -157,6 +226,10 @@ void add_type(Node *n) {
 	case ND_NE:
 	case ND_LT:
 	case ND_LE:
+		n->lhs = to_value(n->lhs);
+		n->rhs = to_value(n->rhs);
+		if (is_aggregate(n->lhs->ty) || is_aggregate(n->rhs->ty))
+			error_at(n->pos, "aggregates cannot be compared");
 		if (is_integer(n->lhs->ty) && is_integer(n->rhs->ty)) usual_conv(n);
 		n->ty = ty_bool;
 		return;
@@ -168,14 +241,54 @@ void add_type(Node *n) {
 		return;
 
 	case ND_ASSIGN:
+		if (n->lhs->ty->kind == TY_ARRAY)
+			error_at(n->pos, "cannot assign to an array");
+		if (is_aggregate(n->lhs->ty)) {
+			if (!same_type(n->lhs->ty, n->rhs->ty))
+				error_at(n->pos, "cannot assign '%s' to '%s'",
+				         type_name(n->rhs->ty), type_name(n->lhs->ty));
+			n->ty = n->lhs->ty;
+			return;
+		}
+		n->rhs = to_value(n->rhs);
 		if (n->lhs->ty->kind == TY_PTR && is_integer(n->rhs->ty) &&
 		    !(n->rhs->kind == ND_NUM && n->rhs->val == 0))
 			error_at(n->pos, "cannot assign an integer to a pointer");
 		if (is_integer(n->lhs->ty) && n->rhs->ty->kind == TY_PTR)
 			error_at(n->pos, "cannot assign a pointer to an integer");
+		if (n->lhs->ty->kind == TY_PTR && n->rhs->ty->kind == TY_PTR &&
+		    !same_type(n->lhs->ty, n->rhs->ty) && n->rhs->ty->base->kind != TY_VOID &&
+		    n->lhs->ty->base->kind != TY_VOID)
+			error_at(n->pos, "cannot assign '%s' to '%s'", type_name(n->rhs->ty),
+			         type_name(n->lhs->ty));
 		n->rhs = cast_to(n->rhs, n->lhs->ty);
 		n->ty = n->lhs->ty;
 		return;
+
+	case ND_INDEX: {
+		Type *lt = n->lhs->ty;
+		if (lt->kind != TY_ARRAY && lt->kind != TY_PTR)
+			error_at(n->pos, "cannot index a value of type '%s'", type_name(lt));
+		if (lt->base->kind == TY_VOID) error_at(n->pos, "cannot index a *void");
+		if (!is_integer(n->rhs->ty))
+			error_at(n->pos, "an index must be an integer");
+		n->ty = lt->base;
+		return;
+	}
+
+	case ND_MEMBER: {
+		Type *lt = n->lhs->ty;
+		if (lt->kind == TY_PTR) lt = lt->base;
+		if (lt->kind != TY_STRUCT)
+			error_at(n->pos, "type '%s' has no fields", type_name(n->lhs->ty));
+		for (Member *m = lt->members; m; m = m->next)
+			if (str_eq(m->name, n->name)) {
+				n->member = m;
+				n->ty = m->ty;
+				return;
+			}
+		error_at(n->pos, "'%s' has no field named '%s'", type_name(lt), n->name);
+	}
 
 	case ND_ADDR:
 		n->ty = type_ptr(n->lhs->ty);
@@ -224,7 +337,10 @@ void add_type(Node *n) {
 		for (Node *a = n->args; a;) {
 			Node *next = a->next;
 			a->next = NULL;
+			a = to_value(a);
 			Type *want = f->params[i++]->ty;
+			if (is_aggregate(want))
+				error_at(a->pos, "passing an aggregate by value is not supported yet");
 			if (want->kind == TY_PTR && a->ty->kind != TY_PTR)
 				error_at(a->pos, "argument must have type '%s'", type_name(want));
 			if (want->kind != TY_PTR && a->ty->kind == TY_PTR)
