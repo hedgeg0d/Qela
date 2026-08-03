@@ -34,6 +34,7 @@ typedef enum {
 	TY_PTR,
 	TY_ARRAY,
 	TY_STRUCT,
+	TY_SLICE,
 } TypeKind;
 
 typedef struct Type   Type;
@@ -65,6 +66,8 @@ extern Type *ty_u8, *ty_u16, *ty_u32, *ty_u64;
 
 Type *type_ptr(Type *base);
 Type *type_array(Type *base, isize len);
+Type *type_slice(Type *base);
+Type *type_str(void);
 Type *type_lookup(Str name);
 void  type_define(Str name, Type *ty);
 bool  is_integer(Type *t);
@@ -79,11 +82,11 @@ typedef enum {
 	ND_VAR,
 	ND_CALL,
 	ND_SYSCALL,
-	ND_CSTRLEN,
 	ND_ADDR,
 	ND_DEREF,
 	ND_MEMBER,
 	ND_INDEX,
+	ND_SLICE,
 	ND_CAST,
 	ND_ADD,
 	ND_SUB,
@@ -145,6 +148,7 @@ struct Node {
 	int      nargs;
 	i64      val;
 	Var     *var;
+	Var     *tmp;
 	Member  *member;
 	Str      name;
 	isize    pos;
@@ -165,6 +169,9 @@ struct Func {
 	i64   addr;
 	isize pos;
 };
+
+void type_func(Func *f);
+void type_set_fn(Func *f);
 
 typedef struct {
 	Func *funcs;
@@ -187,6 +194,7 @@ typedef struct {
 	Buf   data;
 	isize bss_size;
 	i64   entry;
+	int   nph;
 } Image;
 
 extern bool opt_no_bounds;
