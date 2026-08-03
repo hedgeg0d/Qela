@@ -50,6 +50,15 @@ Type *type_str(void) {
 	return cached;
 }
 
+int enum_tag_of(Type *ty, Str name, Variant **out) {
+	for (Variant *v = ty->variants; v; v = v->next)
+		if (str_eq(v->name, name)) {
+			if (out) *out = v;
+			return v->tag;
+		}
+	return -1;
+}
+
 typedef struct Named Named;
 struct Named {
 	Named *next;
@@ -86,7 +95,8 @@ Type *type_lookup(Str name) {
 bool is_integer(Type *t) { return t->kind == TY_INT || t->kind == TY_BOOL; }
 bool is_numeric(Type *t) { return is_integer(t) || t->kind == TY_PTR; }
 bool is_aggregate(Type *t) {
-	return t->kind == TY_ARRAY || t->kind == TY_STRUCT || t->kind == TY_SLICE;
+	return t->kind == TY_ARRAY || t->kind == TY_STRUCT || t->kind == TY_SLICE ||
+	       t->kind == TY_ENUM;
 }
 
 Type *decayed(Type *t) { return t->kind == TY_ARRAY ? type_ptr(t->base) : t; }
@@ -194,12 +204,74 @@ void type_set_fn(Func *f) { cur_fn_typing = f; }
 
 void type_func(Func *f) {
 	cur_fn_typing = f;
+	if (is_aggregate(f->ret) && f->ret->size > 16)
+		f->ret_slot = alloc_temp(type_ptr(f->ret));
 	add_type(f->body);
+}
+
+void add_type(Node *n);
+
+static void type_match(Node *n) {
+	add_type(n->cond);
+
+	Type *st = n->cond->ty;
+	if (st->kind != TY_ENUM)
+		error_at(n->pos, "match needs an enum value, got '%s'", type_name(st));
+
+	bool seen[64] = {false};
+	bool has_default = false;
+
+	for (Node *arm = n->body; arm; arm = arm->next) {
+		arm->typed = true;
+		arm->ty = ty_void;
+
+		if (arm->name.n == 0) {
+			if (has_default) error_at(arm->pos, "duplicate '_' arm");
+			has_default = true;
+		} else {
+			Variant *v = NULL;
+			int tag = enum_tag_of(st, arm->name, &v);
+			if (tag < 0)
+				error_at(arm->pos, "'%s' has no variant named '%s'", type_name(st),
+				         arm->name);
+			if (seen[tag]) error_at(arm->pos, "duplicate arm for '%s'", arm->name);
+			seen[tag] = true;
+			arm->variant = v;
+
+			int nb = 0;
+			for (Node *b = arm->args; b; b = b->next) nb++;
+			if (nb && nb != v->nfields)
+				error_at(arm->pos, "'%s' binds %d value(s), not %d", arm->name, nb,
+				         v->nfields);
+
+			Member *f = v->fields;
+			for (Node *b = arm->args; b; b = b->next, f = f->next) {
+				b->var->ty = f->ty;
+				b->ty = f->ty;
+				b->typed = true;
+			}
+		}
+		add_type(arm->body);
+	}
+
+	if (!has_default)
+		for (Variant *v = st->variants; v; v = v->next)
+			if (!seen[v->tag]) error_at(n->pos, "match does not cover '%s'", v->name);
+
+	n->tmp = alloc_temp(type_ptr(st));
+	if (!n->tmp) error_at(n->pos, "match needs a function scope");
+	n->ty = ty_void;
 }
 
 void add_type(Node *n) {
 	if (!n || n->typed) return;
 	n->typed = true;
+
+	if (n->kind == ND_MATCH) {
+		type_match(n);
+		for (Node *s = n->next; s; s = s->next) add_type(s);
+		return;
+	}
 
 	add_type(n->lhs);
 	add_type(n->rhs);
@@ -350,6 +422,42 @@ void add_type(Node *n) {
 		return;
 	}
 
+	case ND_ENUMLIT: {
+		Variant *v = NULL;
+		if (enum_tag_of(n->ty, n->name, &v) < 0)
+			error_at(n->pos, "'%s' has no variant named '%s'", type_name(n->ty),
+			         n->name);
+		int i = 0;
+		Node head = {0};
+		Node *tail = &head;
+		Member *f = v->fields;
+		for (Node *a = n->args; a;) {
+			Node *next = a->next;
+			a->next = NULL;
+			if (!f) error_at(n->pos, "too many values for '%s'", n->name);
+			a = coerce(a, f->ty);
+			if (is_aggregate(f->ty)) {
+				if (!same_type(f->ty, a->ty))
+					error_at(a->pos, "value must have type '%s'", type_name(f->ty));
+				tail->next = a;
+			} else {
+				a = to_value(a);
+				tail->next = cast_to(a, f->ty);
+			}
+			tail = tail->next;
+			f = f->next;
+			i++;
+			a = next;
+		}
+		if (i != v->nfields)
+			error_at(n->pos, "'%s' needs %d more value(s)", n->name, v->nfields - i);
+		n->args = head.next;
+		n->variant = v;
+		n->tmp = alloc_temp(n->ty);
+		if (!n->tmp) error_at(n->pos, "an enum value needs a function scope");
+		return;
+	}
+
 	case ND_MEMBER: {
 		Type *lt = n->lhs->ty;
 		if (lt->kind == TY_PTR) lt = lt->base;
@@ -416,6 +524,11 @@ void add_type(Node *n) {
 			if (is_aggregate(want)) {
 				if (!same_type(want, a->ty))
 					error_at(a->pos, "argument must have type '%s'", type_name(want));
+				if (want->size > 16) {
+					a->tmp = alloc_temp(want);
+					if (!a->tmp)
+						error_at(a->pos, "this call needs a function scope");
+				}
 				tail->next = a;
 			} else {
 				a = to_value(a);

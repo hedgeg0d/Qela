@@ -2,7 +2,8 @@
 
 static const char *keywords[] = {"fn",  "let",   "var",      "if",       "else",
                                  "while", "for", "in",       "break",    "continue",
-                                 "return", "as", "struct", NULL};
+                                 "return", "as", "struct", "enum",
+                                 "match",  "defer", "import", NULL};
 
 static bool is_space(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
 static bool is_digit(char c) { return c >= '0' && c <= '9'; }
@@ -18,12 +19,14 @@ static bool is_keyword(Str s) {
 }
 
 static const char *puncts[] = {
-    "<<=", ">>=", "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=",
+    "<<=", ">>=", "=>", "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=",
     "/=",  "%=",  "&=", "|=", "^=", "<<", ">>", "..", NULL};
+
+static isize lex_base;
 
 static Token *push(Token **tail, TokKind kind, isize pos) {
 	Token *t = anew(Token);
-	*t = (Token){.kind = kind, .pos = pos};
+	*t = (Token){.kind = kind, .pos = pos + lex_base};
 	(*tail)->next = t;
 	*tail = t;
 	return t;
@@ -39,11 +42,12 @@ static i64 read_escape(Str src, isize *i) {
 	case '\\': return '\\';
 	case '"': return '"';
 	case '\'': return '\'';
-	default: error_at(*i - 1, "unknown escape sequence");
+	default: error_at(lex_base + *i - 1, "unknown escape sequence");
 	}
 }
 
-Token *lex(Str src) {
+Token *lex(Str src, isize base) {
+	lex_base = base;
 	Token head = {0};
 	Token *tail = &head;
 
@@ -61,7 +65,7 @@ Token *lex(Str src) {
 			isize start = i;
 			i += 2;
 			while (i + 1 < src.n && !(src.p[i] == '*' && src.p[i + 1] == '/')) i++;
-			if (i + 1 >= src.n) error_at(start, "unterminated block comment");
+			if (i + 1 >= src.n) error_at(lex_base + start, "unterminated block comment");
 			i += 2;
 			continue;
 		}
@@ -72,7 +76,7 @@ Token *lex(Str src) {
 			if (src.p[i] == '0' && i + 1 < src.n &&
 			    (src.p[i + 1] == 'x' || src.p[i + 1] == 'X')) {
 				i += 2;
-				if (i >= src.n) error_at(start, "malformed hex literal");
+				if (i >= src.n) error_at(lex_base + start, "malformed hex literal");
 				while (i < src.n) {
 					char c = src.p[i];
 					int d;
@@ -86,7 +90,7 @@ Token *lex(Str src) {
 			} else {
 				while (i < src.n && is_digit(src.p[i])) val = val * 10 + (src.p[i++] - '0');
 			}
-			if (i < src.n && is_ident(src.p[i])) error_at(i, "invalid digit in number");
+			if (i < src.n && is_ident(src.p[i])) error_at(lex_base + i, "invalid digit in number");
 			Token *t = push(&tail, TK_NUM, start);
 			t->val = val;
 			t->text = (Str){src.p + start, i - start};
@@ -107,7 +111,7 @@ Token *lex(Str src) {
 			char *buf = anew_n(char, src.n - i + 1);
 			isize n = 0;
 			while (i < src.n && src.p[i] != '"') {
-				if (src.p[i] == '\n') error_at(start, "unterminated string literal");
+				if (src.p[i] == '\n') error_at(lex_base + start, "unterminated string literal");
 				if (src.p[i] == '\\') {
 					i++;
 					buf[n++] = (char)read_escape(src, &i);
@@ -115,7 +119,7 @@ Token *lex(Str src) {
 					buf[n++] = src.p[i++];
 				}
 			}
-			if (i >= src.n) error_at(start, "unterminated string literal");
+			if (i >= src.n) error_at(lex_base + start, "unterminated string literal");
 			i++;
 			buf[n] = 0;
 			Token *t = push(&tail, TK_STR, start);
@@ -136,7 +140,7 @@ Token *lex(Str src) {
 			bool ok = false;
 			for (const char *s = singles; *s; s++)
 				if (*s == src.p[i]) ok = true;
-			if (!ok) error_at(i, "unexpected character");
+			if (!ok) error_at(lex_base + i, "unexpected character");
 			plen = 1;
 		}
 		Token *t = push(&tail, TK_PUNCT, i);
