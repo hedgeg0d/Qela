@@ -26,6 +26,11 @@ typedef struct {
 } StrFixup;
 
 typedef struct {
+	isize at;
+	Var  *var;
+} DataFixup;
+
+typedef struct {
 	isize *p;
 	int    n;
 	int    cap;
@@ -40,6 +45,8 @@ struct Loop {
 
 static Buf   code;
 static Buf   rodata;
+static Buf   data;
+static isize bss_size;
 static int   depth;
 static Loop *cur_loop;
 
@@ -48,6 +55,8 @@ static int ncalls, calls_cap;
 static StrFixup *strrefs;
 static int nstrrefs, strrefs_cap;
 static isize *str_off;
+static DataFixup *datarefs;
+static int ndatarefs, datarefs_cap;
 
 static void list_push(List *l, isize v) {
 	if (l->n == l->cap) {
@@ -257,13 +266,29 @@ static void add_strref(int id) {
 	b4(0);
 }
 
+static void add_dataref(Var *v) {
+	if (ndatarefs == datarefs_cap) {
+		int cap = datarefs_cap ? datarefs_cap * 2 : 32;
+		DataFixup *p = anew_n(DataFixup, cap);
+		memcpy(p, datarefs, sizeof(DataFixup) * (usize)ndatarefs);
+		datarefs = p;
+		datarefs_cap = cap;
+	}
+	b1(0x48);
+	b1(0x8d);
+	modrm(0, RAX, RBP);
+	datarefs[ndatarefs++] = (DataFixup){code.n, v};
+	b4(0);
+}
+
 static void gen_expr(Node *n);
 static void gen_stmt(Node *n);
 
 static void gen_addr(Node *n) {
 	switch (n->kind) {
 	case ND_VAR:
-		lea_local(RAX, n->var->offset);
+		if (n->var->is_global) add_dataref(n->var);
+		else lea_local(RAX, n->var->offset);
 		return;
 	case ND_DEREF:
 		gen_expr(n->lhs);
@@ -627,6 +652,24 @@ static void gen_func(Func *f) {
 	b1(0xc3);
 }
 
+static void layout_globals(Var *globals) {
+	for (Var *v = globals; v; v = v->next) {
+		if (v->init == 0) continue;
+		isize off = (data.n + v->ty->align - 1) & ~(isize)(v->ty->align - 1);
+		while (data.n < off) buf_u8(&data, 0);
+		v->data_off = data.n;
+		for (int i = 0; i < v->ty->size; i++) buf_u8(&data, (u8)(v->init >> (i * 8)));
+	}
+	isize bss = data.n;
+	for (Var *v = globals; v; v = v->next) {
+		if (v->init != 0) continue;
+		bss = (bss + v->ty->align - 1) & ~(isize)(v->ty->align - 1);
+		v->data_off = bss;
+		bss += v->ty->size;
+	}
+	bss_size = bss - data.n;
+}
+
 Image codegen(Unit *u) {
 	str_off = anew_n(isize, u->nstrs ? u->nstrs : 1);
 	for (int i = 0; i < u->nstrs; i++) {
@@ -634,6 +677,9 @@ Image codegen(Unit *u) {
 		buf_bytes(&rodata, u->strs[i].p, u->strs[i].n);
 		buf_u8(&rodata, 0);
 	}
+	while (rodata.n & 7) buf_u8(&rodata, 0);
+
+	layout_globals(u->globals);
 
 	add_call(S("main"), 0);
 	b1(0x89);
@@ -661,5 +707,11 @@ Image codegen(Unit *u) {
 	}
 	while (code.n < rodata_at) buf_u8(&code, 0);
 
-	return (Image){.code = code, .rodata = rodata, .entry = 0};
+	for (int i = 0; i < ndatarefs; i++) {
+		isize target = SEG_GAP + code.n + rodata.n + datarefs[i].var->data_off;
+		buf_patch32(&code, datarefs[i].at, (u32)(target - (datarefs[i].at + 4)));
+	}
+
+	return (Image){
+	    .code = code, .rodata = rodata, .data = data, .bss_size = bss_size, .entry = 0};
 }
