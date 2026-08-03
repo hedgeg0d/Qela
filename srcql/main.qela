@@ -1,0 +1,6 @@
+import "comp.qela";
+import "buf.qela";
+
+fn main() int {
+	return 0;
+}
