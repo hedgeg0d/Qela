@@ -211,6 +211,18 @@ static Node *primary(Token **t) {
 
 	if (tok->kind == TK_IDENT) {
 		*t = tok->next;
+		Type *et = type_lookup(tok->text);
+		if (et && et->kind == TY_ENUM && eq(*t, ".")) {
+			*t = (*t)->next;
+			if ((*t)->kind != TK_IDENT)
+				error_at((*t)->pos, "expected a variant name");
+			Node *n = node(ND_ENUMLIT, tok->pos);
+			n->ty = et;
+			n->name = (*t)->text;
+			*t = (*t)->next;
+			if (eq(*t, "(")) call_args(t, n);
+			return n;
+		}
 		if (eq(*t, "(")) {
 			NodeKind kind = ND_CALL;
 			if (str_eq(tok->text, S("syscall"))) kind = ND_SYSCALL;
@@ -555,6 +567,62 @@ static Node *stmt(Token **t) {
 		return n;
 	}
 
+	if (eq(tok, "defer")) {
+		*t = tok->next;
+		Node *n = node(ND_DEFER, tok->pos);
+		n->lhs = stmt(t);
+		return n;
+	}
+
+	if (eq(tok, "match")) {
+		*t = expect(tok->next, "(");
+		Node *n = node(ND_MATCH, tok->pos);
+		n->cond = expr(t);
+		*t = expect(*t, ")");
+		*t = expect(*t, "{");
+
+		Node  head = {0};
+		Node *tail = &head;
+		while (!eq(*t, "}")) {
+			if ((*t)->kind == TK_EOF) error_at((*t)->pos, "unclosed match");
+			Node *arm = node(ND_ARM, (*t)->pos);
+			if (!consume(t, "_")) {
+				if ((*t)->kind != TK_IDENT)
+					error_at((*t)->pos, "expected a variant name or '_'");
+				arm->name = (*t)->text;
+				*t = (*t)->next;
+			}
+
+			enter_scope();
+			if (consume(t, "(")) {
+				Node  bh = {0};
+				Node *bt = &bh;
+				while (!eq(*t, ")")) {
+					if (bt != &bh) *t = expect(*t, ",");
+					if ((*t)->kind != TK_IDENT)
+						error_at((*t)->pos, "expected a binding name");
+					Node *b = node(ND_VAR, (*t)->pos);
+					b->var = declare((*t)->text, ty_i64, (*t)->pos);
+					*t = (*t)->next;
+					bt->next = b;
+					bt = b;
+				}
+				*t = expect(*t, ")");
+				arm->args = bh.next;
+			}
+			*t = expect(*t, "=>");
+			arm->body = stmt(t);
+			leave_scope();
+
+			tail->next = arm;
+			tail = arm;
+		}
+		*t = expect(*t, "}");
+		if (!head.next) error_at(tok->pos, "match needs at least one arm");
+		n->body = head.next;
+		return n;
+	}
+
 	if (eq(tok, "let") || eq(tok, "var")) return declaration(t);
 
 	Node *n = node(ND_EXPRSTMT, tok->pos);
@@ -586,14 +654,13 @@ static Func *function(Token **t) {
 		Type *ty = parse_type(t);
 		if (ty->kind == TY_ARRAY)
 			error_at(name->pos, "an array must be passed by pointer or as a slice");
-		if (is_aggregate(ty) && ty->size > 16)
-			error_at(name->pos,
-			         "an aggregate larger than 16 bytes must be passed by pointer");
-		rwords += is_aggregate(ty) && ty->size > 8 ? 2 : 1;
+		rwords += is_aggregate(ty) && ty->size > 8 && ty->size <= 16 ? 2 : 1;
 		if (rwords > 6)
 			error_at(name->pos, "parameters do not fit in the argument registers");
 		if (f->nparams == 6) error_at(name->pos, "at most 6 parameters are supported");
-		f->params[f->nparams++] = declare(name->text, ty, name->pos);
+		Var *p = declare(name->text, ty, name->pos);
+		p->by_ref = is_aggregate(ty) && ty->size > 16;
+		f->params[f->nparams++] = p;
 	}
 	*t = expect(*t, ")");
 
@@ -601,9 +668,6 @@ static Func *function(Token **t) {
 		f->ret = parse_type(t);
 		if (f->ret->kind == TY_ARRAY)
 			error_at(kw->pos, "an array cannot be returned by value");
-		if (is_aggregate(f->ret) && f->ret->size > 16)
-			error_at(kw->pos,
-			         "an aggregate larger than 16 bytes must be returned by pointer");
 	}
 
 	f->body = block(t);
@@ -612,6 +676,69 @@ static Func *function(Token **t) {
 	cur_fn = NULL;
 	type_set_fn(NULL);
 	return f;
+}
+
+static void enum_decl(Token **t) {
+	*t = expect(*t, "enum");
+	if ((*t)->kind != TK_IDENT) error_at((*t)->pos, "expected an enum name");
+	Token *name = *t;
+	*t = name->next;
+	if (type_lookup(name->text))
+		error_at(name->pos, "redefinition of type '%s'", name->text);
+
+	Type *ty = anew(Type);
+	*ty = (Type){.kind = TY_ENUM, .align = 8, .name = name->text};
+	type_define(name->text, ty);
+
+	*t = expect(*t, "{");
+	Variant  head = {0};
+	Variant *tail = &head;
+	int tag = 0, maxpay = 0;
+
+	while (!eq(*t, "}")) {
+		if (tail != &head) *t = expect(*t, ",");
+		if (eq(*t, "}")) break;
+		if ((*t)->kind != TK_IDENT) error_at((*t)->pos, "expected a variant name");
+		Token *vname = *t;
+		*t = vname->next;
+		for (Variant *v = head.next; v; v = v->next)
+			if (str_eq(v->name, vname->text))
+				error_at(vname->pos, "duplicate variant '%s'", vname->text);
+		if (tag == 64) error_at(vname->pos, "at most 64 variants are supported");
+
+		Variant *v = anew(Variant);
+		*v = (Variant){.name = vname->text, .tag = tag++, .pos = vname->pos};
+
+		if (consume(t, "(")) {
+			Member  fh = {0};
+			Member *ft = &fh;
+			int     off = 8;
+			while (!eq(*t, ")")) {
+				if (ft != &fh) *t = expect(*t, ",");
+				Type *fty = parse_type(t);
+				if (fty->size == 0)
+					error_at(vname->pos, "a variant field cannot have type 'void'");
+				off = (off + fty->align - 1) & ~(fty->align - 1);
+				Member *m = anew(Member);
+				*m = (Member){.ty = fty, .offset = off, .pos = vname->pos};
+				off += fty->size;
+				ft->next = m;
+				ft = m;
+				v->nfields++;
+			}
+			*t = expect(*t, ")");
+			if (!v->nfields) error_at(vname->pos, "empty payload list");
+			v->fields = fh.next;
+			if (off - 8 > maxpay) maxpay = off - 8;
+		}
+		tail->next = v;
+		tail = v;
+	}
+	*t = expect(*t, "}");
+	if (!head.next) error_at(name->pos, "an enum must have at least one variant");
+
+	ty->variants = head.next;
+	ty->size = (8 + maxpay + 7) & ~7;
 }
 
 static void struct_decl(Token **t) {
@@ -708,8 +835,43 @@ Unit parse(Token *tok) {
 			struct_decl(&tok);
 			continue;
 		}
+		if (eq(tok, "enum")) {
+			enum_decl(&tok);
+			continue;
+		}
 		if (eq(tok, "let") || eq(tok, "var")) {
 			global_decl(&tok);
+			continue;
+		}
+		if (eq(tok, "import")) {
+			tok = tok->next;
+			if (tok->kind != TK_STR)
+				error_at(tok->pos, "import needs a string path");
+			Str raw = tok->str;
+			tok = tok->next;
+			tok = expect(tok, ";");
+
+			/* Resolve path relative to the importing file's directory. */
+			char buf[4096];
+			int cur_file = (int)(tok->pos >> FILE_SHIFT);
+			int dir_len = diag_file_dir(cur_file, buf, sizeof(buf) - 256);
+			char *p = buf + dir_len;
+			memcpy(p, raw.p, (usize)raw.n);
+			p[raw.n] = 0;
+
+			if (!diag_already_imported(buf)) {
+				Str src = read_file(buf);
+				int fid = diag_add_file(buf, src);
+				Token *head = lex(src, (isize)fid << FILE_SHIFT);
+				/* Splice imported tokens between current position and
+				   the main file's remaining tokens. Skip the imported
+				   EOF token — the parser should continue past it. */
+				Token *tail2 = head;
+				while (tail2->next && tail2->next->kind != TK_EOF)
+					tail2 = tail2->next;
+				tail2->next = tok;
+				tok = head;
+			}
 			continue;
 		}
 		tail->next = function(&tok);
@@ -725,8 +887,9 @@ Unit parse(Token *tok) {
 
 		int off = 0;
 		for (Var *v = f->locals; v; v = v->next) {
-			int size = v->ty->size < 8 ? 8 : v->ty->size;
-			off = (off + size + v->ty->align - 1) & ~(v->ty->align - 1);
+			int size = v->by_ref ? 8 : v->ty->size < 8 ? 8 : v->ty->size;
+			int al = v->by_ref ? 8 : v->ty->align;
+			off = (off + size + al - 1) & ~(al - 1);
 			v->offset = off;
 		}
 		f->stack_size = (off + 15) & ~15;

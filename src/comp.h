@@ -22,10 +22,17 @@ struct Token {
 	isize   pos;
 };
 
-void diag_init(const char *path, Str src);
+#define FILE_SHIFT  40
+#define FILE_STRIDE (1LL << FILE_SHIFT)
+
+void set_module_dir(const char *path);
+int  diag_file_dir(int file_id, char *buf, isize cap);
+bool diag_already_imported(const char *path);
+
+int diag_add_file(const char *path, Str src);
 _Noreturn void error_at(isize pos, const char *fmt, ...);
 
-Token *lex(Str src);
+Token *lex(Str src, isize base);
 
 typedef enum {
 	TY_VOID,
@@ -35,10 +42,12 @@ typedef enum {
 	TY_ARRAY,
 	TY_STRUCT,
 	TY_SLICE,
+	TY_ENUM,
 } TypeKind;
 
-typedef struct Type   Type;
-typedef struct Member Member;
+typedef struct Type    Type;
+typedef struct Member  Member;
+typedef struct Variant Variant;
 
 struct Member {
 	Member *next;
@@ -57,6 +66,16 @@ struct Type {
 	isize    len;
 	Str      name;
 	Member  *members;
+	Variant *variants;
+};
+
+struct Variant {
+	Variant *next;
+	Str      name;
+	int      tag;
+	int      nfields;
+	Member  *fields;
+	isize    pos;
 };
 
 extern Type *ty_void;
@@ -67,6 +86,7 @@ extern Type *ty_u8, *ty_u16, *ty_u32, *ty_u64;
 Type *type_ptr(Type *base);
 Type *type_array(Type *base, isize len);
 Type *type_slice(Type *base);
+int   enum_tag_of(Type *ty, Str name, Variant **out);
 Type *type_str(void);
 Type *type_lookup(Str name);
 void  type_define(Str name, Type *ty);
@@ -87,6 +107,10 @@ typedef enum {
 	ND_MEMBER,
 	ND_INDEX,
 	ND_SLICE,
+	ND_ENUMLIT,
+	ND_MATCH,
+	ND_ARM,
+	ND_DEFER,
 	ND_CAST,
 	ND_ADD,
 	ND_SUB,
@@ -126,6 +150,7 @@ struct Var {
 	Var  *next;
 	int   offset;
 	bool  is_global;
+	bool  by_ref;
 	isize data_off;
 	i64   init;
 };
@@ -150,6 +175,7 @@ struct Node {
 	Var     *var;
 	Var     *tmp;
 	Member  *member;
+	Variant *variant;
 	Str      name;
 	isize    pos;
 };
@@ -166,6 +192,7 @@ struct Func {
 	Type *ret;
 	int   stack_size;
 	Node *body;
+	Var  *ret_slot;
 	i64   addr;
 	isize pos;
 };
