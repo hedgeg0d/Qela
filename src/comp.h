@@ -102,6 +102,9 @@ struct Var {
 	Type *ty;
 	Var  *next;
 	int   offset;
+	bool  is_global;
+	isize data_off;
+	i64   init;
 };
 
 typedef struct Node Node;
@@ -144,6 +147,7 @@ struct Func {
 
 typedef struct {
 	Func *funcs;
+	Var  *globals;
 	Str  *strs;
 	int   nstrs;
 } Unit;
@@ -152,12 +156,16 @@ Unit parse(Token *tok);
 Func *find_func(Str name);
 
 #define ELF_BASE 0x400000
-#define ELF_HDR  (64 + 56)
+#define EHDR_SZ  64
+#define PHDR_SZ  56
+#define SEG_GAP  0x1000
 
 typedef struct {
-	Buf code;
-	Buf rodata;
-	i64 entry;
+	Buf   code;
+	Buf   rodata;
+	Buf   data;
+	isize bss_size;
+	i64   entry;
 } Image;
 
 Image codegen(Unit *u);
