@@ -1,7 +1,8 @@
 #include "comp.h"
 
-static const char *keywords[] = {"fn",     "let",  "var",  "if",  "else",
-                                 "while",  "return", NULL};
+static const char *keywords[] = {"fn",  "let",   "var",      "if",       "else",
+                                 "while", "for", "in",       "break",    "continue",
+                                 "return", "as", NULL};
 
 static bool is_space(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
 static bool is_digit(char c) { return c >= '0' && c <= '9'; }
@@ -16,7 +17,9 @@ static bool is_keyword(Str s) {
 	return false;
 }
 
-static const char *puncts[] = {"==", "!=", "<=", ">=", "&&", "||", NULL};
+static const char *puncts[] = {
+    "<<=", ">>=", "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=",
+    "/=",  "%=",  "&=", "|=", "^=", "<<", ">>", "..", NULL};
 
 static Token *push(Token **tail, TokKind kind, isize pos) {
 	Token *t = anew(Token);
@@ -122,14 +125,14 @@ Token *lex(Str src) {
 
 		isize plen = 0;
 		for (int k = 0; puncts[k]; k++) {
-			isize l = 2;
+			isize l = str_from_cstr(puncts[k]).n;
 			if (i + l <= src.n && memcmp(src.p + i, puncts[k], (usize)l) == 0) {
 				plen = l;
 				break;
 			}
 		}
 		if (!plen) {
-			static const char *singles = "+-*/%()[]{};,=<>!&|.:";
+			static const char *singles = "+-*/%()[]{};,=<>!&|^~.:";
 			bool ok = false;
 			for (const char *s = singles; *s; s++)
 				if (*s == src.p[i]) ok = true;
