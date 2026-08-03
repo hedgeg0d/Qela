@@ -32,6 +32,24 @@ Type *type_array(Type *base, isize len) {
 	return t;
 }
 
+Type *type_slice(Type *base) {
+	Type *t = anew(Type);
+	*t = (Type){.kind = TY_SLICE, .size = 16, .align = 8, .base = base};
+
+	Member *len = anew(Member);
+	*len = (Member){.name = S("len"), .ty = ty_i64, .offset = 8};
+	Member *ptr = anew(Member);
+	*ptr = (Member){.next = len, .name = S("ptr"), .ty = type_ptr(base), .offset = 0};
+	t->members = ptr;
+	return t;
+}
+
+Type *type_str(void) {
+	static Type *cached;
+	if (!cached) cached = type_slice(ty_u8);
+	return cached;
+}
+
 typedef struct Named Named;
 struct Named {
 	Named *next;
@@ -59,6 +77,7 @@ Type *type_lookup(Str name) {
 	};
 	for (int i = 0; table[i].name; i++)
 		if (str_eq(name, str_from_cstr(table[i].name))) return *table[i].ty;
+	if (str_eq(name, S("str"))) return type_str();
 	for (Named *n = named_types; n; n = n->next)
 		if (str_eq(n->name, name)) return n->ty;
 	return NULL;
@@ -66,7 +85,9 @@ Type *type_lookup(Str name) {
 
 bool is_integer(Type *t) { return t->kind == TY_INT || t->kind == TY_BOOL; }
 bool is_numeric(Type *t) { return is_integer(t) || t->kind == TY_PTR; }
-bool is_aggregate(Type *t) { return t->kind == TY_ARRAY || t->kind == TY_STRUCT; }
+bool is_aggregate(Type *t) {
+	return t->kind == TY_ARRAY || t->kind == TY_STRUCT || t->kind == TY_SLICE;
+}
 
 Type *decayed(Type *t) { return t->kind == TY_ARRAY ? type_ptr(t->base) : t; }
 
@@ -78,6 +99,16 @@ Str type_name(Type *t) {
 		memcpy(p + 1, base.p, (usize)base.n);
 		p[base.n + 1] = 0;
 		return (Str){p, base.n + 1};
+	}
+	if (t->kind == TY_SLICE) {
+		if (t->base == ty_u8) return S("str");
+		Str base = type_name(t->base);
+		char *p = anew_n(char, base.n + 3);
+		p[0] = '[';
+		p[1] = ']';
+		memcpy(p + 2, base.p, (usize)base.n);
+		p[base.n + 2] = 0;
+		return (Str){p, base.n + 2};
 	}
 	if (t->kind == TY_ARRAY) {
 		Str base = type_name(t->base);
@@ -117,6 +148,16 @@ static Node *cast_to(Node *n, Type *ty) {
 	return c;
 }
 
+static Func *cur_fn_typing;
+
+static Var *alloc_temp(Type *ty) {
+	if (!cur_fn_typing) return NULL;
+	Var *v = anew(Var);
+	*v = (Var){.ty = ty, .next = cur_fn_typing->locals};
+	cur_fn_typing->locals = v;
+	return v;
+}
+
 static Node *to_value(Node *n) {
 	return n->ty->kind == TY_ARRAY ? cast_to(n, decayed(n->ty)) : n;
 }
@@ -125,17 +166,35 @@ static bool same_type(Type *a, Type *b) {
 	if (a == b) return true;
 	if (a->kind != b->kind) return false;
 	switch (a->kind) {
-	case TY_PTR: return same_type(a->base, b->base);
+	case TY_PTR:
+	case TY_SLICE: return same_type(a->base, b->base);
 	case TY_ARRAY: return a->len == b->len && same_type(a->base, b->base);
 	case TY_STRUCT: return false;
 	default: return a->size == b->size && a->is_unsigned == b->is_unsigned;
 	}
 }
 
+static Node *coerce(Node *n, Type *want) {
+	if (want->kind != TY_SLICE || n->ty->kind != TY_ARRAY) return n;
+	if (!same_type(want->base, n->ty->base)) return n;
+	Node *s = anew(Node);
+	*s = (Node){
+	    .kind = ND_SLICE, .typed = true, .ty = want, .lhs = n, .pos = n->pos};
+	s->tmp = alloc_temp(want);
+	return s;
+}
+
 static void usual_conv(Node *n) {
 	Type *t = common(n->lhs->ty, n->rhs->ty);
 	n->lhs = cast_to(n->lhs, t);
 	n->rhs = cast_to(n->rhs, t);
+}
+
+void type_set_fn(Func *f) { cur_fn_typing = f; }
+
+void type_func(Func *f) {
+	cur_fn_typing = f;
+	add_type(f->body);
 }
 
 void add_type(Node *n) {
@@ -158,7 +217,7 @@ void add_type(Node *n) {
 		n->ty = ty_i64;
 		return;
 	case ND_STRLIT:
-		n->ty = type_ptr(ty_u8);
+		n->ty = type_str();
 		return;
 	case ND_VAR:
 		n->ty = n->var->ty;
@@ -244,6 +303,7 @@ void add_type(Node *n) {
 		if (n->lhs->ty->kind == TY_ARRAY)
 			error_at(n->pos, "cannot assign to an array");
 		if (is_aggregate(n->lhs->ty)) {
+			n->rhs = coerce(n->rhs, n->lhs->ty);
 			if (!same_type(n->lhs->ty, n->rhs->ty))
 				error_at(n->pos, "cannot assign '%s' to '%s'",
 				         type_name(n->rhs->ty), type_name(n->lhs->ty));
@@ -267,7 +327,7 @@ void add_type(Node *n) {
 
 	case ND_INDEX: {
 		Type *lt = n->lhs->ty;
-		if (lt->kind != TY_ARRAY && lt->kind != TY_PTR)
+		if (lt->kind != TY_ARRAY && lt->kind != TY_PTR && lt->kind != TY_SLICE)
 			error_at(n->pos, "cannot index a value of type '%s'", type_name(lt));
 		if (lt->base->kind == TY_VOID) error_at(n->pos, "cannot index a *void");
 		if (!is_integer(n->rhs->ty))
@@ -276,10 +336,24 @@ void add_type(Node *n) {
 		return;
 	}
 
+	case ND_SLICE: {
+		Type *lt = n->lhs->ty;
+		if (lt->kind != TY_ARRAY && lt->kind != TY_SLICE)
+			error_at(n->pos, "cannot slice a value of type '%s'", type_name(lt));
+		if (n->rhs && !is_integer(n->rhs->ty))
+			error_at(n->pos, "a slice bound must be an integer");
+		if (n->then && !is_integer(n->then->ty))
+			error_at(n->pos, "a slice bound must be an integer");
+		n->ty = type_slice(lt->base);
+		n->tmp = alloc_temp(n->ty);
+		if (!n->tmp) error_at(n->pos, "a slice expression needs a function scope");
+		return;
+	}
+
 	case ND_MEMBER: {
 		Type *lt = n->lhs->ty;
 		if (lt->kind == TY_PTR) lt = lt->base;
-		if (lt->kind != TY_STRUCT)
+		if (lt->kind != TY_STRUCT && lt->kind != TY_SLICE)
 			error_at(n->pos, "type '%s' has no fields", type_name(n->lhs->ty));
 		for (Member *m = lt->members; m; m = m->next)
 			if (str_eq(m->name, n->name)) {
@@ -337,32 +411,45 @@ void add_type(Node *n) {
 		for (Node *a = n->args; a;) {
 			Node *next = a->next;
 			a->next = NULL;
-			a = to_value(a);
 			Type *want = f->params[i++]->ty;
-			if (is_aggregate(want))
-				error_at(a->pos, "passing an aggregate by value is not supported yet");
-			if (want->kind == TY_PTR && a->ty->kind != TY_PTR)
-				error_at(a->pos, "argument must have type '%s'", type_name(want));
-			if (want->kind != TY_PTR && a->ty->kind == TY_PTR)
-				error_at(a->pos, "argument must have type '%s'", type_name(want));
-			tail->next = cast_to(a, want);
+			a = coerce(a, want);
+			if (is_aggregate(want)) {
+				if (!same_type(want, a->ty))
+					error_at(a->pos, "argument must have type '%s'", type_name(want));
+				tail->next = a;
+			} else {
+				a = to_value(a);
+				if ((want->kind == TY_PTR) != (a->ty->kind == TY_PTR))
+					error_at(a->pos, "argument must have type '%s'", type_name(want));
+				tail->next = cast_to(a, want);
+			}
 			tail = tail->next;
 			a = next;
 		}
 		n->args = head.next;
 		n->ty = f->ret;
+		if (is_aggregate(f->ret)) n->tmp = alloc_temp(f->ret);
 		return;
 	}
 
-	case ND_CSTRLEN:
-		if (n->args->ty->kind != TY_PTR)
-			error_at(n->pos, "cstrlen expects a pointer");
+	case ND_SYSCALL: {
+		Node head = {0};
+		Node *tail = &head;
+		for (Node *a = n->args; a;) {
+			Node *next = a->next;
+			a->next = NULL;
+			a = to_value(a);
+			if (!is_numeric(a->ty))
+				error_at(a->pos,
+				         "a syscall argument must be an integer or a pointer");
+			tail->next = a;
+			tail = a;
+			a = next;
+		}
+		n->args = head.next;
 		n->ty = ty_i64;
 		return;
-
-	case ND_SYSCALL:
-		n->ty = ty_i64;
-		return;
+	}
 
 	default:
 		if (!n->ty) n->ty = ty_void;
