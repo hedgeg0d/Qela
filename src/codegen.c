@@ -127,16 +127,42 @@ static void mov_reg_reg(int dst, int src) {
 	modrm(3, src, dst);
 }
 
-static void lea_local(int reg, int off) {
+static void rbp_mem(u8 op, int reg, int disp) {
 	rex_w(reg, RBP);
-	b1(0x8d);
-	if (-off >= -128 && -off <= 127) {
+	b1(op);
+	if (disp >= -128 && disp <= 127) {
 		modrm(1, reg, RBP);
-		b1((u8)(-off));
+		b1((u8)disp);
 	} else {
 		modrm(2, reg, RBP);
-		b4((u32)(-off));
+		b4((u32)disp);
 	}
+}
+
+static void lea_local(int reg, int off) { rbp_mem(0x8d, reg, -off); }
+static void ld_local(int reg, int off) { rbp_mem(0x8b, reg, -off); }
+static void st_local(int off, int reg) { rbp_mem(0x89, reg, -off); }
+
+static void ld_at_rax(int reg, int disp) {
+	rex_w(reg, RAX);
+	b1(0x8b);
+	if (disp == 0) {
+		modrm(0, reg, RAX);
+	} else {
+		modrm(1, reg, RAX);
+		b1((u8)disp);
+	}
+}
+
+static void push_at_rax(int disp) {
+	b1(0xff);
+	if (disp == 0) {
+		modrm(0, 6, RAX);
+	} else {
+		modrm(1, 6, RAX);
+		b1((u8)disp);
+	}
+	depth++;
 }
 
 static void load(Type *ty) {
@@ -303,6 +329,13 @@ static void add_rax_imm(i64 v) {
 
 static void scale_by(int size);
 
+static void jump_bounds(u8 cc) {
+	b1(0x0f);
+	b1(cc);
+	list_push(&bounds_checks, code.n);
+	b4(0);
+}
+
 static void gen_addr(Node *n) {
 	switch (n->kind) {
 	case ND_VAR:
@@ -319,18 +352,29 @@ static void gen_addr(Node *n) {
 		return;
 	case ND_INDEX: {
 		Type *lt = n->lhs->ty;
-		if (lt->kind == TY_ARRAY) gen_addr(n->lhs);
-		else gen_expr(n->lhs);
-		push_reg(RAX);
-		gen_expr(n->rhs);
-		if (lt->kind == TY_ARRAY && !opt_no_bounds) {
-			b1(0x48);
-			b1(0x3d);
-			b4((u32)lt->len);
-			b1(0x0f);
-			b1(0x83);
-			list_push(&bounds_checks, code.n);
-			b4(0);
+		if (lt->kind == TY_SLICE) {
+			gen_addr(n->lhs);
+			push_at_rax(0);
+			push_at_rax(8);
+			gen_expr(n->rhs);
+			pop_reg(RDI);
+			if (!opt_no_bounds) {
+				rex_w(RDI, RAX);
+				b1(0x39);
+				modrm(3, RDI, RAX);
+				jump_bounds(0x83);
+			}
+		} else {
+			if (lt->kind == TY_ARRAY) gen_addr(n->lhs);
+			else gen_expr(n->lhs);
+			push_reg(RAX);
+			gen_expr(n->rhs);
+			if (lt->kind == TY_ARRAY && !opt_no_bounds) {
+				b1(0x48);
+				b1(0x3d);
+				b4((u32)lt->len);
+				jump_bounds(0x83);
+			}
 		}
 		scale_by(lt->base->size);
 		pop_reg(RDI);
@@ -339,7 +383,58 @@ static void gen_addr(Node *n) {
 		modrm(3, RDI, RAX);
 		return;
 	}
+	case ND_SLICE: {
+		Type *lt = n->lhs->ty;
+		int   off = n->tmp->offset;
+		int   elem = lt->base->size;
+
+		gen_addr(n->lhs);
+		if (lt->kind == TY_SLICE) {
+			ld_at_rax(RDI, 0);
+			st_local(off, RDI);
+			ld_at_rax(RDI, 8);
+			st_local(off - 8, RDI);
+		} else {
+			st_local(off, RAX);
+			mov_reg_imm(RDI, lt->len);
+			st_local(off - 8, RDI);
+		}
+
+		if (n->rhs) gen_expr(n->rhs);
+		else mov_reg_imm(RAX, 0);
+		push_reg(RAX);
+
+		if (n->then) gen_expr(n->then);
+		else ld_local(RAX, off - 8);
+		pop_reg(RDI);
+
+		if (!opt_no_bounds) {
+			rbp_mem(0x3b, RAX, -(off - 8));
+			jump_bounds(0x87);
+			rex_w(RAX, RDI);
+			b1(0x39);
+			modrm(3, RAX, RDI);
+			jump_bounds(0x87);
+		}
+
+		rex_w(RDI, RAX);
+		b1(0x29);
+		modrm(3, RDI, RAX);
+		st_local(off - 8, RAX);
+
+		mov_reg_reg(RAX, RDI);
+		scale_by(elem);
+		rbp_mem(0x03, RAX, -off);
+		st_local(off, RAX);
+
+		lea_local(RAX, off);
+		return;
+	}
 	default:
+		if (is_aggregate(n->ty)) {
+			gen_expr(n);
+			return;
+		}
 		error_at(n->pos, "not an addressable expression");
 	}
 }
@@ -359,45 +454,39 @@ static void copy_aggregate(int size) {
 	pop_reg(RAX);
 }
 
-static void gen_cstrlen(void) {
-	mov_reg_reg(RDX, RAX);
-	isize top = code.n;
-	b1(0x80);
-	modrm(0, 7, RAX);
-	b1(0x00);
-	b1(0x74);
-	isize je_at = code.n;
-	b1(0);
-	b1(0x48);
-	b1(0xff);
-	modrm(3, 0, RAX);
-	b1(0xeb);
-	b1((u8)(top - (code.n + 1)));
-	code.p[je_at] = (u8)(code.n - (je_at + 1));
-	rex_w(RDX, RAX);
-	b1(0x29);
-	modrm(3, RDX, RAX);
+static int arg_words(Type *ty) {
+	if (!is_aggregate(ty)) return 1;
+	return ty->size > 8 ? 2 : 1;
 }
 
 static void gen_args(Node *n, const int *regs, bool first_in_rax) {
+	int dest[14];
+	int nd = 0, ri = 0;
+
 	for (Node *a = n->args; a; a = a->next) {
 		gen_expr(a);
-		push_reg(RAX);
+		int w = arg_words(a->ty);
+		if (is_aggregate(a->ty)) {
+			push_at_rax(0);
+			if (w == 2) push_at_rax(8);
+		} else {
+			push_reg(RAX);
+		}
+		for (int k = 0; k < w; k++) {
+			if (first_in_rax && nd == 0) dest[nd++] = RAX;
+			else dest[nd++] = regs[ri++];
+		}
 	}
-	int i = n->nargs;
-	while (i-- > 0) {
-		if (first_in_rax && i == 0) pop_reg(RAX);
-		else pop_reg(regs[i - (first_in_rax ? 1 : 0)]);
-	}
+	while (nd-- > 0) pop_reg(dest[nd]);
 }
 
 static void scale_by(int size) {
 	if (size == 1) return;
-	mov_reg_imm(RDI, size);
+	mov_reg_imm(RCX, size);
 	b1(0x48);
 	b1(0x0f);
 	b1(0xaf);
-	modrm(3, RAX, RDI);
+	modrm(3, RAX, RCX);
 }
 
 static void gen_binop(Node *n) {
@@ -490,6 +579,7 @@ static void gen_expr(Node *n) {
 	case ND_VAR:
 	case ND_MEMBER:
 	case ND_INDEX:
+	case ND_SLICE:
 		gen_lvalue(n);
 		return;
 	case ND_ADDR:
@@ -551,10 +641,6 @@ static void gen_expr(Node *n) {
 		test_rax();
 		setcc(0x94);
 		return;
-	case ND_CSTRLEN:
-		gen_expr(n->args);
-		gen_cstrlen();
-		return;
 	case ND_SYSCALL:
 		gen_args(n, sys_regs, true);
 		b1(0x0f);
@@ -575,6 +661,12 @@ static void gen_expr(Node *n) {
 			b1(0x83);
 			modrm(3, 0, RSP);
 			b1(8);
+		}
+		if (is_aggregate(n->ty)) {
+			int off = n->tmp->offset;
+			st_local(off, RAX);
+			if (n->ty->size > 8) st_local(off - 8, RDX);
+			lea_local(RAX, off);
 		}
 		return;
 	}
@@ -628,8 +720,15 @@ static void gen_stmt(Node *n) {
 		if (n->lhs) gen_expr(n->lhs);
 		return;
 	case ND_RET:
-		if (n->lhs) gen_expr(n->lhs);
-		else mov_reg_imm(RAX, 0);
+		if (n->lhs) {
+			gen_expr(n->lhs);
+			if (is_aggregate(n->lhs->ty)) {
+				if (n->lhs->ty->size > 8) ld_at_rax(RDX, 8);
+				ld_at_rax(RAX, 0);
+			}
+		} else {
+			mov_reg_imm(RAX, 0);
+		}
 		b1(0xc9);
 		b1(0xc3);
 		return;
@@ -700,12 +799,12 @@ static void gen_func(Func *f) {
 		b4((u32)f->stack_size);
 	}
 
+	int ri = 0;
 	for (int i = 0; i < f->nparams; i++) {
 		Var *v = f->params[i];
-		lea_local(RAX, v->offset);
-		push_reg(RAX);
-		mov_reg_reg(RAX, call_regs[i]);
-		store(v->ty);
+		st_local(v->offset, call_regs[ri++]);
+		if (is_aggregate(v->ty) && v->ty->size > 8)
+			st_local(v->offset - 8, call_regs[ri++]);
 	}
 
 	gen_stmt(f->body);
@@ -750,16 +849,26 @@ static void gen_panic_stub(int msg_id) {
 }
 
 Image codegen(Unit *u) {
-	int panic_id = u->nstrs;
+	int    panic_id = u->nstrs;
+	isize *bytes_off = anew_n(isize, u->nstrs ? u->nstrs : 1);
 	str_off = anew_n(isize, u->nstrs + 1);
+
 	for (int i = 0; i < u->nstrs; i++) {
-		str_off[i] = rodata.n;
+		bytes_off[i] = rodata.n;
 		buf_bytes(&rodata, u->strs[i].p, u->strs[i].n);
 		buf_u8(&rodata, 0);
 	}
 	while (rodata.n & 7) buf_u8(&rodata, 0);
 
+	for (int i = 0; i < u->nstrs; i++) {
+		str_off[i] = rodata.n;
+		buf_u64(&rodata, 0);
+		buf_u64(&rodata, (u64)u->strs[i].n);
+	}
+
 	layout_globals(u->globals);
+	int   nph = data.n + bss_size > 0 ? 2 : 1;
+	isize hdr = EHDR_SZ + PHDR_SZ * nph;
 
 	add_call(S("main"), 0);
 	b1(0x89);
@@ -788,23 +897,35 @@ Image codegen(Unit *u) {
 		buf_patch32(&code, calls[i].at, (u32)(target->addr - (calls[i].at + 4)));
 	}
 
-	isize rodata_at = (code.n + 7) & ~(isize)7;
+	while (code.n & 7) buf_u8(&code, 0);
+
 	if (bounds_checks.n) {
 		str_off[panic_id] = rodata.n;
 		buf_bytes(&rodata, panic_msg, PANIC_LEN);
 		while (rodata.n & 7) buf_u8(&rodata, 0);
 	}
+
 	for (int i = 0; i < nstrrefs; i++) {
-		isize target = rodata_at + str_off[strrefs[i].id];
+		isize target = code.n + str_off[strrefs[i].id];
 		buf_patch32(&code, strrefs[i].at, (u32)(target - (strrefs[i].at + 4)));
 	}
-	while (code.n < rodata_at) buf_u8(&code, 0);
+
+	u64 rodata_vaddr = ELF_BASE + (u64)hdr + (u64)code.n;
+	for (int i = 0; i < u->nstrs; i++) {
+		u64 abs = rodata_vaddr + (u64)bytes_off[i];
+		for (int k = 0; k < 8; k++)
+			rodata.p[str_off[i] + k] = (u8)(abs >> (k * 8));
+	}
 
 	for (int i = 0; i < ndatarefs; i++) {
 		isize target = SEG_GAP + code.n + rodata.n + datarefs[i].var->data_off;
 		buf_patch32(&code, datarefs[i].at, (u32)(target - (datarefs[i].at + 4)));
 	}
 
-	return (Image){
-	    .code = code, .rodata = rodata, .data = data, .bss_size = bss_size, .entry = 0};
+	return (Image){.code = code,
+	               .rodata = rodata,
+	               .data = data,
+	               .bss_size = bss_size,
+	               .entry = 0,
+	               .nph = nph};
 }

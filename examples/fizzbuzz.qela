@@ -1,0 +1,42 @@
+fn write_str(s str) {
+	syscall(1, 1, s.ptr, s.len);
+}
+
+fn write_int(n int) {
+	var buf [24]u8;
+	var i int = 24;
+	var v int = n;
+	if (v < 0) { v = -v; }
+	if (v == 0) {
+		i -= 1;
+		buf[i] = 48;
+	}
+	while (v > 0) {
+		i -= 1;
+		buf[i] = (48 + v % 10) as u8;
+		v /= 10;
+	}
+	if (n < 0) {
+		i -= 1;
+		buf[i] = 45;
+	}
+	write_str(buf[i..24]);
+}
+
+fn main() int {
+	for i in 1..21 {
+		if (i % 15 == 0) {
+			write_str("FizzBuzz");
+		} else if (i % 3 == 0) {
+			write_str("Fizz");
+		} else if (i % 5 == 0) {
+			write_str("Buzz");
+		} else {
+			write_int(i);
+		}
+		write_str("\n");
+	}
+	write_int(-4096);
+	write_str("\n");
+	return 0;
+}
