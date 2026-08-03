@@ -1,0 +1,25 @@
+// expect-exit: 98
+enum Op {
+	Add(int, int),
+	Sub(int, int),
+	Mul(int, int),
+	Neg(int),
+}
+
+fn eval(op Op) int {
+	match (op) {
+		Add(a, b) => { return a + b; }
+		Sub(a, b) => { return a - b; }
+		Mul(a, b) => { return a * b; }
+		Neg(x) => { return -x; }
+	}
+}
+
+fn main() int {
+	var result int = 0;
+	result += eval(Op.Add(10, 20));   // 30
+	result += eval(Op.Sub(50, 8));    // 42
+	result += eval(Op.Mul(3, 7));     // 21
+	result += eval(Op.Neg(-5));       // 5
+	return result; // 30 + 42 + 21 + 5 = 98
+}

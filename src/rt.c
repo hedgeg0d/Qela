@@ -141,6 +141,12 @@ static void vformat(Sink *s, const char *fmt, __builtin_va_list ap) {
 	}
 }
 
+void vprint(int fd, const char *fmt, __builtin_va_list ap) {
+	Sink s = {fd, 0, {0}};
+	vformat(&s, fmt, ap);
+	sink_flush(&s);
+}
+
 void print(int fd, const char *fmt, ...) {
 	Sink s = {fd, 0, {0}};
 	__builtin_va_list ap;

@@ -1,0 +1,50 @@
+// expect-exit: 99
+// Defer correctness is verified by exit code: each defer writes a marker
+// into a shared counter via a global. If defers run in the wrong order
+// or at the wrong time, the final value will be wrong.
+var order int = 0;
+
+fn mark(v int) {
+	order = order * 10 + v;
+}
+
+fn with_defers() int {
+	defer mark(1);
+	{
+		defer mark(2);
+		mark(0);
+	}
+	mark(3);
+	return 0;
+}
+
+fn with_loops() int {
+	for i in 0..3 {
+		if (i == 1) {
+			defer mark(4);
+			continue;
+		}
+		if (i == 2) {
+			defer mark(5);
+			break;
+		}
+		mark(6);
+	}
+	return 0;
+}
+
+fn with_return() int {
+	defer mark(7);
+	defer mark(8);
+	return 99;
+}
+
+fn main() int {
+	with_defers();
+	with_loops();
+	var code int = with_return();
+	// Correct order: 0,2,3,1,6,4,5,8,7
+	// Encoded: 023164587
+	if (order != 23164587) { return 1; }
+	return code;
+}

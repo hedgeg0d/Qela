@@ -1,0 +1,8 @@
+// expect-exit: 45
+import "import_math.inc";
+
+fn main() int {
+	var sum int = add(5, 3);      // 8
+	var prod int = mul(sum, PI);  // 24
+	return add(sum, prod) + 13;   // 8 + 24 + 13 = 45
+}
