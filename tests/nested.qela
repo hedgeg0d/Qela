@@ -1,0 +1,32 @@
+// expect-exit: 93
+struct Vec {
+	x int,
+	y int,
+}
+
+struct Body {
+	pos Vec,
+	vel Vec,
+}
+
+fn step(b *Body) {
+	b.pos.x += b.vel.x;
+	b.pos.y += b.vel.y;
+}
+
+fn main() int {
+	var bodies [3]Body;
+	for i in 0..3 {
+		bodies[i].pos.x = i;
+		bodies[i].vel.x = i * 2;
+		bodies[i].vel.y = 1;
+	}
+	for i in 0..3 {
+		step(&bodies[i]);
+	}
+	var total int = 0;
+	for i in 0..3 {
+		total += bodies[i].pos.x * 10 + bodies[i].pos.y;
+	}
+	return total;
+}
