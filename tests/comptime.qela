@@ -1,0 +1,35 @@
+// expect-exit: 42
+fn fib_ct(n int) int {
+	if (n < 2) { return n; }
+	return fib_ct(n - 1) + fib_ct(n - 2);
+}
+
+fn main() int {
+	// basic arithmetic at compile time
+	let a = comptime { return 5 * 2; }; // 10
+
+	// compile-time function call (recursive): fib(8) = 21
+	let b = comptime { return fib_ct(8); }; // 21
+
+	// comptime loop with op-assign: sum 0..4 = 10
+	let c = comptime {
+		var sum int = 0;
+		for i in 0..5 {
+			sum += i;
+		}
+		return sum; // 10
+	};
+
+	// comptime with conditionals: n=7 is odd -> 1
+	let d = comptime {
+		var n int = 7;
+		if (n % 2 == 0) {
+			return 0;
+		} else {
+			return 1; // 1
+		}
+	};
+
+	// 10 + 21 + 10 + 1 = 42
+	return a + b + c + d;
+}

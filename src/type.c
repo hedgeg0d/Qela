@@ -291,6 +291,20 @@ void add_type(Node *n) {
 	case ND_STRLIT:
 		n->ty = type_str();
 		return;
+	case ND_COMPTIME: {
+		ComptimeVal v = comptime_eval(n);
+		if (v.kind == CV_INT) {
+			n->val = v.num;
+			n->ty = ty_i64;
+			return;
+		}
+		if (v.kind == CV_STR) {
+			n->ty = type_str();
+			return;
+		}
+		n->ty = ty_void;
+		return;
+	}
 	case ND_VAR:
 		n->ty = n->var->ty;
 		return;
