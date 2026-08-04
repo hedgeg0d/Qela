@@ -1,0 +1,25 @@
+var arena_ptr i64 = 0;
+var arena_left i64 = 0;
+
+fn arena_alloc(size i64, align i64) *u8 {
+	var pad i64 = 0;
+	if (align > 1) {
+		pad = (-arena_ptr) & (align - 1);
+	}
+	if (arena_left < pad + size) {
+		var want i64 = size + align + (64 * 1024 * 1024);
+		var r i64 = syscall(9, 0, want, 3, 34, -1, 0);
+		if (r < 0 && r > -4096) { return 0 as *u8; }
+		arena_ptr = r;
+		arena_left = want;
+		if (align > 1) {
+			pad = (-arena_ptr) & (align - 1);
+		}
+	}
+	arena_ptr = arena_ptr + pad;
+	arena_left = arena_left - pad;
+	var p *u8 = arena_ptr as *u8;
+	arena_ptr = arena_ptr + size;
+	arena_left = arena_left - size;
+	return p;
+}
