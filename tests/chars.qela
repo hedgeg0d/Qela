@@ -1,0 +1,32 @@
+// expect-exit: 63
+fn is_digit(c u8) bool {
+	return c >= '0' && c <= '9';
+}
+
+fn is_letter(c u8) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+}
+
+fn digit_val(c u8) int {
+	return c as int - '0';
+}
+
+fn main() int {
+	var n int = 0;
+
+	if ('A' == 65) { n = n + 1; }
+	if ('\n' == 10) { n = n + 2; }
+	if ('\t' == 9) { n = n + 4; }
+	if ('\\' == 92) { n = n + 8; }
+	if ('\'' == 39) { n = n + 16; }
+	if ('\0' == 0) { n = n + 32; }
+
+	var s str = "a1_";
+	if (!is_letter(s.ptr[0])) { n = n + 1000; }
+	if (!is_digit(s.ptr[1])) { n = n + 1000; }
+	if (!is_letter(s.ptr[2])) { n = n + 1000; }
+	if (is_digit(s.ptr[0])) { n = n + 1000; }
+
+	if (digit_val(s.ptr[1]) != 1) { n = n + 1000; }
+	return n;
+}

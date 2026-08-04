@@ -191,6 +191,14 @@ static bool same_type(Type *a, Type *b) {
 	}
 }
 
+/* A struct, slice or enum never silently becomes a scalar. Call this after
+   to_value(), which has already decayed arrays to pointers. */
+static void reject_aggregate(Node *v, Type *want, isize pos) {
+	if (is_aggregate(v->ty) && !is_aggregate(want))
+		error_at(pos, "cannot use a value of type '%s' where '%s' is expected",
+		         type_name(v->ty), type_name(want));
+}
+
 static Node *coerce(Node *n, Type *want) {
 	if (want->kind != TY_SLICE || n->ty->kind != TY_ARRAY) return n;
 	if (!same_type(want->base, n->ty->base)) return n;
@@ -354,11 +362,16 @@ void monomorphize_call(Node *n, Func *f) {
 	n->args = a; /* strip the comptime type args */
 	n->nargs -= nct;
 
-	/* Type the clone (ret_slot, stack_size handled by the parse loop picking it up). */
+	/* Type the clone (ret_slot, stack_size handled by the parse loop picking it up).
+	   We are called from the middle of typing the caller, so the current
+	   function has to be restored: otherwise the caller's later temporaries
+	   land in the instantiation's frame. */
+	Func *saved = cur_fn_typing;
 	cur_fn_typing = f2;
 	if (is_aggregate(f2->ret) && f2->ret->size > 16)
 		f2->ret_slot = alloc_temp(type_ptr(f2->ret));
 	add_type(f2->body);
+	cur_fn_typing = saved;
 }
 
 void type_func(Func *f) {
@@ -445,7 +458,7 @@ void add_type(Node *n) {
 
 	switch (n->kind) {
 	case ND_NUM:
-		n->ty = ty_i64;
+		if (!n->ty) n->ty = ty_i64;
 		return;
 	case ND_STRLIT:
 		n->ty = type_str();
@@ -566,6 +579,7 @@ void add_type(Node *n) {
 			return;
 		}
 		n->rhs = to_value(n->rhs);
+		reject_aggregate(n->rhs, n->lhs->ty, n->pos);
 		if (n->lhs->ty->kind == TY_PTR && is_integer(n->rhs->ty) &&
 		    !(n->rhs->kind == ND_NUM && n->rhs->val == 0))
 			error_at(n->pos, "cannot assign an integer to a pointer");
@@ -625,6 +639,7 @@ void add_type(Node *n) {
 				tail->next = a;
 			} else {
 				a = to_value(a);
+				reject_aggregate(a, f->ty, a->pos);
 				tail->next = cast_to(a, f->ty);
 			}
 			tail = tail->next;
@@ -638,6 +653,67 @@ void add_type(Node *n) {
 		n->variant = v;
 		n->tmp = alloc_temp(n->ty);
 		if (!n->tmp) error_at(n->pos, "an enum value needs a function scope");
+		return;
+	}
+
+	case ND_RET: {
+		Type *want = cur_fn_typing ? cur_fn_typing->ret : ty_void;
+		if (!n->lhs) {
+			if (want->kind != TY_VOID)
+				error_at(n->pos, "this function must return a value of type '%s'",
+				         type_name(want));
+			return;
+		}
+		if (want->kind == TY_VOID)
+			error_at(n->pos, "this function returns nothing");
+		n->lhs = coerce(n->lhs, want);
+		if (is_aggregate(want)) {
+			if (!same_type(want, n->lhs->ty))
+				error_at(n->pos, "cannot return '%s' from a function returning '%s'",
+				         type_name(n->lhs->ty), type_name(want));
+			return;
+		}
+		n->lhs = to_value(n->lhs);
+		reject_aggregate(n->lhs, want, n->pos);
+		if ((want->kind == TY_PTR) != (n->lhs->ty->kind == TY_PTR) &&
+		    !(n->lhs->kind == ND_NUM && n->lhs->val == 0))
+			error_at(n->pos, "cannot return '%s' from a function returning '%s'",
+			         type_name(n->lhs->ty), type_name(want));
+		n->lhs = cast_to(n->lhs, want);
+		return;
+	}
+
+	case ND_FIELD:
+		/* Resolved by the enclosing ND_STRUCTLIT, which knows the type. */
+		return;
+
+	case ND_STRUCTLIT: {
+		for (Node *a = n->args; a; a = a->next) {
+			Member *m = NULL;
+			for (Member *k = n->ty->members; k; k = k->next)
+				if (str_eq(k->name, a->name)) m = k;
+			if (!m)
+				error_at(a->pos, "'%s' has no field named '%s'", type_name(n->ty),
+				         a->name);
+			for (Node *b = n->args; b != a; b = b->next)
+				if (b->member == m)
+					error_at(a->pos, "field '%s' is set twice", a->name);
+
+			a->lhs = coerce(a->lhs, m->ty);
+			if (is_aggregate(m->ty)) {
+				if (!same_type(m->ty, a->lhs->ty))
+					error_at(a->pos, "field '%s' must have type '%s'", a->name,
+					         type_name(m->ty));
+			} else {
+				a->lhs = to_value(a->lhs);
+				reject_aggregate(a->lhs, m->ty, a->pos);
+				a->lhs = cast_to(a->lhs, m->ty);
+			}
+			a->member = m;
+			a->ty = m->ty;
+		}
+		n->tmp = alloc_temp(n->ty);
+		if (!n->tmp) error_at(n->pos, "a struct value needs a function scope");
 		return;
 	}
 
@@ -716,6 +792,7 @@ void add_type(Node *n) {
 				tail->next = a;
 			} else {
 				a = to_value(a);
+				reject_aggregate(a, want, a->pos);
 				if ((want->kind == TY_PTR) != (a->ty->kind == TY_PTR))
 					error_at(a->pos, "argument must have type '%s'", type_name(want));
 				tail->next = cast_to(a, want);
