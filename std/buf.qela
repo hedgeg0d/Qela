@@ -1,27 +1,23 @@
+import "arena.qela";
+
 struct Buf {
 	p *u8,
 	n i64,
 	cap i64,
 }
 
+// Doubles through the arena; the old block is never freed because the
+// compiler lives for exactly one compilation.
 fn buf_grow(b *Buf, need i64) {
 	if (b.n + need <= b.cap) { return; }
 	var cap i64 = b.cap;
 	if (cap == 0) { cap = 4096; }
 	while (cap < b.n + need) { cap = cap * 2; }
-	// TODO: realloc via arena. For now, fail on overflow.
-	var r i64 = syscall(9, 0, cap, 3, 34, -1, 0);
-	if (r < 0 && r > -4096) { return; }
-	if (b.p as i64 != 0 && b.n > 0) {
-		var i i64 = 0;
-		while (i < b.n) {
-			var src *u8 = b.p + i;
-			var dst *u8 = (r as *u8) + i;
-			*dst = *src;
-			i = i + 1;
-		}
-	}
-	b.p = r as *u8;
+	var r *u8 = arena_alloc(cap, 8);
+	if (r as i64 == 0) { return; }
+	var i i64 = 0;
+	while (i < b.n) { r[i] = b.p[i]; i = i + 1; }
+	b.p = r;
 	b.cap = cap;
 }
 
