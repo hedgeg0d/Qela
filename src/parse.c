@@ -805,12 +805,29 @@ static void struct_decl(Token **t) {
 	if ((*t)->kind != TK_IDENT) error_at((*t)->pos, "expected a struct name");
 	Token *name = *t;
 	*t = name->next;
-	if (type_lookup(name->text))
+
+	/* Forward declaration: struct Name; */
+	if (consume(t, ";")) {
+		if (!type_lookup(name->text)) {
+			Type *ty = anew(Type);
+			*ty = (Type){.kind = TY_STRUCT, .align = 8, .size = 8, .name = name->text};
+			type_define(name->text, ty);
+		}
+		return;
+	}
+
+	Type *prev = type_lookup(name->text);
+	if (prev && prev->members)
 		error_at(name->pos, "redefinition of type '%s'", name->text);
 
-	Type *ty = anew(Type);
-	*ty = (Type){.kind = TY_STRUCT, .align = 1, .name = name->text};
-	type_define(name->text, ty);
+	Type *ty;
+	if (prev && prev->kind == TY_STRUCT) {
+		ty = prev;
+	} else {
+		ty = anew(Type);
+		*ty = (Type){.kind = TY_STRUCT, .align = 1, .name = name->text};
+		type_define(name->text, ty);
+	}
 
 	*t = expect(*t, "{");
 	Member head = {0};
