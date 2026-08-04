@@ -5,7 +5,7 @@ var lex_base i64 = 0;
 var lex_tail *Token;
 
 fn push_token(kind int, pos i64) *Token {
-	var t *Token = arena_alloc(64, 8) as *Token;
+	var t *Token = arena_alloc(sizeof(Token), 8) as *Token;
 	t.kind = kind;
 	t.pos = pos + lex_base;
 	lex_tail.next = t;
