@@ -1,0 +1,64 @@
+struct Buf {
+	p *u8,
+	n i64,
+	cap i64,
+}
+
+fn buf_grow(b *Buf, need i64) {
+	if (b.n + need <= b.cap) { return; }
+	var cap i64 = b.cap;
+	if (cap == 0) { cap = 4096; }
+	while (cap < b.n + need) { cap = cap * 2; }
+	// TODO: realloc via arena. For now, fail on overflow.
+	var r i64 = syscall(9, 0, cap, 3, 34, -1, 0);
+	if (r < 0 && r > -4096) { return; }
+	if (b.p as i64 != 0 && b.n > 0) {
+		var i i64 = 0;
+		while (i < b.n) {
+			var src *u8 = b.p + i;
+			var dst *u8 = (r as *u8) + i;
+			*dst = *src;
+			i = i + 1;
+		}
+	}
+	b.p = r as *u8;
+	b.cap = cap;
+}
+
+fn buf_u8(b *Buf, v u8) {
+	buf_grow(b, 1);
+	var p *u8 = b.p + b.n;
+	*p = v;
+	b.n = b.n + 1;
+}
+
+fn buf_u32(b *Buf, v i64) {
+	buf_u8(b, (v & 255) as u8);
+	buf_u8(b, ((v >> 8) & 255) as u8);
+	buf_u8(b, ((v >> 16) & 255) as u8);
+	buf_u8(b, ((v >> 24) & 255) as u8);
+}
+
+fn buf_u64(b *Buf, v i64) {
+	buf_u32(b, v);
+	buf_u32(b, v >> 32);
+}
+
+fn buf_bytes(b *Buf, data *u8, n i64) {
+	buf_grow(b, n);
+	var i i64 = 0;
+	while (i < n) {
+		var p *u8 = b.p + b.n + i;
+		*p = *(data + i);
+		i = i + 1;
+	}
+	b.n = b.n + n;
+}
+
+fn buf_patch32(b *Buf, at i64, v i64) {
+	var p *u8 = b.p + at;
+	*p = (v & 255) as u8;
+	*(p + 1) = ((v >> 8) & 255) as u8;
+	*(p + 2) = ((v >> 16) & 255) as u8;
+	*(p + 3) = ((v >> 24) & 255) as u8;
+}
