@@ -1,0 +1,119 @@
+struct Member;
+struct Variant;
+struct Type;
+struct Var;
+struct Node;
+struct Func;
+
+struct Type {
+	kind int,
+	size int,
+	align int,
+	is_unsigned int,
+	base *Type,
+	len i64,
+	name str,
+	members *Member,
+	variants *Variant,
+}
+
+struct Member {
+	next *Member,
+	name str,
+	ty *Type,
+	offset int,
+	pos i64,
+}
+
+struct Variant {
+	next *Variant,
+	name str,
+	tag int,
+	nfields int,
+	fields *Member,
+	pos i64,
+}
+
+struct Var {
+	name str,
+	ty *Type,
+	next *Var,
+	offset int,
+	is_global int,
+	by_ref int,
+	data_off i64,
+	init i64,
+}
+
+struct Node {
+	kind int,
+	ty *Type,
+	typed int,
+	next *Node,
+	lhs *Node,
+	rhs *Node,
+	cond *Node,
+	tnen *Node,
+	els *Node,
+	init *Node,
+	step *Node,
+	body *Node,
+	args *Node,
+	nargs int,
+	val i64,
+	varp *Var,
+	tmp *Var,
+	member *Member,
+	variant *Variant,
+	typeval *Type,
+	name str,
+	pos i64,
+}
+
+struct Token {
+	kind int,
+	next *Token,
+	text str,
+	str str,
+	val i64,
+	pos i64,
+}
+
+struct Func {
+	name str,
+	next *Func,
+	nparams int,
+	nct int,
+	locals *Var,
+	ret *Type,
+	stack_size int,
+	body *Node,
+	ret_slot *Var,
+	addr i64,
+	pos i64,
+}
+
+var TK_EOF int = 0;
+var TK_IDENT int = 1;
+var TK_KW int = 2;
+var TK_NUM int = 3;
+var TK_STR int = 4;
+var TK_PUNCT int = 5;
+
+var TY_VOID int = 0;
+var TY_BOOL int = 1;
+var TY_INT int = 2;
+var TY_PTR int = 3;
+var TY_ARRAY int = 4;
+var TY_STRUCT int = 5;
+var TY_SLICE int = 6;
+var TY_ENUM int = 7;
+
+var ND_NUM int = 0;
+var ND_STRLIT int = 1;
+var ND_VAR int = 2;
+var ND_CALL int = 3;
+var ND_ADD int = 4;
+var ND_SUB int = 5;
+var ND_MUL int = 6;
+var ND_DIV int = 7;
