@@ -1,0 +1,47 @@
+// expect-exit: 94
+struct Point { x int, y int, }
+struct Rect { lo Point, hi Point, tag u8, }
+
+fn area(r Rect) int {
+	return (r.hi.x - r.lo.x) * (r.hi.y - r.lo.y);
+}
+
+fn shift(p Point, d int) Point {
+	return Point{x: p.x + d, y: p.y + d};
+}
+
+fn main() int {
+	var p Point = Point{x: 3, y: 4};
+	var n int = p.x + p.y;
+
+	// order does not matter
+	var q Point = Point{y: 10, x: 1};
+	n = n + q.x + q.y;
+
+	// omitted fields read as zero
+	var z Point = Point{x: 7};
+	if (z.y != 0) { return 100; }
+	n = n + z.x;
+
+	// fully omitted
+	var e Point = Point{};
+	if (e.x != 0 || e.y != 0) { return 101; }
+
+	// nested aggregates, trailing comma
+	var r Rect = Rect{
+		lo: Point{x: 0, y: 0},
+		hi: Point{x: 5, y: 6},
+		tag: 'A',
+	};
+	if (r.tag != 65) { return 102; }
+	n = n + area(r);
+
+	// literal as a call argument and as a return value
+	n = n + area(Rect{lo: Point{x: 1, y: 1}, hi: Point{x: 3, y: 4}});
+	n = n + shift(p, 10).x;
+
+	// assignment to an existing variable
+	p = Point{x: 20, y: 0};
+	n = n + p.x;
+	return n;
+}

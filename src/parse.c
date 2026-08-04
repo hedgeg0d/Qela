@@ -197,6 +197,33 @@ static Node *call_args(Token **t, Node *n) {
 	return n;
 }
 
+/* Name{field: value, ...}. Fields may come in any order; the ones left out
+   are zeroed. */
+static Node *struct_lit(Token **t, Type *ty, isize pos) {
+	Node *n = node(ND_STRUCTLIT, pos);
+	n->ty = ty;
+	*t = expect(*t, "{");
+
+	Node head = {0};
+	Node *tail = &head;
+	while (!eq(*t, "}")) {
+		if (tail != &head) *t = expect(*t, ",");
+		if (eq(*t, "}")) break;
+		if ((*t)->kind != TK_IDENT) error_at((*t)->pos, "expected a field name");
+		Node *f = node(ND_FIELD, (*t)->pos);
+		f->name = (*t)->text;
+		*t = (*t)->next;
+		*t = expect(*t, ":");
+		f->lhs = assign(t);
+		tail->next = f;
+		tail = f;
+		n->nargs++;
+	}
+	*t = expect(*t, "}");
+	n->args = head.next;
+	return n;
+}
+
 static Node *primary(Token **t) {
 	Token *tok = *t;
 
@@ -210,6 +237,13 @@ static Node *primary(Token **t) {
 	if (tok->kind == TK_NUM) {
 		*t = tok->next;
 		return num_node(tok->val, tok->pos);
+	}
+
+	if (eq(tok, "true") || eq(tok, "false")) {
+		*t = tok->next;
+		Node *n = num_node(eq(tok, "true"), tok->pos);
+		n->ty = ty_bool;
+		return n;
 	}
 
 	if (tok->kind == TK_STR) {
@@ -254,6 +288,8 @@ static Node *primary(Token **t) {
 		if (!tt)
 			for (int i = 0; i < ntype_vars; i++)
 				if (str_eq(type_vars[i]->name, tok->text)) tt = type_vars[i];
+		if (tt && tt->kind == TY_STRUCT && eq(*t, "{"))
+			return struct_lit(t, tt, tok->pos);
 		if (tt && !eq(*t, "(")) {
 			Node *n = node(ND_TYPEEXPR, tok->pos);
 			n->typeval = tt;
