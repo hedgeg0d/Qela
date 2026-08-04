@@ -121,6 +121,7 @@ let ND_EXPRSTMT  = 45;
 let ND_COMPTIME  = 46;
 let ND_TYPEEXPR  = 47;
 let ND_SIZEOF    = 48;
+let ND_ZERO      = 49;
 
 struct Var;
 struct Node;
