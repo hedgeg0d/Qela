@@ -210,6 +210,7 @@ void type_func(Func *f);
 void type_set_fn(Func *f);
 void add_func(Func *f);
 void monomorphize_call(Node *n, Func *f);
+void opt_func(Func *f);
 
 typedef struct {
 	Func *funcs;
