@@ -28,6 +28,7 @@ struct Token {
 void set_module_dir(const char *path);
 int  diag_file_dir(int file_id, char *buf, isize cap);
 bool diag_already_imported(const char *path);
+int  diag_line_for(int file_id, isize off);
 
 int diag_add_file(const char *path, Str src);
 _Noreturn void error_at(isize pos, const char *fmt, ...);
