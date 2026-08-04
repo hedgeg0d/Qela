@@ -43,6 +43,8 @@ typedef enum {
 	TY_STRUCT,
 	TY_SLICE,
 	TY_ENUM,
+	TY_TYPE,
+	TY_TYPEVAR,
 } TypeKind;
 
 typedef struct Type    Type;
@@ -82,8 +84,10 @@ extern Type *ty_void;
 extern Type *ty_bool;
 extern Type *ty_i8, *ty_i16, *ty_i32, *ty_i64;
 extern Type *ty_u8, *ty_u16, *ty_u32, *ty_u64;
+extern Type *ty_type;
 
 Type *type_ptr(Type *base);
+Type *type_new_var(Str name);
 Type *type_array(Type *base, isize len);
 Type *type_slice(Type *base);
 int   enum_tag_of(Type *ty, Str name, Variant **out);
@@ -142,6 +146,8 @@ typedef enum {
 	ND_BLOCK,
 	ND_EXPRSTMT,
 	ND_COMPTIME,
+	ND_TYPEEXPR,
+	ND_SIZEOF,
 } NodeKind;
 
 typedef struct Var Var;
@@ -177,6 +183,7 @@ struct Node {
 	Var     *tmp;
 	Member  *member;
 	Variant *variant;
+	Type    *typeval;
 	Str      name;
 	isize    pos;
 };
@@ -189,6 +196,7 @@ struct Func {
 	Func *next;
 	Var  *params[6];
 	int   nparams;
+	int   nct;
 	Var  *locals;
 	Type *ret;
 	int   stack_size;
@@ -200,6 +208,8 @@ struct Func {
 
 void type_func(Func *f);
 void type_set_fn(Func *f);
+void add_func(Func *f);
+void monomorphize_call(Node *n, Func *f);
 
 typedef struct {
 	Func *funcs;
