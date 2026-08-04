@@ -1,0 +1,25 @@
+// expect-exit: 41
+struct Point {
+	x i32,
+	y i32,
+}
+
+struct Line {
+	a Point,
+	b Point,
+	tag u8,
+}
+
+fn shift(p *Point, dx i32) {
+	p.x += dx;
+}
+
+fn main() int {
+	var l Line;
+	l.a.x = 3;
+	l.a.y = 4;
+	l.b = l.a;
+	l.tag = 7;
+	shift(&l.b, 20);
+	return (l.a.x + l.a.y + l.b.x + l.b.y + (l.tag as i32)) as int;
+}
