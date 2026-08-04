@@ -3,16 +3,44 @@ fn id(comptime T: type, x T) T {
 	return x;
 }
 
-fn make_pair(comptime A: type, comptime B: type, a A, b B) B {
-	return b;
+fn swap(comptime T: type, a *T, b *T) {
+	var tmp T = *a;
+	*a = *b;
+	*b = tmp;
+}
+
+fn set_val(comptime T: type, p *T, v T) {
+	*p = v;
+}
+
+struct Point3 {
+	x int,
+	y int,
+	z int,
 }
 
 fn main() int {
 	var a i64 = id(i64, 10);
-	var b u8 = id(u8, 200);
-	var c i64 = make_pair(i64, u8, 999, 80);
-	var sz int = sizeof(i64) + sizeof(u8); // 8 + 1 = 9
-	var ct int = comptime { return sizeof(i32); }; // 4
-	return ((a as int) + (b as int) + (c + sz + ct - 303) as int);
-	// 10 + 200 + 80 + 9 + 4 - 303 = 0
+	var b i64 = id(i64, 20);
+	swap(i64, &a, &b); // a=20, b=10
+
+	var c u8 = id(u8, 5);
+	set_val(u8, &c, 7); // c=7
+
+	var p Point3;
+	p.x = 1; p.y = 2; p.z = 3;
+	var px *int = &p.x;
+	var pz *int = &p.z;
+	swap(int, px, pz); // x=3, z=1
+
+	var sz int = sizeof(Point3); // 24
+	// comptime: factorial 5! = 1*2*3*4*5 = 120
+	var ct int = comptime {
+		var v int = 1;
+		for i in 1..6 { v *= i; }
+		return v;
+	};
+	// 20 + 10 + 7 + 30 + 20 + 10 + 24 + 120 = 241
+	var total int = (a as int) + (b as int) + (c as int) + p.x*10 + p.y*10 + p.z*10 + sz + ct;
+	return total - 241;
 }
