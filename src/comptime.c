@@ -148,6 +148,12 @@ static ComptimeVal ct_eval_expr(Node *n) {
 		error_at(n->pos, "undefined comptime variable '%s'", n->var->name);
 	}
 
+	case ND_SIZEOF:
+		return ct_int(n->typeval->size);
+
+	case ND_TYPEEXPR:
+		error_at(n->pos, "cannot use a type value in a comptime expression");
+
 	case ND_CAST: {
 		ComptimeVal v = ct_eval_expr(n->lhs);
 		if (n->ty->kind == TY_BOOL) return ct_int(v.num != 0);

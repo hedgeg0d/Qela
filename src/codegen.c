@@ -610,6 +610,9 @@ static void gen_expr(Node *n) {
 		/* Result was precomputed during type checking. */
 		mov_reg_imm(RAX, n->val);
 		return;
+	case ND_SIZEOF:
+		mov_reg_imm(RAX, n->typeval->size);
+		return;
 	case ND_VAR:
 	case ND_MEMBER:
 	case ND_INDEX:
@@ -1015,7 +1018,10 @@ Image codegen(Unit *u) {
 	if (!main_fn) die("error: no 'main' function\n");
 	if (main_fn->nparams) die("error: 'main' must take no parameters\n");
 
-	for (Func *f = u->funcs; f; f = f->next) gen_func(f);
+	for (Func *f = u->funcs; f; f = f->next) {
+		if (f->nct) continue;
+		gen_func(f);
+	}
 
 	if (bounds_checks.n) {
 		isize panic_addr = code.n;
