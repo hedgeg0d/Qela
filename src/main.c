@@ -1,5 +1,23 @@
 #include "comp.h"
 
+static char module_dir[4096];
+static int  module_dir_len;
+
+void set_module_dir(const char *path) {
+	module_dir_len = 0;
+	if (!path) return;
+	Str s = str_from_cstr(path);
+	isize i = s.n - 1;
+	while (i >= 0 && s.p[i] != '/') i--;
+	if (i >= 0) {
+		module_dir_len = (int)(i + 1);
+		if (module_dir_len >= (int)sizeof(module_dir))
+			module_dir_len = (int)sizeof(module_dir) - 1;
+		memcpy(module_dir, s.p, (usize)module_dir_len);
+	}
+	module_dir[module_dir_len] = 0;
+}
+
 static const char *default_output(const char *in) {
 	Str s = str_from_cstr(in);
 	isize end = s.n;
@@ -41,9 +59,10 @@ int qmain(int argc, char **argv) {
 	if (!output) output = default_output(input);
 
 	Str src = read_file(input);
-	diag_init(input, src);
+	int file = diag_add_file(input, src);
+	set_module_dir(input);
 
-	Unit unit = parse(lex(src));
+	Unit unit = parse(lex(src, (isize)file << FILE_SHIFT));
 	Image img = codegen(&unit);
 	write_elf(output, &img);
 	return 0;

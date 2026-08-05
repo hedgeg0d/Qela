@@ -1,0 +1,24 @@
+// expect-exit: 37
+enum Shape {
+	Circle(int),
+	Rect(int, int),
+	Point,
+}
+
+fn area(s Shape) int {
+	match (s) {
+		Circle(r) => { return r * r; }
+		Rect(w, h) => { return w * h; }
+		Point => { return 0; }
+	}
+}
+
+fn main() int {
+	var s Shape = Shape.Circle(5);
+	var total int = area(s);
+	s = Shape.Rect(3, 4);
+	total += area(s);
+	s = Shape.Point;
+	total += area(s);
+	return total; // 25 + 12 + 0 = 37
+}
