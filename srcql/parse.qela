@@ -652,6 +652,7 @@ fn parse_function(t **Token) *Func {
 	f.ret = type_lookup("void");
 	f.pos = p;
 	cur_func = f;
+	type_set_fn(f);
 
 	enter_scope();
 	tok_expect(t, "(");
@@ -687,6 +688,7 @@ fn parse_function(t **Token) *Func {
 		*t = (*t).next;
 		var pty *Type = parse_type(t);
 		var v *Var = declare_var(pn, pty, pp);
+		v.by_ref = is_aggregate(pty) && pty.size > 16;
 		if (nparams == 0) { f.p0 = v; }
 		else if (nparams == 1) { f.p1 = v; }
 		else if (nparams == 2) { f.p2 = v; }
@@ -703,6 +705,7 @@ fn parse_function(t **Token) *Func {
 	leave_scope();
 	ntype_vars = saved_ntype_vars;
 	cur_func = 0 as *Func;
+	type_set_fn(0 as *Func);
 	return f;
 }
 
@@ -804,6 +807,57 @@ fn parse_enum(t **Token) {
 	ty.size = ((8 + maxpay + 7) & ~7) as int;
 }
 
+fn trunc_to(v i64, ty *Type) i64 {
+	if (ty.size == 1) {
+		if (ty.is_unsigned || ty.kind == TY_BOOL) { return v & 255; }
+		return ((v & 255) ^ 128) - 128;
+	}
+	if (ty.size == 2) {
+		if (ty.is_unsigned) { return v & 0xffff; }
+		return ((v & 0xffff) ^ 0x8000) - 0x8000;
+	}
+	if (ty.size == 4) {
+		if (ty.is_unsigned) { return v & 0xffffffff; }
+		return ((v & 0xffffffff) ^ 0x80000000) - 0x80000000;
+	}
+	return v;
+}
+
+fn eval_const(n *Node) i64 {
+	var k int = n.kind;
+	if (k == ND_NUM) { return n.val; }
+	if (k == ND_NEG) { return -eval_const(n.lhs); }
+	if (k == ND_BITNOT) { return ~eval_const(n.lhs); }
+	if (k == ND_NOT) { if (eval_const(n.lhs) == 0) { return 1; } return 0; }
+	if (k == ND_CAST) {
+		var v i64 = eval_const(n.lhs);
+		if (n.ty.kind == TY_BOOL) { if (v != 0) { return 1; } return 0; }
+		return trunc_to(v, n.ty);
+	}
+	if (k == ND_COMPTIME) { return n.val; }
+	if (k == ND_SIZEOF) { return n.typeval.size as i64; }
+	if (k == ND_ADD) { return eval_const(n.lhs) + eval_const(n.rhs); }
+	if (k == ND_SUB) { return eval_const(n.lhs) - eval_const(n.rhs); }
+	if (k == ND_MUL) { return eval_const(n.lhs) * eval_const(n.rhs); }
+	if (k == ND_BITAND) { return eval_const(n.lhs) & eval_const(n.rhs); }
+	if (k == ND_BITOR) { return eval_const(n.lhs) | eval_const(n.rhs); }
+	if (k == ND_BITXOR) { return eval_const(n.lhs) ^ eval_const(n.rhs); }
+	if (k == ND_SHL) { return eval_const(n.lhs) << eval_const(n.rhs); }
+	if (k == ND_SHR) { return eval_const(n.lhs) >> eval_const(n.rhs); }
+	if (k == ND_EQ) { if (eval_const(n.lhs) == eval_const(n.rhs)) { return 1; } return 0; }
+	if (k == ND_NE) { if (eval_const(n.lhs) != eval_const(n.rhs)) { return 1; } return 0; }
+	if (k == ND_LT) { if (eval_const(n.lhs) < eval_const(n.rhs)) { return 1; } return 0; }
+	if (k == ND_LE) { if (eval_const(n.lhs) <= eval_const(n.rhs)) { return 1; } return 0; }
+	if (k == ND_DIV || k == ND_MOD) {
+		var d i64 = eval_const(n.rhs);
+		if (d == 0) { error_at(n.pos, "division by zero in a constant expression"); }
+		if (k == ND_DIV) { return eval_const(n.lhs) / d; }
+		return eval_const(n.lhs) % d;
+	}
+	error_at(n.pos, "initializer must be a constant expression");
+	return 0;
+}
+
 fn parse_global(t **Token) {
 	var kw str = (*t).text;
 	var typed bool = str_eq(kw, "var");
@@ -818,7 +872,7 @@ fn parse_global(t **Token) {
 		var rhs *Node = parse_assign(t);
 		add_type(rhs);
 		if (ty as i64 == 0) { ty = rhs.ty; }
-		init = rhs.val;
+		init = eval_const(rhs);
 	}
 	declare_var(name, ty, p).init = init;
 	tok_expect(t, ";");
