@@ -1,0 +1,4 @@
+// expect-exit: 42
+import "mod/outer.qela";
+
+fn main() int { return outer_val() + 7; }

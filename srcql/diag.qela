@@ -1,17 +1,81 @@
 import "comp.qela";
 
+struct FileInfo {
+	path str,
+	src  str,
+}
+
+var files [64]FileInfo;
 var nfiles int = 0;
-var source_strs str;
+var module_dir str;
+
+fn set_module_dir(path str) {
+	module_dir = path;
+}
+
+fn get_module_dir() str {
+	return module_dir;
+}
 
 fn diag_add_file(path str, src str) int {
 	var id int = nfiles;
+	files[id].path = path;
+	files[id].src = src;
 	nfiles = nfiles + 1;
-	// source_strs[id] = ... TODO: array of file info
 	return id;
 }
 
+fn diag_file_of(pos i64) int {
+	return (pos >> FILE_SHIFT) as int;
+}
+
+fn diag_offset_of(pos i64) i64 {
+	return pos & ((1 << FILE_SHIFT) - 1);
+}
+
+fn diag_line_for(file_id int, off i64) int {
+	var src str = files[file_id].src;
+	var line int = 1;
+	var i i64 = 0;
+	while (i < off && i < src.len) {
+		if (src.ptr[i] == '\n') { line = line + 1; }
+		i = i + 1;
+	}
+	return line;
+}
+
+fn diag_col_for(file_id int, off i64) int {
+	var src str = files[file_id].src;
+	var start i64 = off;
+	while (start > 0 && src.ptr[start - 1] != '\n') { start = start - 1; }
+	return (off - start + 1) as int;
+}
+
+fn eprint_i64(v i64) {
+	var rev [24]u8;
+	var n i64 = 0;
+	if (v == 0) { rev[0] = '0'; n = 1; }
+	while (v > 0) {
+		rev[n] = ('0' as i64 + v % 10) as u8;
+		v = v / 10;
+		n = n + 1;
+	}
+	var out [24]u8;
+	var i i64 = 0;
+	while (i < n) { out[i] = rev[n - 1 - i]; i = i + 1; }
+	sys_write(STDERR, &out[0], n);
+}
+
 fn error_at(pos i64, msg str) {
-	// write to stderr
-	syscall(1, 2, msg.ptr, msg.len);
-	syscall(60, 1, 0, 0, 0, 0, 0);
+	var id int = diag_file_of(pos);
+	var off i64 = diag_offset_of(pos);
+	eprint(files[id].path);
+	eprint(":");
+	eprint_i64(diag_line_for(id, off) as i64);
+	eprint(":");
+	eprint_i64(diag_col_for(id, off) as i64);
+	eprint(": error: ");
+	eprint(msg);
+	eprint("\n");
+	sys_exit(1);
 }

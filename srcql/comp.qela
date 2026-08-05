@@ -1,119 +1,262 @@
-struct Member;
-struct Variant;
-struct Type;
-struct Var;
-struct Node;
-struct Func;
+// The stage1 contract: types, kind constants, and the inter-module API.
+// Definitions only. Changing this file changes the contract.
+// Kinds are `let` constants rather than enums because stage1 sources may not
+// use `match` (see docs/BOOTSTRAP.md).
 
-struct Type {
-	kind int,
-	size int,
-	align int,
-	is_unsigned int,
-	base *Type,
-	len i64,
-	name str,
-	members *Member,
-	variants *Variant,
-}
+import "../std/sys.qela";
+import "../std/arena.qela";
+import "../std/buf.qela";
+import "../std/str.qela";
 
-struct Member {
-	next *Member,
-	name str,
-	ty *Type,
-	offset int,
-	pos i64,
-}
+let TK_EOF   = 0;
+let TK_IDENT = 1;
+let TK_KW    = 2;
+let TK_NUM   = 3;
+let TK_STR   = 4;
+let TK_PUNCT = 5;
 
-struct Variant {
-	next *Variant,
-	name str,
-	tag int,
-	nfields int,
-	fields *Member,
-	pos i64,
-}
+// Positions of every file share one i64: file_id << FILE_SHIFT | offset.
+let FILE_SHIFT = 40;
 
-struct Var {
-	name str,
-	ty *Type,
-	next *Var,
-	offset int,
-	is_global int,
-	by_ref int,
-	data_off i64,
-	init i64,
-}
-
-struct Node {
-	kind int,
-	ty *Type,
-	typed int,
-	next *Node,
-	lhs *Node,
-	rhs *Node,
-	cond *Node,
-	tnen *Node,
-	els *Node,
-	init *Node,
-	step *Node,
-	body *Node,
-	args *Node,
-	nargs int,
-	val i64,
-	varp *Var,
-	tmp *Var,
-	member *Member,
-	variant *Variant,
-	typeval *Type,
-	name str,
-	pos i64,
-}
-
+struct Token;
 struct Token {
 	kind int,
 	next *Token,
 	text str,
-	str str,
-	val i64,
-	pos i64,
+	sval str,
+	val  i64,
+	pos  i64,
 }
 
+let TY_VOID    = 0;
+let TY_BOOL    = 1;
+let TY_INT     = 2;
+let TY_PTR     = 3;
+let TY_ARRAY   = 4;
+let TY_STRUCT  = 5;
+let TY_SLICE   = 6;
+let TY_ENUM    = 7;
+let TY_TYPE    = 8;
+let TY_TYPEVAR = 9;
+
+struct Type;
+struct Member;
+struct Variant;
+
+struct Member {
+	next   *Member,
+	name   str,
+	ty     *Type,
+	offset int,
+	pos    i64,
+}
+
+struct Variant {
+	next    *Variant,
+	name    str,
+	tag     int,
+	nfields int,
+	fields  *Member,
+	pos     i64,
+}
+
+struct Type {
+	kind        int,
+	size        int,
+	align       int,
+	is_unsigned bool,
+	base        *Type,
+	len         i64,
+	name        str,
+	members     *Member,
+	variants    *Variant,
+}
+
+let ND_NUM       = 0;
+let ND_STRLIT    = 1;
+let ND_VAR       = 2;
+let ND_CALL      = 3;
+let ND_SYSCALL   = 4;
+let ND_ADDR      = 5;
+let ND_DEREF     = 6;
+let ND_MEMBER    = 7;
+let ND_INDEX     = 8;
+let ND_SLICE     = 9;
+let ND_ENUMLIT   = 10;
+let ND_STRUCTLIT = 11;
+let ND_FIELD     = 12;
+let ND_MATCH     = 13;
+let ND_ARM       = 14;
+let ND_DEFER     = 15;
+let ND_CAST      = 16;
+let ND_ADD       = 17;
+let ND_SUB       = 18;
+let ND_MUL       = 19;
+let ND_DIV       = 20;
+let ND_MOD       = 21;
+let ND_NEG       = 22;
+let ND_NOT       = 23;
+let ND_BITAND    = 24;
+let ND_BITOR     = 25;
+let ND_BITXOR    = 26;
+let ND_BITNOT    = 27;
+let ND_SHL       = 28;
+let ND_SHR       = 29;
+let ND_EQ        = 30;
+let ND_NE        = 31;
+let ND_LT        = 32;
+let ND_LE        = 33;
+let ND_AND       = 34;
+let ND_OR        = 35;
+let ND_ASSIGN    = 36;
+let ND_OPASSIGN  = 37;
+let ND_COMMA     = 38;
+let ND_IF        = 39;
+let ND_FOR       = 40;
+let ND_BREAK     = 41;
+let ND_CONT      = 42;
+let ND_RET       = 43;
+let ND_BLOCK     = 44;
+let ND_EXPRSTMT  = 45;
+let ND_COMPTIME  = 46;
+let ND_TYPEEXPR  = 47;
+let ND_SIZEOF    = 48;
+
+struct Var;
+struct Node;
+
+struct Var {
+	name      str,
+	ty        *Type,
+	next      *Var,
+	offset    int,
+	is_global bool,
+	by_ref    bool,
+	data_off  i64,
+	init      i64,
+}
+
+struct Node {
+	kind    int,
+	ty      *Type,
+	typed   bool,
+	next    *Node,
+	lhs     *Node,
+	rhs     *Node,
+	cond    *Node,
+	then    *Node,
+	els     *Node,
+	init    *Node,
+	step    *Node,
+	body    *Node,
+	args    *Node,
+	nargs   int,
+	val     i64,
+	varp    *Var,
+	tmp     *Var,
+	member  *Member,
+	variant *Variant,
+	typeval *Type,
+	name    str,
+	pos     i64,
+}
+
+// Parameters are six separate slots: stage0 has no arrays inside structs.
+struct Func;
 struct Func {
-	name str,
-	next *Func,
-	nparams int,
-	nct int,
-	locals *Var,
-	ret *Type,
+	name       str,
+	next       *Func,
+	nparams    int,
+	nct        int,
+	locals     *Var,
+	ret        *Type,
 	stack_size int,
-	body *Node,
-	ret_slot *Var,
-	addr i64,
-	pos i64,
+	body       *Node,
+	ret_slot   *Var,
+	addr       i64,
+	pos        i64,
+	p0         *Var,
+	p1         *Var,
+	p2         *Var,
+	p3         *Var,
+	p4         *Var,
+	p5         *Var,
 }
 
-var TK_EOF int = 0;
-var TK_IDENT int = 1;
-var TK_KW int = 2;
-var TK_NUM int = 3;
-var TK_STR int = 4;
-var TK_PUNCT int = 5;
+// Source order drives the output bytes; see the determinism rules.
+struct StrLit;
+struct StrLit {
+	next *StrLit,
+	s    str,
+	id   int,
+	off  i64,
+}
 
-var TY_VOID int = 0;
-var TY_BOOL int = 1;
-var TY_INT int = 2;
-var TY_PTR int = 3;
-var TY_ARRAY int = 4;
-var TY_STRUCT int = 5;
-var TY_SLICE int = 6;
-var TY_ENUM int = 7;
+struct Unit {
+	funcs   *Func,
+	globals *Var,
+	strs    *StrLit,
+	nstrs   int,
+}
 
-var ND_NUM int = 0;
-var ND_STRLIT int = 1;
-var ND_VAR int = 2;
-var ND_CALL int = 3;
-var ND_ADD int = 4;
-var ND_SUB int = 5;
-var ND_MUL int = 6;
-var ND_DIV int = 7;
+let ELF_BASE = 0x400000;
+let EHDR_SZ  = 64;
+let PHDR_SZ  = 56;
+let SEG_GAP  = 0x1000;
+
+struct Image {
+	code     Buf,
+	rodata   Buf,
+	data     Buf,
+	bss_size i64,
+	entry    i64,
+	nph      int,
+}
+
+// Inter-module API. Qela has no prototypes: functions are visible across the
+// whole spliced token stream, so this list is the agreed contract. Changing a
+// signature means editing this file.
+//
+// std/arena.qela
+//   arena_alloc(size i64, align i64) *u8
+//
+// std/buf.qela
+//   buf_grow(b *Buf, need i64)            buf_u8(b *Buf, v u8)
+//   buf_u32(b *Buf, v i64)                buf_u64(b *Buf, v i64)
+//   buf_bytes(b *Buf, data *u8, n i64)    buf_patch32(b *Buf, at i64, v i64)
+//
+// std/str.qela
+//   str_eq(a str, b str) bool             str_from_cstr(p *u8) str
+//   str_slice(s str, lo i64, hi i64) str  str_dup(s str) str
+//   str_find(s str, c u8) i64             cstr(s str) *u8
+//
+// std/fmt.qela
+//   fmt_i64(b *Buf, v i64)                fmt_hex(b *Buf, v i64)
+//   fmt_str(b *Buf, s str)
+//
+// srcql/diag.qela
+//   set_module_dir(path str)
+//   diag_add_file(path str, src str) int
+//   diag_line_for(file_id int, off i64) int
+//   error_at(pos i64, msg str)            does not return
+//
+// srcql/lex.qela
+//   lex(src str, base i64) *Token
+//
+// srcql/parse.qela
+//   parse(tok *Token) *Unit               find_func(name str) *Func
+//
+// srcql/type.qela
+//   type_unit(u *Unit)                    add_type(n *Node)
+//   type_lookup(name str) *Type           type_define(name str, ty *Type)
+//   type_ptr(base *Type) *Type            type_array(base *Type, len i64) *Type
+//   type_slice(base *Type) *Type          type_str() *Type
+//   is_integer(t *Type) bool              is_aggregate(t *Type) bool
+//   same_type(a *Type, b *Type) bool      type_name(t *Type) str
+//   monomorphize_call(n *Node, f *Func)
+//
+// srcql/codegen.qela
+//   codegen(u *Unit, img *Image)
+//
+// srcql/elf.qela
+//   write_elf(path str, img *Image)

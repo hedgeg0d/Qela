@@ -966,6 +966,7 @@ Unit parse(Token *tok) {
 			continue;
 		}
 		if (eq(tok, "import")) {
+			isize ipos = tok->pos;
 			tok = tok->next;
 			if (tok->kind != TK_STR)
 				error_at(tok->pos, "import needs a string path");
@@ -973,9 +974,10 @@ Unit parse(Token *tok) {
 			tok = tok->next;
 			tok = expect(tok, ";");
 
-			/* Resolve path relative to the importing file's directory. */
+			/* Resolve relative to the importing file, which is the file the
+			   `import` keyword came from — not whatever follows the `;`. */
 			char buf[4096];
-			int cur_file = (int)(tok->pos >> FILE_SHIFT);
+			int cur_file = (int)(ipos >> FILE_SHIFT);
 			int dir_len = diag_file_dir(cur_file, buf, sizeof(buf) - 256);
 			char *p = buf + dir_len;
 			memcpy(p, raw.p, (usize)raw.n);

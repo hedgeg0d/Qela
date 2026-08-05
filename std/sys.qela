@@ -1,0 +1,49 @@
+// The only place in stage1 where a raw syscall is allowed.
+
+let SYS_READ  = 0;
+let SYS_WRITE = 1;
+let SYS_OPEN  = 2;
+let SYS_CLOSE = 3;
+let SYS_MMAP  = 9;
+let SYS_EXIT  = 60;
+
+let STDOUT = 1;
+let STDERR = 2;
+
+let O_WRITE_NEW = 577; // O_WRONLY | O_CREAT | O_TRUNC
+
+fn sys_read(fd i64, buf *u8, n i64) i64 {
+	return syscall(SYS_READ, fd, buf as i64, n);
+}
+
+fn sys_write(fd i64, buf *u8, n i64) i64 {
+	return syscall(SYS_WRITE, fd, buf as i64, n);
+}
+
+fn sys_open_read(path *u8) i64 {
+	return syscall(SYS_OPEN, path as i64, 0, 0);
+}
+
+fn sys_open_exec(path *u8) i64 {
+	return syscall(SYS_OPEN, path as i64, O_WRITE_NEW, 493);
+}
+
+fn sys_close(fd i64) i64 {
+	return syscall(SYS_CLOSE, fd, 0, 0);
+}
+
+fn sys_mmap_anon(n i64) i64 {
+	return syscall(SYS_MMAP, 0, n, 3, 34, -1, 0);
+}
+
+fn sys_exit(code i64) {
+	syscall(SYS_EXIT, code, 0, 0, 0, 0, 0);
+}
+
+fn write_str(fd i64, s str) {
+	sys_write(fd, s.ptr, s.len);
+}
+
+fn eprint(s str) {
+	sys_write(STDERR, s.ptr, s.len);
+}
