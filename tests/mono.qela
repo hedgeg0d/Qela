@@ -1,0 +1,39 @@
+// expect-exit: 84
+// Regression: typing a generic instantiation must not steal the caller's
+// frame. Temporaries allocated after a generic call (struct and enum
+// literals, aggregate returns) used to land in the instantiation's locals.
+struct Box { a int, b int, c int, }
+enum Tag { None, Some(int), }
+
+fn swap(comptime T: type, a *T, b *T) {
+	var tmp T = *a;
+	*a = *b;
+	*b = tmp;
+}
+
+fn sum(b Box) int { return b.a + b.b + b.c; }
+
+fn main() int {
+	var x int = 5;
+	var y int = 9;
+	swap(int, &x, &y); // x=9, y=5
+
+	// Each of these needs a temporary in main's frame.
+	var b Box = Box{a: 1, b: 2, c: 3};
+	var t Tag = Tag.Some(50);
+
+	swap(int, &b.a, &b.c); // a=3, c=1
+
+	var n int = sum(b) + x + y;
+
+	match (t) {
+		Some(v) => { n = n + v; }
+		None => { n = n + 1000; }
+	}
+
+	// A second instantiation of the same shape, then more temporaries.
+	swap(int, &x, &y); // x=5, y=9
+	var b2 Box = Box{a: x, b: y, c: 0};
+	n = n + sum(b2);
+	return n;
+}
