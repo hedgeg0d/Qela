@@ -26,7 +26,7 @@ for f in srcql/*.qela std/*.qela; do
 	case "$f" in
 	std/*) ;;
 	*)
-		if strip "$f" | grep -q 'syscall *('; then
+		if strip "$f" | grep -qE '(^|[^_[:alnum:]])syscall *\('; then
 			report "$f:" "raw syscall, wrap it in std/sys.qela"
 		fi
 		;;
