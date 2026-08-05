@@ -26,6 +26,22 @@ fn diag_add_file(path str, src str) int {
 	return id;
 }
 
+fn diag_file_dir(file_id int) str {
+	var p str = files[file_id].path;
+	var i i64 = p.len - 1;
+	while (i >= 0 && p.ptr[i] != '/') { i = i - 1; }
+	return str_slice(p, 0, i + 1);
+}
+
+fn diag_already_imported(path str) bool {
+	var i int = 0;
+	while (i < nfiles) {
+		if (str_eq(files[i].path, path)) { return true; }
+		i = i + 1;
+	}
+	return false;
+}
+
 fn diag_file_of(pos i64) int {
 	return (pos >> FILE_SHIFT) as int;
 }
