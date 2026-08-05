@@ -1,0 +1,72 @@
+import "arena.qela";
+import "str.qela";
+
+// str -> *u8 map with insertion-order iteration and O(N) lookup.
+// N is tiny in a compiler, so the array is fine.
+
+struct MapEntry {
+	key  str,
+	val  *u8,
+}
+
+struct Map {
+	entries *MapEntry,
+	n       i64,
+	cap     i64,
+}
+
+fn map_grow(m *Map, need i64) {
+	if (m.n + need <= m.cap) { return; }
+	var cap i64 = m.cap;
+	if (cap == 0) { cap = 16; }
+	while (cap < m.n + need) { cap = cap * 2; }
+	var r *MapEntry = arena_alloc(cap * 24, 8) as *MapEntry;
+	var i i64 = 0;
+	while (i < m.n) { *(r + i) = *(m.entries + i); i = i + 1; }
+	m.entries = r;
+	m.cap = cap;
+}
+
+fn map_get(m *Map, key str) *u8 {
+	var i i64 = 0;
+	while (i < m.n) {
+		var e *MapEntry = m.entries + i;
+		if (str_eq(key, e.key)) { return e.val; }
+		i = i + 1;
+	}
+	return 0 as *u8;
+}
+
+fn map_put(m *Map, key str, val *u8) {
+	// Update existing key.
+	var i i64 = 0;
+	while (i < m.n) {
+		var e *MapEntry = m.entries + i;
+		if (str_eq(key, e.key)) { e.val = val; return; }
+		i = i + 1;
+	}
+	// New entry.
+	map_grow(m, 1);
+	var e *MapEntry = m.entries + m.n;
+	e.key = key;
+	e.val = val;
+	m.n = m.n + 1;
+}
+
+fn map_len(m *Map) i64 { return m.n; }
+
+fn map_key(m *Map, i i64) str {
+	if (i < 0 || i >= m.n) {
+		var s str;
+		s.ptr = 0 as *u8; s.len = 0;
+		return s;
+	}
+	var e *MapEntry = m.entries + i;
+	return e.key;
+}
+
+fn map_val(m *Map, i i64) *u8 {
+	if (i < 0 || i >= m.n) { return 0 as *u8; }
+	var e *MapEntry = m.entries + i;
+	return e.val;
+}
