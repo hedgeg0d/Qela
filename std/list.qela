@@ -1,0 +1,45 @@
+import "arena.qela";
+
+// Growable pointer array. Elements are opaque *u8; the caller casts.
+//Doubles+ when full. Never frees.
+struct List {
+	data *u8,
+	len  i64,
+	cap  i64,
+}
+
+fn list_grow(l *List, need i64) {
+	if (l.len + need <= l.cap) { return; }
+	var cap i64 = l.cap;
+	if (cap == 0) { cap = 16; }
+	while (cap < l.len + need) { cap = cap * 2; }
+	var r *u8 = arena_alloc(cap * 8, 8);
+	if (r as i64 == 0) { return; }
+	var i i64 = 0;
+	while (i < l.len) {
+		// Copy 8-byte pointers.
+		var src *i64 = (l.data as *i64) + i;
+		var dst *i64 = (r as *i64) + i;
+		*dst = *src;
+		i = i + 1;
+	}
+	l.data = r;
+	l.cap = cap;
+}
+
+fn list_push(l *List, p *u8) {
+	list_grow(l, 1);
+	var slot *i64 = (l.data as *i64) + l.len;
+	*slot = p as i64;
+	l.len = l.len + 1;
+}
+
+fn list_get(l *List, i i64) *u8 {
+	if (i < 0 || i >= l.len) { return 0 as *u8; }
+	var slot *i64 = (l.data as *i64) + i;
+	return *slot as *u8;
+}
+
+fn list_len(l *List) i64 {
+	return l.len;
+}
