@@ -1,0 +1,827 @@
+import "comp.qela";
+import "diag.qela";
+import "type.qela";
+
+struct Scope;
+struct VarScope;
+
+// ── global state ──
+
+var scope_root *Scope;
+var cur_func *Func;
+var global_vars *Var;
+var all_funcs *Func;
+var funcs_tail *Func;
+
+struct VarScope {
+	next *VarScope,
+	name str,
+	varp *Var,
+}
+
+struct Scope {
+	next *Scope,
+	vars *VarScope,
+}
+
+fn enter_scope() {
+	var s *Scope = arena_alloc(16, 8) as *Scope;
+	s.next = scope_root;
+	scope_root = s;
+}
+
+fn leave_scope() { scope_root = scope_root.next; }
+
+fn find_var(name str) *Var {
+	var s *Scope = scope_root;
+	while (s as i64 != 0) {
+		var vs *VarScope = s.vars;
+		while (vs as i64 != 0) {
+			if (str_eq(vs.name, name)) { return vs.varp; }
+			vs = vs.next;
+		}
+		s = s.next;
+	}
+	return 0 as *Var;
+}
+
+fn declare_var(name str, ty *Type, pos i64) *Var {
+	var vs *VarScope = scope_root.vars;
+	while (vs as i64 != 0) {
+		if (str_eq(vs.name, name)) { error_at(pos, "redeclaration"); }
+		vs = vs.next;
+	}
+	var v *Var = arena_alloc(64, 8) as *Var;
+	v.name = name;
+	v.ty = ty;
+	if (cur_func as i64 != 0) {
+		v.next = cur_func.locals;
+		cur_func.locals = v;
+	} else {
+		v.is_global = true;
+		v.next = global_vars;
+		global_vars = v;
+	}
+	var vsc *VarScope = arena_alloc(24, 8) as *VarScope;
+	vsc.next = scope_root.vars;
+	vsc.name = name;
+	vsc.varp = v;
+	scope_root.vars = vsc;
+	return v;
+}
+
+// ── token helpers ──
+
+fn tok_eq(t *Token, text str) bool {
+	return str_eq(t.text, text);
+}
+
+fn tok_expect(t **Token, text str) {
+	if (!tok_eq(*t, text)) { error_at((*t).pos, "expected something else"); }
+	*t = (*t).next;
+}
+
+fn tok_consume(t **Token, text str) bool {
+	if (!tok_eq(*t, text)) { return false; }
+	*t = (*t).next;
+	return true;
+}
+
+// ── node constructors ──
+
+fn new_node(kind int, pos i64) *Node {
+	var n *Node = arena_alloc(128, 8) as *Node;
+	n.kind = kind;
+	n.pos = pos;
+	return n;
+}
+
+fn num_node(v i64, pos i64) *Node {
+	var n *Node = new_node(ND_NUM, pos);
+	n.val = v;
+	return n;
+}
+
+fn bin_node(kind int, lhs *Node, rhs *Node, pos i64) *Node {
+	var n *Node = new_node(kind, pos);
+	n.lhs = lhs;
+	n.rhs = rhs;
+	return n;
+}
+
+// ── strlit table ──
+
+var strlist_head *StrLit;
+var strlist_tail *StrLit;
+var nstrs int = 0;
+
+fn add_str(s str) int {
+	var lit *StrLit = arena_alloc(32, 8) as *StrLit;
+	lit.s = s;
+	lit.id = nstrs;
+	nstrs = nstrs + 1;
+	if (strlist_tail as i64 == 0) { strlist_head = lit; }
+	else { strlist_tail.next = lit; }
+	strlist_tail = lit;
+	return lit.id;
+}
+
+//
+// Forward-declared at the top for mutual recursion.
+// All functions are mutually visible after the full token stream is parsed.
+//
+// The ordering below ensures that parse_type comes first (used by everything),
+// then expression parsers, then statements, then top-level declarations.>
+
+// ── type parser ──
+
+fn parse_type(t **Token) *Type {
+	if (tok_consume(t, "*")) { return type_ptr(parse_type(t)); }
+	if (tok_eq(*t, "[")) {
+		*t = (*t).next;
+		if (tok_consume(t, "]")) {
+			var base *Type = parse_type(t);
+			return type_slice(base);
+		}
+		if ((*t).kind != TK_NUM) { error_at((*t).pos, "expected array length"); }
+		var len i64 = (*t).val;
+		tok_expect(t, "]");
+		var base *Type = parse_type(t);
+		return type_array(base, len);
+	}
+	if ((*t).kind != TK_IDENT) { error_at((*t).pos, "expected type name"); }
+	var ty *Type = type_lookup((*t).text);
+	if (ty as i64 == 0) { error_at((*t).pos, "unknown type"); }
+	*t = (*t).next;
+	return ty;
+}
+
+// ── expression parser ──
+
+// forward
+fn call_args(t **Token, n *Node) *Node {
+	tok_expect(t, "(");
+	var nargs int = 0;
+	while (!tok_eq(*t, ")")) {
+		if (nargs > 0) { tok_expect(t, ","); }
+		var a *Node = parse_assign(t);
+		var tail **Node = &n.args;
+		while (*tail as i64 != 0) { tail = &(*tail).next; }
+		*tail = a;
+		nargs = nargs + 1;
+	}
+	tok_expect(t, ")");
+	n.nargs = nargs;
+	return n;
+}
+
+fn parse_primary(t **Token) *Node {
+	if (tok_consume(t, "(")) {
+		var n *Node = parse_expr(t);
+		tok_expect(t, ")");
+		return n;
+	}
+	if ((*t).kind == TK_NUM) {
+		var v i64 = (*t).val;
+		var p i64 = (*t).pos;
+		*t = (*t).next;
+		return num_node(v, p);
+	}
+	if ((*t).kind == TK_STR) {
+		var p i64 = (*t).pos;
+		var id int = add_str((*t).sval);
+		*t = (*t).next;
+		var n *Node = new_node(ND_STRLIT, p);
+		n.val = id as i64;
+		return n;
+	}
+	if (tok_consume(t, "true")) { return num_node(1, (*t).pos); }
+	if (tok_consume(t, "false")) { return num_node(0, (*t).pos); }
+	if (tok_consume(t, "comptime")) {
+		var p i64 = (*t).pos;
+		var n *Node = new_node(ND_COMPTIME, p);
+		n.body = parse_block(t);
+		return n;
+	}
+	if (tok_consume(t, "sizeof")) {
+		var p i64 = (*t).pos;
+		tok_expect(t, "(");
+		var ty *Type = parse_type(t);
+		tok_expect(t, ")");
+		var n *Node = new_node(ND_SIZEOF, p);
+		n.typeval = ty;
+		return n;
+	}
+	if ((*t).kind == TK_IDENT) {
+		var name str = (*t).text;
+		var p i64 = (*t).pos;
+		*t = (*t).next;
+
+		// enum literal: Name.Variant(...)
+		if (tok_eq(*t, ".")) {
+			*t = (*t).next;
+			var ty *Type = type_lookup(name);
+			if (ty as i64 != 0 && ty.kind == TY_ENUM) {
+				var vname str = (*t).text;
+				*t = (*t).next;
+				var n *Node = new_node(ND_ENUMLIT, p);
+				n.ty = ty;
+				n.name = vname;
+				if (tok_eq(*t, "(")) { call_args(t, n); }
+				return n;
+			}
+			error_at(p, "expected enum type before dot");
+		}
+
+		// struct literal: Name{field: val, ...}
+		if (tok_eq(*t, "{")) {
+			*t = (*t).next;
+			var n *Node = new_node(ND_STRUCTLIT, p);
+			n.ty = type_lookup(name);
+			var fhead Node;
+			var ftail *Node = &fhead;
+			while (!tok_eq(*t, "}")) {
+				if (ftail != &fhead) { tok_expect(t, ","); }
+				if (tok_eq(*t, "}")) { break; }
+				var fnm str = (*t).text;
+				*t = (*t).next;
+				tok_expect(t, ":");
+				var fex *Node = parse_expr(t);
+				var fld *Node = new_node(ND_FIELD, p);
+				fld.name = fnm;
+				fld.lhs = fex;
+				ftail.next = fld;
+				ftail = fld;
+			}
+			tok_expect(t, "}");
+			n.body = fhead.next;
+			return n;
+		}
+
+		// function call
+		if (tok_eq(*t, "(")) {
+			var kind int = ND_CALL;
+			if (str_eq(name, "syscall")) { kind = ND_SYSCALL; }
+			var n *Node = new_node(kind, p);
+			n.name = name;
+			call_args(t, n);
+			return n;
+		}
+
+		// variable reference
+		var v *Var = find_var(name);
+		if (v as i64 == 0) { error_at(p, "undefined variable"); }
+		var n *Node = new_node(ND_VAR, p);
+		n.varp = v;
+		return n;
+	}
+	error_at((*t).pos, "expected expression");
+	return 0 as *Node;
+}
+
+fn parse_postfix(t **Token) *Node {
+	var n *Node = parse_primary(t);
+	while (true) {
+		var p i64 = (*t).pos;
+		if (tok_consume(t, "[")) {
+			var lo *Node = 0 as *Node;
+			if (!tok_eq(*t, "..")) { lo = parse_expr(t); }
+			if (tok_consume(t, "..")) {
+				var s *Node = new_node(ND_SLICE, p);
+				s.lhs = n;
+				s.rhs = lo;
+				if (!tok_eq(*t, "]")) { s.then = parse_expr(t); }
+				tok_expect(t, "]");
+				n = s;
+				continue;
+			}
+			tok_expect(t, "]");
+			n = bin_node(ND_INDEX, n, lo, p);
+			continue;
+		}
+		if (tok_consume(t, ".")) {
+			var m *Node = new_node(ND_MEMBER, p);
+			m.lhs = n;
+			m.name = (*t).text;
+			*t = (*t).next;
+			n = m;
+			continue;
+		}
+		return n;
+	}
+}
+
+fn parse_unary(t **Token) *Node {
+	var p i64 = (*t).pos;
+	if (tok_consume(t, "-")) { var n *Node = new_node(ND_NEG, p); n.lhs = parse_unary(t); return n; }
+	if (tok_consume(t, "!")) { var n *Node = new_node(ND_NOT, p); n.lhs = parse_unary(t); return n; }
+	if (tok_consume(t, "~")) { var n *Node = new_node(ND_BITNOT, p); n.lhs = parse_unary(t); return n; }
+	if (tok_consume(t, "&")) { var n *Node = new_node(ND_ADDR, p); n.lhs = parse_unary(t); return n; }
+	if (tok_consume(t, "*")) { var n *Node = new_node(ND_DEREF, p); n.lhs = parse_unary(t); return n; }
+	if (tok_consume(t, "+")) { return parse_unary(t); }
+	return parse_postfix(t);
+}
+
+fn parse_cast(t **Token) *Node {
+	var n *Node = parse_unary(t);
+	while (tok_consume(t, "as")) {
+		var p i64 = (*t).pos;
+		var c *Node = new_node(ND_CAST, p);
+		c.lhs = n;
+		c.ty = parse_type(t);
+		n = c;
+	}
+	return n;
+}
+
+fn parse_mul(t **Token) *Node {
+	var n *Node = parse_cast(t);
+	while (true) {
+		var p i64 = (*t).pos;
+		if (tok_consume(t, "*")) { n = bin_node(ND_MUL, n, parse_cast(t), p); }
+		else if (tok_consume(t, "/")) { n = bin_node(ND_DIV, n, parse_cast(t), p); }
+		else if (tok_consume(t, "%")) { n = bin_node(ND_MOD, n, parse_cast(t), p); }
+		else if (tok_consume(t, "<<")) { n = bin_node(ND_SHL, n, parse_cast(t), p); }
+		else if (tok_consume(t, ">>")) { n = bin_node(ND_SHR, n, parse_cast(t), p); }
+		else if (tok_consume(t, "&")) { n = bin_node(ND_BITAND, n, parse_cast(t), p); }
+		else { return n; }
+	}
+}
+
+fn parse_add(t **Token) *Node {
+	var n *Node = parse_mul(t);
+	while (true) {
+		var p i64 = (*t).pos;
+		if (tok_consume(t, "+")) { n = bin_node(ND_ADD, n, parse_mul(t), p); }
+		else if (tok_consume(t, "-")) { n = bin_node(ND_SUB, n, parse_mul(t), p); }
+		else if (tok_consume(t, "|")) { n = bin_node(ND_BITOR, n, parse_mul(t), p); }
+		else if (tok_consume(t, "^")) { n = bin_node(ND_BITXOR, n, parse_mul(t), p); }
+		else { return n; }
+	}
+}
+
+fn parse_rel(t **Token) *Node {
+	var n *Node = parse_add(t);
+	while (true) {
+		var p i64 = (*t).pos;
+		if (tok_consume(t, "<")) { n = bin_node(ND_LT, n, parse_add(t), p); }
+		else if (tok_consume(t, "<=")) { n = bin_node(ND_LE, n, parse_add(t), p); }
+		else if (tok_consume(t, ">")) { n = bin_node(ND_LT, parse_add(t), n, p); }
+		else if (tok_consume(t, ">=")) { n = bin_node(ND_LE, parse_add(t), n, p); }
+		else { return n; }
+	}
+}
+
+fn parse_eq(t **Token) *Node {
+	var n *Node = parse_rel(t);
+	while (true) {
+		var p i64 = (*t).pos;
+		if (tok_consume(t, "==")) { n = bin_node(ND_EQ, n, parse_rel(t), p); }
+		else if (tok_consume(t, "!=")) { n = bin_node(ND_NE, n, parse_rel(t), p); }
+		else { return n; }
+	}
+}
+
+fn parse_logand(t **Token) *Node {
+	var n *Node = parse_eq(t);
+	while (true) {
+		var p i64 = (*t).pos;
+		if (tok_consume(t, "&&")) { n = bin_node(ND_AND, n, parse_eq(t), p); }
+		else { return n; }
+	}
+}
+
+fn parse_logor(t **Token) *Node {
+	var n *Node = parse_logand(t);
+	while (true) {
+		var p i64 = (*t).pos;
+		if (tok_consume(t, "||")) { n = bin_node(ND_OR, n, parse_logand(t), p); }
+		else { return n; }
+	}
+}
+
+fn parse_assign(t **Token) *Node {
+	var n *Node = parse_logor(t);
+	var p i64 = (*t).pos;
+	if (tok_consume(t, "=")) {
+		return bin_node(ND_ASSIGN, n, parse_assign(t), p);
+	}
+	// op=
+	if (tok_consume(t, "+="))  { return bin_node(ND_OPASSIGN, n, parse_assign(t), p); }
+	if (tok_consume(t, "-="))  { return bin_node(ND_OPASSIGN, n, parse_assign(t), p); }
+	if (tok_consume(t, "*="))  { return bin_node(ND_OPASSIGN, n, parse_assign(t), p); }
+	if (tok_consume(t, "/="))  { return bin_node(ND_OPASSIGN, n, parse_assign(t), p); }
+	if (tok_consume(t, "%="))  { return bin_node(ND_OPASSIGN, n, parse_assign(t), p); }
+	if (tok_consume(t, "&="))  { return bin_node(ND_OPASSIGN, n, parse_assign(t), p); }
+	if (tok_consume(t, "|="))  { return bin_node(ND_OPASSIGN, n, parse_assign(t), p); }
+	if (tok_consume(t, "^="))  { return bin_node(ND_OPASSIGN, n, parse_assign(t), p); }
+	if (tok_consume(t, "<<=")) { return bin_node(ND_OPASSIGN, n, parse_assign(t), p); }
+	if (tok_consume(t, ">>=")) { return bin_node(ND_OPASSIGN, n, parse_assign(t), p); }
+	return n;
+}
+
+fn parse_expr(t **Token) *Node {
+	var n *Node = parse_assign(t);
+	if (tok_consume(t, ",")) { return bin_node(ND_COMMA, n, parse_expr(t), (*t).pos); }
+	return n;
+}
+
+// ── statements ──
+
+fn parse_block(t **Token) *Node {
+	var n *Node = new_node(ND_BLOCK, (*t).pos);
+	tok_expect(t, "{");
+	enter_scope();
+	var head Node;
+	var tail *Node = &head;
+	while (!tok_eq(*t, "}")) {
+		tail.next = parse_stmt(t);
+		tail = tail.next;
+	}
+	leave_scope();
+	tok_expect(t, "}");
+	n.body = head.next;
+	return n;
+}
+
+fn parse_decl(t **Token) *Node {
+	var kw str = (*t).text;
+	var typed bool = str_eq(kw, "var");
+	*t = (*t).next;
+	var name str = (*t).text;
+	var p i64 = (*t).pos;
+	*t = (*t).next;
+	var ty *Type = 0 as *Type;
+	if (typed && !tok_eq(*t, "=")) { ty = parse_type(t); }
+	var n *Node = new_node(ND_EXPRSTMT, p);
+	if (tok_consume(t, "=")) {
+		var rhs *Node = parse_assign(t);
+		var v *Var = declare_var(name, ty, p);
+		if (ty as i64 == 0) { add_type(rhs); ty = rhs.ty; v.ty = ty; }
+		var lhs *Node = new_node(ND_VAR, p);
+		lhs.varp = v;
+		n.lhs = bin_node(ND_ASSIGN, lhs, rhs, p);
+	} else {
+		declare_var(name, ty, p);
+	}
+	tok_expect(t, ";");
+	return n;
+}
+
+fn parse_stmt(t **Token) *Node {
+	var p i64 = (*t).pos;
+
+	if (tok_eq(*t, "{")) { return parse_block(t); }
+
+	if (tok_consume(t, "return")) {
+		var n *Node = new_node(ND_RET, p);
+		if (!tok_eq(*t, ";")) { n.lhs = parse_expr(t); }
+		tok_expect(t, ";");
+		return n;
+	}
+
+	if (tok_consume(t, "if")) {
+		tok_expect(t, "(");
+		var n *Node = new_node(ND_IF, p);
+		n.cond = parse_expr(t);
+		tok_expect(t, ")");
+		n.then = parse_stmt(t);
+		if (tok_consume(t, "else")) { n.els = parse_stmt(t); }
+		return n;
+	}
+
+	if (tok_consume(t, "while")) {
+		tok_expect(t, "(");
+		var n *Node = new_node(ND_FOR, p);
+		n.cond = parse_expr(t);
+		tok_expect(t, ")");
+		n.body = parse_stmt(t);
+		return n;
+	}
+
+	if (tok_consume(t, "break")) { tok_expect(t, ";"); return new_node(ND_BREAK, p); }
+	if (tok_consume(t, "continue")) { tok_expect(t, ";"); return new_node(ND_CONT, p); }
+
+	if (tok_consume(t, "for")) {
+		var n *Node = new_node(ND_FOR, p);
+		enter_scope();
+		// for i in lo..hi
+		if ((*t).kind == TK_IDENT && tok_eq((*t).next, "in")) {
+			var name str = (*t).text;
+			var np i64 = (*t).pos;
+			*t = (*t).next.next;
+			var lo *Node = parse_assign(t);
+			tok_expect(t, "..");
+			var hi *Node = parse_assign(t);
+			var v *Var = declare_var(name, 0 as *Type, np);
+			var iv *Node = new_node(ND_VAR, np);
+			iv.varp = v;
+			var init *Node = new_node(ND_EXPRSTMT, np);
+			init.lhs = bin_node(ND_ASSIGN, iv, lo, np);
+			n.init = init;
+			var iv2 *Node = new_node(ND_VAR, np);
+			iv2.varp = v;
+			n.cond = bin_node(ND_LT, iv2, hi, np);
+			var iv3 *Node = new_node(ND_VAR, np);
+			iv3.varp = v;
+			var step *Node = bin_node(ND_OPASSIGN, iv3, num_node(1, np), np);
+			step.val = ND_ADD;
+			n.step = step;
+		} else {
+			tok_expect(t, "(");
+			if (!tok_eq(*t, ";")) {
+				if (tok_eq(*t, "let") || tok_eq(*t, "var")) { n.init = parse_decl(t); }
+				else {
+					var e *Node = new_node(ND_EXPRSTMT, (*t).pos);
+					e.lhs = parse_expr(t);
+					n.init = e;
+					tok_expect(t, ";");
+				}
+			} else { *t = (*t).next; }
+			if (!tok_eq(*t, ";")) { n.cond = parse_expr(t); }
+			tok_expect(t, ";");
+			if (!tok_eq(*t, ")")) { n.step = parse_expr(t); }
+			tok_expect(t, ")");
+		}
+		n.body = parse_stmt(t);
+		leave_scope();
+		return n;
+	}
+
+	if (tok_consume(t, "defer")) {
+		var n *Node = new_node(ND_DEFER, p);
+		n.lhs = parse_stmt(t);
+		return n;
+	}
+
+	if (tok_consume(t, "match")) {
+		tok_expect(t, "(");
+		var n *Node = new_node(ND_MATCH, p);
+		n.cond = parse_expr(t);
+		tok_expect(t, ")");
+		tok_expect(t, "{");
+		var head Node;
+		var tail *Node = &head;
+		while (!tok_eq(*t, "}")) {
+			var arm *Node = new_node(ND_ARM, (*t).pos);
+			if (tok_consume(t, "_")) { arm.name.len = 0; }
+			else {
+				arm.name = (*t).text;
+				*t = (*t).next;
+			}
+			enter_scope();
+			if (tok_consume(t, "(")) {
+				var bh Node;
+				var bt *Node = &bh;
+				while (!tok_eq(*t, ")")) {
+					if (bt != &bh) { tok_expect(t, ","); }
+					var b *Node = new_node(ND_VAR, (*t).pos);
+					b.varp = declare_var((*t).text, 0 as *Type, (*t).pos);
+					*t = (*t).next;
+					bt.next = b;
+					bt = b;
+				}
+				tok_expect(t, ")");
+				arm.args = bh.next;
+			}
+			tok_expect(t, "=>");
+			arm.body = parse_stmt(t);
+			leave_scope();
+			tail.next = arm;
+			tail = arm;
+		}
+		tok_expect(t, "}");
+		n.body = head.next;
+		return n;
+	}
+
+	if (tok_eq(*t, "let") || tok_eq(*t, "var")) { return parse_decl(t); }
+
+	var n *Node = new_node(ND_EXPRSTMT, p);
+	n.lhs = parse_expr(t);
+	tok_expect(t, ";");
+	return n;
+}
+
+// ── top-level ──
+
+fn parse_function(t **Token) *Func {
+	tok_expect(t, "fn");
+	var name str = (*t).text;
+	var p i64 = (*t).pos;
+	*t = (*t).next;
+
+	var f *Func = arena_alloc(120, 8) as *Func;
+	f.name = name;
+	f.ret = 0 as *Type;
+	f.pos = p;
+	cur_func = f;
+
+	enter_scope();
+	tok_expect(t, "(");
+	var nparams int = 0;
+	while (!tok_eq(*t, ")")) {
+		if (nparams > 0) { tok_expect(t, ","); }
+		var pn str = (*t).text;
+		var pp i64 = (*t).pos;
+		*t = (*t).next;
+		var pty *Type = parse_type(t);
+		var v *Var = declare_var(pn, pty, pp);
+		if (nparams == 0) { f.p0 = v; }
+		else if (nparams == 1) { f.p1 = v; }
+		else if (nparams == 2) { f.p2 = v; }
+		else if (nparams == 3) { f.p3 = v; }
+		else if (nparams == 4) { f.p4 = v; }
+		else if (nparams == 5) { f.p5 = v; }
+		nparams = nparams + 1;
+	}
+	f.nparams = nparams;
+	tok_expect(t, ")");
+
+	if (!tok_eq(*t, "{")) { f.ret = parse_type(t); }
+	f.body = parse_block(t);
+	leave_scope();
+	cur_func = 0 as *Func;
+	return f;
+}
+
+fn parse_struct(t **Token) {
+	tok_expect(t, "struct");
+	var name str = (*t).text;
+	var p i64 = (*t).pos;
+	*t = (*t).next;
+
+	if (tok_consume(t, ";")) {
+		if (type_lookup(name) as i64 == 0) {
+			var ty *Type = arena_alloc(64, 8) as *Type;
+			ty.kind = TY_STRUCT; ty.align = 8; ty.size = 8; ty.name = name;
+			type_define(name, ty);
+		}
+		return;
+	}
+
+	var ty *Type = type_lookup(name);
+	if (ty as i64 != 0 && ty.members as i64 != 0) { error_at(p, "redefinition"); }
+	if (ty as i64 == 0) {
+		ty = arena_alloc(64, 8) as *Type;
+		ty.kind = TY_STRUCT; ty.name = name;
+		type_define(name, ty);
+	}
+
+	tok_expect(t, "{");
+	var mhead Member;
+	var mtail *Member = &mhead;
+	var off int = 0; var align int = 1;
+	while (!tok_eq(*t, "}")) {
+		if (mtail != &mhead) { tok_expect(t, ","); }
+		if (tok_eq(*t, "}")) { break; }
+		var fnm str = (*t).text;
+		var fp i64 = (*t).pos;
+		*t = (*t).next;
+		var fty *Type = parse_type(t);
+		off = (off + fty.align - 1) & ~(fty.align - 1);
+		var m *Member = arena_alloc(48, 8) as *Member;
+		m.name = fnm; m.ty = fty; m.offset = off; m.pos = fp;
+		off = off + fty.size;
+		if (fty.align > align) { align = fty.align; }
+		mtail.next = m; mtail = m;
+	}
+	tok_expect(t, "}");
+	ty.align = align;
+	ty.size = (off + align - 1) & ~(align - 1);
+	ty.members = mhead.next;
+}
+
+fn parse_enum(t **Token) {
+	tok_expect(t, "enum");
+	var name str = (*t).text;
+	var p i64 = (*t).pos;
+	*t = (*t).next;
+
+	var ty *Type = arena_alloc(64, 8) as *Type;
+	ty.kind = TY_ENUM; ty.align = 8; ty.name = name;
+	type_define(name, ty);
+
+	tok_expect(t, "{");
+	var vhead Variant;
+	var vtail *Variant = &vhead;
+	var tag int = 0;
+	while (!tok_eq(*t, "}")) {
+		if (vtail != &vhead) { tok_expect(t, ","); }
+		if (tok_eq(*t, "}")) { break; }
+		var vnm str = (*t).text;
+		var vp i64 = (*t).pos;
+		*t = (*t).next;
+		var v *Variant = arena_alloc(40, 8) as *Variant;
+		v.name = vnm; v.tag = tag; v.pos = vp; tag = tag + 1;
+
+		if (tok_consume(t, "(")) {
+			var fhead Member;
+			var ftail *Member = &fhead;
+			var voff int = 8;
+			var nf int = 0;
+			while (!tok_eq(*t, ")")) {
+				if (ftail != &fhead) { tok_expect(t, ","); }
+				var fty *Type = parse_type(t);
+				voff = (voff + fty.align - 1) & ~(fty.align - 1);
+				var m *Member = arena_alloc(48, 8) as *Member;
+				m.ty = fty; m.offset = voff; m.pos = vp;
+				voff = voff + fty.size;
+				nf = nf + 1;
+				ftail.next = m; ftail = m;
+			}
+			tok_expect(t, ")");
+			v.fields = fhead.next;
+			v.nfields = nf;
+		}
+		vtail.next = v; vtail = v;
+	}
+	tok_expect(t, "}");
+	ty.variants = vhead.next;
+}
+
+fn parse_global(t **Token) {
+	var kw str = (*t).text;
+	var typed bool = str_eq(kw, "var");
+	*t = (*t).next;
+	var name str = (*t).text;
+	var p i64 = (*t).pos;
+	*t = (*t).next;
+	var ty *Type = 0 as *Type;
+	if (typed && !tok_eq(*t, "=")) { ty = parse_type(t); }
+	var init i64 = 0;
+	if (tok_consume(t, "=")) {
+		var rhs *Node = parse_assign(t);
+		add_type(rhs);
+		if (ty as i64 == 0) { ty = rhs.ty; }
+		init = rhs.val;
+	}
+	declare_var(name, ty, p).init = init;
+	tok_expect(t, ";");
+}
+
+fn save_type_vars(vars **Type, n *int) {
+	*n = 0; // TODO: type vars for generic params
+}
+
+fn restore_type_vars(vars **Type, n int) {}
+
+fn add_func(f *Func) {
+	if (all_funcs as i64 == 0) { all_funcs = f; }
+	else { funcs_tail.next = f; }
+	funcs_tail = f;
+}
+
+fn find_func(name str) *Func {
+	var f *Func = all_funcs;
+	while (f as i64 != 0) {
+		if (str_eq(f.name, name)) { return f; }
+		f = f.next;
+	}
+	return 0 as *Func;
+}
+
+fn parse(tok *Token) *Unit {
+	enter_scope();
+	var head Func;
+	var tail *Func = &head;
+	while (tok.kind != TK_EOF) {
+		if (tok_eq(tok, "struct")) { parse_struct(&tok); continue; }
+		if (tok_eq(tok, "enum")) { parse_enum(&tok); continue; }
+		if (tok_eq(tok, "let") || tok_eq(tok, "var")) { parse_global(&tok); continue; }
+		if (tok_eq(tok, "import")) {
+			tok = tok.next;
+			if (tok.kind != TK_STR) { error_at(tok.pos, "import needs a string path"); }
+			var raw str = tok.sval;
+			tok = tok.next;
+			tok_expect(&tok, ";");
+			var buf [4096]u8;
+			var dir_len i64 = 0;
+			// resolve path relative to importing file
+			var i i64 = 0;
+			while (i < raw.len) { buf[i + dir_len] = raw.ptr[i]; i = i + 1; }
+			buf[i + dir_len] = 0;
+			tok = tok;
+			continue;
+		}
+		tail.next = parse_function(&tok);
+		tail = tail.next;
+		all_funcs = head.next;
+	}
+	leave_scope();
+	all_funcs = head.next;
+	funcs_tail = tail;
+
+	var f *Func = head.next;
+	while (f as i64 != 0) {
+		type_func(f);
+		f = f.next;
+	}
+
+	var u *Unit = arena_alloc(32, 8) as *Unit;
+	u.funcs = head.next;
+	u.globals = global_vars;
+	u.strs = strlist_head;
+	u.nstrs = nstrs;
+	return u;
+}
