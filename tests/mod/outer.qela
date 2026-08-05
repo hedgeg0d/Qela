@@ -1,0 +1,3 @@
+import "inner.qela";
+
+fn outer_val() int { return inner_val() + 5; }

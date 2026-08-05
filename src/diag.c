@@ -8,7 +8,13 @@ static int         nfiles;
 
 int diag_add_file(const char *path, Str src) {
 	if (nfiles == MAX_FILES) die("error: too many imported files\n");
-	paths[nfiles] = path;
+	/* Callers resolve paths into a stack buffer, so the table needs its own
+	   copy: it outlives them and feeds both diagnostics and import lookup. */
+	Str   p = str_from_cstr(path);
+	char *copy = anew_n(char, p.n + 1);
+	memcpy(copy, p.p, (usize)p.n);
+	copy[p.n] = 0;
+	paths[nfiles] = copy;
 	sources[nfiles] = src;
 	return nfiles++;
 }
