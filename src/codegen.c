@@ -673,6 +673,28 @@ static void gen_expr(Node *n) {
 		lea_local(RAX, off);
 		return;
 	}
+	case ND_STRUCTLIT: {
+		int off = n->tmp->offset;
+		int nmembers = 0;
+		for (Member *m = n->ty->members; m; m = m->next) nmembers++;
+		if (n->nargs < nmembers) {
+			/* Fields left out read as zero: rep stosb over the whole slot. */
+			lea_local(RDI, off);
+			mov_reg_imm(RAX, 0);
+			mov_reg_imm(RCX, n->ty->size);
+			b1(0xf3);
+			b1(0xaa);
+		}
+		for (Node *a = n->args; a; a = a->next) {
+			lea_local(RDI, off - a->member->offset);
+			push_reg(RDI);
+			gen_expr(a->lhs);
+			if (is_aggregate(a->member->ty)) copy_aggregate(a->member->ty->size);
+			else store(a->member->ty);
+		}
+		lea_local(RAX, off);
+		return;
+	}
 	case ND_COMMA:
 		gen_expr(n->lhs);
 		gen_expr(n->rhs);
