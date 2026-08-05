@@ -956,6 +956,7 @@ Unit parse(Token *tok) {
 			error_at(f->pos, "redefinition of function '%s'", f->name);
 		if (f->nct) continue;
 		type_func(f);
+		opt_func(f);
 
 		int off = 0;
 		for (Var *v = f->locals; v; v = v->next) {
