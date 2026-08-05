@@ -1,6 +1,6 @@
 // expect-out: Hello, Qela!
 fn main() int {
 	let msg = "Hello, Qela!\n";
-	syscall(1, 1, msg, cstrlen(msg));
+	syscall(1, 1, msg.ptr, msg.len);
 	return 0;
 }
