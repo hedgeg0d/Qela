@@ -7,6 +7,7 @@
 
 PRIM(ty_void, TY_VOID, 1, false, "void")
 PRIM(ty_bool, TY_BOOL, 1, false, "bool")
+PRIM(ty_type, TY_TYPE, 8, false, "type")
 PRIM(ty_i8, TY_INT, 1, false, "i8")
 PRIM(ty_i16, TY_INT, 2, false, "i16")
 PRIM(ty_i32, TY_INT, 4, false, "i32")
@@ -19,6 +20,12 @@ PRIM(ty_u64, TY_INT, 8, true, "u64")
 Type *type_ptr(Type *base) {
 	Type *t = anew(Type);
 	*t = (Type){.kind = TY_PTR, .size = 8, .align = 8, .is_unsigned = true, .base = base};
+	return t;
+}
+
+Type *type_new_var(Str name) {
+	Type *t = anew(Type);
+	*t = (Type){.kind = TY_TYPEVAR, .size = 8, .align = 8, .name = name};
 	return t;
 }
 
@@ -79,10 +86,10 @@ Type *type_lookup(Str name) {
 		const char *name;
 		Type      **ty;
 	} table[] = {
-	    {"void", &ty_void}, {"bool", &ty_bool}, {"i8", &ty_i8},   {"i16", &ty_i16},
-	    {"i32", &ty_i32},   {"i64", &ty_i64},   {"u8", &ty_u8},   {"u16", &ty_u16},
-	    {"u32", &ty_u32},   {"u64", &ty_u64},   {"int", &ty_i64}, {"uint", &ty_u64},
-	    {"usize", &ty_u64}, {NULL, NULL},
+	    {"void", &ty_void}, {"bool", &ty_bool}, {"type", &ty_type},
+	    {"i8", &ty_i8}, {"i16", &ty_i16}, {"i32", &ty_i32}, {"i64", &ty_i64},
+	    {"u8", &ty_u8}, {"u16", &ty_u16}, {"u32", &ty_u32}, {"u64", &ty_u64},
+	    {"int", &ty_i64}, {"uint", &ty_u64}, {"usize", &ty_u64}, {NULL, NULL},
 	};
 	for (int i = 0; table[i].name; i++)
 		if (str_eq(name, str_from_cstr(table[i].name))) return *table[i].ty;
@@ -202,6 +209,158 @@ static void usual_conv(Node *n) {
 
 void type_set_fn(Func *f) { cur_fn_typing = f; }
 
+/* ── monomorphization ── */
+
+static Type *tsubst(Type *t, int nct, Type **vars, Type **concretes) {
+	if (!t) return NULL;
+	if (t->kind == TY_TYPEVAR) {
+		for (int i = 0; i < nct; i++)
+			if (t == vars[i]) return concretes[i];
+		return t;
+	}
+	if (t->kind == TY_PTR) {
+		Type *b = tsubst(t->base, nct, vars, concretes);
+		return b != t->base ? type_ptr(b) : t;
+	}
+	if (t->kind == TY_ARRAY) {
+		Type *b = tsubst(t->base, nct, vars, concretes);
+		return b != t->base ? type_array(b, t->len) : t;
+	}
+	if (t->kind == TY_SLICE) {
+		Type *b = tsubst(t->base, nct, vars, concretes);
+		return b != t->base ? type_slice(b) : t;
+	}
+	return t;
+}
+
+static Var *var_map_old[256];
+static Var *var_map_new[256];
+static int    nvar_map;
+
+static Var *clone_var(Var *v, int nct, Type **vars, Type **concretes) {
+	if (!v) return NULL;
+	Var *c = anew(Var);
+	*c = *v;
+	c->ty = tsubst(v->ty, nct, vars, concretes);
+	c->next = NULL;
+	var_map_old[nvar_map] = v;
+	var_map_new[nvar_map] = c;
+	nvar_map++;
+	return c;
+}
+
+static Var *remap_var(Var *v) {
+	for (int i = 0; i < nvar_map; i++)
+		if (var_map_old[i] == v) return var_map_new[i];
+	return v;
+}
+
+static Node *clone_node(Node *n, int nct, Type **vars, Type **concretes) {
+	if (!n) return NULL;
+	Node *c = anew(Node);
+	*c = *n;
+	c->ty = tsubst(n->ty, nct, vars, concretes);
+	if (n->typeval) c->typeval = tsubst(n->typeval, nct, vars, concretes);
+	if (n->var) c->var = remap_var(n->var);
+	if (n->tmp) c->tmp = remap_var(n->tmp);
+	c->lhs = clone_node(n->lhs, nct, vars, concretes);
+	c->rhs = clone_node(n->rhs, nct, vars, concretes);
+	c->cond = clone_node(n->cond, nct, vars, concretes);
+	c->then = clone_node(n->then, nct, vars, concretes);
+	c->els = clone_node(n->els, nct, vars, concretes);
+	c->init = clone_node(n->init, nct, vars, concretes);
+	c->step = clone_node(n->step, nct, vars, concretes);
+	c->body = clone_node(n->body, nct, vars, concretes);
+	c->args = clone_node(n->args, nct, vars, concretes);
+	c->next = clone_node(n->next, nct, vars, concretes);
+	return c;
+}
+
+static void build_name(char *buf, isize cap, Func *f, int nct, Type **concretes) {
+	isize n = 0;
+	Str fn = f->name;
+	if (n + fn.n + 1 < cap) {
+		memcpy(buf + n, fn.p, (usize)fn.n);
+		n += fn.n;
+		buf[n++] = '$';
+	}
+	for (int i = 0; i < nct; i++) {
+		Str tn = type_name(concretes[i]);
+		if (n + tn.n + 1 >= cap) break;
+		memcpy(buf + n, tn.p, (usize)tn.n);
+		n += tn.n;
+		buf[n++] = '$';
+	}
+	buf[n] = 0;
+}
+
+static Func *clone_func(Func *f, int nct, Type **concretes) {
+	Type *vars[6];
+	for (int i = 0; i < nct; i++) vars[i] = f->params[i]->ty;
+
+	char namebuf[256];
+	build_name(namebuf, sizeof(namebuf), f, nct, concretes);
+
+	Func *existing = find_func(str_from_cstr(namebuf));
+	if (existing) return existing;
+
+	Func *f2 = anew(Func);
+	*f2 = (Func){.name = str_dup(str_from_cstr(namebuf)),
+	             .ret = tsubst(f->ret, nct, vars, concretes),
+	             .pos = f->pos};
+	nvar_map = 0;
+
+	/* Clone locals (params + temps), skipping comptime params. */
+	Var hd = {0};
+	Var *tl = &hd;
+	for (Var *v = f->locals; v; v = v->next) {
+		for (int i = 0; i < nct; i++)
+			if (v == f->params[i]) goto skip;
+		Var *cv = clone_var(v, nct, vars, concretes);
+		tl->next = cv;
+		tl = cv;
+	skip:;
+	}
+	f2->locals = hd.next;
+
+	/* Clone non-comptime params. */
+	for (int i = nct; i < f->nparams; i++) {
+		f2->params[f2->nparams] = remap_var(f->params[i]);
+		f2->nparams++;
+	}
+
+	f2->body = clone_node(f->body, nct, vars, concretes);
+	add_func(f2);
+	return f2;
+}
+
+void monomorphize_call(Node *n, Func *f) {
+	Type *concretes[6];
+	int nct = f->nct;
+
+	Node *a = n->args;
+	for (int i = 0; i < nct; i++, a = a->next) {
+		if (!a || a->kind != ND_TYPEEXPR)
+			error_at(a ? a->pos : n->pos, "expected a type argument");
+		concretes[i] = a->typeval;
+		if (!concretes[i] || concretes[i]->kind == TY_TYPEVAR)
+			error_at(a->pos, "type argument must be a concrete type");
+	}
+
+	Func *f2 = clone_func(f, nct, concretes);
+
+	/* Rewrite the call to reference the instantiation. */
+	n->name = f2->name;
+	n->args = a; /* strip the comptime type args */
+	n->nargs -= nct;
+
+	/* Type the clone (ret_slot, stack_size handled by the parse loop picking it up). */
+	cur_fn_typing = f2;
+	if (is_aggregate(f2->ret) && f2->ret->size > 16)
+		f2->ret_slot = alloc_temp(type_ptr(f2->ret));
+	add_type(f2->body);
+}
+
 void type_func(Func *f) {
 	cur_fn_typing = f;
 	if (is_aggregate(f->ret) && f->ret->size > 16)
@@ -307,6 +466,16 @@ void add_type(Node *n) {
 	}
 	case ND_VAR:
 		n->ty = n->var->ty;
+		return;
+
+	case ND_TYPEEXPR:
+		n->ty = ty_type;
+		return;
+
+	case ND_SIZEOF:
+		n->ty = ty_i64;
+		if (n->typeval->kind != TY_TYPEVAR)
+			n->val = n->typeval->size;
 		return;
 
 	case ND_ADD:
@@ -525,6 +694,7 @@ void add_type(Node *n) {
 	case ND_CALL: {
 		Func *f = find_func(n->name);
 		if (!f) error_at(n->pos, "undefined function '%s'", n->name);
+		if (f->nct) { monomorphize_call(n, f); f = find_func(n->name); }
 		if (n->nargs != f->nparams)
 			error_at(n->pos, "'%s' takes a different number of arguments", n->name);
 		int i = 0;

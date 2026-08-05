@@ -1,0 +1,18 @@
+// expect-exit: 0
+fn id(comptime T: type, x T) T {
+	return x;
+}
+
+fn make_pair(comptime A: type, comptime B: type, a A, b B) B {
+	return b;
+}
+
+fn main() int {
+	var a i64 = id(i64, 10);
+	var b u8 = id(u8, 200);
+	var c i64 = make_pair(i64, u8, 999, 80);
+	var sz int = sizeof(i64) + sizeof(u8); // 8 + 1 = 9
+	var ct int = comptime { return sizeof(i32); }; // 4
+	return ((a as int) + (b as int) + (c + sz + ct - 303) as int);
+	// 10 + 200 + 80 + 9 + 4 - 303 = 0
+}
