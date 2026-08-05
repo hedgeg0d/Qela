@@ -606,6 +606,10 @@ static void gen_expr(Node *n) {
 	case ND_STRLIT:
 		add_strref(RAX, (int)n->val);
 		return;
+	case ND_COMPTIME:
+		/* Result was precomputed during type checking. */
+		mov_reg_imm(RAX, n->val);
+		return;
 	case ND_VAR:
 	case ND_MEMBER:
 	case ND_INDEX:
