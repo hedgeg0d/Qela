@@ -683,6 +683,10 @@ void add_type(Node *n) {
 		return;
 	}
 
+	case ND_ZERO:
+		n->ty = ty_void;
+		return;
+
 	case ND_FIELD:
 		/* Resolved by the enclosing ND_STRUCTLIT, which knows the type. */
 		return;
