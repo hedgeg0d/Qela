@@ -1,0 +1,191 @@
+/* qelac — minimal Qela self-hosting compiler */
+var arena_ptr i64 = 0;
+var arena_left i64 = 0;
+
+fn alloc(size i64, align i64) *u8 {
+	var pad i64 = 0;
+	if (align > 1) { pad = (-arena_ptr) & (align - 1); }
+	if (arena_left < pad + size) {
+		var want i64 = size + align + (64 * 1024 * 1024);
+		var r i64 = syscall(9, 0, want, 3, 34, -1, 0);
+		if (r < 0 && r > -4096) { return 0 as *u8; }
+		arena_ptr = r;
+		arena_left = want;
+		if (align > 1) { pad = (-arena_ptr) & (align - 1); }
+	}
+	arena_ptr = arena_ptr + pad;
+	arena_left = arena_left - pad;
+	var p *u8 = arena_ptr as *u8;
+	arena_ptr = arena_ptr + size;
+	arena_left = arena_left - size;
+	return p;
+}
+
+struct CodeBuf { p *u8, n i64, cap i64, }
+
+fn bgrow(b *CodeBuf, need i64) {
+	if (b.n + need <= b.cap) { return; }
+	var cap i64 = b.cap;
+	if (cap == 0) { cap = 4096; }
+	while (cap < b.n + need) { cap = cap * 2; }
+	var r *u8 = alloc(cap, 8);
+	if (r as i64 == 0) { return; }
+	if (b.n > 0) {
+		var i i64 = 0;
+		while (i < b.n) { *(r + i) = *(b.p + i); i = i + 1; }
+	}
+	b.p = r;
+	b.cap = cap;
+}
+
+fn bu8(b *CodeBuf, v i64) {
+	bgrow(b, 1);
+	*(b.p + b.n) = v as u8;
+	b.n = b.n + 1;
+}
+
+fn bu32(b *CodeBuf, v i64) {
+	bu8(b, v & 255);
+	bu8(b, (v >> 8) & 255);
+	bu8(b, (v >> 16) & 255);
+	bu8(b, (v >> 24) & 255);
+}
+
+fn bu64(b *CodeBuf, v i64) {
+	bu32(b, v);
+	bu32(b, v >> 32);
+}
+
+fn bpatch32(b *CodeBuf, at i64, v i64) {
+	*(b.p + at)     = (v & 255) as u8;
+	*(b.p + at + 1) = ((v >> 8) & 255) as u8;
+	*(b.p + at + 2) = ((v >> 16) & 255) as u8;
+	*(b.p + at + 3) = ((v >> 24) & 255) as u8;
+}
+
+fn write_elf(path str, code *u8, codelen i64, entry_off i64) i64 {
+	var out CodeBuf;
+	var fsize i64 = 120 + codelen;
+	bgrow(&out, fsize);
+
+	/* ELF ident — 16 bytes */
+	bu32(&out, 0x464c457f); /* \x7fELF */
+	bu32(&out, 0x00010102); /* class=2, data=1, version=1, osabi=0 */
+	bu32(&out, 0);
+	bu32(&out, 0);
+
+	/* e_type=2, e_machine=0x3e */
+	bu32(&out, 2 | (0x3e << 16));
+	/* e_version=1 */
+	bu32(&out, 1);
+	/* e_entry */
+	bu64(&out, 0x400000 + 120 + entry_off);
+	/* e_phoff=64 */
+	bu64(&out, 64);
+	/* e_shoff=0 */
+	bu64(&out, 0);
+	/* e_flags=0 */
+	bu32(&out, 0);
+	/* e_ehsize=64, e_phentsize=56 */
+	bu32(&out, 64 | (56 << 16));
+	/* e_phnum=1, e_shentsize=0 */
+	bu32(&out, 1 | (0 << 16));
+	/* e_shnum=0, e_shstrndx=0 */
+	bu32(&out, 0 | (0 << 16));
+
+	/* PHDR: p_type=1, p_flags=5 */
+	bu64(&out, 1 | (5 << 32));
+	bu64(&out, 0);                    /* p_offset */
+	bu64(&out, 0x400000);            /* p_vaddr */
+	bu64(&out, 0x400000);            /* p_paddr */
+	bu64(&out, fsize);               /* p_filesz */
+	bu64(&out, fsize);               /* p_memsz */
+	bu64(&out, 0x1000);              /* p_align */
+
+	/* code */
+	var i i64 = 0;
+	while (i < codelen) { bu8(&out, *(code + i)); i = i + 1; }
+
+	/* write */
+	var ofd i64 = syscall(2, path.ptr as i64, 65 | 512, 493);
+	if (ofd < 0) { return; }
+	syscall(1, ofd, out.p as i64, out.n);
+	syscall(3, ofd, 0, 0, 0, 0, 0);
+	return out.n;
+}
+
+/* ── parser ── */
+fn parse_num(p *str, pos *i64) i64 {
+	var val i64 = 0;
+	while (*pos < p.len) {
+		var c u8 = *(p.ptr as *u8 + *pos);
+		if (c < 48 || c > 57) { return val; }
+		val = val * 10 + (c as i64 - 48);
+		*pos = *pos + 1;
+	}
+	return val;
+}
+
+fn main() int {
+	/* open and read input.qela */
+	var fd i64 = syscall(2, "input.qela".ptr as i64, 0, 0);
+	if (fd < 0) { return 2; }
+	var src_bytes *u8 = alloc(65536, 8);
+	var got i64 = syscall(0, fd, src_bytes as i64, 65536);
+	syscall(3, fd, 0, 0, 0, 0, 0);
+	if (got <= 0) { return 3; }
+
+	/* find "return" keyword and parse the number after it */
+	var pos i64 = 0;
+	var src str;
+	src.ptr = src_bytes; src.len = got;
+
+	/* scan for "return" */
+	while (pos + 5 < src.len) {
+		var c0 u8 = *(src.ptr as *u8 + pos);
+		var c1 u8 = *(src.ptr as *u8 + pos + 1);
+		var c2 u8 = *(src.ptr as *u8 + pos + 2);
+		var c3 u8 = *(src.ptr as *u8 + pos + 3);
+		var c4 u8 = *(src.ptr as *u8 + pos + 4);
+		var c5 u8 = *(src.ptr as *u8 + pos + 5);
+		if (c0 == 114 && c1 == 101 && c2 == 116 && c3 == 117 && c4 == 114 && c5 == 110) {
+			pos = pos + 6;
+			/* skip spaces */
+			while (pos < src.len) {
+				var c u8 = *(src.ptr as *u8 + pos);
+				if (c != 32 && c != 9 && c != 10) { break; }
+				pos = pos + 1;
+			}
+			var val i64 = parse_num(&src, &pos);
+
+			/* codegen: _start stub + main function */
+			var code CodeBuf;
+			/* _start: xor ebp,ebp; call main; mov edi,eax; mov eax,60; syscall */
+			bu8(&code, 0x31); bu8(&code, 0xed); /* xor ebp,ebp */
+			bu8(&code, 0xe8); /* call rel32 */
+			var call_at i64 = code.n;
+			bu32(&code, 0); /* placeholder */
+			bu8(&code, 0x89); bu8(&code, 0xc7); /* mov edi,eax */
+			bu8(&code, 0xb8); /* mov eax, imm32 */
+			bu32(&code, 60);
+			bu8(&code, 0x0f); bu8(&code, 0x05); /* syscall */
+
+			var entry i64 = code.n; /* entry = main offset */
+			/* main: push rbp; mov rbp,rsp; mov rax,val; leave; ret */
+			bu8(&code, 0x55);
+			bu8(&code, 0x48); bu8(&code, 0x89); bu8(&code, 0xe5);
+			bu8(&code, 0x48); bu8(&code, 0xb8);
+			bu64(&code, val);
+			bu8(&code, 0xc9);
+			bu8(&code, 0xc3);
+
+			/* patch call */
+			bpatch32(&code, call_at, (entry - (call_at + 4)));
+
+			var ws i64 = write_elf("a.out", code.p, code.n, entry);
+			return ws as int;
+		}
+		pos = pos + 1;
+	}
+	return 4;
+}
