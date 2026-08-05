@@ -1,0 +1,29 @@
+// expect-exit: 59
+fn is_even(n int) bool {
+	if (n % 2 == 0) { return true; }
+	return false;
+}
+
+fn pick(c bool, a int, b int) int {
+	if (c) { return a; }
+	return b;
+}
+
+var flag bool = true;
+
+fn main() int {
+	var n int = 0;
+	if (true) { n = n + 1; }
+	if (false) { n = n + 100; }
+	if (true && !false) { n = n + 2; }
+
+	var b bool = is_even(4);
+	if (b == true) { n = n + 4; }
+	if (is_even(7) == false) { n = n + 8; }
+
+	n = n + pick(true, 10, 20);
+	n = n + pick(false, 1000, 32);
+
+	if (flag) { n = n + 2; }
+	return n;
+}
