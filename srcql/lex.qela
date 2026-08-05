@@ -1,55 +1,275 @@
 import "comp.qela";
+import "diag.qela";
 
 var lex_base i64 = 0;
+var lex_tail *Token;
 
-fn str_eq(a str, b str) int {
-	if (a.len != b.len) { return 0; }
+fn push_token(kind int, pos i64) *Token {
+	var t *Token = arena_alloc(64, 8) as *Token;
+	t.kind = kind;
+	t.pos = pos + lex_base;
+	lex_tail.next = t;
+	lex_tail = t;
+	return t;
+}
+
+fn is_space(c u8) bool {
+	return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+}
+
+fn is_digit(c u8) bool {
+	return c >= '0' && c <= '9';
+}
+
+fn is_letter(c u8) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+}
+
+fn is_ident_char(c u8) bool {
+	return is_letter(c) || is_digit(c);
+}
+
+fn lex_src_eq(src str, hi i64, lit str) bool {
+	if (hi - hi != lit.len) { return false; }
 	var i i64 = 0;
-	while (i < a.len) {
-		var ca u8 = *(a.ptr as *u8 + i);
-		var cb u8 = *(b.ptr as *u8 + i);
-		if (ca != cb) { return 0; }
+	while (i < lit.len) {
+		if (src.ptr[hi + i] != lit.ptr[i]) { return false; }
 		i = i + 1;
+	}
+	return true;
+}
+
+fn is_keyword(src str, start i64, end i64) bool {
+	if (end - start == 2) {
+		if (src.ptr[start] == 'f' && src.ptr[start + 1] == 'n') { return true; }
+		if (src.ptr[start] == 'i' && src.ptr[start + 1] == 'f') { return true; }
+		if (src.ptr[start] == 'i' && src.ptr[start + 1] == 'n') { return true; }
+		if (src.ptr[start] == 'a' && src.ptr[start + 1] == 's') { return true; }
+		return false;
+	}
+	if (end - start == 3) {
+		if (src.ptr[start] == 'l' && src.ptr[start + 1] == 'e' && src.ptr[start + 2] == 't') { return true; }
+		if (src.ptr[start] == 'v' && src.ptr[start + 1] == 'a' && src.ptr[start + 2] == 'r') { return true; }
+		if (src.ptr[start] == 'f' && src.ptr[start + 1] == 'o' && src.ptr[start + 2] == 'r') { return true; }
+		return false;
+	}
+	if (end - start == 4) {
+		if (src.ptr[start] == 'e' && src.ptr[start + 1] == 'l' && src.ptr[start + 2] == 's' && src.ptr[start + 3] == 'e') { return true; }
+		if (src.ptr[start] == 'e' && src.ptr[start + 1] == 'n' && src.ptr[start + 2] == 'u' && src.ptr[start + 3] == 'm') { return true; }
+		if (src.ptr[start] == 't' && src.ptr[start + 1] == 'r' && src.ptr[start + 2] == 'u' && src.ptr[start + 3] == 'e') { return true; }
+		return false;
+	}
+	if (end - start == 5) {
+		if (src.ptr[start] == 'w' && src.ptr[start+1] == 'h' && src.ptr[start+2] == 'i' && src.ptr[start+3] == 'l' && src.ptr[start+4] == 'e') { return true; }
+		if (src.ptr[start] == 'b' && src.ptr[start+1] == 'r' && src.ptr[start+2] == 'e' && src.ptr[start+3] == 'a' && src.ptr[start+4] == 'k') { return true; }
+		if (src.ptr[start] == 'm' && src.ptr[start+1] == 'a' && src.ptr[start+2] == 't' && src.ptr[start+3] == 'c' && src.ptr[start+4] == 'h') { return true; }
+		if (src.ptr[start] == 'd' && src.ptr[start+1] == 'e' && src.ptr[start+2] == 'f' && src.ptr[start+3] == 'e' && src.ptr[start+4] == 'r') { return true; }
+		if (src.ptr[start] == 'f' && src.ptr[start+1] == 'a' && src.ptr[start+2] == 'l' && src.ptr[start+3] == 's' && src.ptr[start+4] == 'e') { return true; }
+		return false;
+	}
+	if (end - start == 6) {
+		if (src.ptr[start] == 'r' && src.ptr[start+1] == 'e' && src.ptr[start+2] == 't' && src.ptr[start+3] == 'u' && src.ptr[start+4] == 'r' && src.ptr[start+5] == 'n') { return true; }
+		if (src.ptr[start] == 's' && src.ptr[start+1] == 't' && src.ptr[start+2] == 'r' && src.ptr[start+3] == 'u' && src.ptr[start+4] == 'c' && src.ptr[start+5] == 't') { return true; }
+		if (src.ptr[start] == 'i' && src.ptr[start+1] == 'm' && src.ptr[start+2] == 'p' && src.ptr[start+3] == 'o' && src.ptr[start+4] == 'r' && src.ptr[start+5] == 't') { return true; }
+		if (src.ptr[start] == 's' && src.ptr[start+1] == 'i' && src.ptr[start+2] == 'z' && src.ptr[start+3] == 'e' && src.ptr[start+4] == 'o' && src.ptr[start+5] == 'f') { return true; }
+		return false;
+	}
+	if (end - start == 8) {
+		if (src.ptr[start] == 'c' && src.ptr[start+1] == 'o' && src.ptr[start+2] == 'n' && src.ptr[start+3] == 't' && src.ptr[start+4] == 'i' && src.ptr[start+5] == 'n' && src.ptr[start+6] == 'u' && src.ptr[start+7] == 'e') { return true; }
+		if (src.ptr[start] == 'c' && src.ptr[start+1] == 'o' && src.ptr[start+2] == 'm' && src.ptr[start+3] == 'p' && src.ptr[start+4] == 't' && src.ptr[start+5] == 'i' && src.ptr[start+6] == 'm' && src.ptr[start+7] == 'e') { return true; }
+		return false;
+	}
+	return false;
+}
+
+fn read_escape(src str, i *i64) i64 {
+	var c u8 = src.ptr[*i];
+	*i = *i + 1;
+	if (c == 'n') { return '\n'; }
+	if (c == 't') { return '\t'; }
+	if (c == 'r') { return '\r'; }
+	if (c == '0') { return 0; }
+	if (c == '\\') { return '\\'; }
+	if (c == '"') { return '"'; }
+	if (c == '\'') { return '\''; }
+	// unknown escape — caller handles error
+	return c as i64;
+}
+
+fn punct_len(src str, i i64) i64 {
+	var len i64 = src.len;
+	if (i + 3 <= len) {
+		var c u8 = src.ptr[i];
+		if (c == '<' && src.ptr[i+1] == '<' && src.ptr[i+2] == '=') { return 3; }
+		if (c == '>' && src.ptr[i+1] == '>' && src.ptr[i+2] == '=') { return 3; }
+	}
+	if (i + 2 <= len) {
+		var c0 u8 = src.ptr[i]; var c1 u8 = src.ptr[i+1];
+		if (c0 == '=' && c1 == '=') { return 2; }
+		if (c0 == '!' && c1 == '=') { return 2; }
+		if (c0 == '<' && c1 == '=') { return 2; }
+		if (c0 == '>' && c1 == '=') { return 2; }
+		if (c0 == '&' && c1 == '&') { return 2; }
+		if (c0 == '|' && c1 == '|') { return 2; }
+		if (c0 == '+' && c1 == '=') { return 2; }
+		if (c0 == '-' && c1 == '=') { return 2; }
+		if (c0 == '*' && c1 == '=') { return 2; }
+		if (c0 == '/' && c1 == '=') { return 2; }
+		if (c0 == '%' && c1 == '=') { return 2; }
+		if (c0 == '&' && c1 == '=') { return 2; }
+		if (c0 == '|' && c1 == '=') { return 2; }
+		if (c0 == '^' && c1 == '=') { return 2; }
+		if (c0 == '<' && c1 == '<') { return 2; }
+		if (c0 == '>' && c1 == '>') { return 2; }
+		if (c0 == '.' && c1 == '.') { return 2; }
+		if (c0 == '=' && c1 == '>') { return 2; }
 	}
 	return 1;
 }
 
-fn is_space(c u8) int {
-	return (c == 32) | (c == 9) | (c == 13) | (c == 10);
-}
-
-fn is_digit(c u8) int {
-	return (c >= 48) & (c <= 57);
-}
-
-fn is_letter(c u8) int {
-	return ((c >= 65) & (c <= 90)) | ((c >= 97) & (c <= 122)) | (c == 95);
-}
-
-fn is_keyword(s str) int {
-	if (str_eq(s, "fn")) { return 1; }
-	if (str_eq(s, "let")) { return 1; }
-	if (str_eq(s, "var")) { return 1; }
-	if (str_eq(s, "if")) { return 1; }
-	if (str_eq(s, "else")) { return 1; }
-	if (str_eq(s, "while")) { return 1; }
-	if (str_eq(s, "for")) { return 1; }
-	if (str_eq(s, "in")) { return 1; }
-	if (str_eq(s, "break")) { return 1; }
-	if (str_eq(s, "continue")) { return 1; }
-	if (str_eq(s, "return")) { return 1; }
-	if (str_eq(s, "as")) { return 1; }
-	if (str_eq(s, "struct")) { return 1; }
-	if (str_eq(s, "enum")) { return 1; }
-	if (str_eq(s, "match")) { return 1; }
-	if (str_eq(s, "defer")) { return 1; }
-	if (str_eq(s, "import")) { return 1; }
-	if (str_eq(s, "comptime")) { return 1; }
-	if (str_eq(s, "sizeof")) { return 1; }
-	return 0;
+fn is_punct_single(c u8) bool {
+	return c == '+' || c == '-' || c == '*' || c == '/' || c == '%' ||
+	       c == '(' || c == ')' || c == '[' || c == ']' || c == '{' || c == '}' ||
+	       c == ';' || c == ',' || c == '=' || c == '<' || c == '>' ||
+	       c == '!' || c == '&' || c == '|' || c == '^' || c == '~' || c == '.' || c == ':';
 }
 
 fn lex(src str, base i64) *Token {
-	// TODO: full lexer implementation
-	return 0 as *Token;
+	lex_base = base;
+	var head Token;
+	lex_tail = &head;
+	var i i64 = 0;
+
+	while (i < src.len) {
+		if (is_space(src.ptr[i])) { i = i + 1; continue; }
+
+		// line comment
+		if (src.ptr[i] == '/' && i + 1 < src.len && src.ptr[i + 1] == '/') {
+			while (i < src.len && src.ptr[i] != '\n') { i = i + 1; }
+			continue;
+		}
+
+		// block comment
+		if (src.ptr[i] == '/' && i + 1 < src.len && src.ptr[i + 1] == '*') {
+			var start i64 = i;
+			i = i + 2;
+			while (i + 1 < src.len && !(src.ptr[i] == '*' && src.ptr[i + 1] == '/')) { i = i + 1; }
+			if (i + 1 >= src.len) { error_at(lex_base + start, "unterminated block comment"); }
+			i = i + 2;
+			continue;
+		}
+
+		// number (decimal or hex)
+		if (is_digit(src.ptr[i])) {
+			var start i64 = i;
+			var val i64 = 0;
+			if (src.ptr[i] == '0' && i + 1 < src.len && (src.ptr[i+1] == 'x' || src.ptr[i+1] == 'X')) {
+				i = i + 2;
+				while (i < src.len) {
+					var c u8 = src.ptr[i];
+					var d i64 = 0;
+					if (c >= '0' && c <= '9') { d = c as i64 - '0'; }
+					else if (c >= 'a' && c <= 'f') { d = c as i64 - 'a' + 10; }
+					else if (c >= 'A' && c <= 'F') { d = c as i64 - 'A' + 10; }
+					else { break; }
+					val = val * 16 + d;
+					i = i + 1;
+				}
+			} else {
+				while (i < src.len && is_digit(src.ptr[i])) {
+					val = val * 10 + (src.ptr[i] as i64 - '0');
+					i = i + 1;
+				}
+			}
+			var t *Token = push_token(TK_NUM, start);
+			t.val = val;
+			var s str;
+			s.ptr = src.ptr + start;
+			s.len = i - start;
+			t.text = s;
+			continue;
+		}
+
+		// identifier or keyword
+		if (is_letter(src.ptr[i])) {
+			var start i64 = i;
+			while (i < src.len && is_ident_char(src.ptr[i])) { i = i + 1; }
+			var kind int = TK_IDENT;
+			if (is_keyword(src, start, i)) { kind = TK_KW; }
+			var t *Token = push_token(kind, start);
+			var s str;
+			s.ptr = src.ptr + start;
+			s.len = i - start;
+			t.text = s;
+			continue;
+		}
+
+		// character literal
+		if (src.ptr[i] == '\'') {
+			var start i64 = i;
+			i = i + 1;
+			var val i64 = 0;
+			if (src.ptr[i] == '\\') {
+				i = i + 1;
+				val = read_escape(src, &i);
+			} else {
+				val = src.ptr[i] as i64;
+				i = i + 1;
+			}
+			if (i >= src.len || src.ptr[i] != '\'') {
+				error_at(lex_base + start, "unterminated character literal");
+			}
+			i = i + 1;
+			var t *Token = push_token(TK_NUM, start);
+			t.val = val;
+			var s str;
+			s.ptr = src.ptr + start;
+			s.len = i - start;
+			t.text = s;
+			continue;
+		}
+
+		// string literal
+		if (src.ptr[i] == '"') {
+			var start i64 = i;
+			i = i + 1;
+			var buf *u8 = arena_alloc(src.len - i + 2, 1);
+			var n i64 = 0;
+			while (i < src.len && src.ptr[i] != '"') {
+				if (src.ptr[i] == '\n') { error_at(lex_base + start, "unterminated string literal"); }
+				if (src.ptr[i] == '\\') {
+					i = i + 1;
+					buf[n] = read_escape(src, &i) as u8;
+				} else {
+					buf[n] = src.ptr[i];
+					i = i + 1;
+				}
+				n = n + 1;
+			}
+			if (i >= src.len) { error_at(lex_base + start, "unterminated string literal"); }
+			i = i + 1;
+			buf[n] = 0;
+			var t *Token = push_token(TK_STR, start);
+			var sv str;
+			sv.ptr = buf;
+			sv.len = n;
+			t.sval = sv;
+			continue;
+		}
+
+		// punctuation
+		var plen i64 = punct_len(src, i);
+		if (plen == 1 && !is_punct_single(src.ptr[i])) {
+			error_at(lex_base + i, "unexpected character");
+		}
+		var t *Token = push_token(TK_PUNCT, i);
+		var s str;
+		s.ptr = src.ptr + i;
+		s.len = plen;
+		t.text = s;
+		i = i + plen;
+	}
+
+	push_token(TK_EOF, src.len);
+	return head.next;
 }
