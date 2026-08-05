@@ -31,6 +31,15 @@ int diag_file_dir(int file_id, char *buf, isize cap) {
 	return (int)n;
 }
 
+int diag_line_for(int file_id, isize off) {
+	if (file_id < 0 || file_id >= nfiles) return 1;
+	Str src = sources[file_id];
+	isize line = 1;
+	for (isize i = 0; i < off && i < src.n; i++)
+		if (src.p[i] == '\n') line++;
+	return (int)line;
+}
+
 _Noreturn void error_at(isize pos, const char *fmt, ...) {
 	int   file = (int)(pos >> FILE_SHIFT);
 	isize off = pos & (FILE_STRIDE - 1);
