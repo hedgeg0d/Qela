@@ -1,0 +1,203 @@
+import "comp.qela";
+import "diag.qela";
+import "codegen.qela";
+
+// Enough DWARF 4 for a debugger to map addresses to source lines: one
+// compile unit and a line program. No types, no variables — the wow is
+// stepping through .qela in gdb, and that needs only .debug_line plus a
+// unit that points at it.
+
+var dw_line Buf;
+var dw_info Buf;
+var dw_abbrev Buf;
+
+fn uleb(b *Buf, v i64) {
+	var more bool = true;
+	while (more) {
+		var byte i64 = v & 127;
+		v = (v >> 7) & 0x1ffffffffffffff;
+		if (v == 0) { more = false; } else { byte = byte | 128; }
+		buf_u8(b, byte as u8);
+	}
+}
+
+fn sleb(b *Buf, v i64) {
+	var more bool = true;
+	while (more) {
+		var byte i64 = v & 127;
+		v = v >> 7;
+		var sign i64 = byte & 64;
+		if ((v == 0 && sign == 0) || (v == -1 && sign != 0)) { more = false; }
+		else { byte = byte | 128; }
+		buf_u8(b, byte as u8);
+	}
+}
+
+fn dw_str(b *Buf, s str) {
+	buf_bytes(b, s.ptr, s.len);
+	buf_u8(b, 0);
+}
+
+let DW_LNS_copy         = 1;
+let DW_LNS_advance_pc   = 2;
+let DW_LNS_advance_line = 3;
+let DW_LNS_set_file     = 4;
+
+fn dw_line_header() i64 {
+	buf_u32(&dw_line, 0);        // unit_length, patched later
+	buf_u16(&dw_line, 4);        // version
+	var hlen_at i64 = dw_line.n;
+	buf_u32(&dw_line, 0);        // header_length, patched later
+
+	buf_u8(&dw_line, 1);         // minimum_instruction_length
+	buf_u8(&dw_line, 1);         // maximum_operations_per_instruction
+	buf_u8(&dw_line, 1);         // default_is_stmt
+	buf_u8(&dw_line, 251);       // line_base = -5
+	buf_u8(&dw_line, 14);        // line_range
+	buf_u8(&dw_line, 13);        // opcode_base
+
+	// standard_opcode_lengths for opcodes 1..12
+	buf_u8(&dw_line, 0); buf_u8(&dw_line, 1); buf_u8(&dw_line, 1);
+	buf_u8(&dw_line, 1); buf_u8(&dw_line, 1); buf_u8(&dw_line, 0);
+	buf_u8(&dw_line, 0); buf_u8(&dw_line, 0); buf_u8(&dw_line, 1);
+	buf_u8(&dw_line, 0); buf_u8(&dw_line, 0); buf_u8(&dw_line, 1);
+
+	buf_u8(&dw_line, 0);         // include_directories: none
+
+	var i int = 0;
+	while (i < diag_nfiles()) {
+		dw_str(&dw_line, diag_path_of(i));
+		uleb(&dw_line, 0);       // directory index
+		uleb(&dw_line, 0);       // mtime
+		uleb(&dw_line, 0);       // length
+		i = i + 1;
+	}
+	buf_u8(&dw_line, 0);         // end of file_names
+
+	return hlen_at;
+}
+
+fn dw_set_address(addr i64) {
+	buf_u8(&dw_line, 0);         // extended opcode
+	uleb(&dw_line, 9);
+	buf_u8(&dw_line, 2);         // DW_LNE_set_address
+	buf_u64(&dw_line, addr);
+}
+
+fn dw_end_sequence(advance i64) {
+	if (advance > 0) {
+		buf_u8(&dw_line, DW_LNS_advance_pc as u8);
+		uleb(&dw_line, advance);
+	}
+	buf_u8(&dw_line, 0);
+	uleb(&dw_line, 1);
+	buf_u8(&dw_line, 1);         // DW_LNE_end_sequence
+}
+
+fn dw_build_line(text_vaddr i64, text_size i64) {
+	var hlen_at i64 = dw_line_header();
+	buf_patch32(&dw_line, hlen_at, dw_line.n - (hlen_at + 4));
+
+	dw_set_address(text_vaddr);
+
+	var addr i64 = 0;
+	var line i64 = 1;
+	var file int = 0;
+
+	var r *LineRow = lines_head;
+	while (r as i64 != 0) {
+		if (r.file != file) {
+			buf_u8(&dw_line, DW_LNS_set_file as u8);
+			uleb(&dw_line, (r.file as i64) + 1);
+			file = r.file;
+		}
+		if (r.addr != addr) {
+			buf_u8(&dw_line, DW_LNS_advance_pc as u8);
+			uleb(&dw_line, r.addr - addr);
+			addr = r.addr;
+		}
+		if ((r.line as i64) != line) {
+			buf_u8(&dw_line, DW_LNS_advance_line as u8);
+			sleb(&dw_line, (r.line as i64) - line);
+			line = r.line as i64;
+		}
+		buf_u8(&dw_line, DW_LNS_copy as u8);
+		r = r.next;
+	}
+
+	dw_end_sequence(text_size - addr);
+	buf_patch32(&dw_line, 0, dw_line.n - 4);
+}
+
+fn dw_build_abbrev() {
+	uleb(&dw_abbrev, 1);         // abbrev code
+	uleb(&dw_abbrev, 0x11);      // DW_TAG_compile_unit
+	buf_u8(&dw_abbrev, 0);       // no children
+
+	uleb(&dw_abbrev, 0x25); uleb(&dw_abbrev, 0x08);  // producer, string
+	uleb(&dw_abbrev, 0x13); uleb(&dw_abbrev, 0x05);  // language, data2
+	uleb(&dw_abbrev, 0x03); uleb(&dw_abbrev, 0x08);  // name, string
+	uleb(&dw_abbrev, 0x1b); uleb(&dw_abbrev, 0x08);  // comp_dir, string
+	uleb(&dw_abbrev, 0x11); uleb(&dw_abbrev, 0x01);  // low_pc, addr
+	uleb(&dw_abbrev, 0x12); uleb(&dw_abbrev, 0x01);  // high_pc, addr
+	uleb(&dw_abbrev, 0x10); uleb(&dw_abbrev, 0x17);  // stmt_list, sec_offset
+	uleb(&dw_abbrev, 0); uleb(&dw_abbrev, 0);
+
+	uleb(&dw_abbrev, 0);         // end of abbreviations
+}
+
+fn dw_build_info(text_vaddr i64, text_size i64) {
+	buf_u32(&dw_info, 0);        // unit_length, patched later
+	buf_u16(&dw_info, 4);        // version
+	buf_u32(&dw_info, 0);        // debug_abbrev offset
+	buf_u8(&dw_info, 8);         // address size
+
+	uleb(&dw_info, 1);           // abbrev code
+	dw_str(&dw_info, "qela");
+	buf_u16(&dw_info, 0x0c);     // DW_LANG_C99: the closest thing gdb knows
+	dw_str(&dw_info, diag_path_of(0));
+	dw_str(&dw_info, ".");
+	buf_u64(&dw_info, text_vaddr);
+	buf_u64(&dw_info, text_vaddr + text_size);
+	buf_u32(&dw_info, 0);        // stmt_list
+
+	buf_patch32(&dw_info, 0, dw_info.n - 4);
+}
+
+fn dwarf_build(text_vaddr i64, text_size i64) {
+	dw_build_line(text_vaddr, text_size);
+	dw_build_abbrev();
+	dw_build_info(text_vaddr, text_size);
+}
+
+var dw_sym Buf;
+var dw_strtab Buf;
+
+// One global FUNC symbol per function, so gdb names frames and `break main`
+// resolves. Sizes come from the next function's entry, since codegen lays
+// them out in source order.
+fn dwarf_symbols(text_vaddr i64, text_size i64) {
+	var i i64 = 0;
+	while (i < 24) { buf_u8(&dw_sym, 0); i = i + 1; }
+	buf_u8(&dw_strtab, 0);
+
+	var f *Func = gen_unit.funcs;
+	while (f as i64 != 0) {
+		if (f.nct == 0 && f.body as i64 != 0) {
+			var end i64 = text_size;
+			var g *Func = f.next;
+			while (g as i64 != 0) {
+				if (g.nct == 0 && g.body as i64 != 0) { end = g.addr; g = 0 as *Func; }
+				else { g = g.next; }
+			}
+			buf_u32(&dw_sym, dw_strtab.n);
+			buf_u8(&dw_sym, 0x12);
+			buf_u8(&dw_sym, 0);
+			buf_u16(&dw_sym, 1);
+			buf_u64(&dw_sym, text_vaddr + f.addr);
+			buf_u64(&dw_sym, end - f.addr);
+			dw_str(&dw_strtab, f.name);
+		}
+		f = f.next;
+	}
+}

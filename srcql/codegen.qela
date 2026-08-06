@@ -78,6 +78,7 @@ var str_off *i64;
 var bounds_checks I64List;
 
 var opt_no_bounds bool = false;
+var gen_unit *Unit;
 
 fn b1(v i64) { buf_u8(&code, (v & 255) as u8); }
 fn b4(v i64) { buf_u32(&code, v); }
@@ -1126,7 +1127,37 @@ fn gen_for(n *Node) {
 	cur_loop = lp.prev;
 }
 
+struct LineRow;
+struct LineRow { next *LineRow, addr i64, file int, line int, }
+
+var lines_head *LineRow;
+var lines_tail *LineRow;
+var opt_debug bool = false;
+
+// One row per statement start. Consecutive statements on the same line, and
+// statements that emitted no code, collapse into the previous row.
+fn line_mark(pos i64) {
+	if (!opt_debug) { return; }
+	var f int = diag_file_of(pos);
+	var l int = diag_line_for(f, diag_offset_of(pos));
+	if (lines_tail as i64 != 0) {
+		if (lines_tail.file == f && lines_tail.line == l) { return; }
+		if (lines_tail.addr == code.n) {
+			lines_tail.file = f;
+			lines_tail.line = l;
+			return;
+		}
+	}
+	var r *LineRow = arena_alloc(sizeof(LineRow), 8) as *LineRow;
+	r.addr = code.n;
+	r.file = f;
+	r.line = l;
+	if (lines_tail as i64 == 0) { lines_head = r; } else { lines_tail.next = r; }
+	lines_tail = r;
+}
+
 fn gen_stmt(n *Node) {
+	line_mark(n.pos);
 	var k int = n.kind;
 
 	if (k == ND_BLOCK) { gen_block(n); return; }
@@ -1174,6 +1205,7 @@ fn gen_stmt(n *Node) {
 
 fn gen_func(f *Func) {
 	f.addr = code.n;
+	line_mark(f.pos);
 	depth = 0;
 	gen_fn = f;
 	cur_loop = 0 as *Loop;
@@ -1252,6 +1284,7 @@ fn gen_panic_stub(msg_id int) {
 }
 
 fn codegen(u *Unit, img *Image) {
+	gen_unit = u;
 	var panic_id int = u.nstrs;
 	var bytes_off *i64 = arena_alloc((u.nstrs as i64 + 1) * 8, 8) as *i64;
 	str_off = arena_alloc((u.nstrs as i64 + 1) * 8, 8) as *i64;
