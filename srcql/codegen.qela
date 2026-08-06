@@ -80,6 +80,8 @@ var funcaddrs_head *CallFixup;
 var funcaddrs_tail *CallFixup;
 var coro_stub_at i64 = -1;
 var coro_stub_refs I64List;
+var gc_base_refs I64List;
+var gc_end_refs I64List;
 
 var opt_no_bounds bool = false;
 var gen_unit *Unit;
@@ -923,6 +925,18 @@ fn gen_coro_switch_stub() {
 
 // Emitted once. A new coroutine's stack holds its arguments above the
 // return address, so the trampoline pops them into place and calls through.
+fn patch_abs(sites *I64List, value i64) {
+	var i i64 = 0;
+	while (i < sites.n) {
+		var k i64 = 0;
+		while (k < 8) {
+			code.p[sites.p[i] + k] = ((value >> (k * 8)) & 255) as u8;
+			k = k + 1;
+		}
+		i = i + 1;
+	}
+}
+
 fn gen_coro_stub() {
 	coro_stub_at = code.n;
 	b1(0x5f);                            // pop rdi
@@ -1026,6 +1040,24 @@ fn gen_expr(n *Node) {
 	if (k == ND_FUNCADDR) { add_funcaddr(n.name, n.pos); return; }
 	if (k == ND_CALL) {
 		if (str_eq(n.name, "coro_switch")) { gen_coro_switch(n); return; }
+		if (str_eq(n.name, "gc_data_base") || str_eq(n.name, "gc_data_end")) {
+			rex_w(0, RAX);
+			b1(0xb8);
+			if (str_eq(n.name, "gc_data_base")) { ilist_push(&gc_base_refs, code.n); }
+			else { ilist_push(&gc_end_refs, code.n); }
+			buf_u64(&code, 0);
+			return;
+		}
+		if (str_eq(n.name, "gc_save_regs")) {
+			gen_args(n, false, false, -1);
+			b1(0x48); b1(0x89); b1(0x1f);            // mov [rdi], rbx
+			b1(0x48); b1(0x89); b1(0x6f); b1(0x08);  // mov [rdi+8], rbp
+			b1(0x4c); b1(0x89); b1(0x67); b1(0x10);  // mov [rdi+16], r12
+			b1(0x4c); b1(0x89); b1(0x6f); b1(0x18);  // mov [rdi+24], r13
+			b1(0x4c); b1(0x89); b1(0x77); b1(0x20);  // mov [rdi+32], r14
+			b1(0x4c); b1(0x89); b1(0x7f); b1(0x28);  // mov [rdi+40], r15
+			return;
+		}
 		if (str_eq(n.name, "coro_entry_addr")) {
 			rex_w(0, RAX);
 			b1(0xb8);
@@ -1442,6 +1474,14 @@ fn codegen(u *Unit, img *Image) {
 			si = si + 1;
 		}
 	}
+
+	// The data segment sits right after code and rodata, so the code has to
+	// end on a word boundary or every global lands misaligned.
+	while ((code.n & 7) != 0) { b1(0x90); }
+
+	var dbase i64 = ELF_BASE + SEG_GAP + hdr + code.n + rodata.n;
+	patch_abs(&gc_base_refs, dbase);
+	patch_abs(&gc_end_refs, dbase + gdata.n + bss_size);
 
 	var af *CallFixup = funcaddrs_head;
 	while (af as i64 != 0) {
