@@ -1,0 +1,183 @@
+import "comp.qela";
+import "diag.qela";
+import "lex.qela";
+import "../std/io.qela";
+
+// A formatter over the token stream rather than the AST, so comments
+// survive. Indentation and line breaks are imposed; spacing that carries
+// intent — whether a brace or paren hugged the token before it — is read
+// back from the source, which is what tells `f(x)` from `if (x)` and a
+// struct literal from a block.
+
+var fmt_out Buf;
+var fmt_src str;
+var fmt_depth int = 0;
+var fmt_at_line_start bool = true;
+var fmt_inline int = 0;
+
+fn fmt_indent() {
+	var i int = 0;
+	while (i < fmt_depth) { buf_u8(&fmt_out, '\t'); i = i + 1; }
+}
+
+fn fmt_newline() {
+	if (!fmt_at_line_start) {
+		buf_u8(&fmt_out, '\n');
+		fmt_at_line_start = true;
+	}
+}
+
+fn fmt_emit(s str) {
+	if (fmt_at_line_start) {
+		fmt_indent();
+		fmt_at_line_start = false;
+	}
+	buf_bytes(&fmt_out, s.ptr, s.len);
+}
+
+fn fmt_space() {
+	if (!fmt_at_line_start) { buf_u8(&fmt_out, ' '); }
+}
+
+fn tok_end(t *Token) i64 {
+	return (t.pos & ((1 << FILE_SHIFT) - 1)) + t.text.len;
+}
+
+fn tok_start(t *Token) i64 {
+	return t.pos & ((1 << FILE_SHIFT) - 1);
+}
+
+fn gap_newlines(from i64, to i64) int {
+	var n int = 0;
+	var i i64 = from;
+	while (i < to && i < fmt_src.len) {
+		if (fmt_src.ptr[i] == '\n') { n = n + 1; }
+		i = i + 1;
+	}
+	return n;
+}
+
+fn is_text(t *Token, s str) bool { return str_eq(t.text, s); }
+
+fn opens_group(t *Token) bool {
+	return is_text(t, "(") || is_text(t, "[") || is_text(t, "{");
+}
+
+fn closes_group(t *Token) bool {
+	return is_text(t, ")") || is_text(t, "]") || is_text(t, "}");
+}
+
+// No space in front of these, whatever came before.
+fn tight_before(t *Token) bool {
+	return is_text(t, ",") || is_text(t, ";") || is_text(t, ".") ||
+	       is_text(t, ")") || is_text(t, "]") || is_text(t, "..") ||
+	       is_text(t, ":");
+}
+
+// A brace opening `Name{field: value}` stays on one line; a brace opening a
+// block does not. The two are told apart by what follows the brace.
+fn is_struct_literal(t *Token) bool {
+	if (!is_text(t, "{")) { return false; }
+	var a *Token = t.next;
+	if (a as i64 == 0 || a.kind != TK_IDENT) { return false; }
+	var b *Token = a.next;
+	if (b as i64 == 0) { return false; }
+	return is_text(b, ":");
+}
+
+// No space after these.
+fn tight_after(t *Token) bool {
+	return is_text(t, "(") || is_text(t, "[") || is_text(t, ".") ||
+	       is_text(t, "..") || is_text(t, "&") || is_text(t, "!") ||
+	       is_text(t, "~") || is_text(t, "<-");
+}
+
+fn fmt_run(src str, tok *Token) {
+	fmt_src = src;
+	var prev *Token = 0 as *Token;
+
+	while (tok.kind != TK_EOF) {
+		var blank int = 0;
+		if (prev as i64 != 0) {
+			blank = gap_newlines(tok_end(prev), tok_start(tok));
+		}
+
+		var closed_inline bool = false;
+		if (is_text(tok, "}")) {
+			if (fmt_inline > 0) { fmt_inline = fmt_inline - 1; closed_inline = true; }
+			else {
+				if (fmt_depth > 0) { fmt_depth = fmt_depth - 1; }
+				fmt_newline();
+			}
+		}
+
+		// `}` forced a break; `else` belongs on that same line.
+		if (is_text(tok, "else") && fmt_at_line_start && fmt_out.n > 0) {
+			fmt_out.n = fmt_out.n - 1;
+			fmt_at_line_start = false;
+		}
+
+		if (tok.kind == TK_COMMENT) {
+			if (blank == 0 && prev as i64 != 0) { fmt_space(); }
+			else { fmt_newline(); }
+			if (blank > 1) { buf_u8(&fmt_out, '\n'); }
+			fmt_emit(tok.text);
+			fmt_newline();
+			prev = tok;
+			tok = tok.next;
+			continue;
+		}
+
+		if (fmt_at_line_start && blank > 1) { buf_u8(&fmt_out, '\n'); }
+
+		if (!fmt_at_line_start && prev as i64 != 0) {
+			var hug bool = blank == 0 && tok_end(prev) == tok_start(tok);
+			if (closed_inline) {
+			} else if (tight_before(tok)) {
+			} else if (is_text(tok, "{") && !is_struct_literal(tok)) {
+				fmt_space();
+			} else if (prev.kind == TK_KW && is_text(tok, "(")) {
+				fmt_space();
+			} else if (opens_group(tok) && hug) {
+			} else if (tight_after(prev)) {
+			} else if (fmt_inline > 0 && is_text(prev, "{")) {
+			} else if (closes_group(prev) && is_text(tok, "(")) {
+			} else {
+				fmt_space();
+			}
+		}
+
+		fmt_emit(tok.text);
+
+		if (is_text(tok, "{")) {
+			if (fmt_inline > 0 || is_struct_literal(tok)) {
+				fmt_inline = fmt_inline + 1;
+			} else {
+				fmt_depth = fmt_depth + 1;
+				fmt_newline();
+			}
+		} else if (fmt_inline == 0 && !closed_inline &&
+		           (is_text(tok, ";") || is_text(tok, "}"))) {
+			fmt_newline();
+		}
+
+		prev = tok;
+		tok = tok.next;
+	}
+	fmt_newline();
+}
+
+fn cmd_fmt(argc int, argv **u8) int {
+	if (argc < 3) {
+		eprint("usage: qela fmt <file.qela>\n");
+		return 2;
+	}
+	var input str = str_from_cstr(argv[2]);
+	var src str = read_file(input);
+	var file int = diag_add_file(input, src);
+	lex_keep_comments = true;
+	var tok *Token = lex(src, (file as i64) << FILE_SHIFT);
+	fmt_run(src, tok);
+	write_str(STDOUT, buf_str(&fmt_out));
+	return 0;
+}
