@@ -10,6 +10,13 @@ fn die(msg str) {
 	sys_exit(1);
 }
 
+fn file_exists(path str) bool {
+	var fd i64 = sys_open_read(cstr(path));
+	if (fd < 0) { return false; }
+	sys_close(fd);
+	return true;
+}
+
 fn read_file(path str) str {
 	var fd i64 = sys_open_read(cstr(path));
 	if (fd < 0) {
