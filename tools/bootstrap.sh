@@ -55,6 +55,7 @@ QELA="$OUT/s2" tools/run-tests.sh || fail "S2 does not pass the test corpus"
 step "embedded stdlib, outside the source tree"
 root=$(pwd)
 tmp=$(mktemp -d)
+tmp2=$(mktemp -d)
 cat > "$tmp/embed.qela" <<'EOF'
 import "std/io.qela";
 import "std/fmt.qela";
@@ -68,6 +69,31 @@ EOF
 ( cd "$tmp" && "$root/$OUT/s2" embed.qela -o embed && ./embed ) ||
 	fail "the embedded stdlib does not resolve without std/ on disk"
 rm -rf "$tmp"
+printf '    ok\n'
+
+step "coroutines"
+cat > "$tmp2/coro.qela" <<'EOF'
+import "std/coro.qela";
+import "std/fmt.qela";
+var log Buf;
+fn worker(id i64, rounds i64) {
+	var i i64 = 0;
+	while (i < rounds) { fmt_i64(&log, id); coro_yield(); i = i + 1; }
+}
+fn main() int {
+	spawn worker(1, 3);
+	spawn worker(2, 3);
+	spawn worker(3, 2);
+	coro_run_all();
+	if (log.n != 8) { return 1; }
+	if (log.p[0] != '1' || log.p[1] != '2' || log.p[2] != '3') { return 2; }
+	if (log.p[6] != '1' || log.p[7] != '2') { return 3; }
+	return 0;
+}
+EOF
+( cd "$tmp2" && "$root/$OUT/s2" coro.qela -o coro && ./coro ) ||
+	fail "coroutines do not interleave as expected"
+rm -rf "$tmp2"
 printf '    ok\n'
 
 printf '\nShipping binary: %s\n' "$OUT/s2"
