@@ -35,6 +35,11 @@ fn buf_u8(b *Buf, v u8) {
 	b.n = b.n + 1;
 }
 
+fn buf_u16(b *Buf, v i64) {
+	buf_u8(b, (v & 255) as u8);
+	buf_u8(b, ((v >> 8) & 255) as u8);
+}
+
 fn buf_u32(b *Buf, v i64) {
 	buf_u8(b, (v & 255) as u8);
 	buf_u8(b, ((v >> 8) & 255) as u8);
