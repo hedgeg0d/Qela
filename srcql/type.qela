@@ -1,0 +1,977 @@
+import "comp.qela";
+import "diag.qela";
+import "../std/fmt.qela";
+
+var ty_void *Type;
+var ty_bool *Type;
+var ty_type *Type;
+var ty_i8 *Type;
+var ty_i16 *Type;
+var ty_i32 *Type;
+var ty_i64 *Type;
+var ty_u8 *Type;
+var ty_u16 *Type;
+var ty_u32 *Type;
+var ty_u64 *Type;
+var ty_str_cache *Type;
+var types_ready bool = false;
+
+fn type_alloc() *Type {
+	return arena_alloc(sizeof(Type), 8) as *Type;
+}
+
+fn prim(kind int, size int, uns bool, name str) *Type {
+	var t *Type = type_alloc();
+	*t = Type{kind: kind, size: size, align: size, is_unsigned: uns, name: name};
+	return t;
+}
+
+fn type_init() {
+	if (types_ready) { return; }
+	types_ready = true;
+	ty_void = prim(TY_VOID, 1, false, "void");
+	ty_bool = prim(TY_BOOL, 1, false, "bool");
+	ty_type = prim(TY_TYPE, 8, false, "type");
+	ty_i8  = prim(TY_INT, 1, false, "i8");
+	ty_i16 = prim(TY_INT, 2, false, "i16");
+	ty_i32 = prim(TY_INT, 4, false, "i32");
+	ty_i64 = prim(TY_INT, 8, false, "i64");
+	ty_u8  = prim(TY_INT, 1, true, "u8");
+	ty_u16 = prim(TY_INT, 2, true, "u16");
+	ty_u32 = prim(TY_INT, 4, true, "u32");
+	ty_u64 = prim(TY_INT, 8, true, "u64");
+}
+
+fn type_ptr(base *Type) *Type {
+	type_init();
+	var t *Type = type_alloc();
+	*t = Type{kind: TY_PTR, size: 8, align: 8, is_unsigned: true, base: base};
+	return t;
+}
+
+fn type_new_var(name str) *Type {
+	var t *Type = type_alloc();
+	*t = Type{kind: TY_TYPEVAR, size: 8, align: 8, name: name};
+	return t;
+}
+
+fn type_array(base *Type, len i64) *Type {
+	var t *Type = type_alloc();
+	*t = Type{kind: TY_ARRAY, size: (base.size as i64 * len) as int,
+	          align: base.align, base: base, len: len};
+	return t;
+}
+
+fn member_alloc() *Member {
+	return arena_alloc(sizeof(Member), 8) as *Member;
+}
+
+fn type_slice(base *Type) *Type {
+	type_init();
+	var t *Type = type_alloc();
+	*t = Type{kind: TY_SLICE, size: 16, align: 8, base: base};
+
+	var len *Member = member_alloc();
+	*len = Member{name: "len", ty: ty_i64, offset: 8};
+	var ptr *Member = member_alloc();
+	*ptr = Member{next: len, name: "ptr", ty: type_ptr(base), offset: 0};
+	t.members = ptr;
+	return t;
+}
+
+fn type_str() *Type {
+	type_init();
+	if (ty_str_cache as i64 == 0) { ty_str_cache = type_slice(ty_u8); }
+	return ty_str_cache;
+}
+
+fn enum_tag_of(ty *Type, name str, out **Variant) int {
+	var v *Variant = ty.variants;
+	while (v as i64 != 0) {
+		if (str_eq(v.name, name)) {
+			if (out as i64 != 0) { *out = v; }
+			return v.tag;
+		}
+		v = v.next;
+	}
+	return -1;
+}
+
+struct Named;
+struct Named {
+	next *Named,
+	name str,
+	ty   *Type,
+}
+
+var named_types *Named;
+
+fn type_define(name str, ty *Type) {
+	var n *Named = arena_alloc(sizeof(Named), 8) as *Named;
+	*n = Named{next: named_types, name: name, ty: ty};
+	named_types = n;
+}
+
+fn type_lookup(name str) *Type {
+	type_init();
+	if (str_eq(name, "void")) { return ty_void; }
+	if (str_eq(name, "bool")) { return ty_bool; }
+	if (str_eq(name, "type")) { return ty_type; }
+	if (str_eq(name, "i8"))   { return ty_i8; }
+	if (str_eq(name, "i16"))  { return ty_i16; }
+	if (str_eq(name, "i32"))  { return ty_i32; }
+	if (str_eq(name, "i64"))  { return ty_i64; }
+	if (str_eq(name, "u8"))   { return ty_u8; }
+	if (str_eq(name, "u16"))  { return ty_u16; }
+	if (str_eq(name, "u32"))  { return ty_u32; }
+	if (str_eq(name, "u64"))  { return ty_u64; }
+	if (str_eq(name, "int"))  { return ty_i64; }
+	if (str_eq(name, "uint")) { return ty_u64; }
+	if (str_eq(name, "usize")) { return ty_u64; }
+	if (str_eq(name, "str"))  { return type_str(); }
+
+	var n *Named = named_types;
+	while (n as i64 != 0) {
+		if (str_eq(n.name, name)) { return n.ty; }
+		n = n.next;
+	}
+	return 0 as *Type;
+}
+
+fn is_integer(t *Type) bool {
+	return t.kind == TY_INT || t.kind == TY_BOOL;
+}
+
+fn is_numeric(t *Type) bool {
+	return is_integer(t) || t.kind == TY_PTR;
+}
+
+fn is_aggregate(t *Type) bool {
+	return t.kind == TY_ARRAY || t.kind == TY_STRUCT || t.kind == TY_SLICE ||
+	       t.kind == TY_ENUM;
+}
+
+fn decayed(t *Type) *Type {
+	if (t.kind == TY_ARRAY) { return type_ptr(t.base); }
+	return t;
+}
+
+fn type_name(t *Type) str {
+	if (t.kind == TY_PTR) {
+		var b Buf;
+		buf_u8(&b, '*');
+		fmt_str(&b, type_name(t.base));
+		return buf_str(&b);
+	}
+	if (t.kind == TY_SLICE) {
+		if (t.base as i64 == ty_u8 as i64) { return "str"; }
+		var b Buf;
+		buf_u8(&b, '[');
+		buf_u8(&b, ']');
+		fmt_str(&b, type_name(t.base));
+		return buf_str(&b);
+	}
+	if (t.kind == TY_ARRAY) {
+		var b Buf;
+		buf_u8(&b, '[');
+		fmt_i64(&b, t.len);
+		buf_u8(&b, ']');
+		fmt_str(&b, type_name(t.base));
+		return buf_str(&b);
+	}
+	return t.name;
+}
+
+// A str costs two argument registers, so a message with several pieces
+// cannot be one call. error_at never returns, so one buffer is enough.
+var errbuf Buf;
+
+fn emsg(s str) { fmt_str(&errbuf, s); }
+
+fn emsg_ty(t *Type) { fmt_str(&errbuf, type_name(t)); }
+
+fn efail(pos i64) { error_at(pos, buf_str(&errbuf)); }
+
+fn same_type(a *Type, b *Type) bool {
+	if (a as i64 == b as i64) { return true; }
+	if (a.kind != b.kind) { return false; }
+	if (a.kind == TY_PTR || a.kind == TY_SLICE) { return same_type(a.base, b.base); }
+	if (a.kind == TY_ARRAY) {
+		return a.len == b.len && same_type(a.base, b.base);
+	}
+	if (a.kind == TY_STRUCT || a.kind == TY_ENUM) { return false; }
+	return a.size == b.size && a.is_unsigned == b.is_unsigned;
+}
+
+fn common(a *Type, b *Type) *Type {
+	if (a.kind == TY_PTR) { return a; }
+	if (b.kind == TY_PTR) { return b; }
+	if (a.size < 8 && b.size < 8) { return ty_i64; }
+	if (a.size > b.size) { return a; }
+	if (b.size > a.size) { return b; }
+	if (a.is_unsigned) { return a; }
+	return b;
+}
+
+fn node_alloc() *Node {
+	return arena_alloc(sizeof(Node), 8) as *Node;
+}
+
+fn cast_to(n *Node, ty *Type) *Node {
+	if (n.ty as i64 == ty as i64) { return n; }
+	var c *Node = node_alloc();
+	c.kind = ND_CAST;
+	c.lhs = n;
+	c.ty = ty;
+	c.pos = n.pos;
+	return c;
+}
+
+var cur_fn_typing *Func;
+
+fn type_set_fn(f *Func) { cur_fn_typing = f; }
+
+fn alloc_temp(ty *Type) *Var {
+	if (cur_fn_typing as i64 == 0) { return 0 as *Var; }
+	var v *Var = arena_alloc(sizeof(Var), 8) as *Var;
+	v.ty = ty;
+	v.next = cur_fn_typing.locals;
+	cur_fn_typing.locals = v;
+	return v;
+}
+
+fn to_value(n *Node) *Node {
+	if (n.ty.kind == TY_ARRAY) { return cast_to(n, decayed(n.ty)); }
+	return n;
+}
+
+// An aggregate never silently becomes a scalar. Call after to_value, which
+// has already decayed arrays to pointers.
+fn reject_aggregate(v *Node, want *Type, pos i64) {
+	if (is_aggregate(v.ty) && !is_aggregate(want)) {
+		emsg("cannot use a value of type '"); emsg_ty(v.ty); emsg("' where '"); emsg_ty(want); emsg("' is expected"); efail(pos);
+	}
+}
+
+fn coerce(n *Node, want *Type) *Node {
+	if (want.kind != TY_SLICE || n.ty.kind != TY_ARRAY) { return n; }
+	if (!same_type(want.base, n.ty.base)) { return n; }
+	var s *Node = node_alloc();
+	s.kind = ND_SLICE;
+	s.typed = true;
+	s.ty = want;
+	s.lhs = n;
+	s.pos = n.pos;
+	s.tmp = alloc_temp(want);
+	return s;
+}
+
+fn usual_conv(n *Node) {
+	var t *Type = common(n.lhs.ty, n.rhs.ty);
+	n.lhs = cast_to(n.lhs, t);
+	n.rhs = cast_to(n.rhs, t);
+}
+
+fn func_param(f *Func, i int) *Var {
+	if (i == 0) { return f.p0; }
+	if (i == 1) { return f.p1; }
+	if (i == 2) { return f.p2; }
+	if (i == 3) { return f.p3; }
+	if (i == 4) { return f.p4; }
+	return f.p5;
+}
+
+fn set_func_param(f *Func, i int, v *Var) {
+	if (i == 0) { f.p0 = v; return; }
+	if (i == 1) { f.p1 = v; return; }
+	if (i == 2) { f.p2 = v; return; }
+	if (i == 3) { f.p3 = v; return; }
+	if (i == 4) { f.p4 = v; return; }
+	f.p5 = v;
+}
+
+// ── monomorphization ──
+
+var subst_vars [6]*Type;
+var subst_concretes [6]*Type;
+var subst_n int = 0;
+
+fn tsubst(t *Type) *Type {
+	if (t as i64 == 0) { return t; }
+	if (t.kind == TY_TYPEVAR) {
+		var i int = 0;
+		while (i < subst_n) {
+			if (t as i64 == subst_vars[i] as i64) { return subst_concretes[i]; }
+			i = i + 1;
+		}
+		return t;
+	}
+	if (t.kind == TY_PTR) {
+		var b *Type = tsubst(t.base);
+		if (b as i64 != t.base as i64) { return type_ptr(b); }
+		return t;
+	}
+	if (t.kind == TY_ARRAY) {
+		var b *Type = tsubst(t.base);
+		if (b as i64 != t.base as i64) { return type_array(b, t.len); }
+		return t;
+	}
+	if (t.kind == TY_SLICE) {
+		var b *Type = tsubst(t.base);
+		if (b as i64 != t.base as i64) { return type_slice(b); }
+		return t;
+	}
+	return t;
+}
+
+var var_map_old [256]*Var;
+var var_map_new [256]*Var;
+var nvar_map int = 0;
+
+fn clone_var(v *Var) *Var {
+	if (v as i64 == 0) { return v; }
+	var c *Var = arena_alloc(sizeof(Var), 8) as *Var;
+	*c = *v;
+	c.ty = tsubst(v.ty);
+	c.next = 0 as *Var;
+	var_map_old[nvar_map] = v;
+	var_map_new[nvar_map] = c;
+	nvar_map = nvar_map + 1;
+	return c;
+}
+
+fn remap_var(v *Var) *Var {
+	var i int = 0;
+	while (i < nvar_map) {
+		if (var_map_old[i] as i64 == v as i64) { return var_map_new[i]; }
+		i = i + 1;
+	}
+	return v;
+}
+
+fn clone_node(n *Node) *Node {
+	if (n as i64 == 0) { return n; }
+	var c *Node = node_alloc();
+	*c = *n;
+	c.ty = tsubst(n.ty);
+	if (n.typeval as i64 != 0) { c.typeval = tsubst(n.typeval); }
+	if (n.varp as i64 != 0) { c.varp = remap_var(n.varp); }
+	if (n.tmp as i64 != 0) { c.tmp = remap_var(n.tmp); }
+	c.lhs = clone_node(n.lhs);
+	c.rhs = clone_node(n.rhs);
+	c.cond = clone_node(n.cond);
+	c.then = clone_node(n.then);
+	c.els = clone_node(n.els);
+	c.init = clone_node(n.init);
+	c.step = clone_node(n.step);
+	c.body = clone_node(n.body);
+	c.args = clone_node(n.args);
+	c.next = clone_node(n.next);
+	return c;
+}
+
+fn build_name(f *Func) str {
+	var b Buf;
+	fmt_str(&b, f.name);
+	buf_u8(&b, '$');
+	var i int = 0;
+	while (i < subst_n) {
+		fmt_str(&b, type_name(subst_concretes[i]));
+		buf_u8(&b, '$');
+		i = i + 1;
+	}
+	return buf_str(&b);
+}
+
+fn clone_func(f *Func) *Func {
+	var i int = 0;
+	while (i < subst_n) {
+		subst_vars[i] = func_param(f, i).ty;
+		i = i + 1;
+	}
+
+	var name str = build_name(f);
+	var existing *Func = find_func(name);
+	if (existing as i64 != 0) { return existing; }
+
+	var f2 *Func = arena_alloc(sizeof(Func), 8) as *Func;
+	f2.name = str_dup(name);
+	f2.ret = tsubst(f.ret);
+	f2.pos = f.pos;
+	nvar_map = 0;
+
+	// Clone locals, which include the parameters, skipping comptime ones.
+	var head Var;
+	var tail *Var = &head;
+	var v *Var = f.locals;
+	while (v as i64 != 0) {
+		var skip bool = false;
+		i = 0;
+		while (i < subst_n) {
+			if (v as i64 == func_param(f, i) as i64) { skip = true; }
+			i = i + 1;
+		}
+		if (!skip) {
+			var cv *Var = clone_var(v);
+			tail.next = cv;
+			tail = cv;
+		}
+		v = v.next;
+	}
+	f2.locals = head.next;
+
+	i = subst_n;
+	while (i < f.nparams) {
+		set_func_param(f2, f2.nparams, remap_var(func_param(f, i)));
+		f2.nparams = f2.nparams + 1;
+		i = i + 1;
+	}
+
+	f2.body = clone_node(f.body);
+	add_func(f2);
+	return f2;
+}
+
+fn monomorphize_call(n *Node, f *Func) {
+	var nct int = f.nct;
+	var a *Node = n.args;
+	var i int = 0;
+	while (i < nct) {
+		if (a as i64 == 0) { error_at(n.pos, "expected a type argument"); }
+		if (a.kind != ND_TYPEEXPR) { error_at(a.pos, "expected a type argument"); }
+		if (a.typeval as i64 == 0 || a.typeval.kind == TY_TYPEVAR) {
+			error_at(a.pos, "type argument must be a concrete type");
+		}
+		subst_concretes[i] = a.typeval;
+		a = a.next;
+		i = i + 1;
+	}
+	subst_n = nct;
+
+	var f2 *Func = clone_func(f);
+
+	n.name = f2.name;
+	n.args = a;
+	n.nargs = n.nargs - nct;
+
+	// Typing the instantiation happens in the middle of typing the caller,
+	// so the current function has to be restored: otherwise the caller's
+	// later temporaries land in the instantiation's frame.
+	var saved *Func = cur_fn_typing;
+	var saved_n int = subst_n;
+	cur_fn_typing = f2;
+	if (is_aggregate(f2.ret) && f2.ret.size > 16) {
+		f2.ret_slot = alloc_temp(type_ptr(f2.ret));
+	}
+	add_type(f2.body);
+	cur_fn_typing = saved;
+	subst_n = saved_n;
+}
+
+fn type_func(f *Func) {
+	type_init();
+	cur_fn_typing = f;
+	if (is_aggregate(f.ret) && f.ret.size > 16) {
+		f.ret_slot = alloc_temp(type_ptr(f.ret));
+	}
+	add_type(f.body);
+}
+
+// ── match ──
+
+var arm_seen [64]bool;
+
+fn type_match(n *Node) {
+	add_type(n.cond);
+
+	var st *Type = n.cond.ty;
+	if (st.kind != TY_ENUM) {
+		emsg("match needs an enum value, got '"); emsg_ty(st); emsg("'"); efail(n.pos);
+	}
+
+	var i int = 0;
+	while (i < 64) { arm_seen[i] = false; i = i + 1; }
+	var has_default bool = false;
+
+	var arm *Node = n.body;
+	while (arm as i64 != 0) {
+		arm.typed = true;
+		arm.ty = ty_void;
+
+		if (arm.name.len == 0) {
+			if (has_default) { error_at(arm.pos, "duplicate '_' arm"); }
+			has_default = true;
+		} else {
+			var v *Variant = 0 as *Variant;
+			var tag int = enum_tag_of(st, arm.name, &v);
+			if (tag < 0) {
+				emsg("this enum has no variant named '"); emsg(arm.name); emsg("'"); efail(arm.pos);
+			}
+			if (arm_seen[tag]) {
+				emsg("duplicate arm for '"); emsg(arm.name); emsg("'"); efail(arm.pos);
+			}
+			arm_seen[tag] = true;
+			arm.variant = v;
+
+			var nb int = 0;
+			var b *Node = arm.args;
+			while (b as i64 != 0) { nb = nb + 1; b = b.next; }
+			if (nb != 0 && nb != v.nfields) {
+				emsg("'"); emsg(arm.name); emsg("' binds the wrong number of values"); efail(arm.pos);
+			}
+
+			var fm *Member = v.fields;
+			b = arm.args;
+			while (b as i64 != 0) {
+				b.varp.ty = fm.ty;
+				b.ty = fm.ty;
+				b.typed = true;
+				fm = fm.next;
+				b = b.next;
+			}
+		}
+		add_type(arm.body);
+		arm = arm.next;
+	}
+
+	if (!has_default) {
+		var v *Variant = st.variants;
+		while (v as i64 != 0) {
+			if (!arm_seen[v.tag]) {
+				emsg("match does not cover '"); emsg(v.name); emsg("'"); efail(n.pos);
+			}
+			v = v.next;
+		}
+	}
+
+	n.tmp = alloc_temp(type_ptr(st));
+	if (n.tmp as i64 == 0) { error_at(n.pos, "match needs a function scope"); }
+	n.ty = ty_void;
+}
+
+// ── the walk ──
+
+fn type_children(n *Node) {
+	add_type(n.lhs);
+	add_type(n.rhs);
+	add_type(n.cond);
+	add_type(n.then);
+	add_type(n.els);
+	add_type(n.init);
+	add_type(n.step);
+	add_type(n.body);
+	var a *Node = n.args;
+	while (a as i64 != 0) { add_type(a); a = a.next; }
+	var s *Node = n.next;
+	while (s as i64 != 0) { add_type(s); s = s.next; }
+}
+
+fn type_addsub(n *Node) {
+	n.lhs = to_value(n.lhs);
+	n.rhs = to_value(n.rhs);
+	var lt *Type = n.lhs.ty;
+	var rt *Type = n.rhs.ty;
+	if (lt.kind == TY_PTR && rt.kind == TY_PTR) {
+		if (n.kind == ND_ADD) { error_at(n.pos, "cannot add two pointers"); }
+		n.ty = ty_i64;
+		return;
+	}
+	if (lt.kind == TY_PTR || rt.kind == TY_PTR) {
+		if (rt.kind == TY_PTR) {
+			var t *Node = n.lhs;
+			n.lhs = n.rhs;
+			n.rhs = t;
+		}
+		if (!is_integer(n.rhs.ty)) {
+			error_at(n.pos, "pointer arithmetic needs an integer offset");
+		}
+		n.ty = n.lhs.ty;
+		return;
+	}
+	if (!is_integer(lt) || !is_integer(rt)) {
+		error_at(n.pos, "operands must be numeric");
+	}
+	usual_conv(n);
+	n.ty = n.lhs.ty;
+}
+
+fn type_assign(n *Node) {
+	if (n.lhs.ty.kind == TY_ARRAY) { error_at(n.pos, "cannot assign to an array"); }
+	if (is_aggregate(n.lhs.ty)) {
+		n.rhs = coerce(n.rhs, n.lhs.ty);
+		if (!same_type(n.lhs.ty, n.rhs.ty)) {
+			emsg("cannot assign '"); emsg_ty(n.rhs.ty); emsg("' to '"); emsg_ty(n.lhs.ty); emsg("'"); efail(n.pos);
+		}
+		n.ty = n.lhs.ty;
+		return;
+	}
+	n.rhs = to_value(n.rhs);
+	reject_aggregate(n.rhs, n.lhs.ty, n.pos);
+	if (n.lhs.ty.kind == TY_PTR && is_integer(n.rhs.ty)) {
+		if (!(n.rhs.kind == ND_NUM && n.rhs.val == 0)) {
+			error_at(n.pos, "cannot assign an integer to a pointer");
+		}
+	}
+	if (is_integer(n.lhs.ty) && n.rhs.ty.kind == TY_PTR) {
+		error_at(n.pos, "cannot assign a pointer to an integer");
+	}
+	if (n.lhs.ty.kind == TY_PTR && n.rhs.ty.kind == TY_PTR) {
+		if (!same_type(n.lhs.ty, n.rhs.ty) && n.rhs.ty.base.kind != TY_VOID &&
+		    n.lhs.ty.base.kind != TY_VOID) {
+			emsg("cannot assign '"); emsg_ty(n.rhs.ty); emsg("' to '"); emsg_ty(n.lhs.ty); emsg("'"); efail(n.pos);
+		}
+	}
+	n.rhs = cast_to(n.rhs, n.lhs.ty);
+	n.ty = n.lhs.ty;
+}
+
+fn type_enumlit(n *Node) {
+	var v *Variant = 0 as *Variant;
+	if (enum_tag_of(n.ty, n.name, &v) < 0) {
+		emsg("this enum has no variant named '"); emsg(n.name); emsg("'"); efail(n.pos);
+	}
+	var count int = 0;
+	var head Node;
+	var tail *Node = &head;
+	var fm *Member = v.fields;
+	var a *Node = n.args;
+	while (a as i64 != 0) {
+		var nxt *Node = a.next;
+		a.next = 0 as *Node;
+		if (fm as i64 == 0) {
+			emsg("too many values for '"); emsg(n.name); emsg("'"); efail(n.pos);
+		}
+		a = coerce(a, fm.ty);
+		if (is_aggregate(fm.ty)) {
+			if (!same_type(fm.ty, a.ty)) {
+				emsg("value must have type '"); emsg_ty(fm.ty); emsg("'"); efail(a.pos);
+			}
+			tail.next = a;
+		} else {
+			a = to_value(a);
+			reject_aggregate(a, fm.ty, a.pos);
+			tail.next = cast_to(a, fm.ty);
+		}
+		tail = tail.next;
+		fm = fm.next;
+		count = count + 1;
+		a = nxt;
+	}
+	if (count != v.nfields) {
+		emsg("'"); emsg(n.name); emsg("' needs more values"); efail(n.pos);
+	}
+	n.args = head.next;
+	n.variant = v;
+	n.tmp = alloc_temp(n.ty);
+	if (n.tmp as i64 == 0) { error_at(n.pos, "an enum value needs a function scope"); }
+}
+
+fn type_structlit(n *Node) {
+	var a *Node = n.args;
+	while (a as i64 != 0) {
+		var m *Member = 0 as *Member;
+		var k *Member = n.ty.members;
+		while (k as i64 != 0) {
+			if (str_eq(k.name, a.name)) { m = k; }
+			k = k.next;
+		}
+		if (m as i64 == 0) {
+			emsg("this struct has no field named '"); emsg(a.name); emsg("'"); efail(a.pos);
+		}
+		var b *Node = n.args;
+		while (b as i64 != a as i64) {
+			if (b.member as i64 == m as i64) {
+				emsg("field '"); emsg(a.name); emsg("' is set twice"); efail(a.pos);
+			}
+			b = b.next;
+		}
+
+		a.lhs = coerce(a.lhs, m.ty);
+		if (is_aggregate(m.ty)) {
+			if (!same_type(m.ty, a.lhs.ty)) {
+				emsg("this field must have type '"); emsg_ty(m.ty); emsg("'"); efail(a.pos);
+			}
+		} else {
+			a.lhs = to_value(a.lhs);
+			reject_aggregate(a.lhs, m.ty, a.pos);
+			a.lhs = cast_to(a.lhs, m.ty);
+		}
+		a.member = m;
+		a.ty = m.ty;
+		a = a.next;
+	}
+	n.tmp = alloc_temp(n.ty);
+	if (n.tmp as i64 == 0) { error_at(n.pos, "a struct value needs a function scope"); }
+}
+
+fn type_ret(n *Node) {
+	var want *Type = ty_void;
+	if (cur_fn_typing as i64 != 0) { want = cur_fn_typing.ret; }
+	if (n.lhs as i64 == 0) {
+		if (want.kind != TY_VOID) {
+			emsg("this function must return a value of type '"); emsg_ty(want); emsg("'"); efail(n.pos);
+		}
+		return;
+	}
+	if (want.kind == TY_VOID) { error_at(n.pos, "this function returns nothing"); }
+	n.lhs = coerce(n.lhs, want);
+	if (is_aggregate(want)) {
+		if (!same_type(want, n.lhs.ty)) {
+			emsg("cannot return '"); emsg_ty(n.lhs.ty); emsg("' from a function returning '"); emsg_ty(want); emsg("'"); efail(n.pos);
+		}
+		return;
+	}
+	n.lhs = to_value(n.lhs);
+	reject_aggregate(n.lhs, want, n.pos);
+	if ((want.kind == TY_PTR) != (n.lhs.ty.kind == TY_PTR)) {
+		if (!(n.lhs.kind == ND_NUM && n.lhs.val == 0)) {
+			emsg("cannot return '"); emsg_ty(n.lhs.ty); emsg("' from a function returning '"); emsg_ty(want); emsg("'"); efail(n.pos);
+		}
+	}
+	n.lhs = cast_to(n.lhs, want);
+}
+
+fn type_call(n *Node) {
+	var f *Func = find_func(n.name);
+	if (f as i64 == 0) {
+		emsg("undefined function '"); emsg(n.name); emsg("'"); efail(n.pos);
+	}
+	if (f.nct != 0) {
+		monomorphize_call(n, f);
+		f = find_func(n.name);
+	}
+	if (n.nargs != f.nparams) {
+		emsg("'"); emsg(n.name); emsg("' takes a different number of arguments"); efail(n.pos);
+	}
+	var i int = 0;
+	var head Node;
+	var tail *Node = &head;
+	var a *Node = n.args;
+	while (a as i64 != 0) {
+		var nxt *Node = a.next;
+		a.next = 0 as *Node;
+		var want *Type = func_param(f, i).ty;
+		i = i + 1;
+		a = coerce(a, want);
+		if (is_aggregate(want)) {
+			if (!same_type(want, a.ty)) {
+				emsg("argument must have type '"); emsg_ty(want); emsg("'"); efail(a.pos);
+			}
+			if (want.size > 16) {
+				a.tmp = alloc_temp(want);
+				if (a.tmp as i64 == 0) {
+					error_at(a.pos, "this call needs a function scope");
+				}
+			}
+			tail.next = a;
+		} else {
+			a = to_value(a);
+			reject_aggregate(a, want, a.pos);
+			if ((want.kind == TY_PTR) != (a.ty.kind == TY_PTR)) {
+				emsg("argument must have type '"); emsg_ty(want); emsg("'"); efail(a.pos);
+			}
+			tail.next = cast_to(a, want);
+		}
+		tail = tail.next;
+		a = nxt;
+	}
+	n.args = head.next;
+	n.ty = f.ret;
+	if (is_aggregate(f.ret)) { n.tmp = alloc_temp(f.ret); }
+}
+
+fn type_syscall(n *Node) {
+	var head Node;
+	var tail *Node = &head;
+	var a *Node = n.args;
+	while (a as i64 != 0) {
+		var nxt *Node = a.next;
+		a.next = 0 as *Node;
+		a = to_value(a);
+		if (!is_numeric(a.ty)) {
+			error_at(a.pos, "a syscall argument must be an integer or a pointer");
+		}
+		tail.next = a;
+		tail = a;
+		a = nxt;
+	}
+	n.args = head.next;
+	n.ty = ty_i64;
+}
+
+fn add_type(n *Node) {
+	if (n as i64 == 0) { return; }
+	if (n.typed) { return; }
+	n.typed = true;
+	type_init();
+
+	if (n.kind == ND_MATCH) {
+		type_match(n);
+		var s *Node = n.next;
+		while (s as i64 != 0) { add_type(s); s = s.next; }
+		return;
+	}
+
+	type_children(n);
+
+	var k int = n.kind;
+
+	if (k == ND_NUM) {
+		if (n.ty as i64 == 0) { n.ty = ty_i64; }
+		return;
+	}
+	if (k == ND_STRLIT) { n.ty = type_str(); return; }
+	if (k == ND_VAR) { n.ty = n.varp.ty; return; }
+	if (k == ND_TYPEEXPR) { n.ty = ty_type; return; }
+	if (k == ND_SIZEOF) {
+		n.ty = ty_i64;
+		if (n.typeval.kind != TY_TYPEVAR) { n.val = n.typeval.size as i64; }
+		return;
+	}
+	if (k == ND_ADD || k == ND_SUB) { type_addsub(n); return; }
+
+	if (k == ND_MUL || k == ND_DIV || k == ND_MOD || k == ND_BITAND ||
+	    k == ND_BITOR || k == ND_BITXOR) {
+		if (!is_integer(n.lhs.ty) || !is_integer(n.rhs.ty)) {
+			error_at(n.pos, "operands must be integers");
+		}
+		usual_conv(n);
+		n.ty = n.lhs.ty;
+		return;
+	}
+
+	if (k == ND_SHL || k == ND_SHR) {
+		if (!is_integer(n.lhs.ty) || !is_integer(n.rhs.ty)) {
+			error_at(n.pos, "shift operands must be integers");
+		}
+		if (n.lhs.ty.size < 8) { n.lhs = cast_to(n.lhs, ty_i64); }
+		n.ty = n.lhs.ty;
+		return;
+	}
+
+	if (k == ND_NEG || k == ND_BITNOT) {
+		if (!is_integer(n.lhs.ty)) { error_at(n.pos, "operand must be an integer"); }
+		if (n.lhs.ty.size < 8) { n.ty = ty_i64; } else { n.ty = n.lhs.ty; }
+		return;
+	}
+
+	if (k == ND_EQ || k == ND_NE || k == ND_LT || k == ND_LE) {
+		n.lhs = to_value(n.lhs);
+		n.rhs = to_value(n.rhs);
+		if (is_aggregate(n.lhs.ty) || is_aggregate(n.rhs.ty)) {
+			error_at(n.pos, "aggregates cannot be compared");
+		}
+		if (is_integer(n.lhs.ty) && is_integer(n.rhs.ty)) { usual_conv(n); }
+		n.ty = ty_bool;
+		return;
+	}
+
+	if (k == ND_NOT || k == ND_AND || k == ND_OR) { n.ty = ty_bool; return; }
+	if (k == ND_ASSIGN) { type_assign(n); return; }
+
+	if (k == ND_INDEX) {
+		var lt *Type = n.lhs.ty;
+		if (lt.kind != TY_ARRAY && lt.kind != TY_PTR && lt.kind != TY_SLICE) {
+			emsg("cannot index a value of type '"); emsg_ty(lt); emsg("'"); efail(n.pos);
+		}
+		if (lt.base.kind == TY_VOID) { error_at(n.pos, "cannot index a *void"); }
+		if (!is_integer(n.rhs.ty)) { error_at(n.pos, "an index must be an integer"); }
+		n.ty = lt.base;
+		return;
+	}
+
+	if (k == ND_SLICE) {
+		var lt *Type = n.lhs.ty;
+		if (lt.kind != TY_ARRAY && lt.kind != TY_SLICE) {
+			emsg("cannot slice a value of type '"); emsg_ty(lt); emsg("'"); efail(n.pos);
+		}
+		if (n.rhs as i64 != 0 && !is_integer(n.rhs.ty)) {
+			error_at(n.pos, "a slice bound must be an integer");
+		}
+		if (n.then as i64 != 0 && !is_integer(n.then.ty)) {
+			error_at(n.pos, "a slice bound must be an integer");
+		}
+		n.ty = type_slice(lt.base);
+		n.tmp = alloc_temp(n.ty);
+		if (n.tmp as i64 == 0) {
+			error_at(n.pos, "a slice expression needs a function scope");
+		}
+		return;
+	}
+
+	if (k == ND_ENUMLIT) { type_enumlit(n); return; }
+	if (k == ND_RET) { type_ret(n); return; }
+	if (k == ND_FIELD) { return; }
+	if (k == ND_STRUCTLIT) { type_structlit(n); return; }
+
+	if (k == ND_MEMBER) {
+		var lt *Type = n.lhs.ty;
+		if (lt.kind == TY_PTR) { lt = lt.base; }
+		if (lt.kind != TY_STRUCT && lt.kind != TY_SLICE) {
+			emsg("type '"); emsg_ty(n.lhs.ty); emsg("' has no fields"); efail(n.pos);
+		}
+		var m *Member = lt.members;
+		while (m as i64 != 0) {
+			if (str_eq(m.name, n.name)) {
+				n.member = m;
+				n.ty = m.ty;
+				return;
+			}
+			m = m.next;
+		}
+		emsg("this type has no field named '"); emsg(n.name); emsg("'"); efail(n.pos);
+		return;
+	}
+
+	if (k == ND_ADDR) { n.ty = type_ptr(n.lhs.ty); return; }
+
+	if (k == ND_DEREF) {
+		if (n.lhs.ty.kind != TY_PTR) {
+			emsg("cannot dereference a value of type '"); emsg_ty(n.lhs.ty); emsg("'"); efail(n.pos);
+		}
+		if (n.lhs.ty.base.kind == TY_VOID) {
+			error_at(n.pos, "cannot dereference a *void");
+		}
+		n.ty = n.lhs.ty.base;
+		return;
+	}
+
+	if (k == ND_OPASSIGN) {
+		var lt *Type = n.lhs.ty;
+		if (lt.kind == TY_PTR) {
+			if (n.val != ND_ADD as i64 && n.val != ND_SUB as i64) {
+				error_at(n.pos, "operator not defined for pointers");
+			}
+			if (!is_integer(n.rhs.ty)) {
+				error_at(n.pos, "pointer arithmetic needs an integer offset");
+			}
+		} else {
+			if (!is_integer(lt) || !is_integer(n.rhs.ty)) {
+				error_at(n.pos, "operands must be numeric");
+			}
+		}
+		n.ty = lt;
+		return;
+	}
+
+	if (k == ND_CAST) {
+		if (!is_numeric(n.ty) && n.ty.kind != TY_VOID) {
+			error_at(n.pos, "unsupported cast target");
+		}
+		return;
+	}
+
+	if (k == ND_COMMA) { n.ty = n.rhs.ty; return; }
+	if (k == ND_CALL) { type_call(n); return; }
+	if (k == ND_SYSCALL) { type_syscall(n); return; }
+
+	if (n.ty as i64 == 0) { n.ty = ty_void; }
+}
+
+fn type_unit(u *Unit) {
+	var f *Func = u.funcs;
+	while (f as i64 != 0) {
+		if (f.nct == 0) { type_func(f); }
+		f = f.next;
+	}
+}
