@@ -695,6 +695,23 @@ static void gen_expr(Node *n) {
 		lea_local(RAX, off);
 		return;
 	}
+	case ND_ZERO: {
+		/* A declaration without an initializer zeroes at the point it runs,
+		   so a `var` inside a loop starts clean on every iteration. */
+		int off = n->var->offset;
+		int size = n->var->ty->size;
+		if (size <= 8 && !is_aggregate(n->var->ty)) {
+			mov_reg_imm(RAX, 0);
+			st_local(off, RAX);
+		} else {
+			lea_local(RDI, off);
+			mov_reg_imm(RAX, 0);
+			mov_reg_imm(RCX, size);
+			b1(0xf3);
+			b1(0xaa);
+		}
+		return;
+	}
 	case ND_COMMA:
 		gen_expr(n->lhs);
 		gen_expr(n->rhs);
@@ -1047,16 +1064,24 @@ Image codegen(Unit *u) {
 	int   nph = data.n + bss_size > 0 ? 2 : 1;
 	isize hdr = EHDR_SZ + PHDR_SZ * nph;
 
+	Func *main_fn = find_func(S("main"));
+	if (!main_fn) die("error: no 'main' function\n");
+	if (main_fn->nparams != 0 && main_fn->nparams != 2)
+		die("error: 'main' takes no parameters or (argc, argv)\n");
+
+	/* At process entry [rsp] is argc and rsp+8 is argv, so the arguments are
+	   read before the call pushes a return address over them. */
+	if (main_fn->nparams == 2) {
+		b1(0x48); b1(0x8b); b1(0x3c); b1(0x24);        /* mov rdi, [rsp]    */
+		b1(0x48); b1(0x8d); b1(0x74); b1(0x24); b1(8); /* lea rsi, [rsp+8]  */
+	}
+
 	add_call(S("main"), 0);
 	b1(0x89);
 	modrm(3, RAX, RDI);
 	mov_reg_imm(RAX, 60);
 	b1(0x0f);
 	b1(0x05);
-
-	Func *main_fn = find_func(S("main"));
-	if (!main_fn) die("error: no 'main' function\n");
-	if (main_fn->nparams) die("error: 'main' must take no parameters\n");
 
 	for (Func *f = u->funcs; f; f = f->next) {
 		if (f->nct) continue;

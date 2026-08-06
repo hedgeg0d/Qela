@@ -115,6 +115,7 @@ typedef enum {
 	ND_ENUMLIT,
 	ND_STRUCTLIT,
 	ND_FIELD,
+	ND_ZERO,
 	ND_MATCH,
 	ND_ARM,
 	ND_DEFER,

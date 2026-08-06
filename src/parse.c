@@ -541,7 +541,9 @@ static Node *declaration(Token **t) {
 		n->lhs = binary(ND_ASSIGN, lhs, rhs, name->pos);
 	} else {
 		if (!ty) error_at(name->pos, "'let' requires an initializer");
-		declare(name->text, ty, name->pos);
+		Node *z = node(ND_ZERO, name->pos);
+		z->var = declare(name->text, ty, name->pos);
+		n->lhs = z;
 	}
 	*t = expect(*t, ";");
 	return n;
