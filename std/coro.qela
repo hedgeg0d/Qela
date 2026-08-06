@@ -72,12 +72,15 @@ fn coro_pending() bool {
 	return false;
 }
 
-fn coro_yield() {
+// Returns false when nothing else could run, which lets a blocked channel
+// operation tell waiting apart from deadlock.
+fn coro_yield() bool {
 	var from int = cur_coro;
 	var to int = coro_next(from);
-	if (to == from) { return; }
+	if (to == from) { return false; }
 	cur_coro = to;
 	coro_switch(&coros[from].sp as *u8, &coros[to].sp as *u8);
+	return true;
 }
 
 // Runs on the finishing coroutine's stack and never returns: the switch
