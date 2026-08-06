@@ -402,6 +402,12 @@ fn parse_logor(t **Token) *Node {
 	}
 }
 
+fn opassign_node(lhs *Node, rhs *Node, op int, pos i64) *Node {
+	var n *Node = bin_node(ND_OPASSIGN, lhs, rhs, pos);
+	n.val = op as i64;
+	return n;
+}
+
 fn parse_assign(t **Token) *Node {
 	var n *Node = parse_logor(t);
 	var p i64 = (*t).pos;
@@ -409,16 +415,16 @@ fn parse_assign(t **Token) *Node {
 		return bin_node(ND_ASSIGN, n, parse_assign(t), p);
 	}
 	// op=
-	if (tok_consume(t, "+="))  { return bin_node(ND_OPASSIGN, n, parse_assign(t), p); }
-	if (tok_consume(t, "-="))  { return bin_node(ND_OPASSIGN, n, parse_assign(t), p); }
-	if (tok_consume(t, "*="))  { return bin_node(ND_OPASSIGN, n, parse_assign(t), p); }
-	if (tok_consume(t, "/="))  { return bin_node(ND_OPASSIGN, n, parse_assign(t), p); }
-	if (tok_consume(t, "%="))  { return bin_node(ND_OPASSIGN, n, parse_assign(t), p); }
-	if (tok_consume(t, "&="))  { return bin_node(ND_OPASSIGN, n, parse_assign(t), p); }
-	if (tok_consume(t, "|="))  { return bin_node(ND_OPASSIGN, n, parse_assign(t), p); }
-	if (tok_consume(t, "^="))  { return bin_node(ND_OPASSIGN, n, parse_assign(t), p); }
-	if (tok_consume(t, "<<=")) { return bin_node(ND_OPASSIGN, n, parse_assign(t), p); }
-	if (tok_consume(t, ">>=")) { return bin_node(ND_OPASSIGN, n, parse_assign(t), p); }
+	if (tok_consume(t, "+=")) { return opassign_node(n, parse_assign(t), ND_ADD, p); }
+	if (tok_consume(t, "-=")) { return opassign_node(n, parse_assign(t), ND_SUB, p); }
+	if (tok_consume(t, "*=")) { return opassign_node(n, parse_assign(t), ND_MUL, p); }
+	if (tok_consume(t, "/=")) { return opassign_node(n, parse_assign(t), ND_DIV, p); }
+	if (tok_consume(t, "%=")) { return opassign_node(n, parse_assign(t), ND_MOD, p); }
+	if (tok_consume(t, "&=")) { return opassign_node(n, parse_assign(t), ND_BITAND, p); }
+	if (tok_consume(t, "|=")) { return opassign_node(n, parse_assign(t), ND_BITOR, p); }
+	if (tok_consume(t, "^=")) { return opassign_node(n, parse_assign(t), ND_BITXOR, p); }
+	if (tok_consume(t, "<<=")) { return opassign_node(n, parse_assign(t), ND_SHL, p); }
+	if (tok_consume(t, ">>=")) { return opassign_node(n, parse_assign(t), ND_SHR, p); }
 	return n;
 }
 
@@ -642,7 +648,8 @@ fn parse_function(t **Token) *Func {
 	f.nparams = nparams;
 	tok_expect(t, ")");
 
-	if (!tok_eq(*t, "{")) { f.ret = parse_type(t); }
+	if (tok_eq(*t, "{")) { f.ret = type_lookup("void"); }
+	else { f.ret = parse_type(t); }
 	f.body = parse_block(t);
 	leave_scope();
 	cur_func = 0 as *Func;
