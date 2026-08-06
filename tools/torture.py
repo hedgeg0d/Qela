@@ -28,10 +28,9 @@ def qeval(node, vars: dict) -> int:
     """Recursively evaluate a Python-tuple AST."""
     if isinstance(node, tuple):
         kind = node[0]
+        # Qela has no unsigned literal syntax: every integer literal is i64.
         if kind == "int":
-            t = node[1]
-            b, s = WIDTHS.get(t, (64, True))
-            return qwrap(node[2], b, s)
+            return qwrap(node[2], 64, True)
         if kind == "chr":  return ord(node[1])
         if kind == "true": return 1
         if kind == "false":return 0
@@ -61,27 +60,27 @@ def qeval(node, vars: dict) -> int:
         # All binary ops at i64 width — matches Qela's usual_conv widening.
         b, s = 64, True
         def w(v): return qwrap(v, b, s)
-        wu = lambda v: qwrap(v, b, False)
 
         if op == "+":   return w(lhs + rhs)
         if op == "-":   return w(lhs - rhs)
         if op == "*":   return w(lhs * rhs)
+        # x86 idiv truncates toward zero and takes the sign of the dividend,
+        # unlike Python's floor division and modulo.
         if op == "/":
             if rhs == 0: return 0
-            return w(int(lhs / rhs))
+            q = abs(lhs) // abs(rhs)
+            return w(-q if (lhs < 0) != (rhs < 0) else q)
         if op == "%":
             if rhs == 0: return 0
-            return w(lhs % rhs)
-        if op == "&":   return wu(lhs & rhs)
-        if op == "|":   return wu(lhs | rhs)
+            r = abs(lhs) % abs(rhs)
+            return w(-r if lhs < 0 else r)
+        if op == "&":   return w(lhs & rhs)
+        if op == "|":   return w(lhs | rhs)
         if op == "^":   return w(lhs ^ rhs)
-        if op == "<<":
-            sr = rhs & 63
-            return w(lhs << sr if rhs >= 0 else lhs >> (-rhs & 63))
-        if op == ">>":
-            sr = rhs & 63
-            if rhs < 0: return w(lhs << (-rhs & 63))
-            return w(lhs >> sr) if s else wu(lhs >> sr)
+        # shl/sar take the count from CL, masked to 6 bits for 64-bit
+        # operands. The sign of the count never flips the direction.
+        if op == "<<":  return w(lhs << (rhs & 63))
+        if op == ">>":  return w(lhs >> (rhs & 63))
         if op == "==":  return 1 if lhs == rhs else 0
         if op == "!=":  return 1 if lhs != rhs else 0
         if op == "<":   return 1 if lhs < rhs else 0
@@ -104,8 +103,7 @@ def emit(node, vars: set) -> str:
     if isinstance(node, tuple):
         kind = node[0]
         if kind == "int":
-            t = node[1]
-            return str(node[2])
+            return str(qwrap(node[2], 64, True))
         if kind == "chr":
             return repr(node[1])
         if kind == "true": return "true"
@@ -162,8 +160,9 @@ class Gen:
             return self.leaf(vars_used)
         k = self.rng.randint(0, 15)
         if k < 5:  return self.leaf(vars_used)
-        if k < 13: return self.binop(depth, vars_used)
-        return self.unary(depth, vars_used)
+        if k < 12: return self.binop(depth, vars_used)
+        if k < 14: return self.unary(depth, vars_used)
+        return self.cast(depth, vars_used)
 
     def binop(self, depth: int, vused: set) -> tuple:
         op = self.rng.choice(BINOPS)
@@ -178,46 +177,52 @@ class Gen:
         return ({"-":"neg","!":"not","~":"bnot"}[op],
                 self.expr(depth + 1, vused), ty)
 
+    # Only widths that survive exactly in a signed i64, so every operation
+    # around the cast keeps signed 64-bit semantics in both the program and
+    # the model. u64 would need unsigned comparison and shift modelling.
+    CAST_TYPES = ["i8", "u8", "i16", "u16", "i32", "u32"]
+
     def cast(self, depth: int, vused: set) -> tuple:
-        return ("as", self.expr(depth + 1, vused), self.ty())
+        return ("as", self.expr(depth + 1, vused), self.rng.choice(self.CAST_TYPES))
 
 
-def generate(seed: int, stmts: int = 6, max_depth: int = 4):
+class Program:
+    """Declarations plus assignments, kept structured so that shrinking can
+    recompute the expected value instead of reusing a stale one."""
+
+    def __init__(self, inits, stmts):
+        self.inits = inits   # [(name, initial value)]
+        self.stmts = stmts   # [(target, expression node)]
+
+    def render(self):
+        vars_ = dict(self.inits)
+        body = [f"    var {n} int = {v};" for n, v in self.inits]
+        rv = self.inits[-1][0]
+        for tgt, node in self.stmts:
+            vars_[tgt] = qwrap(qeval(node, vars_), 64, True)
+            body.append(f"    {tgt} = {emit(node, set())};")
+            rv = tgt
+        src = "fn main() int {\n" + "\n".join(body) + f"\n    return {rv};\n}}\n"
+        return src, vars_.get(rv, 0) & 0xff
+
+    def without(self, i):
+        return Program(self.inits, self.stmts[:i] + self.stmts[i + 1:])
+
+
+def generate(seed: int, stmts: int = 6, max_depth: int = 4) -> Program:
     rng = random.Random(seed)
     gen = Gen(rng, max_depth)
 
-    # Pre-declare variables
     nvars = rng.randint(2, 4)
-    decl_lines = []
-    vars_available = []
-    for i in range(nvars):
-        name = f"v{i}"
-        init = rng.randint(0, 20)
-        decl_lines.append(f"    var {name} int = {init};")
-        vars_available.append(name)
+    inits = [(f"v{i}", rng.randint(0, 20)) for i in range(nvars)]
+    gen.vars = [n for n, _ in inits]
 
-    gen.vars = list(vars_available)
+    body = []
+    for _ in range(stmts):
+        tgt = rng.choice(gen.vars)
+        body.append((tgt, gen.expr(0, set())))
 
-    # Generate statement sequence: each computes a value and stores in a var
-    body = list(decl_lines)
-    eval_vars = {n: rng.randint(0, 20) for n in vars_available}
-    rv = vars_available[-1]
-
-    for i in range(stmts):
-        tgt = rng.choice(vars_available)
-        vu = set()
-        node = gen.expr(0, vu)
-        val = qeval(node, eval_vars)
-        b, s = WIDTHS.get("int", (64, True))
-        val = qwrap(val, b, s)
-        eval_vars[tgt] = val
-
-        src = emit(node, set())
-        body.append(f"    {tgt} = {src};")
-        rv = tgt
-
-    return f'fn main() int {{\n{"\n".join(body)}\n    return {rv};\n}}\n', \
-           eval_vars.get(rv, 0) & 0xff
+    return Program(inits, body)
 
 
 # ── Compile & run ───────────────────────────────────────────────────────
@@ -258,27 +263,24 @@ def save_regression(seed: int, src: str, expected: int, got, regdir: str):
 
 # ── Shrinker ────────────────────────────────────────────────────────────
 
-def shrink(src: str, expected: int, compiler: str, timeout: float) -> str:
-    lines = src.split("\n")
-    # Find body lines (between { and return)
-    body_start = next(i+1 for i,l in enumerate(lines) if l.strip().endswith("{"))
-    body_end = next(i for i in range(len(lines)-1,-1,-1) if "return " in lines[i])
-
-    stmts = lines[body_start:body_end]
-    ret = lines[body_end]
-
-    best = list(stmts)
+def shrink(prog: Program, compiler: str, timeout: float) -> Program:
+    """Drop statements while the mismatch survives. Each candidate is
+    re-evaluated: removing a statement changes what the program should
+    return, so the original expectation does not carry over."""
+    best = prog
     changed = True
     while changed:
         changed = False
-        for i in range(len(best)):
-            c = best[:i] + best[i+1:]
-            if not c: continue
-            s = "\n".join(lines[:body_start] + c + [ret, "}\n"])
-            if compile_and_run(s, compiler, timeout) == expected:
-                best = c; changed = True; break
-
-    return "\n".join(lines[:body_start] + best + [ret, "}\n"])
+        for i in range(len(best.stmts)):
+            cand = best.without(i)
+            if not cand.stmts: continue
+            src, expected = cand.render()
+            got = compile_and_run(src, compiler, timeout)
+            if got is not None and got != expected:
+                best = cand
+                changed = True
+                break
+    return best
 
 
 # ── Main ────────────────────────────────────────────────────────────────
@@ -300,7 +302,8 @@ def main():
 
     for i in range(args.n):
         seed = (args.seed + i) if args.seed is not None else random.randint(0, 2**31-1)
-        src, expected = generate(seed, args.stmts, args.max_depth)
+        prog = generate(seed, args.stmts, args.max_depth)
+        src, expected = prog.render()
         got = compile_and_run(src, comp, args.timeout)
 
         if got is None:
@@ -311,7 +314,9 @@ def main():
         else:
             print(f"FAIL seed={seed}: expected {expected}, got {got}")
             if args.shrink:
-                src = shrink(src, expected, comp, args.timeout)
+                prog = shrink(prog, comp, args.timeout)
+                src, expected = prog.render()
+                got = compile_and_run(src, comp, args.timeout)
             save_regression(seed, src, expected, got, args.regress_dir)
             fail += 1
 
