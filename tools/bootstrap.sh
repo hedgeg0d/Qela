@@ -93,7 +93,33 @@ fn main() int {
 EOF
 ( cd "$tmp2" && "$root/$OUT/s2" coro.qela -o coro && ./coro ) ||
 	fail "coroutines do not interleave as expected"
-rm -rf "$tmp2"
+step "channels"
+cat > "$tmp2/chan.qela" <<'EOF'
+import "std/chan.qela";
+var ch Chan;
+var got i64 = 0;
+fn producer(n i64, base i64) {
+	var i i64 = 0;
+	while (i < n) { ch <- base + i; i = i + 1; }
+}
+fn consumer(n i64) {
+	var i i64 = 0;
+	while (i < n) { got = got + <-ch; i = i + 1; }
+}
+fn main() int {
+	chan_init(&ch, 2);
+	spawn producer(4, 10);
+	spawn producer(3, 20);
+	spawn consumer(7);
+	coro_run_all();
+	if (chan_len(&ch) != 0) { return 1; }
+	if (got != 109) { return 2; }
+	return 0;
+}
+EOF
+( cd "$tmp2" && "$root/$OUT/s2" chan.qela -o chan && ./chan ) ||
+	fail "channels do not deliver every value"
 printf '    ok\n'
+rm -rf "$tmp2"
 
 printf '\nShipping binary: %s\n' "$OUT/s2"
