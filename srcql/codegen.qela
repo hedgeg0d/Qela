@@ -331,6 +331,16 @@ fn copy_aggregate(size int) {
 	pop_reg(RAX);
 }
 
+// A local scalar of machine width lives at a known rbp offset, so it can be
+// read or written with one instruction instead of materialising its address.
+fn direct_local(n *Node) bool {
+	if (n.kind != ND_VAR) { return false; }
+	var v *Var = n.varp;
+	if (v.is_global || v.by_ref) { return false; }
+	if (is_aggregate(n.ty)) { return false; }
+	return n.ty.size == 8;
+}
+
 fn gen_addr(n *Node) {
 	var k int = n.kind;
 	if (k == ND_VAR) {
@@ -644,7 +654,12 @@ fn gen_expr(n *Node) {
 	if (k == ND_STRLIT) { add_strref(RAX, n.val as int); return; }
 	if (k == ND_COMPTIME) { mov_reg_imm(RAX, n.val); return; }
 	if (k == ND_SIZEOF) { mov_reg_imm(RAX, n.typeval.size as i64); return; }
-	if (k == ND_VAR || k == ND_MEMBER || k == ND_INDEX || k == ND_SLICE) {
+	if (k == ND_VAR) {
+		if (direct_local(n)) { ld_local(RAX, n.varp.offset as i64); return; }
+		gen_lvalue(n);
+		return;
+	}
+	if (k == ND_MEMBER || k == ND_INDEX || k == ND_SLICE) {
 		gen_lvalue(n);
 		return;
 	}
@@ -665,6 +680,11 @@ fn gen_expr(n *Node) {
 		return;
 	}
 	if (k == ND_ASSIGN) {
+		if (direct_local(n.lhs)) {
+			gen_expr(n.rhs);
+			st_local(n.lhs.varp.offset as i64, RAX);
+			return;
+		}
 		gen_addr(n.lhs);
 		push_reg(RAX);
 		gen_expr(n.rhs);
@@ -932,16 +952,6 @@ fn gen_func(f *Func) {
 		b1(0x48); b1(0x81);
 		modrm(3, 5, RSP);
 		b4(f.stack_size as i64);
-
-		b1(0x49); b1(0x89); b1(0xe3);
-		b1(0x45); b1(0x31); b1(0xd2);
-		var top i64 = code.n;
-		b1(0x49); b1(0x39); b1(0xeb);
-		b1(0x73); b1(0x08);
-		b1(0x4d); b1(0x89); b1(0x13);
-		b1(0x49); b1(0x83); b1(0xc3); b1(0x08);
-		b1(0xeb);
-		b1(top - (code.n + 1));
 	}
 
 	var ri int = 0;
