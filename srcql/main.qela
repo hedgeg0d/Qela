@@ -5,6 +5,7 @@ import "parse.qela";
 import "type.qela";
 import "codegen.qela";
 import "elf.qela";
+import "fmt.qela";
 import "../std/io.qela";
 
 fn default_output(path str) str {
@@ -44,7 +45,64 @@ fn dump_std(name str) int {
 	return 1;
 }
 
+fn compile_file(input str, output str) {
+	var src str = read_file(input);
+	var file int = diag_add_file(input, src);
+	set_module_dir(input);
+	var unit *Unit = parse(lex(src, (file as i64) << FILE_SHIFT));
+	var img Image;
+	codegen(unit, &img);
+	write_elf(output, &img);
+}
+
+// Compiles to a temporary file, runs it with the remaining arguments, then
+// removes it and reports the child's exit status as its own.
+fn cmd_run(argc int, argv **u8) int {
+	if (argc < 3) {
+		eprint("usage: qela run <file.qela> [args]\n");
+		return 2;
+	}
+	var input str = str_from_cstr(argv[2]);
+
+	var tb Buf;
+	fmt_str(&tb, "/tmp/qela-run-");
+	fmt_i64(&tb, sys_getpid());
+	var tmp str = buf_str(&tb);
+	var tmpc *u8 = cstr(tmp);
+
+	compile_file(input, tmp);
+
+	var nargs int = argc - 2;
+	var cargv *i64 = arena_alloc((nargs as i64 + 1) * 8, 8) as *i64;
+	cargv[0] = tmpc as i64;
+	var i int = 1;
+	while (i < nargs) {
+		cargv[i] = argv[i + 2] as i64;
+		i = i + 1;
+	}
+	cargv[nargs] = 0;
+
+	var envp *i64 = arena_alloc(8, 8) as *i64;
+	envp[0] = 0;
+
+	var pid i64 = sys_fork();
+	if (pid == 0) {
+		sys_execve(tmpc, cargv as *u8, envp as *u8);
+		sys_exit(127);
+	}
+	var status [1]i64;
+	sys_wait4(pid, &status[0] as *u8);
+	sys_unlink(tmpc);
+	return ((status[0] >> 8) & 255) as int;
+}
+
 fn main(argc int, argv **u8) int {
+	if (argc >= 2 && str_eq(str_from_cstr(argv[1]), "run")) {
+		return cmd_run(argc, argv);
+	}
+	if (argc >= 2 && str_eq(str_from_cstr(argv[1]), "fmt")) {
+		return cmd_fmt(argc, argv);
+	}
 	var input str;
 	var output str;
 	var have_input bool = false;

@@ -14,6 +14,7 @@ let TK_KW    = 2;
 let TK_NUM   = 3;
 let TK_STR   = 4;
 let TK_PUNCT = 5;
+let TK_COMMENT = 6;
 
 // Positions of every file share one i64: file_id << FILE_SHIFT | offset.
 let FILE_SHIFT = 40;
