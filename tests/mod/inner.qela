@@ -1,0 +1,1 @@
+fn inner_val() int { return 30; }
