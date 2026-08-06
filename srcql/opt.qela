@@ -1,0 +1,106 @@
+import "comp.qela";
+
+fn trunc_val(v i64, t *Type) i64 {
+	if (t.size == 1) {
+		if (t.is_unsigned || t.kind == TY_BOOL) { return v as u64 & 0xff; }
+		if ((v & 0x80) != 0) { return (v & 0xff) as u64 | 0xffffffffffffff00 as i64; }
+		return v & 0xff;
+	}
+	if (t.size == 2) {
+		if (t.is_unsigned) { return v as u64 & 0xffff; }
+		if ((v & 0x8000) != 0) { return (v & 0xffff) as u64 | 0xffffffffffff0000 as i64; }
+		return v & 0xffff;
+	}
+	if (t.size == 4) {
+		if (t.is_unsigned) { return v as u64 & 0xffffffff; }
+		if ((v & 0x80000000) != 0) { return (v & 0xffffffff) as u64 | 0xffffffff00000000 as i64; }
+		return v & 0xffffffff;
+	}
+	return v;
+}
+
+fn const_fold(n *Node) {
+	if (n.kind == ND_NUM || n.kind == ND_STRLIT || n.kind == ND_VAR || n.kind == ND_COMPTIME) { return; }
+
+	if (n.kind == ND_CAST) {
+		const_fold(n.lhs);
+		if (n.lhs.kind == ND_NUM) {
+			var v i64 = n.lhs.val;
+			if (n.ty.kind == TY_BOOL) { n.val = (v != 0) as i64; }
+			else { n.val = trunc_val(v, n.ty); }
+			n.kind = ND_NUM;
+		}
+		return;
+	}
+
+	if (n.kind == ND_NEG) {
+		const_fold(n.lhs);
+		if (n.lhs.kind == ND_NUM) { n.val = -n.lhs.val; n.kind = ND_NUM; }
+		return;
+	}
+	if (n.kind == ND_BITNOT) {
+		const_fold(n.lhs);
+		if (n.lhs.kind == ND_NUM) { n.val = ~n.lhs.val; n.kind = ND_NUM; }
+		return;
+	}
+	if (n.kind == ND_NOT) {
+		const_fold(n.lhs);
+		if (n.lhs.kind == ND_NUM) { n.val = (n.lhs.val == 0) as i64; n.kind = ND_NUM; }
+		return;
+	}
+
+	if (n.kind == ND_ADD || n.kind == ND_SUB || n.kind == ND_MUL || n.kind == ND_DIV ||
+	    n.kind == ND_MOD || n.kind == ND_BITAND || n.kind == ND_BITOR || n.kind == ND_BITXOR ||
+	    n.kind == ND_SHL || n.kind == ND_SHR || n.kind == ND_EQ || n.kind == ND_NE ||
+	    n.kind == ND_LT || n.kind == ND_LE || n.kind == ND_AND || n.kind == ND_OR) {
+		const_fold(n.lhs);
+		const_fold(n.rhs);
+		if (n.lhs.kind == ND_NUM && n.rhs.kind == ND_NUM) {
+			var a i64 = n.lhs.val; var b i64 = n.rhs.val;
+			if (n.kind == ND_ADD)    { n.val = a + b; }
+			else if (n.kind == ND_SUB)    { n.val = a - b; }
+			else if (n.kind == ND_MUL)    { n.val = a * b; }
+			else if (n.kind == ND_DIV)    { if (b != 0) { n.val = a / b; } }
+			else if (n.kind == ND_MOD)    { if (b != 0) { n.val = a % b; } }
+			else if (n.kind == ND_BITAND) { n.val = a & b; }
+			else if (n.kind == ND_BITOR)  { n.val = a | b; }
+			else if (n.kind == ND_BITXOR) { n.val = a ^ b; }
+			else if (n.kind == ND_SHL)    { n.val = a << b; }
+			else if (n.kind == ND_SHR)    { n.val = a >> b; }
+			else if (n.kind == ND_EQ)     { n.val = (a == b) as i64; }
+			else if (n.kind == ND_NE)     { n.val = (a != b) as i64; }
+			else if (n.kind == ND_LT)     { n.val = (a < b) as i64; }
+			else if (n.kind == ND_LE)     { n.val = (a <= b) as i64; }
+			else if (n.kind == ND_AND)    { n.val = ((a != 0) && (b != 0)) as i64; }
+			else if (n.kind == ND_OR)     { n.val = ((a != 0) || (b != 0)) as i64; }
+			n.kind = ND_NUM;
+		}
+		if (n.kind == ND_AND && n.lhs.kind == ND_NUM && n.lhs.val == 0) { n.val = 0; n.kind = ND_NUM; }
+		if (n.kind == ND_AND && n.rhs.kind == ND_NUM && n.rhs.val == 0) { n.val = 0; n.kind = ND_NUM; }
+		if (n.kind == ND_OR && n.lhs.kind == ND_NUM && n.lhs.val != 0)  { n.val = 1; n.kind = ND_NUM; }
+		if (n.kind == ND_OR && n.rhs.kind == ND_NUM && n.rhs.val != 0)  { n.val = 1; n.kind = ND_NUM; }
+		return;
+	}
+}
+
+fn fold_body(n *Node) {
+	if (n as i64 == 0) { return; }
+	const_fold(n);
+	fold_body(n.lhs);
+	fold_body(n.rhs);
+	fold_body(n.cond);
+	fold_body(n.then);
+	fold_body(n.els);
+	fold_body(n.init);
+	fold_body(n.step);
+	fold_body(n.body);
+	var a *Node = n.args;
+	while (a as i64 != 0) { fold_body(a); a = a.next; }
+	fold_body(n.next);
+}
+
+fn opt_func(f *Func) {
+	if (f.body as i64 == 0) { return; }
+	const_fold(f.body);
+	fold_body(f.body);
+}
