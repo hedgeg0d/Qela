@@ -647,6 +647,13 @@ fn gen_logical(n *Node) {
 }
 
 fn gen_opassign(n *Node) {
+	var k int = n.val as int;
+	if (direct_local(n.lhs) && n.rhs.kind == ND_NUM && fits_imm32(n.rhs.val) &&
+	    n.lhs.ty.size == 8 && n.lhs.ty.kind != TY_PTR &&
+	    (k == ND_ADD || k == ND_SUB || k == ND_BITAND || k == ND_BITOR || k == ND_BITXOR)) {
+		alu_mem_imm(alu_ext_for(k), n.lhs.varp.offset as i64, n.rhs.val);
+		return;
+	}
 	gen_addr(n.lhs);
 	push_reg(RAX);
 	load(n.lhs.ty);
@@ -776,6 +783,32 @@ fn alu_rax_mem(op0 i64, op1 i64, off i64) {
 	} else {
 		modrm(2, RAX, RBP);
 		b4(disp);
+	}
+}
+
+fn alu_mem_imm(ext int, off i64, v i64) {
+	b1(0x48);
+	var disp i64 = -off;
+	if (v >= -128 && v <= 127) {
+		b1(0x83);
+		if (disp >= -128 && disp <= 127) {
+			modrm(1, ext, RBP);
+			b1(disp);
+		} else {
+			modrm(2, ext, RBP);
+			b4(disp);
+		}
+		b1(v);
+	} else {
+		b1(0x81);
+		if (disp >= -128 && disp <= 127) {
+			modrm(1, ext, RBP);
+			b1(disp);
+		} else {
+			modrm(2, ext, RBP);
+			b4(disp);
+		}
+		b4(v);
 	}
 }
 
