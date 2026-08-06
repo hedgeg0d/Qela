@@ -76,6 +76,10 @@ var datarefs_head *DataFixup;
 var datarefs_tail *DataFixup;
 var str_off *i64;
 var bounds_checks I64List;
+var funcaddrs_head *CallFixup;
+var funcaddrs_tail *CallFixup;
+var coro_stub_at i64 = -1;
+var coro_stub_refs I64List;
 
 var opt_no_bounds bool = false;
 var gen_unit *Unit;
@@ -284,6 +288,19 @@ fn add_dataref(v *Var) {
 	if (datarefs_tail as i64 == 0) { datarefs_head = f; } else { datarefs_tail.next = f; }
 	datarefs_tail = f;
 	b4(0);
+}
+
+fn add_funcaddr(name str, pos i64) {
+	rex_w(0, RAX);
+	b1(0xb8);
+	var f *CallFixup = arena_alloc(sizeof(CallFixup), 8) as *CallFixup;
+	f.at = code.n;
+	f.name = name;
+	f.pos = pos;
+	if (funcaddrs_tail as i64 == 0) { funcaddrs_head = f; }
+	else { funcaddrs_tail.next = f; }
+	funcaddrs_tail = f;
+	buf_u64(&code, 0);
 }
 
 fn add_rax_imm(v i64) {
@@ -872,6 +889,53 @@ fn branch_true(n *Node, out *I64List) {
 	ilist_push(out, jump(0x85));
 }
 
+var coro_switch_at i64 = -1;
+var coro_switch_refs I64List;
+
+// The switch has to be a real function: its trailing ret consumes the
+// return address that the call pushed onto whichever stack is current,
+// which is exactly how control lands back where a coroutine left off.
+fn gen_coro_switch(n *Node) {
+	gen_args(n, false, false, -1);
+	b1(0xe8);
+	ilist_push(&coro_switch_refs, code.n);
+	b4(0);
+}
+
+fn gen_coro_switch_stub() {
+	coro_switch_at = code.n;
+	b1(0x53);                            // push rbx
+	b1(0x55);                            // push rbp
+	b1(0x41); b1(0x54);                  // push r12
+	b1(0x41); b1(0x55);                  // push r13
+	b1(0x41); b1(0x56);                  // push r14
+	b1(0x41); b1(0x57);                  // push r15
+	b1(0x48); b1(0x89); b1(0x27);        // mov [rdi], rsp
+	b1(0x48); b1(0x8b); b1(0x26);        // mov rsp, [rsi]
+	b1(0x41); b1(0x5f);                  // pop r15
+	b1(0x41); b1(0x5e);                  // pop r14
+	b1(0x41); b1(0x5d);                  // pop r13
+	b1(0x41); b1(0x5c);                  // pop r12
+	b1(0x5d);                            // pop rbp
+	b1(0x5b);                            // pop rbx
+	b1(0xc3);                            // ret
+}
+
+// Emitted once. A new coroutine's stack holds its arguments above the
+// return address, so the trampoline pops them into place and calls through.
+fn gen_coro_stub() {
+	coro_stub_at = code.n;
+	b1(0x5f);                            // pop rdi
+	b1(0x5e);                            // pop rsi
+	b1(0x5a);                            // pop rdx
+	b1(0x59);                            // pop rcx
+	b1(0x41); b1(0x58);                  // pop r8
+	b1(0x58);                            // pop rax  (target)
+	b1(0xff); b1(0xd0);                  // call rax
+	add_call("coro_finish", 0);
+	b1(0x0f); b1(0x0b);                  // ud2: coro_finish never returns
+}
+
 fn gen_expr(n *Node) {
 	var k int = n.kind;
 
@@ -959,7 +1023,19 @@ fn gen_expr(n *Node) {
 		b1(0x0f); b1(0x05);
 		return;
 	}
-	if (k == ND_CALL) { gen_call(n); return; }
+	if (k == ND_FUNCADDR) { add_funcaddr(n.name, n.pos); return; }
+	if (k == ND_CALL) {
+		if (str_eq(n.name, "coro_switch")) { gen_coro_switch(n); return; }
+		if (str_eq(n.name, "coro_entry_addr")) {
+			rex_w(0, RAX);
+			b1(0xb8);
+			ilist_push(&coro_stub_refs, code.n);
+			buf_u64(&code, 0);
+			return;
+		}
+		gen_call(n);
+		return;
+	}
 	if (k == ND_AND || k == ND_OR) { gen_logical(n); return; }
 
 	var lt *Type = n.lhs.ty;
@@ -1341,6 +1417,45 @@ fn codegen(u *Unit, img *Image) {
 			buf_patch32(&code, bounds_checks.p[i], panic_addr - (bounds_checks.p[i] + 4));
 			i = i + 1;
 		}
+	}
+
+	if (coro_switch_refs.n != 0) {
+		gen_coro_switch_stub();
+		var wi i64 = 0;
+		while (wi < coro_switch_refs.n) {
+			var site i64 = coro_switch_refs.p[wi];
+			buf_patch32(&code, site, coro_switch_at - (site + 4));
+			wi = wi + 1;
+		}
+	}
+
+	if (coro_stub_refs.n != 0) {
+		gen_coro_stub();
+		var si i64 = 0;
+		while (si < coro_stub_refs.n) {
+			var abs i64 = ELF_BASE + hdr + coro_stub_at;
+			var kk i64 = 0;
+			while (kk < 8) {
+				code.p[coro_stub_refs.p[si] + kk] = ((abs >> (kk * 8)) & 255) as u8;
+				kk = kk + 1;
+			}
+			si = si + 1;
+		}
+	}
+
+	var af *CallFixup = funcaddrs_head;
+	while (af as i64 != 0) {
+		var at *Func = find_func(af.name);
+		if (at as i64 == 0) {
+			emsg("undefined function '"); emsg(af.name); emsg("'"); efail(af.pos);
+		}
+		var abs2 i64 = ELF_BASE + hdr + at.addr;
+		var j i64 = 0;
+		while (j < 8) {
+			code.p[af.at + j] = ((abs2 >> (j * 8)) & 255) as u8;
+			j = j + 1;
+		}
+		af = af.next;
 	}
 
 	var cf *CallFixup = calls_head;
