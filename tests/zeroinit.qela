@@ -1,0 +1,43 @@
+// expect-exit: 42
+// Locals start zeroed, like globals. Without it a declaration without an
+// initializer reads whatever the previous frame left on the stack.
+struct Buf { p *u8, n i64, cap i64, }
+
+fn dirty() int {
+	var junk [24]i64;
+	var i int = 0;
+	while (i < 24) { junk[i] = 0x4141414141; i = i + 1; }
+	return junk[7] as int;
+}
+
+fn scalars() i64 {
+	var a i64;
+	var b int;
+	var c u8;
+	var p *u8;
+	return a + b + (c as i64) + (p as i64);
+}
+
+fn aggregate() i64 {
+	var s Buf;
+	var arr [8]i64;
+	var total i64 = s.n + s.cap + (s.p as i64);
+	var i int = 0;
+	while (i < 8) { total = total + arr[i]; i = i + 1; }
+	return total;
+}
+
+fn with_args(a i64, b i64, c i64, d i64, e i64, f i64) i64 {
+	var untouched i64;
+	return a + b + c + d + e + f + untouched;
+}
+
+fn main() int {
+	dirty();
+	if (scalars() != 0) { return 90; }
+	dirty();
+	if (aggregate() != 0) { return 91; }
+	dirty();
+	if (with_args(1, 2, 3, 4, 5, 6) != 21) { return 92; }
+	return 42;
+}
