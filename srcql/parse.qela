@@ -1,6 +1,8 @@
 import "comp.qela";
 import "diag.qela";
 import "type.qela";
+import "funcs.qela";
+import "opt.qela";
 import "../std/io.qela";
 
 struct Scope;
@@ -11,8 +13,9 @@ struct VarScope;
 var scope_root *Scope;
 var cur_func *Func;
 var global_vars *Var;
-var all_funcs *Func;
-var funcs_tail *Func;
+
+var type_vars [6]*Type;
+var ntype_vars int;
 
 struct VarScope {
 	next *VarScope,
@@ -152,6 +155,15 @@ fn parse_type(t **Token) *Type {
 		return type_array(base, len);
 	}
 	if ((*t).kind != TK_IDENT) { error_at((*t).pos, "expected type name"); }
+	var i int = 0;
+	while (i < ntype_vars) {
+		if (str_eq(type_vars[i].name, (*t).text)) {
+			var tv *Type = type_vars[i];
+			*t = (*t).next;
+			return tv;
+		}
+		i = i + 1;
+	}
 	var ty *Type = type_lookup((*t).text);
 	if (ty as i64 == 0) { error_at((*t).pos, "unknown type"); }
 	*t = (*t).next;
@@ -257,6 +269,20 @@ fn parse_primary(t **Token) *Node {
 			}
 			tok_expect(t, "}");
 			n.args = fhead.next;
+			return n;
+		}
+		// also search type vars for comptime param references
+		if (named as i64 == 0) {
+			var i int = 0;
+			while (i < ntype_vars) {
+				if (str_eq(type_vars[i].name, name)) { named = type_vars[i]; break; }
+				i = i + 1;
+			}
+		}
+		// type-expression (used as generic argument: f(i64, x))
+		if (named as i64 != 0 && !tok_eq(*t, "(") && !tok_eq(*t, ".") && !tok_eq(*t, "{")) {
+			var n *Node = new_node(ND_TYPEEXPR, p);
+			n.typeval = named;
 			return n;
 		}
 
@@ -623,15 +649,39 @@ fn parse_function(t **Token) *Func {
 
 	var f *Func = arena_alloc(sizeof(Func), 8) as *Func;
 	f.name = name;
-	f.ret = 0 as *Type;
+	f.ret = type_lookup("void");
 	f.pos = p;
 	cur_func = f;
 
 	enter_scope();
 	tok_expect(t, "(");
 	var nparams int = 0;
+	var saved_ntype_vars int = ntype_vars;
 	while (!tok_eq(*t, ")")) {
 		if (nparams > 0) { tok_expect(t, ","); }
+
+		if (tok_consume(t, "comptime")) {
+			var pn str = (*t).text;
+			var pp i64 = (*t).pos;
+			*t = (*t).next;
+			tok_expect(t, ":");
+			if (f.nct != nparams) { error_at(pp, "comptime parameters must come first"); }
+			parse_type(t);
+			var tv *Type = type_new_var(pn);
+			type_vars[ntype_vars] = tv;
+			ntype_vars = ntype_vars + 1;
+			var v *Var = declare_var(pn, type_lookup("type"), pp);
+			f.nct = f.nct + 1;
+			if (nparams == 0) { f.p0 = v; }
+			else if (nparams == 1) { f.p1 = v; }
+			else if (nparams == 2) { f.p2 = v; }
+			else if (nparams == 3) { f.p3 = v; }
+			else if (nparams == 4) { f.p4 = v; }
+			else if (nparams == 5) { f.p5 = v; }
+			nparams = nparams + 1;
+			continue;
+		}
+
 		var pn str = (*t).text;
 		var pp i64 = (*t).pos;
 		*t = (*t).next;
@@ -648,10 +698,10 @@ fn parse_function(t **Token) *Func {
 	f.nparams = nparams;
 	tok_expect(t, ")");
 
-	if (tok_eq(*t, "{")) { f.ret = type_lookup("void"); }
-	else { f.ret = parse_type(t); }
+	if (!tok_eq(*t, "{")) { f.ret = parse_type(t); }
 	f.body = parse_block(t);
 	leave_scope();
+	ntype_vars = saved_ntype_vars;
 	cur_func = 0 as *Func;
 	return f;
 }
@@ -717,6 +767,7 @@ fn parse_enum(t **Token) {
 	var vhead Variant;
 	var vtail *Variant = &vhead;
 	var tag int = 0;
+	var maxpay int = 0;
 	while (!tok_eq(*t, "}")) {
 		if (vtail != &vhead) { tok_expect(t, ","); }
 		if (tok_eq(*t, "}")) { break; }
@@ -744,11 +795,13 @@ fn parse_enum(t **Token) {
 			tok_expect(t, ")");
 			v.fields = fhead.next;
 			v.nfields = nf;
+			if (voff - 8 > maxpay) { maxpay = voff - 8; }
 		}
 		vtail.next = v; vtail = v;
 	}
 	tok_expect(t, "}");
 	ty.variants = vhead.next;
+	ty.size = ((8 + maxpay + 7) & ~7) as int;
 }
 
 fn parse_global(t **Token) {
@@ -772,24 +825,11 @@ fn parse_global(t **Token) {
 }
 
 fn save_type_vars(vars **Type, n *int) {
-	*n = 0; // TODO: type vars for generic params
+	*n = ntype_vars;
 }
 
-fn restore_type_vars(vars **Type, n int) {}
-
-fn add_func(f *Func) {
-	if (all_funcs as i64 == 0) { all_funcs = f; }
-	else { funcs_tail.next = f; }
-	funcs_tail = f;
-}
-
-fn find_func(name str) *Func {
-	var f *Func = all_funcs;
-	while (f as i64 != 0) {
-		if (str_eq(f.name, name)) { return f; }
-		f = f.next;
-	}
-	return 0 as *Func;
+fn restore_type_vars(vars **Type, n int) {
+	ntype_vars = n;
 }
 
 fn parse(tok *Token) *Unit {
@@ -841,6 +881,7 @@ fn parse(tok *Token) *Unit {
 		}
 		if (f.nct == 0) {
 			type_func(f);
+			opt_func(f);
 
 			var off i64 = 0;
 			var v *Var = f.locals;
