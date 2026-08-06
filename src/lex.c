@@ -3,7 +3,8 @@
 static const char *keywords[] = {"fn",  "let",   "var",      "if",       "else",
                                  "while", "for", "in",       "break",    "continue",
                                  "return", "as", "struct", "enum",
-                                 "match",  "defer", "import", "comptime", "sizeof", NULL};
+                                 "match",  "defer", "import", "comptime", "sizeof",
+                                 "true",   "false", NULL};
 
 static bool is_space(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
 static bool is_digit(char c) { return c >= '0' && c <= '9'; }
@@ -103,6 +104,27 @@ Token *lex(Str src, isize base) {
 			Str text = (Str){src.p + start, i - start};
 			Token *t = push(&tail, is_keyword(text) ? TK_KW : TK_IDENT, start);
 			t->text = text;
+			continue;
+		}
+
+		if (src.p[i] == '\'') {
+			isize start = i++;
+			if (i >= src.n) error_at(lex_base + start, "unterminated character literal");
+			i64 val;
+			if (src.p[i] == '\\') {
+				i++;
+				val = read_escape(src, &i);
+			} else if (src.p[i] == '\n') {
+				error_at(lex_base + start, "unterminated character literal");
+			} else {
+				val = (u8)src.p[i++];
+			}
+			if (i >= src.n || src.p[i] != '\'')
+				error_at(lex_base + start, "a character literal holds exactly one character");
+			i++;
+			Token *t = push(&tail, TK_NUM, start);
+			t->val = val;
+			t->text = (Str){src.p + start, i - start};
 			continue;
 		}
 
