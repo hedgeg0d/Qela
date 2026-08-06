@@ -23,6 +23,27 @@ fn default_output(path str) str {
 	return str_slice(path, start, end);
 }
 
+// Prints an embedded module, so the shipped library stays readable without
+// a copy on disk. Accepts "fmt", "fmt.qela" or "std/fmt.qela".
+fn dump_std(name str) int {
+	var i int = 0;
+	var n int = std_blob_count();
+	while (i < n) {
+		var full str = std_blob_name(i);
+		var bare str = str_slice(full, 4, full.len - 5);
+		if (str_eq(full, name) || str_eq(bare, name) ||
+		    str_eq(str_slice(full, 4, full.len), name)) {
+			write_str(STDOUT, std_blob_src(i));
+			return 0;
+		}
+		i = i + 1;
+	}
+	eprint("error: no embedded module named ");
+	eprint(name);
+	eprint("\n");
+	return 1;
+}
+
 fn main(argc int, argv **u8) int {
 	var input str;
 	var output str;
@@ -37,6 +58,10 @@ fn main(argc int, argv **u8) int {
 			if (i == argc) { die("error: -o needs an argument"); }
 			output = str_from_cstr(argv[i]);
 			have_output = true;
+		} else if (str_eq(a, "--dump-std")) {
+			i = i + 1;
+			if (i == argc) { die("error: --dump-std needs a module name"); }
+			return dump_std(str_from_cstr(argv[i]));
 		} else if (str_eq(a, "--no-bounds-checks")) {
 			opt_no_bounds = true;
 		} else if (a.len > 0 && a.ptr[0] == '-') {

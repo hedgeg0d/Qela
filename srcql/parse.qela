@@ -4,6 +4,7 @@ import "type.qela";
 import "funcs.qela";
 import "opt.qela";
 import "../std/io.qela";
+import "std_blob.qela";
 
 struct Scope;
 struct VarScope;
@@ -858,6 +859,23 @@ fn eval_const(n *Node) i64 {
 	return 0;
 }
 
+// "std/..." names the library the compiler carries inside itself. A file of
+// the same name on disk wins, so the shipped modules stay editable.
+fn is_std_path(s str) bool {
+	if (s.len < 4) { return false; }
+	return s.ptr[0] == 's' && s.ptr[1] == 't' && s.ptr[2] == 'd' && s.ptr[3] == '/';
+}
+
+fn blob_find(name str) int {
+	var i int = 0;
+	var n int = std_blob_count();
+	while (i < n) {
+		if (str_eq(std_blob_name(i), name)) { return i; }
+		i = i + 1;
+	}
+	return -1;
+}
+
 fn parse_global(t **Token) {
 	var kw str = (*t).text;
 	var typed bool = str_eq(kw, "var");
@@ -902,13 +920,25 @@ fn parse(tok *Token) *Unit {
 			tok = tok.next;
 			tok_expect(&tok, ";");
 
-			var pb Buf;
-			fmt_str(&pb, diag_file_dir(diag_file_of(ipos)));
-			fmt_str(&pb, raw);
-			var path str = buf_str(&pb);
+			var path str = raw;
+			if (!is_std_path(raw)) {
+				var pb Buf;
+				fmt_str(&pb, diag_file_dir(diag_file_of(ipos)));
+				fmt_str(&pb, raw);
+				path = buf_str(&pb);
+			}
 
 			if (!diag_already_imported(path)) {
-				var isrc str = read_file(path);
+				var isrc str;
+				if (file_exists(path)) {
+					isrc = read_file(path);
+				} else {
+					var bi int = blob_find(path);
+					if (bi < 0) {
+						emsg("cannot open "); emsg(path); efail(ipos);
+					}
+					isrc = std_blob_src(bi);
+				}
 				var fid int = diag_add_file(path, isrc);
 				var ihead *Token = lex(isrc, (fid as i64) << FILE_SHIFT);
 				var itail *Token = ihead;
