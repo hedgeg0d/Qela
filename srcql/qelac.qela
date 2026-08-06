@@ -63,55 +63,99 @@ fn bpatch32(b *CodeBuf, at i64, v i64) {
 	*(b.p + at + 3) = ((v >> 24) & 255) as u8;
 }
 
-fn write_elf(path str, code *u8, codelen i64, entry_off i64) i64 {
-	var out CodeBuf;
-	var fsize i64 = 120 + codelen;
-	bgrow(&out, fsize);
+fn write_elf(path_ptr *u8, path_len i64, code *u8, codelen i64, entry_off i64) {
+	var ofd i64 = syscall(2, path_ptr as i64, 65 | 512, 493);
+	if (ofd < 0) { return 1; }
 
-	/* ELF ident — 16 bytes */
-	bu32(&out, 0x464c457f); /* \x7fELF */
-	bu32(&out, 0x00010102); /* class=2, data=1, version=1, osabi=0 */
-	bu32(&out, 0);
-	bu32(&out, 0);
+	var total i64 = 120 + codelen;
+	var out *u8 = alloc(total, 8);
+	var n i64 = 0;
 
-	/* e_type=2, e_machine=0x3e */
-	bu32(&out, 2 | (0x3e << 16));
-	/* e_version=1 */
-	bu32(&out, 1);
-	/* e_entry */
-	bu64(&out, 0x400000 + 120 + entry_off);
-	/* e_phoff=64 */
-	bu64(&out, 64);
-	/* e_shoff=0 */
-	bu64(&out, 0);
-	/* e_flags=0 */
-	bu32(&out, 0);
+	/* helper: write u8/u32/u64 to out at offset n, advancing n */
+	/* ELF ident */
+	out[0] = 0x7f; out[1] = 69; out[2] = 76; out[3] = 70;
+	out[4] = 2; out[5] = 1; out[6] = 1; out[7] = 0;
+	var i i64 = 8; while (i < 16) { *(out + i) = 0; i = i + 1; }
+	n = 16;
+
+	/* pack u32 helper via explicit writes */
+	/* e_type=2, e_machine=0x3e, e_version=1 */
+	*(out + n) = 2;      n = n + 1;
+	*(out + n) = 0;      n = n + 1;
+	*(out + n) = 0x3e;   n = n + 1;
+	*(out + n) = 0;      n = n + 1;
+	*(out + n) = 1;      n = n + 1;
+	*(out + n) = 0;      n = n + 1;
+	*(out + n) = 0;      n = n + 1;
+	*(out + n) = 0;      n = n + 1;
+
+	/* e_entry = 0x400000 + 120 + entry_off */
+	var entry_addr i64 = 0x400000 + 120 + entry_off;
+	i = 0; while (i < 8) { *(out + n + i) = (entry_addr >> (i * 8)) as u8; i = i + 1; }
+	n = n + 8;
+
+	/* e_phoff = 64 */
+	i = 0; while (i < 8) { *(out + n + i) = (64 >> (i * 8)) as u8; i = i + 1; }
+	n = n + 8;
+
+	/* e_shoff = 0 */
+	i = 0; while (i < 8) { *(out + n + i) = 0; i = i + 1; }
+	n = n + 8;
+
+	/* e_flags = 0 */
+	i = 0; while (i < 4) { *(out + n + i) = 0; i = i + 1; }
+	n = n + 4;
+
 	/* e_ehsize=64, e_phentsize=56 */
-	bu32(&out, 64 | (56 << 16));
+	*(out + n) = 64; n = n + 1;
+	*(out + n) = 0;  n = n + 1;
+	*(out + n) = 56; n = n + 1;
+	*(out + n) = 0;  n = n + 1;
+
 	/* e_phnum=1, e_shentsize=0 */
-	bu32(&out, 1 | (0 << 16));
+	*(out + n) = 1; n = n + 1;
+	*(out + n) = 0; n = n + 1;
+	*(out + n) = 0; n = n + 1;
+	*(out + n) = 0; n = n + 1;
+
 	/* e_shnum=0, e_shstrndx=0 */
-	bu32(&out, 0 | (0 << 16));
+	*(out + n) = 0; n = n + 1;
+	*(out + n) = 0; n = n + 1;
+	*(out + n) = 0; n = n + 1;
+	*(out + n) = 0; n = n + 1;
 
 	/* PHDR: p_type=1, p_flags=5 */
-	bu64(&out, 1 | (5 << 32));
-	bu64(&out, 0);                    /* p_offset */
-	bu64(&out, 0x400000);            /* p_vaddr */
-	bu64(&out, 0x400000);            /* p_paddr */
-	bu64(&out, fsize);               /* p_filesz */
-	bu64(&out, fsize);               /* p_memsz */
-	bu64(&out, 0x1000);              /* p_align */
+	i = 0; while (i < 4) { *(out + n + i) = (1 >> (i * 8)) as u8; i = i + 1; }
+	n = n + 4;
+	i = 0; while (i < 4) { *(out + n + i) = (5 >> (i * 8)) as u8; i = i + 1; }
+	n = n + 4;
+	/* p_offset = 0 */
+	i = 0; while (i < 8) { *(out + n + i) = 0; i = i + 1; }
+	n = n + 8;
+	/* p_vaddr = 0x400000 */
+	var vaddr i64 = 0x400000;
+	i = 0; while (i < 8) { *(out + n + i) = (vaddr >> (i * 8)) as u8; i = i + 1; }
+	n = n + 8;
+	/* p_paddr = 0x400000 */
+	i = 0; while (i < 8) { *(out + n + i) = (vaddr >> (i * 8)) as u8; i = i + 1; }
+	n = n + 8;
+	/* p_filesz = total */
+	i = 0; while (i < 8) { *(out + n + i) = (total >> (i * 8)) as u8; i = i + 1; }
+	n = n + 8;
+	/* p_memsz = total */
+	i = 0; while (i < 8) { *(out + n + i) = (total >> (i * 8)) as u8; i = i + 1; }
+	n = n + 8;
+	/* p_align = 0x1000 */
+	i = 0; while (i < 8) { *(out + n + i) = (0x1000 >> (i * 8)) as u8; i = i + 1; }
+	n = n + 8;
 
-	/* code */
-	var i i64 = 0;
-	while (i < codelen) { bu8(&out, *(code + i)); i = i + 1; }
+	/* copy code */
+	i = 0;
+	while (i < codelen) { *(out + n + i) = *(code + i); i = i + 1; }
+	n = n + codelen;
 
-	/* write */
-	var ofd i64 = syscall(2, path.ptr as i64, 65 | 512, 493);
-	if (ofd < 0) { return; }
-	syscall(1, ofd, out.p as i64, out.n);
+	syscall(1, ofd, out as i64, n);
 	syscall(3, ofd, 0, 0, 0, 0, 0);
-	return out.n;
 }
 
 /* ── parser ── */
@@ -182,8 +226,8 @@ fn main() int {
 			/* patch call */
 			bpatch32(&code, call_at, (entry - (call_at + 4)));
 
-			var ws i64 = write_elf("a.out", code.p, code.n, entry);
-			return ws as int;
+			write_elf("a.out".ptr, "a.out".len, code.p, code.n, 0);
+			return val as int;
 		}
 		pos = pos + 1;
 	}
