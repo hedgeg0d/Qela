@@ -214,6 +214,18 @@ struct Image {
 	nph      int,
 }
 
+struct ComptimeVal {
+	kind int,
+	num  i64,
+	str  str,
+	ty   *Type,
+}
+
+let CV_INT = 0;
+let CV_STR = 1;
+let CV_TYPE = 2;
+let CV_VOID = 3;
+
 // Inter-module API. Qela has no prototypes: functions are visible across the
 // whole spliced token stream, so this list is the agreed contract. Changing a
 // signature means editing this file.
@@ -255,6 +267,12 @@ struct Image {
 //   is_integer(t *Type) bool              is_aggregate(t *Type) bool
 //   same_type(a *Type, b *Type) bool      type_name(t *Type) str
 //   monomorphize_call(n *Node, f *Func)
+//
+// srcql/comptime.qela
+//   comptime_eval(n *Node) ComptimeVal
+//
+// srcql/opt.qela
+//   opt_func(f *Func)
 //
 // srcql/codegen.qela
 //   codegen(u *Unit, img *Image)
