@@ -1,0 +1,47 @@
+import "sys.qela";
+import "buf.qela";
+import "str.qela";
+
+let IO_CHUNK = 65536;
+
+fn die(msg str) {
+	eprint(msg);
+	eprint("\n");
+	sys_exit(1);
+}
+
+fn read_file(path str) str {
+	var fd i64 = sys_open_read(cstr(path));
+	if (fd < 0) {
+		eprint("error: cannot open ");
+		eprint(path);
+		eprint("\n");
+		sys_exit(1);
+	}
+	var b Buf;
+	var got i64 = 1;
+	while (got > 0) {
+		buf_grow(&b, IO_CHUNK);
+		got = sys_read(fd, b.p + b.n, IO_CHUNK);
+		if (got > 0) { b.n = b.n + got; }
+	}
+	sys_close(fd);
+	return buf_str(&b);
+}
+
+fn write_file(path str, data *u8, n i64) {
+	var fd i64 = sys_open_exec(cstr(path));
+	if (fd < 0) {
+		eprint("error: cannot write ");
+		eprint(path);
+		eprint("\n");
+		sys_exit(1);
+	}
+	var off i64 = 0;
+	while (off < n) {
+		var wrote i64 = sys_write(fd, data + off, n - off);
+		if (wrote <= 0) { die("error: short write"); }
+		off = off + wrote;
+	}
+	sys_close(fd);
+}
