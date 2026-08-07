@@ -181,6 +181,7 @@ struct Func {
 	ret        *Type,
 	stack_size int,
 	nsaved     int,
+	leaf       bool,
 	body       *Node,
 	ret_slot   *Var,
 	addr       i64,
