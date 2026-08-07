@@ -957,6 +957,24 @@ static void gen_func(Func *f) {
 		b4((u32)f->stack_size);
 	}
 
+	/* Locals start zeroed, matching globals. Without this a `var b Buf;`
+	   holds whatever the previous frame left behind, which is silent
+	   corruption rather than a diagnosable error.
+	   The frame is [rsp, rbp) and stack_size is a multiple of 16, so a
+	   qword loop covers it exactly. rep stosb is shorter but would eat RDI
+	   and RCX, which still hold incoming arguments here. */
+	if (f->stack_size) {
+		b1(0x49); b1(0x89); b1(0xe3);             /* mov r11, rsp     */
+		b1(0x45); b1(0x31); b1(0xd2);             /* xor r10d, r10d   */
+		isize top = code.n;
+		b1(0x49); b1(0x39); b1(0xeb);             /* cmp r11, rbp     */
+		b1(0x73); b1(0x08);                       /* jae +8           */
+		b1(0x4d); b1(0x89); b1(0x13);             /* mov [r11], r10   */
+		b1(0x49); b1(0x83); b1(0xc3); b1(0x08);   /* add r11, 8       */
+		b1(0xeb);
+		b1((u8)(top - (code.n + 1)));             /* jmp top          */
+	}
+
 	int ri = 0;
 	if (f->ret_slot) st_local(f->ret_slot->offset, call_regs[ri++]);
 	for (int i = 0; i < f->nparams; i++) {
