@@ -470,6 +470,13 @@ fn gen_addr(n *Node) {
 		}
 
 		if (lt.kind == TY_ARRAY) { gen_addr(n.lhs); } else { gen_expr(n.lhs); }
+		// A constant index into an array is checked here, so no code is
+		// emitted for it and the offset folds into the address.
+		if (n.rhs.kind == ND_NUM &&
+		    (lt.kind != TY_ARRAY || (n.rhs.val >= 0 && n.rhs.val < lt.len))) {
+			add_rax_imm(n.rhs.val * (lt.base.size as i64));
+			return;
+		}
 		var idx int = RDI;
 		if (direct_local(n.rhs)) {
 			// A promoted index needs no copy: it can be the lea index directly.
@@ -994,11 +1001,11 @@ fn alu_rax_imm(ext int, v i64) {
 		b1(0x83);
 		modrm(3, ext, RAX);
 		b1(v);
-	} else {
-		b1(0x81);
-		modrm(3, ext, RAX);
-		b4(v);
+		return;
 	}
+	// The accumulator has a one-byte-shorter form with a full immediate.
+	b1(0x05 | ((ext as i64) << 3));
+	b4(v);
 }
 
 fn alu_rax_imm_reg(ext int, reg int, v i64) {
