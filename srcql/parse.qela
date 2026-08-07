@@ -3,6 +3,7 @@ import "diag.qela";
 import "type.qela";
 import "funcs.qela";
 import "regalloc.qela";
+import "generic.qela";
 import "opt.qela";
 import "../std/io.qela";
 import "std_blob.qela";
@@ -166,10 +167,50 @@ fn parse_type(t **Token) *Type {
 		}
 		i = i + 1;
 	}
+	var tm *Tmpl = tmpl_find((*t).text);
+	if (tm as i64 != 0) {
+		var tp i64 = (*t).pos;
+		*t = (*t).next;
+		tok_expect(t, "(");
+		var a0 *Type = parse_type(t);
+		var a1 *Type = 0 as *Type;
+		if (tm.nparams > 1) {
+			tok_expect(t, ",");
+			a1 = parse_type(t);
+		}
+		tok_expect(t, ")");
+		return generic_instance(tm, a0, a1);
+	}
 	var ty *Type = type_lookup((*t).text);
 	if (ty as i64 == 0) { error_at((*t).pos, "unknown type"); }
 	*t = (*t).next;
 	return ty;
+}
+
+// struct Name(T) / enum Name(T, U): bind the parameters as type variables for
+// the duration of the body, and hand back the template to fill in.
+fn parse_tmpl_params(t **Token, name str, p i64) *Tmpl {
+	if (!tok_eq(*t, "(")) { return 0 as *Tmpl; }
+	*t = (*t).next;
+	var tm *Tmpl = arena_alloc(sizeof(Tmpl), 8) as *Tmpl;
+	tm.name = name;
+	while (!tok_eq(*t, ")")) {
+		if (tm.nparams > 0) { tok_expect(t, ","); }
+		if (tm.nparams == 2) { error_at((*t).pos, "at most two type parameters"); }
+		var pn str = (*t).text;
+		*t = (*t).next;
+		var tv *Type = type_new_var(pn);
+		type_vars[ntype_vars] = tv;
+		ntype_vars = ntype_vars + 1;
+		if (tm.nparams == 0) { tm.tv0 = tv; } else { tm.tv1 = tv; }
+		tm.nparams = tm.nparams + 1;
+	}
+	tok_expect(t, ")");
+	if (tm.nparams == 0) { error_at(p, "a parameterized type needs a parameter"); }
+	tm.proto = arena_alloc(sizeof(Type), 8) as *Type;
+	tm.proto.name = name;
+	tmpl_add(tm);
+	return tm;
 }
 
 // ── expression parser ──
@@ -231,9 +272,16 @@ fn parse_primary(t **Token) *Node {
 	if ((*t).kind == TK_IDENT) {
 		var name str = (*t).text;
 		var p i64 = (*t).pos;
+		var start *Token = *t;
 		*t = (*t).next;
 
 		var named *Type = type_lookup(name);
+		// A template name is followed by its arguments, so the whole
+		// application has to be read as a type before the dot or the brace.
+		if (named as i64 == 0 && tmpl_find(name) as i64 != 0) {
+			*t = start;
+			named = parse_type(t);
+		}
 
 		// enum literal: Name.Variant(...). Anything else followed by a dot
 		// is a member access and belongs to parse_postfix.
@@ -790,12 +838,20 @@ fn parse_struct(t **Token) {
 		return;
 	}
 
-	var ty *Type = type_lookup(name);
-	if (ty as i64 != 0 && ty.members as i64 != 0) { error_at(p, "redefinition"); }
-	if (ty as i64 == 0) {
-		ty = arena_alloc(sizeof(Type), 8) as *Type;
-		ty.kind = TY_STRUCT; ty.name = name;
-		type_define(name, ty);
+	var saved_tv int = ntype_vars;
+	var tm *Tmpl = parse_tmpl_params(t, name, p);
+	var ty *Type = 0 as *Type;
+	if (tm as i64 != 0) {
+		ty = tm.proto;
+		ty.kind = TY_STRUCT;
+	} else {
+		ty = type_lookup(name);
+		if (ty as i64 != 0 && ty.members as i64 != 0) { error_at(p, "redefinition"); }
+		if (ty as i64 == 0) {
+			ty = arena_alloc(sizeof(Type), 8) as *Type;
+			ty.kind = TY_STRUCT; ty.name = name;
+			type_define(name, ty);
+		}
 	}
 
 	tok_expect(t, "{");
@@ -817,9 +873,10 @@ fn parse_struct(t **Token) {
 		mtail.next = m; mtail = m;
 	}
 	tok_expect(t, "}");
+	ty.members = mhead.next;
 	ty.align = align;
 	ty.size = (off + align - 1) & ~(align - 1);
-	ty.members = mhead.next;
+	ntype_vars = saved_tv;
 }
 
 fn parse_enum(t **Token) {
@@ -828,9 +885,17 @@ fn parse_enum(t **Token) {
 	var p i64 = (*t).pos;
 	*t = (*t).next;
 
-	var ty *Type = arena_alloc(sizeof(Type), 8) as *Type;
-	ty.kind = TY_ENUM; ty.align = 8; ty.name = name;
-	type_define(name, ty);
+	var saved_tv int = ntype_vars;
+	var tm *Tmpl = parse_tmpl_params(t, name, p);
+	var ty *Type = 0 as *Type;
+	if (tm as i64 != 0) {
+		ty = tm.proto;
+		ty.kind = TY_ENUM; ty.align = 8;
+	} else {
+		ty = arena_alloc(sizeof(Type), 8) as *Type;
+		ty.kind = TY_ENUM; ty.align = 8; ty.name = name;
+		type_define(name, ty);
+	}
 
 	tok_expect(t, "{");
 	var vhead Variant;
@@ -871,6 +936,7 @@ fn parse_enum(t **Token) {
 	tok_expect(t, "}");
 	ty.variants = vhead.next;
 	ty.size = ((8 + maxpay + 7) & ~7) as int;
+	ntype_vars = saved_tv;
 }
 
 fn trunc_to(v i64, ty *Type) i64 {
