@@ -1,6 +1,7 @@
 import "comp.qela";
 import "diag.qela";
 import "../std/fmt.qela";
+import "comptime.qela";
 
 var ty_void *Type;
 var ty_bool *Type;
@@ -821,6 +822,17 @@ fn add_type(n *Node) {
 		return;
 	}
 	if (k == ND_STRLIT) { n.ty = type_str(); return; }
+	if (k == ND_COMPTIME) {
+		var cv ComptimeVal = comptime_eval(n);
+		if (cv.kind == CV_INT) {
+			n.val = cv.num;
+			n.ty = ty_i64;
+			return;
+		}
+		if (cv.kind == CV_STR) { n.ty = type_str(); return; }
+		n.ty = ty_void;
+		return;
+	}
 	if (k == ND_VAR) { n.ty = n.varp.ty; return; }
 	if (k == ND_TYPEEXPR) { n.ty = ty_type; return; }
 	if (k == ND_SIZEOF) {
