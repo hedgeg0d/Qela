@@ -44,6 +44,11 @@ fn ilist_push(l *I64List, v i64) {
 	l.n = l.n + 1;
 }
 
+fn ilist_set(l *I64List, i i64, v i64) {
+	while (l.n <= i) { ilist_push(l, 0); }
+	l.p[i] = v;
+}
+
 struct CallFixup;
 struct CallFixup { next *CallFixup, at i64, name str, pos i64, }
 
@@ -248,15 +253,49 @@ fn setcc(cc i64) {
 	modrm(3, RAX, RAX);
 }
 
-fn jump(opcode2 i64) i64 {
-	if (opcode2 != 0) { b1(0x0f); b1(opcode2); } else { b1(0xe9); }
-	var at i64 = code.n;
-	b4(0);
-	return at;
+// Branches are emitted long, then the whole unit is emitted again with the
+// ones that turned out to be within a byte encoded short. Branch ids come from
+// the walk order of the tree, so they name the same branch in every pass, and
+// shortening only ever brings targets closer, so the choice never has to be
+// taken back.
+var br_at I64List;
+var br_short I64List;
+var br_n i64;
+var br_grew bool;
+
+fn br_is_short(id i64) bool {
+	return id < br_short.n && br_short.p[id] != 0;
 }
 
-fn patch_here(at i64) {
-	buf_patch32(&code, at, code.n - (at + 4));
+fn jump(opcode2 i64) i64 {
+	var id i64 = br_n;
+	br_n = br_n + 1;
+	if (br_is_short(id)) {
+		if (opcode2 != 0) { b1(opcode2 - 0x10); } else { b1(0xeb); }
+		ilist_set(&br_at, id, code.n);
+		b1(0);
+	} else {
+		if (opcode2 != 0) { b1(0x0f); b1(opcode2); } else { b1(0xe9); }
+		ilist_set(&br_at, id, code.n);
+		b4(0);
+	}
+	return id;
+}
+
+fn patch_here(id i64) {
+	var at i64 = br_at.p[id];
+	if (br_is_short(id)) {
+		var d8 i64 = code.n - (at + 1);
+		if (d8 < -128 || d8 > 127) { die("internal: short branch out of range"); }
+		code.p[at] = (d8 & 255) as u8;
+		return;
+	}
+	var d i64 = code.n - (at + 4);
+	buf_patch32(&code, at, d);
+	if (d >= -128 && d <= 127) {
+		ilist_set(&br_short, id, 1);
+		br_grew = true;
+	}
 }
 
 fn add_call(name str, pos i64) {
@@ -1601,39 +1640,31 @@ fn gen_panic_stub(msg_id int) {
 	b1(0x0f); b1(0x05);
 }
 
-fn codegen(u *Unit, img *Image) {
-	gen_unit = u;
-	var panic_id int = u.nstrs;
-	var bytes_off *i64 = arena_alloc((u.nstrs as i64 + 1) * 8, 8) as *i64;
-	str_off = arena_alloc((u.nstrs as i64 + 1) * 8, 8) as *i64;
+fn reset_code() {
+	code.n = 0;
+	br_n = 0;
+	br_at.n = 0;
+	br_grew = false;
+	bounds_checks.n = 0;
+	coro_switch_refs.n = 0;
+	coro_switch_at = -1;
+	coro_stub_refs.n = 0;
+	coro_stub_at = -1;
+	gc_base_refs.n = 0;
+	gc_end_refs.n = 0;
+	calls_head = 0 as *CallFixup;
+	calls_tail = 0 as *CallFixup;
+	strrefs_head = 0 as *StrFixup;
+	strrefs_tail = 0 as *StrFixup;
+	datarefs_head = 0 as *DataFixup;
+	datarefs_tail = 0 as *DataFixup;
+	funcaddrs_head = 0 as *CallFixup;
+	funcaddrs_tail = 0 as *CallFixup;
+	lines_head = 0 as *LineRow;
+	lines_tail = 0 as *LineRow;
+}
 
-	var s *StrLit = u.strs;
-	while (s as i64 != 0) {
-		bytes_off[s.id] = rodata.n;
-		buf_bytes(&rodata, s.s.ptr, s.s.len);
-		buf_u8(&rodata, 0);
-		s = s.next;
-	}
-	while ((rodata.n & 7) != 0) { buf_u8(&rodata, 0); }
-
-	s = u.strs;
-	while (s as i64 != 0) {
-		str_off[s.id] = rodata.n;
-		buf_u64(&rodata, 0);
-		buf_u64(&rodata, s.s.len);
-		s = s.next;
-	}
-
-	layout_globals(u.globals);
-	var nph int = 1;
-	if (gdata.n + bss_size > 0) { nph = 2; }
-	var hdr i64 = EHDR_SZ + PHDR_SZ * (nph as i64);
-
-	var main_fn *Func = find_func("main");
-	if (main_fn as i64 == 0) { die("error: no 'main' function"); }
-	if (main_fn.nparams != 0 && main_fn.nparams != 2) {
-		die("error: 'main' takes no parameters or (argc, argv)");
-	}
+fn emit_code(u *Unit, main_fn *Func, panic_id int, hdr i64) {
 	if (main_fn.nparams == 2) {
 		b1(0x48); b1(0x8b); b1(0x3c); b1(0x24);
 		b1(0x48); b1(0x8d); b1(0x74); b1(0x24); b1(8);
@@ -1688,6 +1719,48 @@ fn codegen(u *Unit, img *Image) {
 	// The data segment sits right after code and rodata, so the code has to
 	// end on a word boundary or every global lands misaligned.
 	while ((code.n & 7) != 0) { b1(0x90); }
+}
+
+fn codegen(u *Unit, img *Image) {
+	gen_unit = u;
+	var panic_id int = u.nstrs;
+	var bytes_off *i64 = arena_alloc((u.nstrs as i64 + 1) * 8, 8) as *i64;
+	str_off = arena_alloc((u.nstrs as i64 + 1) * 8, 8) as *i64;
+
+	var s *StrLit = u.strs;
+	while (s as i64 != 0) {
+		bytes_off[s.id] = rodata.n;
+		buf_bytes(&rodata, s.s.ptr, s.s.len);
+		buf_u8(&rodata, 0);
+		s = s.next;
+	}
+	while ((rodata.n & 7) != 0) { buf_u8(&rodata, 0); }
+
+	s = u.strs;
+	while (s as i64 != 0) {
+		str_off[s.id] = rodata.n;
+		buf_u64(&rodata, 0);
+		buf_u64(&rodata, s.s.len);
+		s = s.next;
+	}
+
+	layout_globals(u.globals);
+	var nph int = 1;
+	if (gdata.n + bss_size > 0) { nph = 2; }
+	var hdr i64 = EHDR_SZ + PHDR_SZ * (nph as i64);
+
+	var main_fn *Func = find_func("main");
+	if (main_fn as i64 == 0) { die("error: no 'main' function"); }
+	if (main_fn.nparams != 0 && main_fn.nparams != 2) {
+		die("error: 'main' takes no parameters or (argc, argv)");
+	}
+	var pass int = 0;
+	while (true) {
+		reset_code();
+		emit_code(u, main_fn, panic_id, hdr);
+		if (!br_grew || pass >= 8) { break; }
+		pass = pass + 1;
+	}
 
 	var dbase i64 = ELF_BASE + SEG_GAP + hdr + code.n + rodata.n;
 	patch_abs(&gc_base_refs, dbase);
