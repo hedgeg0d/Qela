@@ -1,0 +1,32 @@
+// stage1-only
+// expect-exit: 42
+// A closed channel drains first: the buffered values come out, then recv
+// yields zeroes, which the caller tells apart with chan_is_closed.
+import "std/chan.qela";
+
+var ch Chan(i64);
+var ngot i64 = 0;
+
+fn sender() {
+	var i i64 = 0;
+	while (i < 3) { ch <- i + 1; i = i + 1; }
+	chan_close(&ch);
+}
+
+fn receiver() {
+	var v i64 = <-ch;
+	while (true) {
+		if (v == 0 && chan_is_closed(&ch)) { return; }
+		ngot = ngot + 1;
+		v = <-ch;
+	}
+}
+
+fn main() int {
+	chan_init(&ch, 3);
+	spawn sender();
+	spawn receiver();
+	coro_run_all();
+	if (ngot != 3) { return 1; }
+	return 42;
+}
