@@ -1,6 +1,7 @@
 import "comp.qela";
 import "diag.qela";
 import "type.qela";
+import "../std/io.qela";
 
 struct Scope;
 struct VarScope;
@@ -145,6 +146,7 @@ fn parse_type(t **Token) *Type {
 		}
 		if ((*t).kind != TK_NUM) { error_at((*t).pos, "expected array length"); }
 		var len i64 = (*t).val;
+		*t = (*t).next;
 		tok_expect(t, "]");
 		var base *Type = parse_type(t);
 		return type_array(base, len);
@@ -462,7 +464,9 @@ fn parse_decl(t **Token) *Node {
 		lhs.varp = v;
 		n.lhs = bin_node(ND_ASSIGN, lhs, rhs, p);
 	} else {
-		declare_var(name, ty, p);
+		var z *Node = new_node(ND_ZERO, p);
+		z.varp = declare_var(name, ty, p);
+		n.lhs = z;
 	}
 	tok_expect(t, ";");
 	return n;
@@ -790,18 +794,29 @@ fn parse(tok *Token) *Unit {
 		if (tok_eq(tok, "enum")) { parse_enum(&tok); continue; }
 		if (tok_eq(tok, "let") || tok_eq(tok, "var")) { parse_global(&tok); continue; }
 		if (tok_eq(tok, "import")) {
+			var ipos i64 = tok.pos;
 			tok = tok.next;
 			if (tok.kind != TK_STR) { error_at(tok.pos, "import needs a string path"); }
 			var raw str = tok.sval;
 			tok = tok.next;
 			tok_expect(&tok, ";");
-			var buf [4096]u8;
-			var dir_len i64 = 0;
-			// resolve path relative to importing file
-			var i i64 = 0;
-			while (i < raw.len) { buf[i + dir_len] = raw.ptr[i]; i = i + 1; }
-			buf[i + dir_len] = 0;
-			tok = tok;
+
+			var pb Buf;
+			fmt_str(&pb, diag_file_dir(diag_file_of(ipos)));
+			fmt_str(&pb, raw);
+			var path str = buf_str(&pb);
+
+			if (!diag_already_imported(path)) {
+				var isrc str = read_file(path);
+				var fid int = diag_add_file(path, isrc);
+				var ihead *Token = lex(isrc, (fid as i64) << FILE_SHIFT);
+				var itail *Token = ihead;
+				while (itail.next as i64 != 0 && itail.next.kind != TK_EOF) {
+					itail = itail.next;
+				}
+				itail.next = tok;
+				tok = ihead;
+			}
 			continue;
 		}
 		tail.next = parse_function(&tok);
@@ -814,7 +829,25 @@ fn parse(tok *Token) *Unit {
 
 	var f *Func = head.next;
 	while (f as i64 != 0) {
-		type_func(f);
+		if (find_func(f.name) as i64 != f as i64) {
+			emsg("redefinition of function '"); emsg(f.name); emsg("'"); efail(f.pos);
+		}
+		if (f.nct == 0) {
+			type_func(f);
+
+			var off i64 = 0;
+			var v *Var = f.locals;
+			while (v as i64 != 0) {
+				var size i64 = v.ty.size as i64;
+				var al i64 = v.ty.align as i64;
+				if (v.by_ref) { size = 8; al = 8; }
+				else if (size < 8) { size = 8; }
+				off = (off + size + al - 1) & ~(al - 1);
+				v.offset = off as int;
+				v = v.next;
+			}
+			f.stack_size = ((off + 15) & ~15) as int;
+		}
 		f = f.next;
 	}
 

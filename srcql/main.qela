@@ -1,6 +1,68 @@
 import "comp.qela";
 import "diag.qela";
+import "lex.qela";
+import "parse.qela";
+import "type.qela";
+import "codegen.qela";
+import "elf.qela";
+import "../std/io.qela";
 
-fn main() int {
+fn default_output(path str) str {
+	var end i64 = path.len;
+	if (end > 5 && path.ptr[end - 5] == '.' && path.ptr[end - 4] == 'q' &&
+	    path.ptr[end - 3] == 'e' && path.ptr[end - 2] == 'l' && path.ptr[end - 1] == 'a') {
+		end = end - 5;
+	}
+	var start i64 = 0;
+	var i i64 = 0;
+	while (i < end) {
+		if (path.ptr[i] == '/') { start = i + 1; }
+		i = i + 1;
+	}
+	if (start == end) { return "a.out"; }
+	return str_slice(path, start, end);
+}
+
+fn main(argc int, argv **u8) int {
+	var input str;
+	var output str;
+	var have_input bool = false;
+	var have_output bool = false;
+
+	var i int = 1;
+	while (i < argc) {
+		var a str = str_from_cstr(argv[i]);
+		if (str_eq(a, "-o")) {
+			i = i + 1;
+			if (i == argc) { die("error: -o needs an argument"); }
+			output = str_from_cstr(argv[i]);
+			have_output = true;
+		} else if (str_eq(a, "--no-bounds-checks")) {
+			opt_no_bounds = true;
+		} else if (a.len > 0 && a.ptr[0] == '-') {
+			die("error: unknown option");
+		} else if (!have_input) {
+			input = a;
+			have_input = true;
+		} else {
+			die("error: more than one input file");
+		}
+		i = i + 1;
+	}
+
+	if (!have_input) {
+		eprint("usage: qela <file.qela> [-o output]\n");
+		return 2;
+	}
+	if (!have_output) { output = default_output(input); }
+
+	var src str = read_file(input);
+	var file int = diag_add_file(input, src);
+	set_module_dir(input);
+
+	var unit *Unit = parse(lex(src, (file as i64) << FILE_SHIFT));
+	var img Image;
+	codegen(unit, &img);
+	write_elf(output, &img);
 	return 0;
 }

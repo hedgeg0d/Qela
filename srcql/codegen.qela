@@ -1,0 +1,1112 @@
+import "comp.qela";
+import "diag.qela";
+import "type.qela";
+
+let RAX = 0;
+let RCX = 1;
+let RDX = 2;
+let RSP = 4;
+let RBP = 5;
+let RSI = 6;
+let RDI = 7;
+let R8  = 8;
+let R9  = 9;
+let R10 = 10;
+
+fn call_reg(i int) int {
+	if (i == 0) { return RDI; }
+	if (i == 1) { return RSI; }
+	if (i == 2) { return RDX; }
+	if (i == 3) { return RCX; }
+	if (i == 4) { return R8; }
+	return R9;
+}
+
+fn sys_reg(i int) int {
+	if (i == 3) { return R10; }
+	return call_reg(i);
+}
+
+struct I64List { p *i64, n i64, cap i64, }
+
+fn ilist_push(l *I64List, v i64) {
+	if (l.n == l.cap) {
+		var cap i64 = 8;
+		if (l.cap != 0) { cap = l.cap * 2; }
+		var q *i64 = arena_alloc(cap * 8, 8) as *i64;
+		var i i64 = 0;
+		while (i < l.n) { q[i] = l.p[i]; i = i + 1; }
+		l.p = q;
+		l.cap = cap;
+	}
+	l.p[l.n] = v;
+	l.n = l.n + 1;
+}
+
+struct CallFixup;
+struct CallFixup { next *CallFixup, at i64, name str, pos i64, }
+
+struct StrFixup;
+struct StrFixup { next *StrFixup, at i64, id int, }
+
+struct DataFixup;
+struct DataFixup { next *DataFixup, at i64, varp *Var, }
+
+struct Loop;
+struct Loop { prev *Loop, brk I64List, cont I64List, depth int, }
+
+struct DeferScope;
+struct DeferScope { prev *DeferScope, list *Node, depth int, }
+
+var code Buf;
+var rodata Buf;
+var gdata Buf;
+var bss_size i64;
+var depth int;
+var cur_loop *Loop;
+var gen_fn *Func;
+var cur_defers *DeferScope;
+var defer_depth int;
+
+var calls_head *CallFixup;
+var calls_tail *CallFixup;
+var strrefs_head *StrFixup;
+var strrefs_tail *StrFixup;
+var datarefs_head *DataFixup;
+var datarefs_tail *DataFixup;
+var str_off *i64;
+var bounds_checks I64List;
+
+var opt_no_bounds bool = false;
+
+fn b1(v i64) { buf_u8(&code, (v & 255) as u8); }
+fn b4(v i64) { buf_u32(&code, v); }
+
+fn rex_w(reg int, rm int) {
+	var v i64 = 0x48;
+	if (reg >= 8) { v = v | 4; }
+	if (rm >= 8) { v = v | 1; }
+	b1(v);
+}
+
+fn modrm(mod int, reg int, rm int) {
+	b1(((mod as i64) << 6) | (((reg as i64) & 7) << 3) | ((rm as i64) & 7));
+}
+
+fn push_reg(r int) {
+	if (r >= 8) { b1(0x41); }
+	b1(0x50 + ((r as i64) & 7));
+	depth = depth + 1;
+}
+
+fn pop_reg(r int) {
+	if (r >= 8) { b1(0x41); }
+	b1(0x58 + ((r as i64) & 7));
+	depth = depth - 1;
+}
+
+fn mov_reg_imm(r int, v i64) {
+	if (v == 0) {
+		if (r >= 8) { b1(0x45); }
+		b1(0x31);
+		modrm(3, r, r);
+		return;
+	}
+	if (v > 0 && v <= 0xffffffff) {
+		if (r >= 8) { b1(0x41); }
+		b1(0xb8 + ((r as i64) & 7));
+		b4(v);
+		return;
+	}
+	if (v >= -2147483648 && v <= 2147483647) {
+		rex_w(0, r);
+		b1(0xc7);
+		modrm(3, 0, r);
+		b4(v);
+		return;
+	}
+	rex_w(0, r);
+	b1(0xb8 + ((r as i64) & 7));
+	buf_u64(&code, v);
+}
+
+fn mov_reg_reg(dst int, src int) {
+	if (dst == src) { return; }
+	rex_w(src, dst);
+	b1(0x89);
+	modrm(3, src, dst);
+}
+
+fn rbp_mem(op i64, reg int, disp i64) {
+	rex_w(reg, RBP);
+	b1(op);
+	if (disp >= -128 && disp <= 127) {
+		modrm(1, reg, RBP);
+		b1(disp);
+	} else {
+		modrm(2, reg, RBP);
+		b4(disp);
+	}
+}
+
+fn lea_local(reg int, off i64) { rbp_mem(0x8d, reg, -off); }
+fn ld_local(reg int, off i64) { rbp_mem(0x8b, reg, -off); }
+fn st_local(off i64, reg int) { rbp_mem(0x89, reg, -off); }
+
+fn ld_at_rax(reg int, disp i64) {
+	rex_w(reg, RAX);
+	b1(0x8b);
+	if (disp == 0) {
+		modrm(0, reg, RAX);
+	} else {
+		modrm(1, reg, RAX);
+		b1(disp);
+	}
+}
+
+fn push_at_rax(disp i64) {
+	b1(0xff);
+	if (disp == 0) {
+		modrm(0, 6, RAX);
+	} else {
+		modrm(1, 6, RAX);
+		b1(disp);
+	}
+	depth = depth + 1;
+}
+
+fn load(ty *Type) {
+	if (ty.size == 1) {
+		b1(0x48); b1(0x0f);
+		if (ty.is_unsigned || ty.kind == TY_BOOL) { b1(0xb6); } else { b1(0xbe); }
+		modrm(0, RAX, RAX);
+		return;
+	}
+	if (ty.size == 2) {
+		b1(0x48); b1(0x0f);
+		if (ty.is_unsigned) { b1(0xb7); } else { b1(0xbf); }
+		modrm(0, RAX, RAX);
+		return;
+	}
+	if (ty.size == 4) {
+		if (ty.is_unsigned) { b1(0x8b); } else { b1(0x48); b1(0x63); }
+		modrm(0, RAX, RAX);
+		return;
+	}
+	b1(0x48); b1(0x8b);
+	modrm(0, RAX, RAX);
+}
+
+fn store(ty *Type) {
+	pop_reg(RDI);
+	if (ty.size == 1) { b1(0x88); modrm(0, RAX, RDI); return; }
+	if (ty.size == 2) { b1(0x66); b1(0x89); modrm(0, RAX, RDI); return; }
+	if (ty.size == 4) { b1(0x89); modrm(0, RAX, RDI); return; }
+	b1(0x48); b1(0x89); modrm(0, RAX, RDI);
+}
+
+fn truncate_to(ty *Type) {
+	if (ty.size == 1) {
+		b1(0x48); b1(0x0f);
+		if (ty.is_unsigned || ty.kind == TY_BOOL) { b1(0xb6); } else { b1(0xbe); }
+		modrm(3, RAX, RAX);
+		return;
+	}
+	if (ty.size == 2) {
+		b1(0x48); b1(0x0f);
+		if (ty.is_unsigned) { b1(0xb7); } else { b1(0xbf); }
+		modrm(3, RAX, RAX);
+		return;
+	}
+	if (ty.size == 4) {
+		if (ty.is_unsigned) {
+			b1(0x89); modrm(3, RAX, RAX);
+		} else {
+			b1(0x48); b1(0x63); modrm(3, RAX, RAX);
+		}
+	}
+}
+
+fn test_rax() {
+	b1(0x48); b1(0x85);
+	modrm(3, RAX, RAX);
+}
+
+fn setcc(cc i64) {
+	b1(0x0f);
+	b1(cc);
+	modrm(3, 0, RAX);
+	b1(0x48); b1(0x0f); b1(0xb6);
+	modrm(3, RAX, RAX);
+}
+
+fn jump(opcode2 i64) i64 {
+	if (opcode2 != 0) { b1(0x0f); b1(opcode2); } else { b1(0xe9); }
+	var at i64 = code.n;
+	b4(0);
+	return at;
+}
+
+fn patch_here(at i64) {
+	buf_patch32(&code, at, code.n - (at + 4));
+}
+
+fn add_call(name str, pos i64) {
+	b1(0xe8);
+	var f *CallFixup = arena_alloc(sizeof(CallFixup), 8) as *CallFixup;
+	f.at = code.n;
+	f.name = name;
+	f.pos = pos;
+	if (calls_tail as i64 == 0) { calls_head = f; } else { calls_tail.next = f; }
+	calls_tail = f;
+	b4(0);
+}
+
+fn add_strref(reg int, id int) {
+	rex_w(reg, RBP);
+	b1(0x8d);
+	modrm(0, reg, RBP);
+	var f *StrFixup = arena_alloc(sizeof(StrFixup), 8) as *StrFixup;
+	f.at = code.n;
+	f.id = id;
+	if (strrefs_tail as i64 == 0) { strrefs_head = f; } else { strrefs_tail.next = f; }
+	strrefs_tail = f;
+	b4(0);
+}
+
+fn add_dataref(v *Var) {
+	b1(0x48); b1(0x8d);
+	modrm(0, RAX, RBP);
+	var f *DataFixup = arena_alloc(sizeof(DataFixup), 8) as *DataFixup;
+	f.at = code.n;
+	f.varp = v;
+	if (datarefs_tail as i64 == 0) { datarefs_head = f; } else { datarefs_tail.next = f; }
+	datarefs_tail = f;
+	b4(0);
+}
+
+fn add_rax_imm(v i64) {
+	if (v == 0) { return; }
+	b1(0x48);
+	if (v >= -128 && v <= 127) {
+		b1(0x83);
+		modrm(3, 0, RAX);
+		b1(v);
+	} else {
+		b1(0x81);
+		modrm(3, 0, RAX);
+		b4(v);
+	}
+}
+
+fn scale_by(size int) {
+	if (size == 1) { return; }
+	mov_reg_imm(RCX, size as i64);
+	b1(0x48); b1(0x0f); b1(0xaf);
+	modrm(3, RAX, RCX);
+}
+
+fn jump_bounds(cc i64) {
+	b1(0x0f);
+	b1(cc);
+	ilist_push(&bounds_checks, code.n);
+	b4(0);
+}
+
+fn by_ref_ty(ty *Type) bool {
+	return is_aggregate(ty) && ty.size > 16;
+}
+
+fn copy_rsi_rdi(size int) {
+	mov_reg_imm(RCX, size as i64);
+	b1(0xf3); b1(0xa4);
+}
+
+fn copy_aggregate(size int) {
+	pop_reg(RDI);
+	mov_reg_reg(RSI, RAX);
+	push_reg(RDI);
+	mov_reg_imm(RCX, size as i64);
+	b1(0xf3); b1(0xa4);
+	pop_reg(RAX);
+}
+
+fn gen_addr(n *Node) {
+	var k int = n.kind;
+	if (k == ND_VAR) {
+		if (n.varp.is_global) { add_dataref(n.varp); }
+		else if (n.varp.by_ref) { ld_local(RAX, n.varp.offset as i64); }
+		else { lea_local(RAX, n.varp.offset as i64); }
+		return;
+	}
+	if (k == ND_DEREF) { gen_expr(n.lhs); return; }
+	if (k == ND_MEMBER) {
+		if (n.lhs.ty.kind == TY_PTR) { gen_expr(n.lhs); } else { gen_addr(n.lhs); }
+		add_rax_imm(n.member.offset as i64);
+		return;
+	}
+	if (k == ND_INDEX) {
+		var lt *Type = n.lhs.ty;
+		if (lt.kind == TY_SLICE) {
+			gen_addr(n.lhs);
+			push_at_rax(0);
+			push_at_rax(8);
+			gen_expr(n.rhs);
+			pop_reg(RDI);
+			if (!opt_no_bounds) {
+				rex_w(RDI, RAX);
+				b1(0x39);
+				modrm(3, RDI, RAX);
+				jump_bounds(0x83);
+			}
+		} else {
+			if (lt.kind == TY_ARRAY) { gen_addr(n.lhs); } else { gen_expr(n.lhs); }
+			push_reg(RAX);
+			gen_expr(n.rhs);
+			if (lt.kind == TY_ARRAY && !opt_no_bounds) {
+				b1(0x48); b1(0x3d);
+				b4(lt.len);
+				jump_bounds(0x83);
+			}
+		}
+		scale_by(lt.base.size);
+		pop_reg(RDI);
+		rex_w(RDI, RAX);
+		b1(0x01);
+		modrm(3, RDI, RAX);
+		return;
+	}
+	if (k == ND_SLICE) {
+		var lt *Type = n.lhs.ty;
+		var off i64 = n.tmp.offset as i64;
+		var elem int = lt.base.size;
+
+		gen_addr(n.lhs);
+		if (lt.kind == TY_SLICE) {
+			ld_at_rax(RDI, 0);
+			st_local(off, RDI);
+			ld_at_rax(RDI, 8);
+			st_local(off - 8, RDI);
+		} else {
+			st_local(off, RAX);
+			mov_reg_imm(RDI, lt.len);
+			st_local(off - 8, RDI);
+		}
+
+		if (n.rhs as i64 != 0) { gen_expr(n.rhs); } else { mov_reg_imm(RAX, 0); }
+		push_reg(RAX);
+
+		if (n.then as i64 != 0) { gen_expr(n.then); } else { ld_local(RAX, off - 8); }
+		pop_reg(RDI);
+
+		if (!opt_no_bounds) {
+			rbp_mem(0x3b, RAX, -(off - 8));
+			jump_bounds(0x87);
+			rex_w(RAX, RDI);
+			b1(0x39);
+			modrm(3, RAX, RDI);
+			jump_bounds(0x87);
+		}
+
+		rex_w(RDI, RAX);
+		b1(0x29);
+		modrm(3, RDI, RAX);
+		st_local(off - 8, RAX);
+
+		mov_reg_reg(RAX, RDI);
+		scale_by(elem);
+		rbp_mem(0x03, RAX, -off);
+		st_local(off, RAX);
+
+		lea_local(RAX, off);
+		return;
+	}
+	if (is_aggregate(n.ty)) { gen_expr(n); return; }
+	error_at(n.pos, "not an addressable expression");
+}
+
+fn gen_lvalue(n *Node) {
+	gen_addr(n);
+	if (!is_aggregate(n.ty)) { load(n.ty); }
+}
+
+fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64) {
+	var dest [14]int;
+	var nd int = 0;
+	var ri int = 0;
+
+	if (hidden >= 0) {
+		lea_local(RAX, hidden);
+		push_reg(RAX);
+		if (sys) { dest[nd] = sys_reg(ri); } else { dest[nd] = call_reg(ri); }
+		nd = nd + 1;
+		ri = ri + 1;
+	}
+
+	var a *Node = n.args;
+	while (a as i64 != 0) {
+		gen_expr(a);
+		if (by_ref_ty(a.ty)) {
+			mov_reg_reg(RSI, RAX);
+			lea_local(RDI, a.tmp.offset as i64);
+			copy_rsi_rdi(a.ty.size);
+			lea_local(RAX, a.tmp.offset as i64);
+			push_reg(RAX);
+			if (sys) { dest[nd] = sys_reg(ri); } else { dest[nd] = call_reg(ri); }
+			nd = nd + 1;
+			ri = ri + 1;
+		} else if (is_aggregate(a.ty)) {
+			push_at_rax(0);
+			if (first_in_rax && nd == 0) {
+				dest[nd] = RAX;
+			} else {
+				if (sys) { dest[nd] = sys_reg(ri); } else { dest[nd] = call_reg(ri); }
+				ri = ri + 1;
+			}
+			nd = nd + 1;
+			if (a.ty.size > 8) {
+				push_at_rax(8);
+				if (sys) { dest[nd] = sys_reg(ri); } else { dest[nd] = call_reg(ri); }
+				nd = nd + 1;
+				ri = ri + 1;
+			}
+		} else {
+			push_reg(RAX);
+			if (first_in_rax && nd == 0) {
+				dest[nd] = RAX;
+			} else {
+				if (sys) { dest[nd] = sys_reg(ri); } else { dest[nd] = call_reg(ri); }
+				ri = ri + 1;
+			}
+			nd = nd + 1;
+		}
+		a = a.next;
+	}
+	while (nd > 0) {
+		nd = nd - 1;
+		pop_reg(dest[nd]);
+	}
+}
+
+fn gen_binop(n *Node) {
+	var t *Type = n.ty;
+	var k int = n.kind;
+
+	if (k == ND_ADD) { rex_w(RDI, RAX); b1(0x01); modrm(3, RDI, RAX); return; }
+	if (k == ND_SUB) { rex_w(RDI, RAX); b1(0x29); modrm(3, RDI, RAX); return; }
+	if (k == ND_MUL) { b1(0x48); b1(0x0f); b1(0xaf); modrm(3, RAX, RDI); return; }
+	if (k == ND_DIV || k == ND_MOD) {
+		if (t.is_unsigned) {
+			b1(0x31); modrm(3, RDX, RDX);
+			b1(0x48); b1(0xf7); modrm(3, 6, RDI);
+		} else {
+			b1(0x48); b1(0x99);
+			b1(0x48); b1(0xf7); modrm(3, 7, RDI);
+		}
+		if (k == ND_MOD) { mov_reg_reg(RAX, RDX); }
+		return;
+	}
+	if (k == ND_BITAND) { rex_w(RDI, RAX); b1(0x21); modrm(3, RDI, RAX); return; }
+	if (k == ND_BITOR)  { rex_w(RDI, RAX); b1(0x09); modrm(3, RDI, RAX); return; }
+	if (k == ND_BITXOR) { rex_w(RDI, RAX); b1(0x31); modrm(3, RDI, RAX); return; }
+	if (k == ND_SHL || k == ND_SHR) {
+		mov_reg_reg(RCX, RDI);
+		b1(0x48); b1(0xd3);
+		var ext int = 7;
+		if (k == ND_SHL) { ext = 4; } else if (t.is_unsigned) { ext = 5; }
+		modrm(3, ext, RAX);
+		return;
+	}
+	if (k == ND_EQ || k == ND_NE || k == ND_LT || k == ND_LE) {
+		rex_w(RDI, RAX);
+		b1(0x39);
+		modrm(3, RDI, RAX);
+		var uns bool = n.lhs.ty.is_unsigned || n.lhs.ty.kind == TY_PTR;
+		var cc i64 = 0x94;
+		if (k == ND_NE) { cc = 0x95; }
+		else if (k == ND_LT) { if (uns) { cc = 0x92; } else { cc = 0x9c; } }
+		else if (k == ND_LE) { if (uns) { cc = 0x96; } else { cc = 0x9e; } }
+		setcc(cc);
+		return;
+	}
+	error_at(n.pos, "invalid expression");
+}
+
+fn gen_enumlit(n *Node) {
+	var off i64 = n.tmp.offset as i64;
+	mov_reg_imm(RAX, n.variant.tag as i64);
+	st_local(off, RAX);
+
+	var f *Member = n.variant.fields;
+	var a *Node = n.args;
+	while (a as i64 != 0) {
+		lea_local(RDI, off - (f.offset as i64));
+		push_reg(RDI);
+		gen_expr(a);
+		if (is_aggregate(f.ty)) { copy_aggregate(f.ty.size); } else { store(f.ty); }
+		f = f.next;
+		a = a.next;
+	}
+	lea_local(RAX, off);
+}
+
+fn gen_structlit(n *Node) {
+	var off i64 = n.tmp.offset as i64;
+	var nmembers int = 0;
+	var m *Member = n.ty.members;
+	while (m as i64 != 0) { nmembers = nmembers + 1; m = m.next; }
+
+	if (n.nargs < nmembers) {
+		lea_local(RDI, off);
+		mov_reg_imm(RAX, 0);
+		mov_reg_imm(RCX, n.ty.size as i64);
+		b1(0xf3); b1(0xaa);
+	}
+	var a *Node = n.args;
+	while (a as i64 != 0) {
+		lea_local(RDI, off - (a.member.offset as i64));
+		push_reg(RDI);
+		gen_expr(a.lhs);
+		if (is_aggregate(a.member.ty)) {
+			copy_aggregate(a.member.ty.size);
+		} else {
+			store(a.member.ty);
+		}
+		a = a.next;
+	}
+	lea_local(RAX, off);
+}
+
+fn gen_call(n *Node) {
+	var ret_mem bool = is_aggregate(n.ty) && n.ty.size > 16;
+	var hidden i64 = -1;
+	if (ret_mem) { hidden = n.tmp.offset as i64; }
+	gen_args(n, false, false, hidden);
+
+	var odd bool = (depth & 1) != 0;
+	if (odd) {
+		b1(0x48); b1(0x83); modrm(3, 5, RSP); b1(8);
+	}
+	add_call(n.name, n.pos);
+	if (odd) {
+		b1(0x48); b1(0x83); modrm(3, 0, RSP); b1(8);
+	}
+	if (is_aggregate(n.ty) && !ret_mem) {
+		var off i64 = n.tmp.offset as i64;
+		st_local(off, RAX);
+		if (n.ty.size > 8) { st_local(off - 8, RDX); }
+		lea_local(RAX, off);
+	}
+}
+
+fn gen_logical(n *Node) {
+	gen_expr(n.lhs);
+	test_rax();
+	var cc i64 = 0x85;
+	if (n.kind == ND_AND) { cc = 0x84; }
+	var skip i64 = jump(cc);
+	gen_expr(n.rhs);
+	test_rax();
+	var skip2 i64 = jump(cc);
+	if (n.kind == ND_AND) { mov_reg_imm(RAX, 1); } else { mov_reg_imm(RAX, 0); }
+	var end i64 = jump(0);
+	patch_here(skip);
+	patch_here(skip2);
+	if (n.kind == ND_AND) { mov_reg_imm(RAX, 0); } else { mov_reg_imm(RAX, 1); }
+	patch_here(end);
+}
+
+fn gen_opassign(n *Node) {
+	gen_addr(n.lhs);
+	push_reg(RAX);
+	load(n.lhs.ty);
+	push_reg(RAX);
+	gen_expr(n.rhs);
+	if (n.lhs.ty.kind == TY_PTR) { scale_by(n.lhs.ty.base.size); }
+	mov_reg_reg(RDI, RAX);
+	pop_reg(RAX);
+
+	var op Node;
+	op.kind = n.val as int;
+	op.ty = n.lhs.ty;
+	op.lhs = n.lhs;
+	op.pos = n.pos;
+	gen_binop(&op);
+
+	truncate_to(n.lhs.ty);
+	store(n.lhs.ty);
+}
+
+fn gen_expr(n *Node) {
+	var k int = n.kind;
+
+	if (k == ND_NUM) { mov_reg_imm(RAX, n.val); return; }
+	if (k == ND_STRLIT) { add_strref(RAX, n.val as int); return; }
+	if (k == ND_COMPTIME) { mov_reg_imm(RAX, n.val); return; }
+	if (k == ND_SIZEOF) { mov_reg_imm(RAX, n.typeval.size as i64); return; }
+	if (k == ND_VAR || k == ND_MEMBER || k == ND_INDEX || k == ND_SLICE) {
+		gen_lvalue(n);
+		return;
+	}
+	if (k == ND_ADDR) { gen_addr(n.lhs); return; }
+	if (k == ND_DEREF) {
+		gen_expr(n.lhs);
+		if (!is_aggregate(n.ty)) { load(n.ty); }
+		return;
+	}
+	if (k == ND_CAST) {
+		gen_expr(n.lhs);
+		if (n.ty.kind == TY_BOOL) {
+			test_rax();
+			setcc(0x95);
+		} else {
+			truncate_to(n.ty);
+		}
+		return;
+	}
+	if (k == ND_ASSIGN) {
+		gen_addr(n.lhs);
+		push_reg(RAX);
+		gen_expr(n.rhs);
+		if (is_aggregate(n.lhs.ty)) {
+			copy_aggregate(n.lhs.ty.size);
+		} else {
+			store(n.lhs.ty);
+		}
+		return;
+	}
+	if (k == ND_OPASSIGN) { gen_opassign(n); return; }
+	if (k == ND_ENUMLIT) { gen_enumlit(n); return; }
+	if (k == ND_STRUCTLIT) { gen_structlit(n); return; }
+	if (k == ND_ZERO) {
+		var off i64 = n.varp.offset as i64;
+		var size int = n.varp.ty.size;
+		if (size <= 8 && !is_aggregate(n.varp.ty)) {
+			mov_reg_imm(RAX, 0);
+			st_local(off, RAX);
+		} else {
+			lea_local(RDI, off);
+			mov_reg_imm(RAX, 0);
+			mov_reg_imm(RCX, size as i64);
+			b1(0xf3); b1(0xaa);
+		}
+		return;
+	}
+	if (k == ND_COMMA) { gen_expr(n.lhs); gen_expr(n.rhs); return; }
+	if (k == ND_NEG) {
+		gen_expr(n.lhs);
+		b1(0x48); b1(0xf7); modrm(3, 3, RAX);
+		return;
+	}
+	if (k == ND_BITNOT) {
+		gen_expr(n.lhs);
+		b1(0x48); b1(0xf7); modrm(3, 2, RAX);
+		return;
+	}
+	if (k == ND_NOT) {
+		gen_expr(n.lhs);
+		test_rax();
+		setcc(0x94);
+		return;
+	}
+	if (k == ND_SYSCALL) {
+		gen_args(n, true, true, -1);
+		b1(0x0f); b1(0x05);
+		return;
+	}
+	if (k == ND_CALL) { gen_call(n); return; }
+	if (k == ND_AND || k == ND_OR) { gen_logical(n); return; }
+
+	var lt *Type = n.lhs.ty;
+	var rt *Type = n.rhs.ty;
+	var ptr_diff bool = k == ND_SUB && lt.kind == TY_PTR && rt.kind == TY_PTR;
+
+	gen_expr(n.rhs);
+	if (!ptr_diff && lt.kind == TY_PTR && rt.kind != TY_PTR) {
+		scale_by(lt.base.size);
+	}
+	push_reg(RAX);
+	gen_expr(n.lhs);
+	pop_reg(RDI);
+	gen_binop(n);
+
+	if (ptr_diff) {
+		mov_reg_imm(RDI, lt.base.size as i64);
+		b1(0x48); b1(0x99);
+		b1(0x48); b1(0xf7); modrm(3, 7, RDI);
+	}
+}
+
+fn run_defers(ds *DeferScope) {
+	var d *Node = ds.list;
+	while (d as i64 != 0) {
+		gen_stmt(d.lhs);
+		d = d.els;
+	}
+}
+
+fn unwind_to(target int) {
+	var ds *DeferScope = cur_defers;
+	while (ds as i64 != 0 && ds.depth > target) {
+		run_defers(ds);
+		ds = ds.prev;
+	}
+}
+
+fn gen_match(n *Node) {
+	var soff i64 = n.tmp.offset as i64;
+	gen_addr(n.cond);
+	st_local(soff, RAX);
+
+	var ends I64List;
+	var arm *Node = n.body;
+	while (arm as i64 != 0) {
+		var miss i64 = -1;
+		if (arm.name.len != 0) {
+			ld_local(RAX, soff);
+			b1(0x48); b1(0x83);
+			modrm(0, 7, RAX);
+			b1(arm.variant.tag as i64);
+			miss = jump(0x85);
+		}
+
+		var f *Member = 0 as *Member;
+		if (arm.variant as i64 != 0) { f = arm.variant.fields; }
+		var b *Node = arm.args;
+		while (b as i64 != 0) {
+			lea_local(RDI, b.varp.offset as i64);
+			push_reg(RDI);
+			ld_local(RAX, soff);
+			add_rax_imm(f.offset as i64);
+			if (is_aggregate(f.ty)) {
+				copy_aggregate(f.ty.size);
+			} else {
+				load(f.ty);
+				store(f.ty);
+			}
+			f = f.next;
+			b = b.next;
+		}
+
+		gen_stmt(arm.body);
+		if (arm.next as i64 != 0) { ilist_push(&ends, jump(0)); }
+		if (miss >= 0) { patch_here(miss); }
+		arm = arm.next;
+	}
+	var i i64 = 0;
+	while (i < ends.n) { patch_here(ends.p[i]); i = i + 1; }
+}
+
+fn gen_block(n *Node) {
+	var ds DeferScope;
+	defer_depth = defer_depth + 1;
+	ds.prev = cur_defers;
+	ds.depth = defer_depth;
+	cur_defers = &ds;
+
+	var s *Node = n.body;
+	while (s as i64 != 0) { gen_stmt(s); s = s.next; }
+
+	run_defers(&ds);
+	cur_defers = ds.prev;
+	defer_depth = defer_depth - 1;
+}
+
+fn gen_ret(n *Node) {
+	if (n.lhs as i64 != 0) {
+		gen_expr(n.lhs);
+		if (is_aggregate(n.lhs.ty)) {
+			if (gen_fn.ret_slot as i64 != 0) {
+				mov_reg_reg(RSI, RAX);
+				ld_local(RDI, gen_fn.ret_slot.offset as i64);
+				copy_rsi_rdi(n.lhs.ty.size);
+				ld_local(RAX, gen_fn.ret_slot.offset as i64);
+			} else {
+				if (n.lhs.ty.size > 8) { ld_at_rax(RDX, 8); }
+				ld_at_rax(RAX, 0);
+			}
+		}
+	} else {
+		mov_reg_imm(RAX, 0);
+	}
+	if (cur_defers as i64 != 0) {
+		var wide bool = false;
+		if (n.lhs as i64 != 0 && is_aggregate(n.lhs.ty)) {
+			wide = n.lhs.ty.size > 8 && n.lhs.ty.size <= 16;
+		}
+		push_reg(RAX);
+		if (wide) { push_reg(RDX); }
+		unwind_to(0);
+		if (wide) { pop_reg(RDX); }
+		pop_reg(RAX);
+	}
+	b1(0xc9); b1(0xc3);
+}
+
+fn gen_for(n *Node) {
+	if (n.init as i64 != 0) { gen_stmt(n.init); }
+
+	var lp Loop;
+	lp.prev = cur_loop;
+	lp.depth = defer_depth;
+	cur_loop = &lp;
+
+	var top i64 = code.n;
+	if (n.cond as i64 != 0) {
+		gen_expr(n.cond);
+		test_rax();
+		ilist_push(&lp.brk, jump(0x84));
+	}
+	gen_stmt(n.body);
+
+	var i i64 = 0;
+	while (i < lp.cont.n) { patch_here(lp.cont.p[i]); i = i + 1; }
+	if (n.step as i64 != 0) { gen_expr(n.step); }
+	b1(0xe9);
+	b4(top - (code.n + 4));
+
+	i = 0;
+	while (i < lp.brk.n) { patch_here(lp.brk.p[i]); i = i + 1; }
+	cur_loop = lp.prev;
+}
+
+fn gen_stmt(n *Node) {
+	var k int = n.kind;
+
+	if (k == ND_BLOCK) { gen_block(n); return; }
+	if (k == ND_DEFER) {
+		if (cur_defers as i64 == 0) { error_at(n.pos, "'defer' outside of a block"); }
+		n.els = cur_defers.list;
+		cur_defers.list = n;
+		return;
+	}
+	if (k == ND_MATCH) { gen_match(n); return; }
+	if (k == ND_EXPRSTMT) {
+		if (n.lhs as i64 != 0) { gen_expr(n.lhs); }
+		return;
+	}
+	if (k == ND_RET) { gen_ret(n); return; }
+	if (k == ND_IF) {
+		gen_expr(n.cond);
+		test_rax();
+		var els i64 = jump(0x84);
+		gen_stmt(n.then);
+		if (n.els as i64 != 0) {
+			var end i64 = jump(0);
+			patch_here(els);
+			gen_stmt(n.els);
+			patch_here(end);
+		} else {
+			patch_here(els);
+		}
+		return;
+	}
+	if (k == ND_FOR) { gen_for(n); return; }
+	if (k == ND_BREAK) {
+		if (cur_loop as i64 == 0) { error_at(n.pos, "'break' outside of a loop"); }
+		unwind_to(cur_loop.depth);
+		ilist_push(&cur_loop.brk, jump(0));
+		return;
+	}
+	if (k == ND_CONT) {
+		if (cur_loop as i64 == 0) { error_at(n.pos, "'continue' outside of a loop"); }
+		unwind_to(cur_loop.depth);
+		ilist_push(&cur_loop.cont, jump(0));
+		return;
+	}
+	gen_expr(n);
+}
+
+fn gen_func(f *Func) {
+	f.addr = code.n;
+	depth = 0;
+	gen_fn = f;
+	cur_loop = 0 as *Loop;
+	cur_defers = 0 as *DeferScope;
+	defer_depth = 0;
+
+	push_reg(RBP);
+	depth = depth - 1;
+	mov_reg_reg(RBP, RSP);
+	if (f.stack_size != 0) {
+		b1(0x48); b1(0x81);
+		modrm(3, 5, RSP);
+		b4(f.stack_size as i64);
+
+		b1(0x49); b1(0x89); b1(0xe3);
+		b1(0x45); b1(0x31); b1(0xd2);
+		var top i64 = code.n;
+		b1(0x49); b1(0x39); b1(0xeb);
+		b1(0x73); b1(0x08);
+		b1(0x4d); b1(0x89); b1(0x13);
+		b1(0x49); b1(0x83); b1(0xc3); b1(0x08);
+		b1(0xeb);
+		b1(top - (code.n + 1));
+	}
+
+	var ri int = 0;
+	if (f.ret_slot as i64 != 0) {
+		st_local(f.ret_slot.offset as i64, call_reg(ri));
+		ri = ri + 1;
+	}
+	var i int = 0;
+	while (i < f.nparams) {
+		var v *Var = func_param(f, i);
+		st_local(v.offset as i64, call_reg(ri));
+		ri = ri + 1;
+		if (is_aggregate(v.ty) && !v.by_ref && v.ty.size > 8) {
+			st_local((v.offset as i64) - 8, call_reg(ri));
+			ri = ri + 1;
+		}
+		i = i + 1;
+	}
+
+	gen_stmt(f.body);
+
+	mov_reg_imm(RAX, 0);
+	b1(0xc9); b1(0xc3);
+}
+
+fn layout_globals(globals *Var) {
+	var v *Var = globals;
+	while (v as i64 != 0) {
+		if (v.init != 0) {
+			var align i64 = v.ty.align as i64;
+			var off i64 = (gdata.n + align - 1) & ~(align - 1);
+			while (gdata.n < off) { buf_u8(&gdata, 0); }
+			v.data_off = gdata.n;
+			var i int = 0;
+			while (i < v.ty.size) {
+				buf_u8(&gdata, ((v.init >> (i * 8)) & 255) as u8);
+				i = i + 1;
+			}
+		}
+		v = v.next;
+	}
+	var bss i64 = gdata.n;
+	v = globals;
+	while (v as i64 != 0) {
+		if (v.init == 0) {
+			var align i64 = v.ty.align as i64;
+			bss = (bss + align - 1) & ~(align - 1);
+			v.data_off = bss;
+			bss = bss + (v.ty.size as i64);
+		}
+		v = v.next;
+	}
+	bss_size = bss - gdata.n;
+}
+
+fn gen_panic_stub(msg_id int) {
+	add_strref(RSI, msg_id);
+	mov_reg_imm(RAX, 1);
+	mov_reg_imm(RDI, 2);
+	mov_reg_imm(RDX, 25);
+	b1(0x0f); b1(0x05);
+	mov_reg_imm(RAX, 60);
+	mov_reg_imm(RDI, 134);
+	b1(0x0f); b1(0x05);
+}
+
+fn codegen(u *Unit, img *Image) {
+	var panic_id int = u.nstrs;
+	var bytes_off *i64 = arena_alloc((u.nstrs as i64 + 1) * 8, 8) as *i64;
+	str_off = arena_alloc((u.nstrs as i64 + 1) * 8, 8) as *i64;
+
+	var s *StrLit = u.strs;
+	while (s as i64 != 0) {
+		bytes_off[s.id] = rodata.n;
+		buf_bytes(&rodata, s.s.ptr, s.s.len);
+		buf_u8(&rodata, 0);
+		s = s.next;
+	}
+	while ((rodata.n & 7) != 0) { buf_u8(&rodata, 0); }
+
+	s = u.strs;
+	while (s as i64 != 0) {
+		str_off[s.id] = rodata.n;
+		buf_u64(&rodata, 0);
+		buf_u64(&rodata, s.s.len);
+		s = s.next;
+	}
+
+	layout_globals(u.globals);
+	var nph int = 1;
+	if (gdata.n + bss_size > 0) { nph = 2; }
+	var hdr i64 = EHDR_SZ + PHDR_SZ * (nph as i64);
+
+	var main_fn *Func = find_func("main");
+	if (main_fn as i64 == 0) { die("error: no 'main' function"); }
+	if (main_fn.nparams != 0 && main_fn.nparams != 2) {
+		die("error: 'main' takes no parameters or (argc, argv)");
+	}
+	if (main_fn.nparams == 2) {
+		b1(0x48); b1(0x8b); b1(0x3c); b1(0x24);
+		b1(0x48); b1(0x8d); b1(0x74); b1(0x24); b1(8);
+	}
+
+	add_call("main", 0);
+	b1(0x89);
+	modrm(3, RAX, RDI);
+	mov_reg_imm(RAX, 60);
+	b1(0x0f); b1(0x05);
+
+	var f *Func = u.funcs;
+	while (f as i64 != 0) {
+		if (f.nct == 0) { gen_func(f); }
+		f = f.next;
+	}
+
+	if (bounds_checks.n != 0) {
+		var panic_addr i64 = code.n;
+		gen_panic_stub(panic_id);
+		var i i64 = 0;
+		while (i < bounds_checks.n) {
+			buf_patch32(&code, bounds_checks.p[i], panic_addr - (bounds_checks.p[i] + 4));
+			i = i + 1;
+		}
+	}
+
+	var cf *CallFixup = calls_head;
+	while (cf as i64 != 0) {
+		var target *Func = find_func(cf.name);
+		if (target as i64 == 0) {
+			emsg("undefined function '"); emsg(cf.name); emsg("'"); efail(cf.pos);
+		}
+		buf_patch32(&code, cf.at, target.addr - (cf.at + 4));
+		cf = cf.next;
+	}
+
+	var sf *StrFixup = strrefs_head;
+	while (sf as i64 != 0) {
+		var target i64 = code.n + str_off[sf.id];
+		buf_patch32(&code, sf.at, target - (sf.at + 4));
+		sf = sf.next;
+	}
+
+	var rodata_vaddr i64 = ELF_BASE + hdr + code.n;
+	s = u.strs;
+	while (s as i64 != 0) {
+		var abs i64 = rodata_vaddr + bytes_off[s.id];
+		var k i64 = 0;
+		while (k < 8) {
+			rodata.p[str_off[s.id] + k] = ((abs >> (k * 8)) & 255) as u8;
+			k = k + 1;
+		}
+		s = s.next;
+	}
+
+	var df *DataFixup = datarefs_head;
+	while (df as i64 != 0) {
+		var target i64 = SEG_GAP + code.n + rodata.n + df.varp.data_off;
+		buf_patch32(&code, df.at, target - (df.at + 4));
+		df = df.next;
+	}
+
+	img.code = code;
+	img.rodata = rodata;
+	img.data = gdata;
+	img.bss_size = bss_size;
+	img.entry = 0;
+	img.nph = nph;
+}
