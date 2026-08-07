@@ -1,5 +1,6 @@
 import "comp.qela";
 import "../std/io.qela";
+import "dwarf.qela";
 
 fn elf_phdr(f *Buf, flags i64, off i64, vaddr i64, filesz i64, memsz i64) {
 	buf_u32(f, 1);
@@ -10,6 +11,37 @@ fn elf_phdr(f *Buf, flags i64, off i64, vaddr i64, filesz i64, memsz i64) {
 	buf_u64(f, filesz);
 	buf_u64(f, memsz);
 	buf_u64(f, SEG_GAP);
+}
+
+let SHT_PROGBITS = 1;
+let SHT_STRTAB   = 3;
+
+var shdr_addr i64 = 0;
+
+fn shdr_raw(f *Buf, name i64, kind i64, flags i64, off i64, size i64) {
+	buf_u32(f, name);
+	buf_u32(f, kind);
+	buf_u64(f, flags);
+	if (flags == 0) { buf_u64(f, 0); } else { buf_u64(f, ELF_BASE + shdr_addr); }
+	buf_u64(f, off);
+	buf_u64(f, size);
+	buf_u32(f, 0);
+	buf_u32(f, 0);
+	if (flags == 0) { buf_u64(f, 1); } else { buf_u64(f, 16); }
+	buf_u64(f, 0);
+}
+
+fn shdr_symtab(f *Buf, name i64, off i64, size i64) {
+	buf_u32(f, name);
+	buf_u32(f, 2);
+	buf_u64(f, 0);
+	buf_u64(f, 0);
+	buf_u64(f, off);
+	buf_u64(f, size);
+	buf_u32(f, 6);
+	buf_u32(f, 1);
+	buf_u64(f, 8);
+	buf_u64(f, 24);
 }
 
 fn write_elf(path str, img *Image) {
@@ -34,19 +66,50 @@ fn write_elf(path str, img *Image) {
 	var i i64 = 7;
 	while (i < 16) { buf_u8(&f, 0); i = i + 1; }
 
+	// Debug sections live past the loadable image and need a section table.
+	var nsh int = 0;
+	var names Buf;
+	var n_text i64 = 0;
+	var n_line i64 = 0;
+	var n_info i64 = 0;
+	var n_abbrev i64 = 0;
+	var n_sym i64 = 0;
+	var n_str i64 = 0;
+	var n_shstr i64 = 0;
+	if (opt_debug) {
+		dwarf_build(ELF_BASE + hdr, img.code.n);
+		buf_u8(&names, 0);
+		n_text = names.n;   dw_str(&names, ".text");
+		n_line = names.n;   dw_str(&names, ".debug_line");
+		n_info = names.n;   dw_str(&names, ".debug_info");
+		n_abbrev = names.n; dw_str(&names, ".debug_abbrev");
+		n_sym = names.n;    dw_str(&names, ".symtab");
+		n_str = names.n;    dw_str(&names, ".strtab");
+		n_shstr = names.n;  dw_str(&names, ".shstrtab");
+		dwarf_symbols(ELF_BASE + hdr, img.code.n);
+		nsh = 8;
+	}
+
 	buf_u16(&f, 2);
 	buf_u16(&f, 0x3e);
 	buf_u32(&f, 1);
 	buf_u64(&f, ELF_BASE + hdr + img.entry);
 	buf_u64(&f, EHDR_SZ);
+	var shoff_at i64 = f.n;
 	buf_u64(&f, 0);
 	buf_u32(&f, 0);
 	buf_u16(&f, EHDR_SZ);
 	buf_u16(&f, PHDR_SZ);
 	buf_u16(&f, nph as i64);
-	buf_u16(&f, 0);
-	buf_u16(&f, 0);
-	buf_u16(&f, 0);
+	if (nsh == 0) {
+		buf_u16(&f, 0);
+		buf_u16(&f, 0);
+		buf_u16(&f, 0);
+	} else {
+		buf_u16(&f, 64);
+		buf_u16(&f, nsh as i64);
+		buf_u16(&f, 7);
+	}
 
 	elf_phdr(&f, 5, 0, ELF_BASE, hdr + text, hdr + text);
 	if (nph == 2) {
@@ -56,6 +119,40 @@ fn write_elf(path str, img *Image) {
 	buf_bytes(&f, img.code.p, img.code.n);
 	buf_bytes(&f, img.rodata.p, img.rodata.n);
 	buf_bytes(&f, img.data.p, img.data.n);
+
+	if (nsh != 0) {
+		var off_line i64 = f.n;
+		buf_bytes(&f, dw_line.p, dw_line.n);
+		var off_info i64 = f.n;
+		buf_bytes(&f, dw_info.p, dw_info.n);
+		var off_abbrev i64 = f.n;
+		buf_bytes(&f, dw_abbrev.p, dw_abbrev.n);
+		var off_sym i64 = f.n;
+		buf_bytes(&f, dw_sym.p, dw_sym.n);
+		var off_str i64 = f.n;
+		buf_bytes(&f, dw_strtab.p, dw_strtab.n);
+		var off_shstr i64 = f.n;
+		buf_bytes(&f, names.p, names.n);
+
+		while ((f.n & 7) != 0) { buf_u8(&f, 0); }
+		var shoff i64 = f.n;
+		var i i64 = 0;
+		while (i < 64) { buf_u8(&f, 0); i = i + 1; }
+		shdr_addr = hdr;
+		shdr_raw(&f, n_text, SHT_PROGBITS, 6, hdr, img.code.n);
+		shdr_raw(&f, n_line, SHT_PROGBITS, 0, off_line, dw_line.n);
+		shdr_raw(&f, n_info, SHT_PROGBITS, 0, off_info, dw_info.n);
+		shdr_raw(&f, n_abbrev, SHT_PROGBITS, 0, off_abbrev, dw_abbrev.n);
+		shdr_symtab(&f, n_sym, off_sym, dw_sym.n);
+		shdr_raw(&f, n_str, SHT_STRTAB, 0, off_str, dw_strtab.n);
+		shdr_raw(&f, n_shstr, SHT_STRTAB, 0, off_shstr, names.n);
+
+		var k i64 = 0;
+		while (k < 8) {
+			f.p[shoff_at + k] = ((shoff >> (k * 8)) & 255) as u8;
+			k = k + 1;
+		}
+	}
 
 	write_file(path, f.p, f.n);
 }
