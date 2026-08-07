@@ -613,7 +613,14 @@ fn gen_call(n *Node) {
 	if (ret_mem) { hidden = n.tmp.offset as i64; }
 	gen_args(n, false, false, hidden);
 
+	var odd bool = (depth & 1) != 0;
+	if (odd) {
+		b1(0x48); b1(0x83); modrm(3, 5, RSP); b1(8);
+	}
 	add_call(n.name, n.pos);
+	if (odd) {
+		b1(0x48); b1(0x83); modrm(3, 0, RSP); b1(8);
+	}
 	if (is_aggregate(n.ty) && !ret_mem) {
 		var off i64 = n.tmp.offset as i64;
 		st_local(off, RAX);
@@ -640,13 +647,6 @@ fn gen_logical(n *Node) {
 }
 
 fn gen_opassign(n *Node) {
-	var k int = n.val as int;
-	if (direct_local(n.lhs) && n.rhs.kind == ND_NUM && fits_imm32(n.rhs.val) &&
-	    n.lhs.ty.size == 8 && n.lhs.ty.kind != TY_PTR &&
-	    (k == ND_ADD || k == ND_SUB || k == ND_BITAND || k == ND_BITOR || k == ND_BITXOR)) {
-		alu_mem_imm(alu_ext_for(k), n.lhs.varp.offset as i64, n.rhs.val);
-		return;
-	}
 	gen_addr(n.lhs);
 	push_reg(RAX);
 	load(n.lhs.ty);
@@ -665,6 +665,35 @@ fn gen_opassign(n *Node) {
 
 	truncate_to(n.lhs.ty);
 	store(n.lhs.ty);
+}
+
+// An assignment written as a statement discards its result, so it can write
+// straight to the slot without routing the value through rax.
+fn stmt_assign(n *Node) bool {
+	if (!direct_local(n.lhs)) { return false; }
+	if (n.rhs.kind != ND_NUM) { return false; }
+	if (n.rhs.val == 0 || !fits_imm32(n.rhs.val)) { return false; }
+	rbp_mem(0xc7, 0, -(n.lhs.varp.offset as i64));
+	b4(n.rhs.val);
+	return true;
+}
+
+fn stmt_opassign(n *Node) bool {
+	if (!direct_local(n.lhs)) { return false; }
+	if (n.lhs.ty.kind == TY_PTR) { return false; }
+	if (n.rhs.kind != ND_NUM || !fits_imm32(n.rhs.val)) { return false; }
+	var k int = n.val as int;
+	if (k != ND_ADD && k != ND_SUB && k != ND_BITAND && k != ND_BITOR && k != ND_BITXOR) {
+		return false;
+	}
+	alu_mem_imm(alu_ext_for(k), n.lhs.varp.offset as i64, n.rhs.val);
+	return true;
+}
+
+fn gen_exprstmt(n *Node) {
+	if (n.kind == ND_ASSIGN && stmt_assign(n)) { return; }
+	if (n.kind == ND_OPASSIGN && stmt_opassign(n)) { return; }
+	gen_expr(n);
 }
 
 fn fits_imm32(v i64) bool {
@@ -1010,14 +1039,6 @@ fn gen_expr(n *Node) {
 	}
 	if (k == ND_ASSIGN) {
 		if (direct_local(n.lhs)) {
-			if (n.rhs.kind == ND_NUM && n.rhs.val != 0 && fits_imm32(n.rhs.val)) {
-				var off i64 = -(n.lhs.varp.offset as i64);
-				if (off >= -128 && off <= 127) {
-					rbp_mem(0xc7, 0, off);
-					b4(n.rhs.val);
-					return;
-				}
-			}
 			gen_expr(n.rhs);
 			st_local(n.lhs.varp.offset as i64, RAX);
 			return;
@@ -1311,7 +1332,7 @@ fn gen_stmt(n *Node) {
 	}
 	if (k == ND_MATCH) { gen_match(n); return; }
 	if (k == ND_EXPRSTMT) {
-		if (n.lhs as i64 != 0) { gen_expr(n.lhs); }
+		if (n.lhs as i64 != 0) { gen_exprstmt(n.lhs); }
 		return;
 	}
 	if (k == ND_RET) { gen_ret(n); return; }
