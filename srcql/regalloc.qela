@@ -1,0 +1,184 @@
+import "comp.qela";
+import "type.qela";
+import "funcs.qela";
+
+// A local whose address is never taken can live in a callee-saved register for
+// its whole live range instead of a frame slot. Live ranges come from a linear
+// walk of the AST in emission order. A loop stretches every range that touches
+// it to the end of the loop, so a value carried across iterations stays live;
+// a defer body stretches its ranges to the end of the function, because it is
+// emitted out of order at every exit.
+
+let RA_NREG = 5;
+let RA_FOREVER = 0x7fffffffffffff;
+
+fn ra_pool(i int) int {
+	if (i == 0) { return 3; }
+	if (i == 1) { return 12; }
+	if (i == 2) { return 13; }
+	if (i == 3) { return 14; }
+	return 15;
+}
+
+var ra_pos i64;
+var ra_loop int;
+var ra_fn *Func;
+
+fn ra_weight() i64 {
+	var w i64 = 1;
+	var i int = 0;
+	while (i < ra_loop && i < 4) { w = w * 8; i = i + 1; }
+	return w;
+}
+
+fn ra_use(v *Var) {
+	if (v as i64 == 0) { return; }
+	if (v.is_global) { return; }
+	if (v.lo == 0) { v.lo = ra_pos; }
+	if (ra_pos > v.hi) { v.hi = ra_pos; }
+	v.uses = v.uses + ra_weight();
+}
+
+fn ra_deny(n *Node) {
+	if (n as i64 == 0) { return; }
+	if (n.kind == ND_VAR) { n.varp.no_reg = true; }
+}
+
+fn ra_extend(from i64, to i64) {
+	var v *Var = ra_fn.locals;
+	while (v as i64 != 0) {
+		if (v.hi > from && v.hi < to) { v.hi = to; }
+		v = v.next;
+	}
+}
+
+fn ra_list(n *Node) {
+	var p *Node = n;
+	while (p as i64 != 0) {
+		ra_walk(p);
+		p = p.next;
+	}
+}
+
+fn ra_walk(n *Node) {
+	if (n as i64 == 0) { return; }
+	ra_pos = ra_pos + 1;
+	var k int = n.kind;
+
+	// Temporaries are always addressed through the frame.
+	if (n.tmp as i64 != 0) { n.tmp.no_reg = true; }
+
+	if (k == ND_VAR || k == ND_ZERO) { ra_use(n.varp); return; }
+	if (k == ND_ADDR) { ra_deny(n.lhs); ra_walk(n.lhs); return; }
+	if (k == ND_MATCH) {
+		ra_deny(n.cond);
+		ra_walk(n.cond);
+		var arm *Node = n.body;
+		while (arm as i64 != 0) {
+			ra_pos = ra_pos + 1;
+			var b *Node = arm.args;
+			while (b as i64 != 0) {
+				ra_deny(b);
+				ra_use(b.varp);
+				b = b.next;
+			}
+			ra_walk(arm.body);
+			arm = arm.next;
+		}
+		return;
+	}
+	if (k == ND_FOR) {
+		ra_walk(n.init);
+		var top i64 = ra_pos;
+		ra_loop = ra_loop + 1;
+		ra_walk(n.cond);
+		ra_walk(n.body);
+		ra_walk(n.step);
+		ra_loop = ra_loop - 1;
+		ra_extend(top, ra_pos);
+		return;
+	}
+	if (k == ND_DEFER) {
+		var top i64 = ra_pos;
+		ra_walk(n.lhs);
+		ra_extend(top, RA_FOREVER);
+		return;
+	}
+
+	ra_walk(n.lhs);
+	ra_walk(n.rhs);
+	ra_walk(n.cond);
+	ra_walk(n.init);
+	ra_walk(n.step);
+	ra_walk(n.then);
+	ra_walk(n.els);
+	ra_list(n.body);
+	ra_list(n.args);
+}
+
+fn ra_eligible(v *Var) bool {
+	if (v.no_reg || v.is_global || v.by_ref) { return false; }
+	if (v.uses == 0) { return false; }
+	if (is_aggregate(v.ty)) { return false; }
+	return v.ty.size == 8;
+}
+
+// Vars are taken most-used first rather than in range order: a register spent
+// on a loop variable buys more than one spent on a long-lived cold value.
+fn ra_pick(reg int) bool {
+	var best *Var = 0 as *Var;
+	var v *Var = ra_fn.locals;
+	while (v as i64 != 0) {
+		if (!v.has_reg && ra_eligible(v)) {
+			var ok bool = true;
+			var o *Var = ra_fn.locals;
+			while (o as i64 != 0) {
+				if (o.has_reg && o.reg == reg && o.lo <= v.hi && v.lo <= o.hi) {
+					ok = false;
+				}
+				o = o.next;
+			}
+			if (ok && (best as i64 == 0 || v.uses > best.uses)) { best = v; }
+		}
+		v = v.next;
+	}
+	if (best as i64 == 0) { return false; }
+	best.has_reg = true;
+	best.reg = reg;
+	return true;
+}
+
+fn regalloc(f *Func) {
+	if (f.body as i64 == 0) { return; }
+	ra_fn = f;
+	ra_pos = 0;
+	ra_loop = 0;
+	if (f.ret_slot as i64 != 0) { f.ret_slot.no_reg = true; }
+
+	var i int = 0;
+	while (i < f.nparams) {
+		ra_pos = ra_pos + 1;
+		ra_use(func_param(f, i));
+		i = i + 1;
+	}
+	ra_walk(f.body);
+
+	i = 0;
+	while (i < RA_NREG) {
+		while (ra_pick(ra_pool(i))) { }
+		i = i + 1;
+	}
+
+	f.nsaved = 0;
+	i = 0;
+	while (i < RA_NREG) {
+		var used bool = false;
+		var v *Var = f.locals;
+		while (v as i64 != 0) {
+			if (v.has_reg && v.reg == ra_pool(i)) { used = true; }
+			v = v.next;
+		}
+		if (used) { f.nsaved = f.nsaved + 1; }
+		i = i + 1;
+	}
+}
