@@ -21,6 +21,13 @@ fn buf_grow(b *Buf, need i64) {
 	b.cap = cap;
 }
 
+fn buf_str(b *Buf) str {
+	var s str;
+	s.ptr = b.p;
+	s.len = b.n;
+	return s;
+}
+
 fn buf_u8(b *Buf, v u8) {
 	buf_grow(b, 1);
 	var p *u8 = b.p + b.n;

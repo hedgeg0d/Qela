@@ -25,7 +25,7 @@ struct Scope {
 }
 
 fn enter_scope() {
-	var s *Scope = arena_alloc(16, 8) as *Scope;
+	var s *Scope = arena_alloc(sizeof(Scope), 8) as *Scope;
 	s.next = scope_root;
 	scope_root = s;
 }
@@ -51,7 +51,7 @@ fn declare_var(name str, ty *Type, pos i64) *Var {
 		if (str_eq(vs.name, name)) { error_at(pos, "redeclaration"); }
 		vs = vs.next;
 	}
-	var v *Var = arena_alloc(64, 8) as *Var;
+	var v *Var = arena_alloc(sizeof(Var), 8) as *Var;
 	v.name = name;
 	v.ty = ty;
 	if (cur_func as i64 != 0) {
@@ -62,7 +62,7 @@ fn declare_var(name str, ty *Type, pos i64) *Var {
 		v.next = global_vars;
 		global_vars = v;
 	}
-	var vsc *VarScope = arena_alloc(24, 8) as *VarScope;
+	var vsc *VarScope = arena_alloc(sizeof(VarScope), 8) as *VarScope;
 	vsc.next = scope_root.vars;
 	vsc.name = name;
 	vsc.varp = v;
@@ -90,7 +90,7 @@ fn tok_consume(t **Token, text str) bool {
 // ── node constructors ──
 
 fn new_node(kind int, pos i64) *Node {
-	var n *Node = arena_alloc(128, 8) as *Node;
+	var n *Node = arena_alloc(sizeof(Node), 8) as *Node;
 	n.kind = kind;
 	n.pos = pos;
 	return n;
@@ -116,7 +116,7 @@ var strlist_tail *StrLit;
 var nstrs int = 0;
 
 fn add_str(s str) int {
-	var lit *StrLit = arena_alloc(32, 8) as *StrLit;
+	var lit *StrLit = arena_alloc(sizeof(StrLit), 8) as *StrLit;
 	lit.s = s;
 	lit.id = nstrs;
 	nstrs = nstrs + 1;
@@ -217,44 +217,44 @@ fn parse_primary(t **Token) *Node {
 		var p i64 = (*t).pos;
 		*t = (*t).next;
 
-		// enum literal: Name.Variant(...)
-		if (tok_eq(*t, ".")) {
+		var named *Type = type_lookup(name);
+
+		// enum literal: Name.Variant(...). Anything else followed by a dot
+		// is a member access and belongs to parse_postfix.
+		if (named as i64 != 0 && named.kind == TY_ENUM && tok_eq(*t, ".")) {
 			*t = (*t).next;
-			var ty *Type = type_lookup(name);
-			if (ty as i64 != 0 && ty.kind == TY_ENUM) {
-				var vname str = (*t).text;
-				*t = (*t).next;
-				var n *Node = new_node(ND_ENUMLIT, p);
-				n.ty = ty;
-				n.name = vname;
-				if (tok_eq(*t, "(")) { call_args(t, n); }
-				return n;
-			}
-			error_at(p, "expected enum type before dot");
+			var vname str = (*t).text;
+			*t = (*t).next;
+			var n *Node = new_node(ND_ENUMLIT, p);
+			n.ty = named;
+			n.name = vname;
+			if (tok_eq(*t, "(")) { call_args(t, n); }
+			return n;
 		}
 
 		// struct literal: Name{field: val, ...}
-		if (tok_eq(*t, "{")) {
+		if (named as i64 != 0 && named.kind == TY_STRUCT && tok_eq(*t, "{")) {
 			*t = (*t).next;
 			var n *Node = new_node(ND_STRUCTLIT, p);
-			n.ty = type_lookup(name);
+			n.ty = named;
 			var fhead Node;
 			var ftail *Node = &fhead;
 			while (!tok_eq(*t, "}")) {
-				if (ftail != &fhead) { tok_expect(t, ","); }
+				if (ftail as i64 != &fhead as i64) { tok_expect(t, ","); }
 				if (tok_eq(*t, "}")) { break; }
 				var fnm str = (*t).text;
+				var fpos i64 = (*t).pos;
 				*t = (*t).next;
 				tok_expect(t, ":");
-				var fex *Node = parse_expr(t);
-				var fld *Node = new_node(ND_FIELD, p);
+				var fld *Node = new_node(ND_FIELD, fpos);
 				fld.name = fnm;
-				fld.lhs = fex;
+				fld.lhs = parse_assign(t);
 				ftail.next = fld;
 				ftail = fld;
+				n.nargs = n.nargs + 1;
 			}
 			tok_expect(t, "}");
-			n.body = fhead.next;
+			n.args = fhead.next;
 			return n;
 		}
 
@@ -513,7 +513,7 @@ fn parse_stmt(t **Token) *Node {
 			var lo *Node = parse_assign(t);
 			tok_expect(t, "..");
 			var hi *Node = parse_assign(t);
-			var v *Var = declare_var(name, 0 as *Type, np);
+			var v *Var = declare_var(name, type_lookup("int"), np);
 			var iv *Node = new_node(ND_VAR, np);
 			iv.varp = v;
 			var init *Node = new_node(ND_EXPRSTMT, np);
@@ -611,7 +611,7 @@ fn parse_function(t **Token) *Func {
 	var p i64 = (*t).pos;
 	*t = (*t).next;
 
-	var f *Func = arena_alloc(120, 8) as *Func;
+	var f *Func = arena_alloc(sizeof(Func), 8) as *Func;
 	f.name = name;
 	f.ret = 0 as *Type;
 	f.pos = p;
@@ -653,7 +653,7 @@ fn parse_struct(t **Token) {
 
 	if (tok_consume(t, ";")) {
 		if (type_lookup(name) as i64 == 0) {
-			var ty *Type = arena_alloc(64, 8) as *Type;
+			var ty *Type = arena_alloc(sizeof(Type), 8) as *Type;
 			ty.kind = TY_STRUCT; ty.align = 8; ty.size = 8; ty.name = name;
 			type_define(name, ty);
 		}
@@ -663,7 +663,7 @@ fn parse_struct(t **Token) {
 	var ty *Type = type_lookup(name);
 	if (ty as i64 != 0 && ty.members as i64 != 0) { error_at(p, "redefinition"); }
 	if (ty as i64 == 0) {
-		ty = arena_alloc(64, 8) as *Type;
+		ty = arena_alloc(sizeof(Type), 8) as *Type;
 		ty.kind = TY_STRUCT; ty.name = name;
 		type_define(name, ty);
 	}
@@ -680,7 +680,7 @@ fn parse_struct(t **Token) {
 		*t = (*t).next;
 		var fty *Type = parse_type(t);
 		off = (off + fty.align - 1) & ~(fty.align - 1);
-		var m *Member = arena_alloc(48, 8) as *Member;
+		var m *Member = arena_alloc(sizeof(Member), 8) as *Member;
 		m.name = fnm; m.ty = fty; m.offset = off; m.pos = fp;
 		off = off + fty.size;
 		if (fty.align > align) { align = fty.align; }
@@ -698,7 +698,7 @@ fn parse_enum(t **Token) {
 	var p i64 = (*t).pos;
 	*t = (*t).next;
 
-	var ty *Type = arena_alloc(64, 8) as *Type;
+	var ty *Type = arena_alloc(sizeof(Type), 8) as *Type;
 	ty.kind = TY_ENUM; ty.align = 8; ty.name = name;
 	type_define(name, ty);
 
@@ -712,7 +712,7 @@ fn parse_enum(t **Token) {
 		var vnm str = (*t).text;
 		var vp i64 = (*t).pos;
 		*t = (*t).next;
-		var v *Variant = arena_alloc(40, 8) as *Variant;
+		var v *Variant = arena_alloc(sizeof(Variant), 8) as *Variant;
 		v.name = vnm; v.tag = tag; v.pos = vp; tag = tag + 1;
 
 		if (tok_consume(t, "(")) {
@@ -724,7 +724,7 @@ fn parse_enum(t **Token) {
 				if (ftail != &fhead) { tok_expect(t, ","); }
 				var fty *Type = parse_type(t);
 				voff = (voff + fty.align - 1) & ~(fty.align - 1);
-				var m *Member = arena_alloc(48, 8) as *Member;
+				var m *Member = arena_alloc(sizeof(Member), 8) as *Member;
 				m.ty = fty; m.offset = voff; m.pos = vp;
 				voff = voff + fty.size;
 				nf = nf + 1;
@@ -818,7 +818,7 @@ fn parse(tok *Token) *Unit {
 		f = f.next;
 	}
 
-	var u *Unit = arena_alloc(32, 8) as *Unit;
+	var u *Unit = arena_alloc(sizeof(Unit), 8) as *Unit;
 	u.funcs = head.next;
 	u.globals = global_vars;
 	u.strs = strlist_head;
