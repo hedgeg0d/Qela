@@ -1,0 +1,252 @@
+import "comp.qela";
+import "type.qela";
+
+// Elides the bounds check on an array access the enclosing loop already
+// proves safe. Sound only for the exact shape:
+//
+//   for (i = c; i < K; i += 1) { ... a[i] ... }     c >= 0, len(a) == K
+//   i = c;                                          c >= 0
+//   while (i < K) { ... a[i] ...; i += 1; }
+//
+// The condition is `i < K` with K a literal equal to the array's length, so
+// the loop already proves the upper bound at the top of the body. The lower
+// bound is induction: the entry value is a constant c >= 0, the increment is
+// exactly +1, and it only runs while i < K, so i + 1 cannot wrap (K is an
+// i64 literal, so K <= 2^63 - 1). The body must not write i anywhere else,
+// and taking i's address would let a write slip through a pointer, so loops
+// of a var whose address is taken anywhere in the function are never
+// elided. For the while shape the access must precede the increment.
+
+fn elide_bounds(f *Func) {
+	var taken [64]*Var;
+	var ntaken int = 0;
+	ntaken = addr_scan(f.body, &taken[0], ntaken);
+	elide_chain(f.body, 0 as *Node, &taken[0], ntaken);
+}
+
+// ── address-of scan ──
+
+fn addr_add(taken **Var, ntaken int, v *Var) int {
+	var i int = 0;
+	while (i < ntaken) {
+		if ((taken[i] as i64) == (v as i64)) { return ntaken; }
+		i = i + 1;
+	}
+	taken[ntaken] = v;
+	return ntaken + 1;
+}
+
+fn addr_taken(taken **Var, ntaken int, v *Var) bool {
+	var i int = 0;
+	while (i < ntaken) {
+		if ((taken[i] as i64) == (v as i64)) { return true; }
+		i = i + 1;
+	}
+	return false;
+}
+
+fn addr_scan(n *Node, taken **Var, ntaken int) int {
+	while (n as i64 != 0) {
+		ntaken = addr_node(n, taken, ntaken);
+		n = n.next;
+	}
+	return ntaken;
+}
+
+fn addr_node(n *Node, taken **Var, ntaken int) int {
+	if (n.kind == ND_ADDR && n.lhs.kind == ND_VAR) {
+		ntaken = addr_add(taken, ntaken, n.lhs.varp);
+	}
+	ntaken = addr_scan(n.lhs, taken, ntaken);
+	ntaken = addr_scan(n.rhs, taken, ntaken);
+	ntaken = addr_scan(n.cond, taken, ntaken);
+	ntaken = addr_scan(n.then, taken, ntaken);
+	ntaken = addr_scan(n.els, taken, ntaken);
+	ntaken = addr_scan(n.init, taken, ntaken);
+	ntaken = addr_scan(n.step, taken, ntaken);
+	ntaken = addr_scan(n.body, taken, ntaken);
+	return addr_scan(n.args, taken, ntaken);
+}
+
+// ── the walk over statements, tracking the previous one ──
+
+fn elide_chain(n *Node, prev *Node, taken **Var, ntaken int) {
+	while (n as i64 != 0) {
+		elide_stmt(n, prev, taken, ntaken);
+		prev = n;
+		n = n.next;
+	}
+}
+
+fn elide_stmt(n *Node, prev *Node, taken **Var, ntaken int) {
+	if (n.kind == ND_FOR) {
+		elide_loop(n, prev, taken, ntaken);
+		elide_chain(n.body, 0 as *Node, taken, ntaken);
+	} else if (n.kind == ND_BLOCK) {
+		elide_chain(n.body, 0 as *Node, taken, ntaken);
+	} else if (n.kind == ND_IF) {
+		elide_chain(n.then, 0 as *Node, taken, ntaken);
+		elide_chain(n.els, 0 as *Node, taken, ntaken);
+	} else if (n.kind == ND_DEFER) {
+		elide_chain(n.lhs, 0 as *Node, taken, ntaken);
+	} else if (n.kind == ND_MATCH) {
+		elide_chain(n.body, 0 as *Node, taken, ntaken);
+	} else if (n.kind == ND_ARM) {
+		elide_chain(n.body, 0 as *Node, taken, ntaken);
+	}
+}
+
+// ── pattern pieces ──
+
+// The entry: `i = c` or `var i = c` or a bare `var i` (zeroed), c >= 0.
+fn entry_const(st *Node, iv *Var) bool {
+	if (st as i64 == 0 || st.kind != ND_EXPRSTMT) { return false; }
+	var a *Node = st.lhs;
+	if (a.kind == ND_ZERO) {
+		return (a.varp as i64) == (iv as i64);
+	}
+	if (a.kind != ND_ASSIGN || a.lhs.kind != ND_VAR) { return false; }
+	if ((a.lhs.varp as i64) != (iv as i64) || a.rhs.kind != ND_NUM) { return false; }
+	return a.rhs.val >= 0;
+}
+
+// `i = i + 1` or `i += 1`.
+fn step_add1(st *Node, iv *Var) bool {
+	if (st as i64 == 0) { return false; }
+	if (st.kind == ND_ASSIGN) {
+		if (st.lhs.kind != ND_VAR || (st.lhs.varp as i64) != (iv as i64)) { return false; }
+		if (st.rhs.kind != ND_ADD || st.rhs.lhs.kind != ND_VAR) { return false; }
+		if ((st.rhs.lhs.varp as i64) != (iv as i64)) { return false; }
+		return st.rhs.rhs.kind == ND_NUM && st.rhs.rhs.val == 1;
+	}
+	if (st.kind != ND_OPASSIGN) { return false; }
+	if (st.val != ND_ADD) { return false; }
+	if (st.lhs.kind != ND_VAR || (st.lhs.varp as i64) != (iv as i64)) { return false; }
+	return st.rhs.kind == ND_NUM && st.rhs.val == 1;
+}
+
+fn is_iwrite(st *Node, iv *Var) bool {
+	if (st.kind != ND_EXPRSTMT) { return false; }
+	var a *Node = st.lhs;
+	if (a.kind != ND_ASSIGN && a.kind != ND_OPASSIGN) { return false; }
+	return a.lhs.kind == ND_VAR && (a.lhs.varp as i64) == (iv as i64);
+}
+
+fn node_write(n *Node, iv *Var) bool {
+	if (n.kind == ND_ASSIGN || n.kind == ND_OPASSIGN) {
+		if (n.lhs.kind == ND_VAR && (n.lhs.varp as i64) == (iv as i64)) { return true; }
+	}
+	return false;
+}
+
+// Walks a chain (a statement list or an argument list).
+fn scan_write(n *Node, iv *Var) bool {
+	while (n as i64 != 0) {
+		if (node_write(n, iv)) { return true; }
+		if (field_scan(n, iv)) { return true; }
+		n = n.next;
+	}
+	return false;
+}
+
+// Walks the children of a single node, without following next.
+fn field_scan(n *Node, iv *Var) bool {
+	if (scan_write(n.lhs, iv)) { return true; }
+	if (scan_write(n.rhs, iv)) { return true; }
+	if (scan_write(n.cond, iv)) { return true; }
+	if (scan_write(n.then, iv)) { return true; }
+	if (scan_write(n.els, iv)) { return true; }
+	if (scan_write(n.init, iv)) { return true; }
+	if (scan_write(n.step, iv)) { return true; }
+	if (scan_write(n.body, iv)) { return true; }
+	return scan_write(n.args, iv);
+}
+
+// For the while shape: the increment must be a top-level statement of the
+// block, shaped `i = i + 1` / `i += 1`, and it must be the only write to i.
+fn body_inc(n *Node, iv *Var, out **Node) bool {
+	if (n.kind != ND_BLOCK) { return false; }
+	var found *Node = 0 as *Node;
+	var i *Node = n.body;
+	while (i as i64 != 0) {
+		if (is_iwrite(i, iv)) {
+			if (found as i64 != 0) { return false; }
+			if (!stmt_add1(i, iv)) { return false; }
+			found = i;
+		} else {
+			if (field_scan(i, iv)) { return false; }
+		}
+		i = i.next;
+	}
+	if (found as i64 == 0) { return false; }
+	*out = found;
+	return true;
+}
+
+fn stmt_add1(st *Node, iv *Var) bool {
+	if (st.kind != ND_EXPRSTMT) { return false; }
+	return step_add1(st.lhs, iv);
+}
+
+// ── the loop itself ──
+
+fn elide_loop(n *Node, prev *Node, taken **Var, ntaken int) {
+	if (n.cond as i64 == 0 || n.cond.kind != ND_LT) { return; }
+	if (n.cond.lhs.kind != ND_VAR || n.cond.rhs.kind != ND_NUM) { return; }
+	var iv *Var = n.cond.lhs.varp;
+	var K i64 = n.cond.rhs.val;
+	if (K < 0) { return; }
+	if (iv.is_global) { return; }
+	if (addr_taken(taken, ntaken, iv)) { return; }
+
+	if (n.init as i64 != 0) {
+		if (!entry_const(n.init, iv)) { return; }
+	} else {
+		if (!entry_const(prev, iv)) { return; }
+	}
+
+	if (n.step as i64 != 0) {
+		if (!step_add1(n.step, iv)) { return; }
+		if (scan_write(n.body, iv)) { return; }
+		mark_chain(n.body, iv, K);
+	} else {
+		var inc *Node = 0 as *Node;
+		if (!body_inc(n.body, iv, &inc)) { return; }
+		mark_until(n.body, iv, K, inc);
+	}
+}
+
+// ── marking ──
+
+fn mark_chain(n *Node, iv *Var, K i64) {
+	while (n as i64 != 0) {
+		mark_node(n, iv, K);
+		n = n.next;
+	}
+}
+
+fn mark_node(n *Node, iv *Var, K i64) {
+	if (n.kind == ND_INDEX && n.rhs.kind == ND_VAR && (n.rhs.varp as i64) == (iv as i64) &&
+	    n.lhs.ty as i64 != 0 && n.lhs.ty.kind == TY_ARRAY && n.lhs.ty.len == K) {
+		n.nobounds = true;
+	}
+	mark_chain(n.lhs, iv, K);
+	mark_chain(n.rhs, iv, K);
+	mark_chain(n.cond, iv, K);
+	mark_chain(n.then, iv, K);
+	mark_chain(n.els, iv, K);
+	mark_chain(n.init, iv, K);
+	mark_chain(n.step, iv, K);
+	mark_chain(n.body, iv, K);
+	mark_chain(n.args, iv, K);
+}
+
+// The while-shape: only the top-level statements before the increment.
+fn mark_until(n *Node, iv *Var, K i64, stop *Node) {
+	var i *Node = n.body;
+	while (i as i64 != 0) {
+		if (i == stop) { return; }
+		mark_node(i, iv, K);
+		i = i.next;
+	}
+}

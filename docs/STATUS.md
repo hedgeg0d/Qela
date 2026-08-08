@@ -10,7 +10,7 @@ Updated 2026-08-03. Read `BOOTSTRAP.md` first; it constrains everything below.
 | **S2 — the shipped compiler, Qela compiled by itself** | **179 832 B** |
 | S2 under xz -9 (proxy for upx --lzma) | 43 248 B, ~4.1% of the 1 MiB budget |
 | stage1 sources | 7 454 lines of Qela |
-| Emitted code vs `gcc -Os` on `bench/` | **226%**, or **193%** without bounds checks (M4 gate wants ≤150%) |
+| Emitted code vs `gcc -Os` on `bench/` | **218%**, or **193%** without bounds checks (M4 gate wants ≤150%) |
 
 Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the
 38-test corpus under S2, the embedded stdlib resolving outside the source tree,
@@ -67,10 +67,10 @@ started.
 
 ### 1. Emitted code size (M4)
 
-226% of `gcc -Os`, down from 355%; 193% with bounds checks off, which is the
+218% of `gcc -Os`, down from 355%; 193% with bounds checks off, which is the
 number comparable to what gcc emits. `fib` is already at 153%.
 
-Done, in `srcql/regalloc.qela` and `srcql/codegen.qela`:
+Done, in `srcql/regalloc.qela`, `srcql/codegen.qela` and `srcql/bounds.qela`:
 
 - **Register promotion.** Scalar locals whose address is never taken live in a
   register for their whole live range. Ranges come from a linear walk of the
@@ -93,17 +93,17 @@ Done, in `srcql/regalloc.qela` and `srcql/codegen.qela`:
   trampoline at the end of their own function so they relax too.
 - **Absolute addressing.** Globals and string literals are `mov reg, imm32`
   rather than a RIP-relative `lea`; the image lives below 4 GiB.
+- **Redundant bounds checks.** `srcql/bounds.qela` drops the check on an array
+  access the loop already proves in bounds: the exact shape `for (i = c; i < K;
+  i += 1) { a[i] }` and `i = c; while (i < K) { ... a[i] ...; i += 1; }`, with
+  `c >= 0`, `K` a literal equal to the array's length, no other write to `i`
+  and its address never taken. The lower half is induction: the increment only
+  runs while `i < K <= 2^63-1`, so `i + 1` cannot wrap. Tests
+  `tests/boundsloop.qela` and `tests/boundsoob.qela` pin the soundness both
+  ways. `sieve` went 317% -> 297%.
 
 What is left, in order of what it would buy:
 
-- **Redundant bounds checks.** `while (i < N) { a[i] ... }` emits a compare the
-  loop condition already made. Eliminating it needs to prove `0 <= i < N` at the
-  access. The upper half is the loop condition; the lower half needs a
-  whole-function pass showing every write to `i` keeps it non-negative.
-  **Careful:** deriving that from `a + b` with both non-negative assumes the
-  addition does not wrap, and Qela defines wrapping. An unsound elision here
-  corrupts memory rather than producing a wrong number, so it needs either an
-  overflow argument or a narrower rule.
 - **Loop-invariant addresses.** The address of a global array is recomputed on
   every access inside a loop.
 - **Common subexpressions.** Nothing is reused between statements.
