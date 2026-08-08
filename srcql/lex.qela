@@ -123,6 +123,7 @@ fn punct_len(src str, i i64) i64 {
 		if (c0 == '>' && c1 == '>') { return 2; }
 		if (c0 == '.' && c1 == '.') { return 2; }
 		if (c0 == '=' && c1 == '>') { return 2; }
+		if (c0 == '<' && c1 == '-') { return 2; }
 	}
 	return 1;
 }
