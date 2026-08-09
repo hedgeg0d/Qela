@@ -613,14 +613,7 @@ fn gen_call(n *Node) {
 	if (ret_mem) { hidden = n.tmp.offset as i64; }
 	gen_args(n, false, false, hidden);
 
-	var odd bool = (depth & 1) != 0;
-	if (odd) {
-		b1(0x48); b1(0x83); modrm(3, 5, RSP); b1(8);
-	}
 	add_call(n.name, n.pos);
-	if (odd) {
-		b1(0x48); b1(0x83); modrm(3, 0, RSP); b1(8);
-	}
 	if (is_aggregate(n.ty) && !ret_mem) {
 		var off i64 = n.tmp.offset as i64;
 		st_local(off, RAX);
