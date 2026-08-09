@@ -72,6 +72,8 @@ fn coro_pending() bool {
 	return false;
 }
 
+fn coro_slots() int { return ncoros; }
+
 // Returns false when nothing else could run, which lets a blocked channel
 // operation tell waiting apart from deadlock.
 fn coro_yield() bool {
