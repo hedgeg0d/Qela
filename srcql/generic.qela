@@ -1,0 +1,165 @@
+import "comp.qela";
+import "diag.qela";
+import "type.qela";
+
+// Parameterized types. `struct Chan(T) { ... }` is not a type; it is a template
+// whose body was parsed once with T bound to a type variable. Writing Chan(i64)
+// clones that body with T replaced and lays the result out.
+//
+// An argument that is still a type variable cannot be laid out yet, so the
+// application stays as a TY_GENERIC and is finished when the enclosing generic
+// function is monomorphized. Instances are registered under their printed name,
+// so the same arguments always name the same type: struct identity is pointer
+// identity here.
+
+var tmpls *Tmpl;
+
+fn tmpl_add(tm *Tmpl) {
+	tm.next = tmpls;
+	tmpls = tm;
+}
+
+fn tmpl_find(name str) *Tmpl {
+	var tm *Tmpl = tmpls;
+	while (tm as i64 != 0) {
+		if (str_eq(tm.name, name)) { return tm; }
+		tm = tm.next;
+	}
+	return 0 as *Tmpl;
+}
+
+fn type_has_var(t *Type) bool {
+	if (t as i64 == 0) { return false; }
+	if (t.kind == TY_TYPEVAR || t.kind == TY_GENERIC) { return true; }
+	if (t.kind == TY_PTR || t.kind == TY_ARRAY || t.kind == TY_SLICE) {
+		return type_has_var(t.base);
+	}
+	return false;
+}
+
+fn inst_name(tm *Tmpl, a0 *Type, a1 *Type) str {
+	var b Buf;
+	fmt_str(&b, tm.name);
+	buf_u8(&b, '(');
+	fmt_str(&b, type_name(a0));
+	if (tm.nparams > 1) {
+		buf_u8(&b, ',');
+		fmt_str(&b, type_name(a1));
+	}
+	buf_u8(&b, ')');
+	return buf_str(&b);
+}
+
+var gt0 *Type;
+var gc0 *Type;
+var gt1 *Type;
+var gc1 *Type;
+
+fn gsubst(t *Type) *Type {
+	if (t as i64 == 0) { return t; }
+	if (gt0 as i64 != 0 && t as i64 == gt0 as i64) { return gc0; }
+	if (gt1 as i64 != 0 && t as i64 == gt1 as i64) { return gc1; }
+	if (t.kind == TY_PTR) {
+		var b *Type = gsubst(t.base);
+		if (b as i64 != t.base as i64) { return type_ptr(b); }
+		return t;
+	}
+	if (t.kind == TY_ARRAY) {
+		var b *Type = gsubst(t.base);
+		if (b as i64 != t.base as i64) { return type_array(b, t.len); }
+		return t;
+	}
+	if (t.kind == TY_SLICE) {
+		var b *Type = gsubst(t.base);
+		if (b as i64 != t.base as i64) { return type_slice(b); }
+		return t;
+	}
+	if (t.kind == TY_GENERIC) {
+		var b0 *Type = gsubst(t.ga0);
+		var b1 *Type = gsubst(t.ga1);
+		if (b0 as i64 != t.ga0 as i64 || b1 as i64 != t.ga1 as i64) {
+			return generic_instance(t.tmpl, b0, b1);
+		}
+		return t;
+	}
+	return t;
+}
+
+fn clone_members(src *Member) *Member {
+	var head Member;
+	var tail *Member = &head;
+	var m *Member = src;
+	while (m as i64 != 0) {
+		var c *Member = arena_alloc(sizeof(Member), 8) as *Member;
+		*c = *m;
+		c.next = 0 as *Member;
+		c.ty = gsubst(m.ty);
+		tail.next = c;
+		tail = c;
+		m = m.next;
+	}
+	return head.next;
+}
+
+fn generic_instance(tm *Tmpl, a0 *Type, a1 *Type) *Type {
+	if (type_has_var(a0) || type_has_var(a1)) {
+		var g *Type = arena_alloc(sizeof(Type), 8) as *Type;
+		g.kind = TY_GENERIC;
+		g.size = 8;
+		g.align = 8;
+		g.tmpl = tm;
+		g.ga0 = a0;
+		g.ga1 = a1;
+		g.name = inst_name(tm, a0, a1);
+		return g;
+	}
+
+	var nm str = inst_name(tm, a0, a1);
+	var found *Type = type_lookup(nm);
+	if (found as i64 != 0) { return found; }
+
+	var ty *Type = arena_alloc(sizeof(Type), 8) as *Type;
+	ty.kind = tm.proto.kind;
+	ty.name = str_dup(nm);
+	ty.align = 1;
+	// Kept so inference can see which template and arguments produced this.
+	ty.tmpl = tm;
+	ty.ga0 = a0;
+	ty.ga1 = a1;
+	// Registered before the body is filled in, so a member pointing back at the
+	// same instance finds it instead of instantiating for ever.
+	type_define(ty.name, ty);
+
+	var s0 *Type = gt0;
+	var s1 *Type = gt1;
+	var d0 *Type = gc0;
+	var d1 *Type = gc1;
+	gt0 = tm.tv0;
+	gc0 = a0;
+	gt1 = tm.tv1;
+	gc1 = a1;
+
+	ty.members = clone_members(tm.proto.members);
+
+	var vhead Variant;
+	var vtail *Variant = &vhead;
+	var v *Variant = tm.proto.variants;
+	while (v as i64 != 0) {
+		var c *Variant = arena_alloc(sizeof(Variant), 8) as *Variant;
+		*c = *v;
+		c.next = 0 as *Variant;
+		c.fields = clone_members(v.fields);
+		vtail.next = c;
+		vtail = c;
+		v = v.next;
+	}
+	ty.variants = vhead.next;
+
+	gt0 = s0;
+	gc0 = d0;
+	gt1 = s1;
+	gc1 = d1;
+
+	if (ty.kind == TY_ENUM) { layout_enum(ty); } else { layout_struct(ty); }
+	return ty;
+}

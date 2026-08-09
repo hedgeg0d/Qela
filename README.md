@@ -27,18 +27,33 @@ The design goal is the most language per byte. The compiler is currently
 ## What it has
 
 Fixed-width integers, pointers, arrays, slices and `str`, structs with
-literals, enums with payloads and exhaustive `match`, `defer`, generics by
-monomorphization, and `comptime` blocks evaluated during type checking.
+literals, enums with payloads and exhaustive `match`, `defer`, and `comptime`
+blocks evaluated during type checking.
 
-Coroutines on their own stacks with `spawn`, and channels:
+Generics by monomorphization, over functions and over types, with the type
+argument inferred from the call:
 
 ```qela
-spawn producer(4, 10);
+struct Pair(T) { a T, b T, }
+
+fn first(comptime T: type, p *Pair(T)) T { return p.a; }
+
+var p Pair(i64);
+var x i64 = first(&p);   // T is i64, nobody had to say so
+```
+
+Coroutines on their own stacks with `spawn`, and channels of any type:
+
+```qela
+var ch Chan(Msg);
+chan_init(&ch, 8);
+
+spawn producer(4);
 spawn consumer(4);
 coro_run_all();
 
-ch <- 42;
-var v i64 = <-ch;
+ch <- m;
+var v Msg = <-ch;
 ```
 
 A conservative mark-sweep collector for programs whose lifetimes are not

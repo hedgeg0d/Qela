@@ -193,6 +193,43 @@ fn emsg_ty(t *Type) { fmt_str(&errbuf, type_name(t)); }
 
 fn efail(pos i64) { error_at(pos, buf_str(&errbuf)); }
 
+// Field offsets, size and alignment from a member list. Shared by the struct
+// parser and by instantiation of a parameterized type.
+fn layout_struct(ty *Type) {
+	var off int = 0;
+	var align int = 1;
+	var m *Member = ty.members;
+	while (m as i64 != 0) {
+		off = (off + m.ty.align - 1) & ~(m.ty.align - 1);
+		m.offset = off;
+		off = off + m.ty.size;
+		if (m.ty.align > align) { align = m.ty.align; }
+		m = m.next;
+	}
+	ty.align = align;
+	ty.size = (off + align - 1) & ~(align - 1);
+}
+
+// A payload starts after the tag word; the enum is as wide as its widest one.
+fn layout_enum(ty *Type) {
+	var maxpay int = 0;
+	var v *Variant = ty.variants;
+	while (v as i64 != 0) {
+		var off int = 8;
+		var m *Member = v.fields;
+		while (m as i64 != 0) {
+			off = (off + m.ty.align - 1) & ~(m.ty.align - 1);
+			m.offset = off;
+			off = off + m.ty.size;
+			m = m.next;
+		}
+		if (off - 8 > maxpay) { maxpay = off - 8; }
+		v = v.next;
+	}
+	ty.align = 8;
+	ty.size = ((8 + maxpay + 7) & ~7) as int;
+}
+
 fn same_type(a *Type, b *Type) bool {
 	if (a as i64 == b as i64) { return true; }
 	if (a.kind != b.kind) { return false; }
@@ -322,6 +359,14 @@ fn tsubst(t *Type) *Type {
 		if (b as i64 != t.base as i64) { return type_slice(b); }
 		return t;
 	}
+	if (t.kind == TY_GENERIC) {
+		var b0 *Type = tsubst(t.ga0);
+		var b1 *Type = tsubst(t.ga1);
+		if (b0 as i64 != t.ga0 as i64 || b1 as i64 != t.ga1 as i64) {
+			return generic_instance(t.tmpl, b0, b1);
+		}
+		return t;
+	}
 	return t;
 }
 
@@ -433,27 +478,86 @@ fn clone_func(f *Func) *Func {
 	return f2;
 }
 
+// Match a declared parameter type against the type of the argument passed for
+// it, binding each type variable to what it stands for. Only the shapes that
+// can carry a variable are walked; anything else contributes nothing.
+fn unify(decl *Type, act *Type) {
+	if (decl as i64 == 0 || act as i64 == 0) { return; }
+	if (decl.kind == TY_TYPEVAR) {
+		var i int = 0;
+		while (i < subst_n) {
+			if (decl as i64 == subst_vars[i] as i64) {
+				if (subst_concretes[i] as i64 == 0) { subst_concretes[i] = act; }
+				return;
+			}
+			i = i + 1;
+		}
+		return;
+	}
+	if (decl.kind == TY_PTR || decl.kind == TY_SLICE || decl.kind == TY_ARRAY) {
+		if (act.kind == decl.kind) { unify(decl.base, act.base); }
+		return;
+	}
+	if (decl.kind == TY_GENERIC) {
+		if (act.tmpl as i64 != decl.tmpl as i64) { return; }
+		unify(decl.ga0, act.ga0);
+		unify(decl.ga1, act.ga1);
+	}
+}
+
 fn monomorphize_call(n *Node, f *Func) {
 	var nct int = f.nct;
-	var a *Node = n.args;
 	var i int = 0;
 	while (i < nct) {
-		if (a as i64 == 0) { error_at(n.pos, "expected a type argument"); }
-		if (a.kind != ND_TYPEEXPR) { error_at(a.pos, "expected a type argument"); }
-		if (a.typeval as i64 == 0 || a.typeval.kind == TY_TYPEVAR) {
-			error_at(a.pos, "type argument must be a concrete type");
-		}
-		subst_concretes[i] = a.typeval;
-		a = a.next;
+		subst_vars[i] = func_param(f, i).ty;
+		subst_concretes[i] = 0 as *Type;
 		i = i + 1;
 	}
 	subst_n = nct;
+
+	var a *Node = n.args;
+	var given int = 0;
+	if (a as i64 != 0 && a.kind == ND_TYPEEXPR) {
+		i = 0;
+		while (i < nct) {
+			if (a as i64 == 0) { error_at(n.pos, "expected a type argument"); }
+			if (a.kind != ND_TYPEEXPR) { error_at(a.pos, "expected a type argument"); }
+			if (a.typeval as i64 == 0 || type_has_var(a.typeval)) {
+				error_at(a.pos, "type argument must be a concrete type");
+			}
+			subst_concretes[i] = a.typeval;
+			a = a.next;
+			i = i + 1;
+		}
+		given = nct;
+	} else {
+		// No type arguments written out: read them off the value arguments.
+		var arg *Node = n.args;
+		i = nct;
+		while (i < f.nparams && arg as i64 != 0) {
+			unify(func_param(f, i).ty, arg.ty);
+			arg = arg.next;
+			i = i + 1;
+		}
+		i = 0;
+		while (i < nct) {
+			if (subst_concretes[i] as i64 == 0) {
+				emsg("cannot tell what '"); emsg(func_param(f, i).ty.name);
+				emsg("' is in this call to '"); emsg(n.name); emsg("'");
+				efail(n.pos);
+			}
+			if (type_has_var(subst_concretes[i])) {
+				error_at(n.pos, "type argument must be a concrete type");
+			}
+			i = i + 1;
+		}
+	}
 
 	var f2 *Func = clone_func(f);
 
 	n.name = f2.name;
 	n.args = a;
-	n.nargs = n.nargs - nct;
+	n.nargs = n.nargs - given;
 
 	// Typing the instantiation happens in the middle of typing the caller,
 	// so the current function has to be restored: otherwise the caller's
