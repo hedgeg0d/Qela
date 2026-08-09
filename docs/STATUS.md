@@ -7,13 +7,13 @@ Updated 2026-08-03. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **186 368 B** |
-| S2 under xz -9 (proxy for upx --lzma) | 44 616 B, ~4.3% of the 1 MiB budget |
-| stage1 sources | 7 752 lines of Qela |
+| **S2 — the shipped compiler, Qela compiled by itself** | **187 520 B** |
+| S2 under xz -9 (proxy for upx --lzma) | 44 936 B, ~4.3% of the 1 MiB budget |
+| stage1 sources | 7 873 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **218%**, or **193%** without bounds checks (M4 gate wants ≤150%) |
 
 Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the
-46-test corpus under S2, the embedded stdlib resolving outside the source tree,
+49-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, and a scripted language
 server conversation.
 
@@ -29,7 +29,10 @@ declaration; modules via `import`; `comptime` blocks; generics by
 monomorphization, with the type argument inferred from the value arguments
 when it is not written out; `syscall`; `asm(byte, byte, ...)` for raw machine
 code with the result convention that whatever's left in `RAX` is the
-expression's value, same as `syscall`; `main(argc, argv)`; bounds checks.
+expression's value, same as `syscall`; more than 6 function parameters, the
+7th and later spilled to the stack per SysV (one-word parameters only --
+a `str`/8-16-byte struct that would overflow the register budget is still
+rejected); `main(argc, argv)`; bounds checks.
 
 **Concurrency.** `spawn f(...)`, `coro_yield`, `coro_run_all` on separate
 stacks; `Chan(T)`, buffered channels of any element type, and rendezvous at
