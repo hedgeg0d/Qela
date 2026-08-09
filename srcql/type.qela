@@ -901,6 +901,7 @@ fn add_type(n *Node) {
 
 	if (k == ND_ENUMLIT) { type_enumlit(n); return; }
 	if (k == ND_RET) { type_ret(n); return; }
+	if (k == ND_ZERO) { n.ty = ty_void; return; }
 	if (k == ND_FIELD) { return; }
 	if (k == ND_STRUCTLIT) { type_structlit(n); return; }
 
