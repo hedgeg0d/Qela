@@ -665,6 +665,19 @@ fn alu_rax_imm(ext int, v i64) {
 	}
 }
 
+fn alu_rax_imm_reg(ext int, reg int, v i64) {
+	rex_w(0, reg);
+	if (v >= -128 && v <= 127) {
+		b1(0x83);
+		modrm(3, ext, reg);
+		b1(v);
+	} else {
+		b1(0x81);
+		modrm(3, ext, reg);
+		b4(v);
+	}
+}
+
 fn alu_ext_for(kind int) int {
 	if (kind == ND_ADD) { return 0; }
 	if (kind == ND_BITOR) { return 1; }
@@ -728,6 +741,134 @@ fn gen_binop_imm(n *Node, v i64) bool {
 		return true;
 	}
 	return false;
+}
+
+// rax <op> [rbp-off], for the common case of a machine-word local on the
+// right: one instruction instead of a load, a push and a pop.
+fn alu_rax_mem(op0 i64, op1 i64, off i64) {
+	b1(0x48);
+	if (op0 != 0) { b1(op0); }
+	b1(op1);
+	var disp i64 = -off;
+	if (disp >= -128 && disp <= 127) {
+		modrm(1, RAX, RBP);
+		b1(disp);
+	} else {
+		modrm(2, RAX, RBP);
+		b4(disp);
+	}
+}
+
+fn gen_binop_mem(n *Node, off i64) bool {
+	var k int = n.kind;
+	gen_expr(n.lhs);
+	if (k == ND_ADD)    { alu_rax_mem(0, 0x03, off); return true; }
+	if (k == ND_SUB)    { alu_rax_mem(0, 0x2b, off); return true; }
+	if (k == ND_BITAND) { alu_rax_mem(0, 0x23, off); return true; }
+	if (k == ND_BITOR)  { alu_rax_mem(0, 0x0b, off); return true; }
+	if (k == ND_BITXOR) { alu_rax_mem(0, 0x33, off); return true; }
+	if (k == ND_MUL)    { alu_rax_mem(0x0f, 0xaf, off); return true; }
+	alu_rax_mem(0, 0x3b, off);
+	setcc(cmp_cc_for(n));
+	return true;
+}
+
+fn mem_binop_ok(n *Node) bool {
+	var k int = n.kind;
+	if (k != ND_ADD && k != ND_SUB && k != ND_BITAND && k != ND_BITOR &&
+	    k != ND_BITXOR && k != ND_MUL && k != ND_EQ && k != ND_NE &&
+	    k != ND_LT && k != ND_LE) {
+		return false;
+	}
+	return direct_local(n.rhs);
+}
+
+fn is_compare(n *Node) bool {
+	var k int = n.kind;
+	return k == ND_EQ || k == ND_NE || k == ND_LT || k == ND_LE;
+}
+
+// Emits the comparison and returns its setcc opcode, without materialising
+// a boolean. Callers that only branch on the result skip setcc entirely.
+fn gen_compare(n *Node) i64 {
+	var lt *Type = n.lhs.ty;
+	if (n.rhs.kind == ND_NUM && fits_imm32(n.rhs.val) &&
+	    (lt.kind != TY_PTR || n.rhs.val == 0)) {
+		gen_expr(n.lhs);
+		alu_rax_imm(7, n.rhs.val);
+		return cmp_cc_for(n);
+	}
+	if (lt.kind != TY_PTR && direct_local(n.rhs)) {
+		gen_expr(n.lhs);
+		alu_rax_mem(0, 0x3b, n.rhs.varp.offset as i64);
+		return cmp_cc_for(n);
+	}
+	gen_expr(n.rhs);
+	push_reg(RAX);
+	gen_expr(n.lhs);
+	pop_reg(RDI);
+	rex_w(RDI, RAX);
+	b1(0x39);
+	modrm(3, RDI, RAX);
+	return cmp_cc_for(n);
+}
+
+fn patch_all(l *I64List) {
+	var i i64 = 0;
+	while (i < l.n) { patch_here(l.p[i]); i = i + 1; }
+}
+
+// Short-circuit conditions become branches instead of a materialised 0/1.
+// setcc and jcc share their low nibble, and flipping bit 0 inverts the
+// condition, so a setcc opcode converts to its jcc by (cc ^ 1) - 0x10.
+fn branch_false(n *Node, out *I64List) {
+	var k int = n.kind;
+	if (k == ND_AND) {
+		branch_false(n.lhs, out);
+		branch_false(n.rhs, out);
+		return;
+	}
+	if (k == ND_OR) {
+		var taken I64List;
+		branch_true(n.lhs, &taken);
+		branch_false(n.rhs, out);
+		patch_all(&taken);
+		return;
+	}
+	if (k == ND_NOT) { branch_true(n.lhs, out); return; }
+	if (is_compare(n)) {
+		var cc i64 = gen_compare(n);
+		ilist_push(out, jump((cc ^ 1) - 0x10));
+		return;
+	}
+	gen_expr(n);
+	test_rax();
+	ilist_push(out, jump(0x84));
+}
+
+fn branch_true(n *Node, out *I64List) {
+	var k int = n.kind;
+	if (k == ND_OR) {
+		branch_true(n.lhs, out);
+		branch_true(n.rhs, out);
+		return;
+	}
+	if (k == ND_AND) {
+		var missed I64List;
+		branch_false(n.lhs, &missed);
+		branch_true(n.rhs, out);
+		patch_all(&missed);
+		return;
+	}
+	if (k == ND_NOT) { branch_false(n.lhs, out); return; }
+	if (is_compare(n)) {
+		var cc i64 = gen_compare(n);
+		ilist_push(out, jump(cc - 0x10));
+		return;
+	}
+	gen_expr(n);
+	test_rax();
+	ilist_push(out, jump(0x85));
 }
 
 fn gen_expr(n *Node) {
@@ -824,10 +965,18 @@ fn gen_expr(n *Node) {
 	var rt *Type = n.rhs.ty;
 	var ptr_diff bool = k == ND_SUB && lt.kind == TY_PTR && rt.kind == TY_PTR;
 
-	if (n.rhs.kind == ND_NUM && !ptr_diff) {
+	var k2 int = n.kind;
+	if (n.rhs.kind == ND_NUM && !ptr_diff && !(lt.kind == TY_PTR && k2 != ND_ADD && k2 != ND_SUB && n.rhs.val != 0)) {
 		var v i64 = n.rhs.val;
-		if (lt.kind == TY_PTR) { v = v * (lt.base.size as i64); }
+		if (lt.kind == TY_PTR) {
+			if (k2 != ND_ADD && k2 != ND_SUB) { v = v; }
+			else { v = v * (lt.base.size as i64); }
+		}
 		if (fits_imm32(v) && gen_binop_imm(n, v)) { return; }
+	}
+
+	if (!ptr_diff && lt.kind != TY_PTR && mem_binop_ok(n)) {
+		if (gen_binop_mem(n, n.rhs.varp.offset as i64)) { return; }
 	}
 
 	gen_expr(n.rhs);
@@ -962,9 +1111,7 @@ fn gen_for(n *Node) {
 
 	var top i64 = code.n;
 	if (n.cond as i64 != 0) {
-		gen_expr(n.cond);
-		test_rax();
-		ilist_push(&lp.brk, jump(0x84));
+		branch_false(n.cond, &lp.brk);
 	}
 	gen_stmt(n.body);
 
@@ -996,17 +1143,16 @@ fn gen_stmt(n *Node) {
 	}
 	if (k == ND_RET) { gen_ret(n); return; }
 	if (k == ND_IF) {
-		gen_expr(n.cond);
-		test_rax();
-		var els i64 = jump(0x84);
+		var els I64List;
+		branch_false(n.cond, &els);
 		gen_stmt(n.then);
 		if (n.els as i64 != 0) {
 			var end i64 = jump(0);
-			patch_here(els);
+			patch_all(&els);
 			gen_stmt(n.els);
 			patch_here(end);
 		} else {
-			patch_here(els);
+			patch_all(&els);
 		}
 		return;
 	}
@@ -1038,9 +1184,7 @@ fn gen_func(f *Func) {
 	depth = depth - 1;
 	mov_reg_reg(RBP, RSP);
 	if (f.stack_size != 0) {
-		b1(0x48); b1(0x81);
-		modrm(3, 5, RSP);
-		b4(f.stack_size as i64);
+		alu_rax_imm_reg(5, RSP, f.stack_size as i64);
 	}
 
 	var ri int = 0;
