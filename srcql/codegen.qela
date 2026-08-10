@@ -647,6 +647,89 @@ fn gen_opassign(n *Node) {
 	store(n.lhs.ty);
 }
 
+fn fits_imm32(v i64) bool {
+	return v >= -2147483648 && v <= 2147483647;
+}
+
+// group-1 ALU op on rax with an immediate: 48 83 /ext ib or 48 81 /ext id
+fn alu_rax_imm(ext int, v i64) {
+	b1(0x48);
+	if (v >= -128 && v <= 127) {
+		b1(0x83);
+		modrm(3, ext, RAX);
+		b1(v);
+	} else {
+		b1(0x81);
+		modrm(3, ext, RAX);
+		b4(v);
+	}
+}
+
+fn alu_ext_for(kind int) int {
+	if (kind == ND_ADD) { return 0; }
+	if (kind == ND_BITOR) { return 1; }
+	if (kind == ND_BITAND) { return 4; }
+	if (kind == ND_SUB) { return 5; }
+	if (kind == ND_BITXOR) { return 6; }
+	return 7;
+}
+
+fn shift_ext_for(n *Node) int {
+	if (n.kind == ND_SHL) { return 4; }
+	if (n.ty.is_unsigned) { return 5; }
+	return 7;
+}
+
+fn cmp_cc_for(n *Node) i64 {
+	var uns bool = n.lhs.ty.is_unsigned || n.lhs.ty.kind == TY_PTR;
+	if (n.kind == ND_EQ) { return 0x94; }
+	if (n.kind == ND_NE) { return 0x95; }
+	if (n.kind == ND_LT) { if (uns) { return 0x92; } return 0x9c; }
+	if (uns) { return 0x96; }
+	return 0x9e;
+}
+
+// Folds a constant right operand into the instruction, which removes the
+// materialise/push/pop sequence the stack machine would otherwise emit.
+fn gen_binop_imm(n *Node, v i64) bool {
+	var k int = n.kind;
+	if (k == ND_ADD || k == ND_SUB || k == ND_BITAND || k == ND_BITOR ||
+	    k == ND_BITXOR) {
+		gen_expr(n.lhs);
+		alu_rax_imm(alu_ext_for(k), v);
+		return true;
+	}
+	if (k == ND_EQ || k == ND_NE || k == ND_LT || k == ND_LE) {
+		gen_expr(n.lhs);
+		alu_rax_imm(7, v);
+		setcc(cmp_cc_for(n));
+		return true;
+	}
+	if (k == ND_SHL || k == ND_SHR) {
+		if (v < 0 || v > 63) { return false; }
+		gen_expr(n.lhs);
+		b1(0x48); b1(0xc1);
+		modrm(3, shift_ext_for(n), RAX);
+		b1(v);
+		return true;
+	}
+	if (k == ND_MUL) {
+		gen_expr(n.lhs);
+		b1(0x48);
+		if (v >= -128 && v <= 127) {
+			b1(0x6b);
+			modrm(3, RAX, RAX);
+			b1(v);
+		} else {
+			b1(0x69);
+			modrm(3, RAX, RAX);
+			b4(v);
+		}
+		return true;
+	}
+	return false;
+}
+
 fn gen_expr(n *Node) {
 	var k int = n.kind;
 
@@ -740,6 +823,12 @@ fn gen_expr(n *Node) {
 	var lt *Type = n.lhs.ty;
 	var rt *Type = n.rhs.ty;
 	var ptr_diff bool = k == ND_SUB && lt.kind == TY_PTR && rt.kind == TY_PTR;
+
+	if (n.rhs.kind == ND_NUM && !ptr_diff) {
+		var v i64 = n.rhs.val;
+		if (lt.kind == TY_PTR) { v = v * (lt.base.size as i64); }
+		if (fits_imm32(v) && gen_binop_imm(n, v)) { return; }
+	}
 
 	gen_expr(n.rhs);
 	if (!ptr_diff && lt.kind == TY_PTR && rt.kind != TY_PTR) {
