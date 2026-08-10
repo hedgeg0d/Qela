@@ -6,6 +6,7 @@ import "type.qela";
 import "codegen.qela";
 import "elf.qela";
 import "fmt.qela";
+import "lsp.qela";
 import "../std/io.qela";
 
 fn default_output(path str) str {
@@ -102,6 +103,9 @@ fn main(argc int, argv **u8) int {
 	}
 	if (argc >= 2 && str_eq(str_from_cstr(argv[1]), "fmt")) {
 		return cmd_fmt(argc, argv);
+	}
+	if (argc >= 2 && str_eq(str_from_cstr(argv[1]), "--lsp")) {
+		return lsp_run();
 	}
 	var input str;
 	var output str;
