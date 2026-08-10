@@ -156,6 +156,23 @@ EOF
 ( cd "$tmp2" && "$root/$OUT/s2" gc.qela -o gc && ./gc ) ||
 	fail "the collector loses reachable objects or reclaims nothing"
 printf '    ok\n'
+
+step "run and fmt"
+cat > "$tmp2/tool.qela" <<'EOF'
+struct P{x int,y int,}
+fn area(p P)int{
+   var a int=p.x*p.y;
+if(a>10){return a;}else{return 0;}
+}
+fn main()int{var p P=P{x:3,y:4};return area(p);}
+EOF
+( cd "$tmp2" &&
+  "$root/$OUT/s2" fmt tool.qela > one.qela &&
+  "$root/$OUT/s2" fmt one.qela > two.qela &&
+  cmp -s one.qela two.qela &&
+  "$root/$OUT/s2" run one.qela; [ $? -eq 12 ] ) ||
+	fail "fmt is not idempotent, or run does not forward the exit status"
+printf '    ok\n'
 rm -rf "$tmp2"
 
 printf '\nShipping binary: %s\n' "$OUT/s2"

@@ -5,7 +5,12 @@ let SYS_WRITE = 1;
 let SYS_OPEN  = 2;
 let SYS_CLOSE = 3;
 let SYS_MMAP  = 9;
-let SYS_EXIT  = 60;
+let SYS_EXIT   = 60;
+let SYS_FORK   = 57;
+let SYS_EXECVE = 59;
+let SYS_WAIT4  = 61;
+let SYS_UNLINK = 87;
+let SYS_GETPID = 39;
 
 let STDOUT = 1;
 let STDERR = 2;
@@ -39,6 +44,20 @@ fn sys_mmap_anon(n i64) i64 {
 fn sys_exit(code i64) {
 	syscall(SYS_EXIT, code, 0, 0, 0, 0, 0);
 }
+
+fn sys_fork() i64 { return syscall(SYS_FORK, 0, 0, 0); }
+
+fn sys_execve(path *u8, argv *u8, envp *u8) i64 {
+	return syscall(SYS_EXECVE, path as i64, argv as i64, envp as i64);
+}
+
+fn sys_wait4(pid i64, status *u8) i64 {
+	return syscall(SYS_WAIT4, pid, status as i64, 0, 0);
+}
+
+fn sys_unlink(path *u8) i64 { return syscall(SYS_UNLINK, path as i64, 0, 0); }
+
+fn sys_getpid() i64 { return syscall(SYS_GETPID, 0, 0, 0); }
 
 fn write_str(fd i64, s str) {
 	sys_write(fd, s.ptr, s.len);
