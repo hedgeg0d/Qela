@@ -1,0 +1,61 @@
+import "comp.qela";
+import "../std/io.qela";
+
+fn elf_phdr(f *Buf, flags i64, off i64, vaddr i64, filesz i64, memsz i64) {
+	buf_u32(f, 1);
+	buf_u32(f, flags);
+	buf_u64(f, off);
+	buf_u64(f, vaddr);
+	buf_u64(f, vaddr);
+	buf_u64(f, filesz);
+	buf_u64(f, memsz);
+	buf_u64(f, SEG_GAP);
+}
+
+fn write_elf(path str, img *Image) {
+	var text i64 = img.code.n + img.rodata.n;
+	var rw i64 = img.data.n + img.bss_size;
+	var nph int = img.nph;
+	var hdr i64 = EHDR_SZ + PHDR_SZ * (nph as i64);
+
+	var data_off i64 = hdr + text;
+	var data_vaddr i64 = ELF_BASE + SEG_GAP + data_off;
+
+	var f Buf;
+	buf_grow(&f, data_off + img.data.n);
+
+	buf_u8(&f, 0x7f);
+	buf_u8(&f, 'E');
+	buf_u8(&f, 'L');
+	buf_u8(&f, 'F');
+	buf_u8(&f, 2);
+	buf_u8(&f, 1);
+	buf_u8(&f, 1);
+	var i i64 = 7;
+	while (i < 16) { buf_u8(&f, 0); i = i + 1; }
+
+	buf_u16(&f, 2);
+	buf_u16(&f, 0x3e);
+	buf_u32(&f, 1);
+	buf_u64(&f, ELF_BASE + hdr + img.entry);
+	buf_u64(&f, EHDR_SZ);
+	buf_u64(&f, 0);
+	buf_u32(&f, 0);
+	buf_u16(&f, EHDR_SZ);
+	buf_u16(&f, PHDR_SZ);
+	buf_u16(&f, nph as i64);
+	buf_u16(&f, 0);
+	buf_u16(&f, 0);
+	buf_u16(&f, 0);
+
+	elf_phdr(&f, 5, 0, ELF_BASE, hdr + text, hdr + text);
+	if (nph == 2) {
+		elf_phdr(&f, 6, data_off, data_vaddr, img.data.n, rw);
+	}
+
+	buf_bytes(&f, img.code.p, img.code.n);
+	buf_bytes(&f, img.rodata.p, img.rodata.n);
+	buf_bytes(&f, img.data.p, img.data.n);
+
+	write_file(path, f.p, f.n);
+}
