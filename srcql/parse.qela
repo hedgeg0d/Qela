@@ -342,6 +342,7 @@ fn parse_primary(t **Token) *Node {
 		if (tok_eq(*t, "(")) {
 			var kind int = ND_CALL;
 			if (str_eq(name, "syscall")) { kind = ND_SYSCALL; }
+			if (str_eq(name, "asm")) { kind = ND_ASM; }
 			var n *Node = new_node(kind, p);
 			n.name = name;
 			call_args(t, n);
