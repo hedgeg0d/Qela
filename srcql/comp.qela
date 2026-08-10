@@ -39,10 +39,23 @@ let TY_SLICE   = 6;
 let TY_ENUM    = 7;
 let TY_TYPE    = 8;
 let TY_TYPEVAR = 9;
+let TY_GENERIC = 10;
 
 struct Type;
 struct Member;
 struct Variant;
+struct Tmpl;
+
+// A parameterized type. `proto` is the body parsed once with the parameters
+// bound to type variables; instantiating clones it with them substituted.
+struct Tmpl {
+	next    *Tmpl,
+	name    str,
+	nparams int,
+	tv0     *Type,
+	tv1     *Type,
+	proto   *Type,
+}
 
 struct Member {
 	next   *Member,
@@ -71,6 +84,10 @@ struct Type {
 	name        str,
 	members     *Member,
 	variants    *Variant,
+	// TY_GENERIC only: the template and the arguments it is waiting on.
+	tmpl        *Tmpl,
+	ga0         *Type,
+	ga1         *Type,
 }
 
 let ND_NUM       = 0;

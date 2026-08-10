@@ -7,27 +7,31 @@ Updated 2026-08-03. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **155 848 B** |
-| S2 under xz -9 (proxy for upx --lzma) | 37 432 B, ~3.6% of the 1 MiB budget |
-| stage1 sources | 6 299 lines of Qela |
+| **S2 — the shipped compiler, Qela compiled by itself** | **161 832 B** |
+| S2 under xz -9 (proxy for upx --lzma) | 38 676 B, ~3.7% of the 1 MiB budget |
+| stage1 sources | 6 653 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **226%**, or **193%** without bounds checks (M4 gate wants ≤150%) |
 
 Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the
-30-test corpus under S2, the embedded stdlib resolving outside the source tree,
+31-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, and `run`/`fmt`.
 
 ## Done
 
 **Language.** i8–u64, bool, int/uint/usize; pointers, arrays, slices, `str`;
 structs with literals and forward declarations; enums with payloads and
-exhaustive `match`; `defer`; the full operator set with compound assignment;
+exhaustive `match`; parameterized types `struct Pair(T)` and `enum Opt(T)`,
+instantiated on use and cached so identical arguments name the same type;
+`defer`; the full operator set with compound assignment;
 `as`, `sizeof`, character literals, `true`/`false`; locals zeroed at their
 declaration; modules via `import`; `comptime` blocks; generics by
-monomorphization; `syscall`; `main(argc, argv)`; bounds checks.
+monomorphization, with the type argument inferred from the value arguments
+when it is not written out; `syscall`; `main(argc, argv)`; bounds checks.
 
 **Concurrency.** `spawn f(...)`, `coro_yield`, `coro_run_all` on separate
-stacks; buffered channels with `ch <- v` and `<-ch`, blocking through the
-scheduler, with deadlock detection rather than a spin.
+stacks; `Chan(T)`, buffered channels of any element type, with `ch <- v` and `<-ch`
+inferring that type, blocking through the scheduler, and deadlock detection
+rather than a spin.
 
 **Memory.** Arena by default; `std/gc.qela` is a conservative mark-sweep
 collector rooted in the callee-saved registers, the stack and the data segment.
@@ -110,8 +114,9 @@ doing only after 1b, so the second backend inherits a real allocator.
   sessions would have slipped past it**, including the two the register
   allocator would have been most likely to introduce. Still the cheapest way to
   buy confidence.
-- Unbuffered channels (true rendezvous); channels currently carry `i64`, with
-  pointers passed by cast.
+- Unbuffered channels (true rendezvous).
+- Parameterized types take at most two parameters, and there is no way to
+  constrain one. Both limits are in `srcql/generic.qela`.
 - `genblob.py --min` to strip comments and indentation from the embedded
   library. Measured: saves 416 bytes packed, and costs `--dump-std` its
   readability. Not worth it at 3.5% of budget.
