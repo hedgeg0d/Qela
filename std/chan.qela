@@ -1,0 +1,71 @@
+import "coro.qela";
+import "arena.qela";
+import "sys.qela";
+
+// Buffered channels over the cooperative scheduler. `ch <- v` and `<-ch`
+// desugar to chan_send and chan_recv, both of which hand control to another
+// coroutine while they cannot make progress.
+//
+// A blocked operation yields until the buffer changes. If nothing else can
+// run, no future yield can change anything either, so that is a deadlock and
+// the program says so instead of spinning.
+
+struct Chan {
+	buf    *i64,
+	cap    i64,
+	n      i64,
+	head   i64,
+	closed bool,
+}
+
+fn chan_init(c *Chan, cap i64) {
+	if (cap < 1) { cap = 1; }
+	c.buf = arena_alloc(cap * 8, 8) as *i64;
+	c.cap = cap;
+	c.n = 0;
+	c.head = 0;
+	c.closed = false;
+}
+
+fn chan_len(c *Chan) i64 { return c.n; }
+
+fn chan_is_closed(c *Chan) bool { return c.closed; }
+
+fn chan_close(c *Chan) { c.closed = true; }
+
+fn chan_block(what str) {
+	if (!coro_yield()) {
+		eprint("qela: deadlock, every coroutine is blocked on a channel ");
+		eprint(what);
+		eprint("\n");
+		sys_exit(1);
+	}
+}
+
+fn chan_send(c *Chan, v i64) {
+	if (c.closed) {
+		eprint("qela: send on a closed channel\n");
+		sys_exit(1);
+	}
+	while (c.n == c.cap) { chan_block("send"); }
+	var slot i64 = c.head + c.n;
+	if (slot >= c.cap) { slot = slot - c.cap; }
+	var p *i64 = c.buf as *i64;
+	p[slot] = v;
+	c.n = c.n + 1;
+}
+
+// Returns 0 once a closed channel has drained; pair it with chan_is_closed
+// when zero is a valid value.
+fn chan_recv(c *Chan) i64 {
+	while (c.n == 0) {
+		if (c.closed) { return 0; }
+		chan_block("receive");
+	}
+	var p *i64 = c.buf as *i64;
+	var v i64 = p[c.head];
+	c.head = c.head + 1;
+	if (c.head >= c.cap) { c.head = 0; }
+	c.n = c.n - 1;
+	return v;
+}
