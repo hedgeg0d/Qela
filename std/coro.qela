@@ -1,0 +1,95 @@
+import "sys.qela";
+import "arena.qela";
+
+// Cooperative coroutines on their own stacks. Slot 0 is the main context,
+// so switching back to the program is the same operation as switching
+// between coroutines. coro_switch and coro_entry_addr are compiler
+// intrinsics: the first is the stack swap, the second is the address of
+// the trampoline a fresh coroutine returns into.
+
+let CORO_STACK = 65536;
+let CORO_SLOTS = 256;
+
+struct Coro {
+	sp    i64,
+	done  bool,
+	alive bool,
+}
+
+var coros [256]Coro;
+var ncoros int = 0;
+var cur_coro int = 0;
+
+fn coro_spawn(target i64, a0 i64, a1 i64, a2 i64, a3 i64, a4 i64) {
+	if (ncoros + 1 >= CORO_SLOTS) { return; }
+	ncoros = ncoros + 1;
+	var id int = ncoros;
+
+	var stack *u8 = arena_alloc(CORO_STACK, 16);
+	var top i64 = ((stack as i64) + CORO_STACK) & ~15;
+
+	// Thirteen words: six callee-saved, the trampoline address, five
+	// arguments and the target. Landing on sp % 16 == 8 leaves the target
+	// with the alignment a call would have given it.
+	var sp0 i64 = top - 13 * 8;
+	if ((sp0 & 15) != 8) { sp0 = sp0 - 8; }
+
+	var p *i64 = sp0 as *i64;
+	var i i64 = 0;
+	while (i < 6) { p[i] = 0; i = i + 1; }
+	p[6] = coro_entry_addr();
+	p[7] = a0;
+	p[8] = a1;
+	p[9] = a2;
+	p[10] = a3;
+	p[11] = a4;
+	p[12] = target;
+
+	coros[id].sp = sp0;
+	coros[id].done = false;
+	coros[id].alive = true;
+}
+
+fn coro_next(from int) int {
+	var i int = from + 1;
+	var n int = ncoros + 1;
+	var seen int = 0;
+	while (seen <= ncoros) {
+		if (i > ncoros) { i = 0; }
+		if (i == 0 || (coros[i].alive && !coros[i].done)) { return i; }
+		i = i + 1;
+		seen = seen + 1;
+	}
+	return 0;
+}
+
+fn coro_pending() bool {
+	var i int = 1;
+	while (i <= ncoros) {
+		if (coros[i].alive && !coros[i].done) { return true; }
+		i = i + 1;
+	}
+	return false;
+}
+
+fn coro_yield() {
+	var from int = cur_coro;
+	var to int = coro_next(from);
+	if (to == from) { return; }
+	cur_coro = to;
+	coro_switch(&coros[from].sp as *u8, &coros[to].sp as *u8);
+}
+
+// Runs on the finishing coroutine's stack and never returns: the switch
+// away from a done slot is one-way.
+fn coro_finish() {
+	var from int = cur_coro;
+	coros[from].done = true;
+	var to int = coro_next(from);
+	cur_coro = to;
+	coro_switch(&coros[from].sp as *u8, &coros[to].sp as *u8);
+}
+
+fn coro_run_all() {
+	while (coro_pending()) { coro_yield(); }
+}

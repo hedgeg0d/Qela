@@ -732,7 +732,31 @@ fn type_ret(n *Node) {
 	n.lhs = cast_to(n.lhs, want);
 }
 
+// Two calls have no Qela definition: the compiler emits them directly.
+fn type_intrinsic(n *Node) bool {
+	if (str_eq(n.name, "coro_entry_addr")) {
+		if (n.nargs != 0) { error_at(n.pos, "coro_entry_addr takes no arguments"); }
+		n.ty = ty_i64;
+		return true;
+	}
+	if (str_eq(n.name, "coro_switch")) {
+		if (n.nargs != 2) { error_at(n.pos, "coro_switch takes two pointers"); }
+		var a *Node = n.args;
+		while (a as i64 != 0) {
+			a = to_value(a);
+			if (a.ty.kind != TY_PTR) {
+				error_at(a.pos, "coro_switch takes two pointers");
+			}
+			a = a.next;
+		}
+		n.ty = ty_void;
+		return true;
+	}
+	return false;
+}
+
 fn type_call(n *Node) {
+	if (type_intrinsic(n)) { return; }
 	var f *Func = find_func(n.name);
 	if (f as i64 == 0) {
 		emsg("undefined function '"); emsg(n.name); emsg("'"); efail(n.pos);
@@ -914,6 +938,7 @@ fn add_type(n *Node) {
 	if (k == ND_ENUMLIT) { type_enumlit(n); return; }
 	if (k == ND_RET) { type_ret(n); return; }
 	if (k == ND_ZERO) { n.ty = ty_void; return; }
+	if (k == ND_FUNCADDR) { n.ty = ty_i64; return; }
 	if (k == ND_FIELD) { return; }
 	if (k == ND_STRUCTLIT) { type_structlit(n); return; }
 
