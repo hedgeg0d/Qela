@@ -1,0 +1,8 @@
+#!/usr/bin/env qela run
+// stage1-only
+// expect-exit: 42
+// The first line is a shebang: the lexer skips `#!...` only at offset
+// zero; a `#` anywhere else is still an error.
+fn main() int {
+	return 42;
+}
