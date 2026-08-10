@@ -36,6 +36,17 @@ fn read_file(path str) str {
 	return buf_str(&b);
 }
 
+fn read_stdin() str {
+	var b Buf;
+	var got i64 = 1;
+	while (got > 0) {
+		buf_grow(&b, IO_CHUNK);
+		got = sys_read(0, b.p + b.n, IO_CHUNK);
+		if (got > 0) { b.n = b.n + got; }
+	}
+	return buf_str(&b);
+}
+
 fn write_file(path str, data *u8, n i64) {
 	var fd i64 = sys_open_exec(cstr(path));
 	if (fd < 0) {
