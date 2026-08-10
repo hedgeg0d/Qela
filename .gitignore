@@ -4,3 +4,5 @@
 /stage3
 /tests/out/
 /build/
+*.pyc
+__pycache__/
