@@ -89,48 +89,69 @@ fn merge_file(path str, tail *Token, head **Token) *Token {
 	return t;
 }
 
-fn cmd_build_dir(dir str, output str) {
+var g_dir_names [48]str;
+var g_dir_n int = 0;
+
+// Lists a directory's .qela files into g_dir_names, sorted by name.
+fn dir_list(dir str) {
 	var list Buf;
 	read_dir(dir, &list);
-	var names [48]str;
-	var n int = 0;
+	g_dir_n = 0;
 	var i i64 = 0;
 	var start i64 = 0;
 	while (i < list.n) {
 		if (list.p[i] == '\n') {
-			if (n >= 48) { die("error: too many .qela files in the directory"); }
-			names[n].ptr = list.p + start;
-			names[n].len = i - start;
-			n = n + 1;
+			if (g_dir_n >= 48) { die("error: too many .qela files in the directory"); }
+			g_dir_names[g_dir_n].ptr = list.p + start;
+			g_dir_names[g_dir_n].len = i - start;
+			g_dir_n = g_dir_n + 1;
 			start = i + 1;
 		}
 		i = i + 1;
 	}
-	if (n == 0) { die("error: no .qela files in the directory"); }
+	if (g_dir_n == 0) { die("error: no .qela files in the directory"); }
 
 	var k int = 0;
-	while (k < n) {
+	while (k < g_dir_n) {
 		var j int = k;
-		while (j > 0 && str_lt(names[j], names[j - 1])) {
-			var tmp str = names[j];
-			names[j] = names[j - 1];
-			names[j - 1] = tmp;
+		while (j > 0 && str_lt(g_dir_names[j], g_dir_names[j - 1])) {
+			var tmp str = g_dir_names[j];
+			g_dir_names[j] = g_dir_names[j - 1];
+			g_dir_names[j - 1] = tmp;
 			j = j - 1;
 		}
 		k = k + 1;
 	}
+}
 
+// The entry file of a directory: main.qela, or the sole file. Prints an
+// error and returns "" when there is nothing to build.
+fn dir_entry_path(dir str) str {
+	dir_list(dir);
 	var ei int = -1;
-	i = 0;
-	while (i < n) {
-		if (str_eq(names[i], "main.qela")) { ei = i as int; }
+	var i int = 0;
+	while (i < g_dir_n) {
+		if (str_eq(g_dir_names[i], "main.qela")) { ei = i; }
 		i = i + 1;
 	}
-	if (ei < 0 && n == 1) { ei = 0; }
+	if (ei < 0 && g_dir_n == 1) { ei = 0; }
 	if (ei < 0) {
 		eprint("error: no main.qela in the directory\n");
-		sys_exit(1);
+		return "";
 	}
+	var ep Buf;
+	fmt_str(&ep, dir);
+	if (ep.n == 0 || ep.p[ep.n - 1] != '/') { buf_u8(&ep, '/'); }
+	fmt_str(&ep, g_dir_names[ei]);
+	return buf_str(&ep);
+}
+
+// Merges every .qela file in the directory into one program: the entry file
+// (main.qela, or the sole file) comes last, everything else first in sorted
+// order, so functions call across files without imports.
+fn cmd_build_dir(dir str, output str) {
+	var epath str = dir_entry_path(dir);
+	if (epath.len == 0) { sys_exit(1); }
 
 	var dp Buf;
 	fmt_str(&dp, dir);
@@ -139,19 +160,14 @@ fn cmd_build_dir(dir str, output str) {
 	var head *Token = 0 as *Token;
 	var tail *Token = 0 as *Token;
 	var idx int = 0;
-	while (idx < n) {
-		if (idx != ei) {
-			var fp Buf;
-			fmt_str(&fp, buf_str(&dp));
-			fmt_str(&fp, names[idx]);
-			tail = merge_file(buf_str(&fp), tail, &head);
-		}
+	while (idx < g_dir_n) {
+		var fp Buf;
+		fmt_str(&fp, buf_str(&dp));
+		fmt_str(&fp, g_dir_names[idx]);
+		if (str_eq(buf_str(&fp), epath)) { idx = idx + 1; continue; }
+		tail = merge_file(buf_str(&fp), tail, &head);
 		idx = idx + 1;
 	}
-	var ep Buf;
-	fmt_str(&ep, buf_str(&dp));
-	fmt_str(&ep, names[ei]);
-	var epath str = buf_str(&ep);
 	tail = merge_file(epath, tail, &head);
 
 	set_module_dir(epath);
@@ -212,8 +228,193 @@ fn cmd_run(argc int, argv **u8) int {
 	return ((status[0] >> 8) & 255) as int;
 }
 
+// ── qela test: the compiler is also the test runner ──
+//
+// Reads the expectations from the source's leading comments:
+//
+//   // expect-exit: 42          the program must exit 42 (default 0)
+//   // expect-out: text         each line the output must contain, in order
+//   // expect-compile-error     the compiler must reject the file
+//
+// then compiles (a directory input merges like `qela .`), runs the binary
+// with any remaining arguments, captures stdout+stderr into a temp file
+// and compares. Prints one `ok name` / `FAIL name: detail` line per test
+// and exits with the number of failures.
+
+fn expect_has(src str, mark str) bool {
+	var i i64 = 0;
+	while (i + 2 < src.len) {
+		if (src.ptr[i] == '/' && src.ptr[i + 1] == '/' &&
+		    str_eq(str_slice(src, i + 3, i + 3 + mark.len), mark)) { return true; }
+		i = i + 1;
+	}
+	return false;
+}
+
+// Appends the text after the marker of every matching comment line, one
+// per line, to out. Returns whether any line matched.
+fn expect_lines(src str, mark str, out *Buf, n *int) bool {
+	var found bool = false;
+	var i i64 = 0;
+	while (i + 2 < src.len) {
+		if (src.ptr[i] == '/' && src.ptr[i + 1] == '/' &&
+		    str_eq(str_slice(src, i + 3, i + 3 + mark.len), mark)) {
+			found = true;
+			var j i64 = i + 3 + mark.len;
+			while (j < src.len && src.ptr[j] == ' ') { j = j + 1; }
+			var e i64 = j;
+			while (e < src.len && src.ptr[e] != '\n') { e = e + 1; }
+			if (*n > 0) { buf_u8(out, '\n'); }
+			var k i64 = j;
+			while (k < e) { buf_u8(out, src.ptr[k]); k = k + 1; }
+			*n = *n + 1;
+		}
+		i = i + 1;
+	}
+	return found;
+}
+
+fn parse_i64(s str) i64 {
+	var i i64 = 0;
+	var neg bool = false;
+	if (s.len > 0 && s.ptr[0] == '-') { neg = true; i = 1; }
+	var v i64 = 0;
+	while (i < s.len && s.ptr[i] >= '0' && s.ptr[i] <= '9') {
+		v = v * 10 + (s.ptr[i] as i64 - '0');
+		i = i + 1;
+	}
+	if (neg) { v = -v; }
+	return v;
+}
+
+fn test_ok(name str) {
+	write_str(STDOUT, "ok   ");
+	write_str(STDOUT, name);
+	write_str(STDOUT, "\n");
+}
+
+fn test_fail(name str, msg str) {
+	write_str(STDOUT, "FAIL ");
+	write_str(STDOUT, name);
+	write_str(STDOUT, ": ");
+	write_str(STDOUT, msg);
+	write_str(STDOUT, "\n");
+}
+
+fn cmd_test(argc int, argv **u8) int {
+	if (argc < 3) {
+		eprint("usage: qela test <file.qela|dir> [args]\n");
+		return 2;
+	}
+	var input str = str_from_cstr(argv[2]);
+	var entry str = input;
+	var src str;
+	if (is_dir(input)) {
+		entry = dir_entry_path(input);
+		if (entry.len == 0) { return 1; }
+		src = read_file(entry);
+	} else {
+		src = read_file(input);
+	}
+
+	// The compile itself may be the test.
+	if (expect_has(src, "expect-compile-error")) {
+		var pid i64 = sys_fork();
+		if (pid == 0) {
+			if (is_dir(input)) { cmd_build_dir(input, "/tmp/qela-test-reject"); }
+			else { compile_file(input, "/tmp/qela-test-reject"); }
+			sys_exit(0);
+		}
+		var status [1]i64;
+		sys_wait4(pid, &status[0] as *u8);
+		var code i64 = (status[0] >> 8) & 255;
+		if (code == 0) {
+			test_fail(input, "compiled, but was expected to be rejected");
+			return 1;
+		}
+		test_ok(input);
+		return 0;
+	}
+
+	var tb Buf;
+	fmt_str(&tb, "/tmp/qela-test-");
+	fmt_i64(&tb, sys_getpid());
+	var tmp str = buf_str(&tb);
+	var tmpc *u8 = cstr(tmp);
+	var ob Buf;
+	fmt_str(&ob, tmp);
+	fmt_str(&ob, ".out");
+	var outc *u8 = cstr(buf_str(&ob));
+
+	if (is_dir(input)) { cmd_build_dir(input, tmp); }
+	else { compile_file(input, tmp); }
+
+	var out_fd i64 = sys_open_exec(outc);
+	if (out_fd < 0) { die("error: cannot create the test output file"); }
+
+	var nargs int = argc - 2;
+	var cargv *i64 = arena_alloc((nargs as i64 + 1) * 8, 8) as *i64;
+	cargv[0] = tmpc as i64;
+	var i int = 1;
+	while (i < nargs) {
+		cargv[i] = argv[i + 2] as i64;
+		i = i + 1;
+	}
+	cargv[nargs] = 0;
+	var envp *i64 = arena_alloc(8, 8) as *i64;
+	envp[0] = 0;
+
+	var pid i64 = sys_fork();
+	if (pid == 0) {
+		sys_dup2(out_fd, 1);
+		sys_dup2(out_fd, 2);
+		sys_execve(tmpc, cargv as *u8, envp as *u8);
+		sys_exit(127);
+	}
+	var status [1]i64;
+	sys_wait4(pid, &status[0] as *u8);
+	sys_close(out_fd);
+
+	var got_out str = read_file(buf_str(&ob));
+	var got_exit i64 = (status[0] >> 8) & 255;
+	sys_unlink(tmpc);
+	sys_unlink(outc);
+
+	var want_exit i64 = 0;
+	var eb Buf;
+	var en int = 0;
+	if (expect_lines(src, "expect-exit:", &eb, &en)) {
+		want_exit = parse_i64(buf_str(&eb));
+	}
+	var fail_count int = 0;
+	var msg Buf;
+	if (got_exit != want_exit) {
+		fmt_str(&msg, "exit ");
+		fmt_i64(&msg, got_exit);
+		fmt_str(&msg, ", want ");
+		fmt_i64(&msg, want_exit);
+		test_fail(input, buf_str(&msg));
+		fail_count = fail_count + 1;
+	} else {
+		var wb Buf;
+		var wn int = 0;
+		expect_lines(src, "expect-out:", &wb, &wn);
+		if (wn > 0) {
+			var out_len i64 = got_out.len;
+			while (out_len > 0 && (got_out.ptr[out_len - 1] == '\n' ||
+			    got_out.ptr[out_len - 1] == 0)) { out_len = out_len - 1; }
+			if (!str_eq(str_slice(got_out, 0, out_len), buf_str(&wb))) {
+				test_fail(input, "output does not match expect-out");
+				fail_count = fail_count + 1;
+			}
+		}
+	}
+	if (fail_count == 0) { test_ok(input); }
+	return fail_count;
+}
+
 fn cmd_help() int {
-	write_str(STDOUT, "usage: qela <file.qela> [-o output] [options]\n       qela . [dir]   build a project from a directory\n       qela run <file.qela> [args]\n       qela fmt <file.qela>\n       qela --lsp\n       qela --dump-std <module>\n\ncompile a Qela program to a static binary; '-' reads the source\nfrom stdin. A directory merges every .qela file in it into one\nprogram (entry: main.qela, or the sole file) -- no imports needed\nbetween project files. 'run' compiles to a temp file and executes\nit, and panics print a backtrace there.\n\noptions:\n  -o <file>        output path (default: input name without .qela)\n  -g               DWARF line info and symbols for gdb\n  --backtrace      print function frames on panic\n  --no-bounds-checks   disable index checks\n  -h, --help       this text\n");
+	write_str(STDOUT, "usage: qela <file.qela> [-o output] [options]\n       qela . [dir]   build a project from a directory\n       qela run <file.qela> [args]\n       qela test <file.qela|dir> [args]\n       qela fmt <file.qela>\n       qela --lsp\n       qela --dump-std <module>\n\ncompile a Qela program to a static binary; '-' reads the source\nfrom stdin. A directory merges every .qela file in it into one\nprogram (entry: main.qela, or the sole file) -- no imports needed\nbetween project files. 'run' compiles to a temp file and executes\nit, and panics print a backtrace there. 'test' runs the program and\nchecks its leading comments: // expect-exit: N, // expect-out: text\n(one line each, compared in order) and // expect-compile-error.\n\noptions:\n  -o <file>        output path (default: input name without .qela)\n  -g               DWARF line info and symbols for gdb\n  --backtrace      print function frames on panic\n  --no-bounds-checks   disable index checks\n  -h, --help       this text\n");
 	return 0;
 }
 
@@ -226,6 +427,9 @@ fn main(argc int, argv **u8) int {
 	}
 	if (argc >= 2 && str_eq(str_from_cstr(argv[1]), "run")) {
 		return cmd_run(argc, argv);
+	}
+	if (argc >= 2 && str_eq(str_from_cstr(argv[1]), "test")) {
+		return cmd_test(argc, argv);
 	}
 	if (argc >= 2 && str_eq(str_from_cstr(argv[1]), "fmt")) {
 		return cmd_fmt(argc, argv);
