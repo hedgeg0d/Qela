@@ -199,6 +199,27 @@ EOF
 	fail "fmt is not idempotent, or run does not forward the exit status"
 printf '    ok\n'
 
+step "interpolation and repl"
+cat > "$tmp2/interp.qela" <<'EOF'
+import "std/io.qela";
+fn main() int {
+	var n i64 = 42;
+	var s str = "hi";
+	write_str(STDOUT, "n = ${n}, s = ${s}, sum = ${1 + 2}\n");
+	return 0;
+}
+EOF
+( cd "$tmp2" &&
+  "$root/$OUT/s2" fmt interp.qela > interp_fmt.qela &&
+  "$root/$OUT/s2" fmt interp_fmt.qela > interp_fmt2.qela &&
+  cmp -s interp_fmt.qela interp_fmt2.qela &&
+  "$root/$OUT/s2" interp_fmt.qela -o interp &&
+  [ "$(./interp)" = "n = 42, s = hi, sum = 3" ] &&
+  [ "$(printf '1 + 2\n"x"\n' | "$root/$OUT/s2" repl)" = "3x" ] ) ||
+	fail "interpolation or the repl misbehaves"
+printf '    ok\n'
+
+
 step "stdin compile and shebang"
 cat > "$tmp2/btcrash.qela" <<'EOF'
 fn deep(n i64) i64 {
