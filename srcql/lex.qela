@@ -2,6 +2,9 @@ import "comp.qela";
 import "diag.qela";
 
 var lex_base i64 = 0;
+
+// Only the formatter wants comments; the parser never sees them.
+var lex_keep_comments bool = false;
 var lex_tail *Token;
 
 fn push_token(kind int, pos i64) *Token {
@@ -146,7 +149,15 @@ fn lex(src str, base i64) *Token {
 
 		// line comment
 		if (src.ptr[i] == '/' && i + 1 < src.len && src.ptr[i + 1] == '/') {
+			var cstart i64 = i;
 			while (i < src.len && src.ptr[i] != '\n') { i = i + 1; }
+			if (lex_keep_comments) {
+				var ct *Token = push_token(TK_COMMENT, cstart);
+				var cs str;
+				cs.ptr = src.ptr + cstart;
+				cs.len = i - cstart;
+				ct.text = cs;
+			}
 			continue;
 		}
 
@@ -157,6 +168,13 @@ fn lex(src str, base i64) *Token {
 			while (i + 1 < src.len && !(src.ptr[i] == '*' && src.ptr[i + 1] == '/')) { i = i + 1; }
 			if (i + 1 >= src.len) { error_at(lex_base + start, "unterminated block comment"); }
 			i = i + 2;
+			if (lex_keep_comments) {
+				var bt *Token = push_token(TK_COMMENT, start);
+				var bs str;
+				bs.ptr = src.ptr + start;
+				bs.len = i - start;
+				bt.text = bs;
+			}
 			continue;
 		}
 
@@ -255,6 +273,10 @@ fn lex(src str, base i64) *Token {
 			sv.ptr = buf;
 			sv.len = n;
 			t.sval = sv;
+			var raw str;
+			raw.ptr = src.ptr + start;
+			raw.len = i - start;
+			t.text = raw;
 			continue;
 		}
 
