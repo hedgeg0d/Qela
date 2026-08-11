@@ -96,8 +96,11 @@ EOF
 step "channels"
 cat > "$tmp2/chan.qela" <<'EOF'
 import "std/chan.qela";
-var ch Chan;
+struct Msg { id i64, amount i64, }
+var ch Chan(i64);
+var mch Chan(Msg);
 var got i64 = 0;
+var total i64 = 0;
 fn producer(n i64, base i64) {
 	var i i64 = 0;
 	while (i < n) { ch <- base + i; i = i + 1; }
@@ -106,14 +109,36 @@ fn consumer(n i64) {
 	var i i64 = 0;
 	while (i < n) { got = got + <-ch; i = i + 1; }
 }
+fn sender(n i64) {
+	var i i64 = 0;
+	while (i < n) {
+		var m Msg;
+		m.id = i;
+		m.amount = i * 3;
+		mch <- m;
+		i = i + 1;
+	}
+}
+fn receiver(n i64) {
+	var i i64 = 0;
+	while (i < n) {
+		var m Msg = <-mch;
+		total = total + m.amount;
+		i = i + 1;
+	}
+}
 fn main() int {
 	chan_init(&ch, 2);
+	chan_init(&mch, 2);
 	spawn producer(4, 10);
 	spawn producer(3, 20);
 	spawn consumer(7);
+	spawn sender(5);
+	spawn receiver(5);
 	coro_run_all();
 	if (chan_len(&ch) != 0) { return 1; }
 	if (got != 109) { return 2; }
+	if (total != 30) { return 3; }
 	return 0;
 }
 EOF
