@@ -46,7 +46,54 @@ fn dump_std(name str) int {
 	return 1;
 }
 
+// The compiler is designed around one compilation per process, and the
+// per-pass reset (reset_code) only covers what changes between branch
+// relaxation passes. Everything module-global that accumulates over a
+// compile — file table, string table, functions, types, templates, the
+// code/rodata/data buffers, DWARF — is cleared here so one process can
+// compile any number of programs (qela test runs a whole corpus).
+fn reset_compile() {
+	nfiles = 0;
+	nstrs = 0;
+	strlist_head = 0 as *StrLit;
+	strlist_tail = 0 as *StrLit;
+	global_vars = 0 as *Var;
+	scope_root = 0 as *Scope;
+	cur_func = 0 as *Func;
+	ntype_vars = 0;
+	all_funcs = 0 as *Func;
+	funcs_tail = 0 as *Func;
+	named_types = 0 as *Named;
+	tmpls = 0 as *Tmpl;
+	ct_stack = 0 as *CTFrame;
+	ct_returning = false;
+	ct_broke = false;
+	ct_continued = false;
+	code.n = 0;
+	rodata.n = 0;
+	gdata.n = 0;
+	bss_size = 0;
+	// Branch ids restart at zero every compile; the short-branch marks from
+	// the previous compile must not leak into the new one. This list is the
+	// one per-pass state reset_code must NOT clear — marks survive between
+	// relaxation passes of a single compile.
+	br_short.n = 0;
+	lex_keep_comments = false;
+	depth = 0;
+	overflow_pushed = 0;
+	cur_loop = 0 as *Loop;
+	cur_defers = 0 as *DeferScope;
+	defer_depth = 0;
+	gen_unit = 0 as *Unit;
+	dw_line.n = 0;
+	dw_info.n = 0;
+	dw_abbrev.n = 0;
+	dw_sym.n = 0;
+	dw_strtab.n = 0;
+}
+
 fn compile_src(name str, src str, output str) {
+	reset_compile();
 	var file int = diag_add_file(name, src);
 	set_module_dir(name);
 	var unit *Unit = parse(lex(src, (file as i64) << FILE_SHIFT));
@@ -429,17 +476,8 @@ fn cmd_test(argc int, argv **u8) int {
 	var fails int = 0;
 	var k int = 0;
 	while (k < n_in) {
-		// One compilation per process: the compiler carries state that is
-		// only guaranteed clean for a single compile, so each test runs in
-		// its own forked child.
-		var pid i64 = sys_fork();
-		if (pid == 0) {
-			sys_exit(test_one(inputs[k], read_file(inputs[k]),
-			    argv + prog_start, argc - prog_start));
-		}
-		var status [1]i64;
-		sys_wait4(pid, &status[0] as *u8);
-		fails = fails + (((status[0] >> 8) & 255) as int);
+		fails = fails + test_one(inputs[k], read_file(inputs[k]),
+		    argv + prog_start, argc - prog_start);
 		k = k + 1;
 	}
 	return fails;
