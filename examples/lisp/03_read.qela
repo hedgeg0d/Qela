@@ -1,0 +1,105 @@
+// 03_read.qela — the reader: tokens to objects.
+//
+// Reads one form per call: atoms become numbers or symbols, `'x` becomes
+// (quote x), `(a b c)` becomes a proper list, `(a . b)` an improper one.
+// The error channel reports unexpected `)`/`.` and end-of-input.
+
+import "std/str.qela";
+
+fn rd_num(text str, out *i64) bool {
+	var i i64 = 0;
+	var neg bool = false;
+	if (text.len > 0 && text.ptr[0] == '-') { neg = true; i = 1; }
+	if (i >= text.len) { return false; }
+	var v i64 = 0;
+	while (i < text.len) {
+		var c u8 = text.ptr[i];
+		if (c < '0' || c > '9') { return false; }
+		if (v > 922337203685477580) { return false; }
+		v = v * 10 + (c as i64 - '0');
+		i = i + 1;
+	}
+	if (neg) { v = -v; }
+	*out = v;
+	return true;
+}
+
+fn rd_quote(o Obj) Obj {
+	return obj_cons(sym_intern("quote"), obj_cons(o, Obj.Nil));
+}
+
+// Reads the elements of a list until the matching `)`. Handles `(a . b)`.
+fn rd_list(t **Tok) Obj {
+	var t0 *Tok = *t;
+	if (t0.kind == TK_RPAR) {
+		*t = t0.next;
+		return Obj.Nil;
+	}
+	if (t0.kind == TK_END) {
+		return obj_err("unexpected end of input");
+	}
+	var first Obj = rd_read(t);
+	if (g_err) { return Obj.Nil; }
+	var t1 *Tok = *t;
+	if (t1.kind == TK_DOT) {
+		*t = t1.next;
+		var tail Obj = rd_read(t);
+		if (g_err) { return Obj.Nil; }
+		var t2 *Tok = *t;
+		if (t2.kind != TK_RPAR) {
+			return obj_err("expected ) after dotted tail");
+		}
+		*t = t2.next;
+		return obj_cons(first, tail);
+	}
+	var rest Obj = rd_list(t);
+	if (g_err) { return Obj.Nil; }
+	return obj_cons(first, rest);
+}
+
+fn rd_read(t **Tok) Obj {
+	var t0 *Tok = *t;
+	var kind int = t0.kind;
+	if (kind == TK_LPAR) {
+		*t = t0.next;
+		var l Obj = rd_list(t);
+		if (g_err) { return Obj.Nil; }
+		return l;
+	}
+	if (kind == TK_QUOTE) {
+		*t = t0.next;
+		var o Obj = rd_read(t);
+		if (g_err) { return Obj.Nil; }
+		return rd_quote(o);
+	}
+	if (kind == TK_STR) {
+		*t = t0.next;
+		return Obj.Str(t0.text);
+	}
+	if (kind == TK_ATOM) {
+		*t = t0.next;
+		var n i64 = 0;
+		if (rd_num(t0.text, &n)) { return Obj.Int(n); }
+		return sym_intern(t0.text);
+	}
+	if (kind == TK_RPAR) { return obj_err("unexpected )"); }
+	if (kind == TK_DOT) { return obj_err("unexpected ."); }
+	return obj_err("unexpected end of input");
+}
+
+// Reads every form in the stream; used by batch mode and the self-tests.
+fn rd_read_all(t **Tok) Obj {
+	var head Obj = Obj.Nil;
+	var tail *ConsCell = 0 as *ConsCell;
+	while ((*t).kind != TK_END) {
+		var o Obj = rd_read(t);
+		if (g_err) { return Obj.Nil; }
+		var cell *ConsCell = arena_alloc(sizeof(ConsCell), 8) as *ConsCell;
+		cell.car = o;
+		cell.cdr = Obj.Nil;
+		if (tail as i64 == 0) { head = Obj.Cons(cell); }
+		else { tail.cdr = Obj.Cons(cell); }
+		tail = cell;
+	}
+	return head;
+}
