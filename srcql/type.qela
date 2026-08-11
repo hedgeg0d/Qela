@@ -734,6 +734,19 @@ fn type_ret(n *Node) {
 
 // Two calls have no Qela definition: the compiler emits them directly.
 fn type_intrinsic(n *Node) bool {
+	if (str_eq(n.name, "gc_data_base") || str_eq(n.name, "gc_data_end")) {
+		n.ty = ty_i64;
+		return true;
+	}
+	if (str_eq(n.name, "gc_save_regs")) {
+		if (n.nargs != 1) { error_at(n.pos, "gc_save_regs takes one pointer"); }
+		n.args = to_value(n.args);
+		if (n.args.ty.kind != TY_PTR) {
+			error_at(n.pos, "gc_save_regs takes one pointer");
+		}
+		n.ty = ty_void;
+		return true;
+	}
 	if (str_eq(n.name, "coro_entry_addr")) {
 		if (n.nargs != 0) { error_at(n.pos, "coro_entry_addr takes no arguments"); }
 		n.ty = ty_i64;
