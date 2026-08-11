@@ -47,6 +47,20 @@ fn read_stdin() str {
 	return buf_str(&b);
 }
 
+// One line, newline included; "" only at end of input. An empty line
+// returns "\n", so a caller can tell the two apart.
+fn read_line() str {
+	var b Buf;
+	var c u8 = 0;
+	while (true) {
+		var got i64 = sys_read(0, &c, 1);
+		if (got <= 0) { break; }
+		buf_u8(&b, c);
+		if (c == '\n') { break; }
+	}
+	return buf_str(&b);
+}
+
 fn write_file(path str, data *u8, n i64) {
 	var fd i64 = sys_open_exec(cstr(path));
 	if (fd < 0) {
