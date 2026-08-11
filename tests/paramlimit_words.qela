@@ -1,0 +1,11 @@
+// stage1-only
+// expect-exit: 112
+// Fewer than 7 parameters but more than 6 register words: a str costs two
+// words, so the 6th parameter here is already the 7th word and must spill
+// to rbp+16, not a register.
+fn f(a int, b int, c int, d int, e str, g int) int {
+	return a + b + c + d + g + e.len;
+}
+fn main() int {
+	return f(1, 2, 3, 4, "hi", 100);
+}
