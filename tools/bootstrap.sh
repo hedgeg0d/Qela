@@ -215,7 +215,8 @@ EOF
   cmp -s interp_fmt.qela interp_fmt2.qela &&
   "$root/$OUT/s2" interp_fmt.qela -o interp &&
   [ "$(./interp)" = "n = 42, s = hi, sum = 3" ] &&
-  [ "$(printf '1 + 2\n"x"\n' | "$root/$OUT/s2" repl)" = "3x" ] ) ||
+  [ "$(printf '1 + 2\n"x"\n' | "$root/$OUT/s2" repl)" = "3x" ] &&
+  [ "$(printf 'rand_range(1, 7)\n' | "$root/$OUT/s2" repl)" = "5" ] ) ||
 	fail "interpolation or the repl misbehaves"
 printf '    ok\n'
 
