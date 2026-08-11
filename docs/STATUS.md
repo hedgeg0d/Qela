@@ -29,9 +29,9 @@ monomorphization, with the type argument inferred from the value arguments
 when it is not written out; `syscall`; `main(argc, argv)`; bounds checks.
 
 **Concurrency.** `spawn f(...)`, `coro_yield`, `coro_run_all` on separate
-stacks; `Chan(T)`, buffered channels of any element type, with `ch <- v` and `<-ch`
-inferring that type, blocking through the scheduler, and deadlock detection
-rather than a spin.
+stacks; `Chan(T)`, buffered channels of any element type. `ch <- v` and `<-ch`
+infer that type, block through the scheduler, and report a deadlock rather than
+spinning when nothing can run.
 
 **Memory.** Arena by default; `std/gc.qela` is a conservative mark-sweep
 collector rooted in the callee-saved registers, the stack and the data segment.
@@ -48,6 +48,9 @@ inside the binary — a program importing `std/io.qela` compiles in an empty
 directory with nothing but the compiler present.
 
 ## Not done
+
+Item 1 is mostly done and kept here for what remains of it; 2 and 3 have not
+been started.
 
 ### 1. Emitted code size (M4)
 
@@ -105,7 +108,8 @@ what is needed. Its own session.
 ### 3. ARM64 backend
 
 The most expensive item, and the only one that would push the budget. Worth
-doing only after 1b, so the second backend inherits a real allocator.
+doing only once the x86 backend has stopped moving, so the second one inherits
+a settled shape rather than a moving target.
 
 ### 4. Smaller
 
@@ -119,7 +123,7 @@ doing only after 1b, so the second backend inherits a real allocator.
   constrain one. Both limits are in `srcql/generic.qela`.
 - `genblob.py --min` to strip comments and indentation from the embedded
   library. Measured: saves 416 bytes packed, and costs `--dump-std` its
-  readability. Not worth it at 3.5% of budget.
+  readability. Not worth it at 3.7% of budget.
 
 ## Rules that keep holding
 
