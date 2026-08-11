@@ -846,6 +846,10 @@ fn stmt_update(v *Node, k int, e *Node) bool {
 		alu_rm_imm(alu_ext_for(k), v, e.val);
 		return true;
 	}
+	if (direct_local(e) && e.varp.has_reg) {
+		alu_rm_reg(alu_op_for(k), v, e.varp.reg);
+		return true;
+	}
 	if (!v.varp.has_reg) { return false; }
 	gen_expr(e);
 	alu_rm_reg(alu_op_for(k), v, RAX);
@@ -1038,6 +1042,28 @@ fn swap_binop_ok(n *Node) bool {
 	return direct_local(n.lhs) && !direct_local(n.rhs);
 }
 
+// An lvalue reached through a pointer is loaded only to be compared, so the
+// comparison can read memory itself.
+fn addressable_load(n *Node) bool {
+	var k int = n.kind;
+	if (k != ND_INDEX && k != ND_MEMBER && k != ND_DEREF) { return false; }
+	return !is_aggregate(n.ty) && n.ty.kind != TY_SLICE;
+}
+
+fn fits_width(v i64, ty *Type) bool {
+	if (!fits_imm32(v)) { return false; }
+	if (ty.size >= 4) { return true; }
+	if (ty.size == 2) { return v >= -32768 && v <= 32767; }
+	return v >= -128 && v <= 255;
+}
+
+fn cmp_at_rax_imm(ty *Type, v i64) {
+	if (ty.size == 1) { b1(0x80); modrm(0, 7, RAX); b1(v); return; }
+	if (ty.size == 2) { b1(0x66); b1(0x81); modrm(0, 7, RAX); b1(v); b1(v >> 8); return; }
+	if (ty.size == 4) { b1(0x81); modrm(0, 7, RAX); b4(v); return; }
+	b1(0x48); b1(0x81); modrm(0, 7, RAX); b4(v);
+}
+
 fn is_compare(n *Node) bool {
 	var k int = n.kind;
 	return k == ND_EQ || k == ND_NE || k == ND_LT || k == ND_LE;
@@ -1047,6 +1073,20 @@ fn is_compare(n *Node) bool {
 // a boolean. Callers that only branch on the result skip setcc entirely.
 fn gen_compare(n *Node) i64 {
 	var lt *Type = n.lhs.ty;
+	// Equality survives a widening cast, so the load under it can be compared
+	// at its own width. Ordering cannot: the widened type decides the
+	// signedness of the condition code.
+	var mem *Node = n.lhs;
+	if ((n.kind == ND_EQ || n.kind == ND_NE) && mem.kind == ND_CAST &&
+	    is_integer(mem.ty) && is_integer(mem.lhs.ty) && mem.lhs.ty.size <= mem.ty.size) {
+		mem = mem.lhs;
+	}
+	if (n.rhs.kind == ND_NUM && (mem.ty.kind != TY_PTR || n.rhs.val == 0) &&
+	    fits_width(n.rhs.val, mem.ty) && addressable_load(mem)) {
+		gen_addr(mem);
+		cmp_at_rax_imm(mem.ty, n.rhs.val);
+		return cmp_cc_for(n);
+	}
 	if (n.rhs.kind == ND_NUM && fits_imm32(n.rhs.val) &&
 	    (lt.kind != TY_PTR || n.rhs.val == 0)) {
 		if (direct_local(n.lhs)) {
