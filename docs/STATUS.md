@@ -7,13 +7,13 @@ Updated 2026-08-03. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **179 832 B** |
-| S2 under xz -9 (proxy for upx --lzma) | 43 248 B, ~4.1% of the 1 MiB budget |
-| stage1 sources | 7 454 lines of Qela |
+| **S2 — the shipped compiler, Qela compiled by itself** | **186 368 B** |
+| S2 under xz -9 (proxy for upx --lzma) | 44 616 B, ~4.3% of the 1 MiB budget |
+| stage1 sources | 7 752 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **218%**, or **193%** without bounds checks (M4 gate wants ≤150%) |
 
 Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the
-38-test corpus under S2, the embedded stdlib resolving outside the source tree,
+46-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, and a scripted language
 server conversation.
 
@@ -27,7 +27,9 @@ instantiated on use and cached so identical arguments name the same type;
 `as`, `sizeof`, character literals, `true`/`false`; locals zeroed at their
 declaration; modules via `import`; `comptime` blocks; generics by
 monomorphization, with the type argument inferred from the value arguments
-when it is not written out; `syscall`; `main(argc, argv)`; bounds checks.
+when it is not written out; `syscall`; `asm(byte, byte, ...)` for raw machine
+code with the result convention that whatever's left in `RAX` is the
+expression's value, same as `syscall`; `main(argc, argv)`; bounds checks.
 
 **Concurrency.** `spawn f(...)`, `coro_yield`, `coro_run_all` on separate
 stacks; `Chan(T)`, buffered channels of any element type, and rendezvous at
@@ -102,14 +104,22 @@ Done, in `srcql/regalloc.qela`, `srcql/codegen.qela` and `srcql/bounds.qela`:
   `tests/boundsloop.qela` and `tests/boundsoob.qela` pin the soundness both
   ways. `sieve` went 317% -> 297%.
 
-What is left, in order of what it would buy:
+Both closed off, measured rather than assumed (see above):
 
-- **Loop-invariant addresses.** The address of a global array is recomputed on
-  every access inside a loop.
-- **Common subexpressions.** Nothing is reused between statements.
+- **Loop-invariant addresses.** Built, tested, bootstrap-green, then reverted:
+  net negative. Absolute addressing already makes a global's base address a
+  single 5-byte `mov`, and any new pass module costs ~2.4 KB compiled into S2
+  regardless of hit rate here, which swallowed the whole local saving.
+  Self-compiled size went *up*, 185 800 -> 188 344 B.
+- **Common subexpressions.** Surveyed before building: ~12 same-line repeated
+  subexpressions across ~4300 lines of stage1, worth maybe 40-50 bytes total.
+  Same fixed-cost wall as above; not built.
 - **Expression temporaries** still go through `push`/`pop`. That is already the
   smallest encoding; replacing it with registers costs bytes, so it is a speed
   optimization, not a size one.
+
+x86 codegen has stopped moving on the remaining levers. Next size lever is
+ARM64 (below), or accept 218% and spend budget on wow/byte elsewhere.
 
 ### 2. ARM64 backend
 
