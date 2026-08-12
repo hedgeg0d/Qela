@@ -231,6 +231,25 @@ else
 fi
 printf '    ok\n'
 
+step "qela . project build"
+mkdir -p "$tmp2/proj"
+cat > "$tmp2/proj/plus.qela" <<'EOF'
+fn add7(x i64) i64 {
+	return x + 7;
+}
+EOF
+cat > "$tmp2/proj/main.qela" <<'EOF'
+import "std/str.qela";
+fn main() int {
+	var s str = "ab";
+	if (!str_eq(s, "ab")) { return 1; }
+	return add7(35) as int;
+}
+EOF
+( cd "$tmp2/proj" && "$root/$OUT/s2" . && ./a.out; [ $? -eq 42 ] ) ||
+	fail "qela . does not merge a directory into one program"
+printf '    ok\n'
+
 step "language server"
 QELA="$OUT/s2" python3 tools/lsp-test.py ||
 	fail "the language server fails the scripted conversation"
