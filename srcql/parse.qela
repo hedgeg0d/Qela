@@ -340,7 +340,23 @@ fn parse_postfix(t **Token) *Node {
 	}
 }
 
+fn chan_call(name str, arg *Node, pos i64) *Node {
+	var c *Node = new_node(ND_CALL, pos);
+	c.name = name;
+	var a *Node = new_node(ND_ADDR, pos);
+	a.lhs = arg;
+	c.args = a;
+	c.nargs = 1;
+	return c;
+}
+
 fn parse_unary(t **Token) *Node {
+	if (tok_eq(*t, "<-")) {
+		var p i64 = (*t).pos;
+		*t = (*t).next;
+		return chan_call("chan_recv", parse_unary(t), p);
+	}
+
 	var p i64 = (*t).pos;
 	if (tok_consume(t, "-")) { var n *Node = new_node(ND_NEG, p); n.lhs = parse_unary(t); return n; }
 	if (tok_consume(t, "!")) { var n *Node = new_node(ND_NOT, p); n.lhs = parse_unary(t); return n; }
@@ -441,6 +457,16 @@ fn parse_assign(t **Token) *Node {
 	if (tok_consume(t, "=")) {
 		return bin_node(ND_ASSIGN, n, parse_assign(t), p);
 	}
+	if (tok_eq(*t, "<-")) {
+		var sp i64 = (*t).pos;
+		*t = (*t).next;
+		var send *Node = chan_call("chan_send", n, sp);
+		var v *Node = parse_assign(t);
+		send.args.next = v;
+		send.nargs = 2;
+		return send;
+	}
+
 	// op=
 	if (tok_consume(t, "+=")) { return opassign_node(n, parse_assign(t), ND_ADD, p); }
 	if (tok_consume(t, "-=")) { return opassign_node(n, parse_assign(t), ND_SUB, p); }
