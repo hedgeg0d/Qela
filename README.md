@@ -22,13 +22,15 @@ $ ldd hello
 ```
 
 The design goal is the most language per byte. The compiler is currently
-157 KB, about 3.5% of its own budget.
+205 952 B — 48 KB packed with `upx --lzma`, about 4.6% of its own 1 MiB
+budget.
 
 ## What it has
 
 Fixed-width integers, pointers, arrays, slices and `str`, structs with
 literals, enums with payloads and exhaustive `match`, `defer`, and `comptime`
-blocks evaluated during type checking.
+blocks evaluated during type checking. `assert(cond, "msg")` and
+`panic("msg")` for the crash paths, and a panic backtrace under `qela run`.
 
 Generics by monomorphization, over functions and over types, with the type
 argument inferred from the call:
@@ -59,21 +61,37 @@ var v Msg = <-ch;
 A conservative mark-sweep collector for programs whose lifetimes are not
 stack-shaped; arenas remain the default.
 
+The compiler is also its own build system and test runner. `qela .` merges
+every `.qela` file in a directory into one program, no imports needed between
+project files. `qela test file.qela` — or `qela test tests/*.qela` for a
+whole corpus at once — compiles, runs and checks the `// expect-exit:`,
+`// expect-out:` and `// expect-compile-error` comments at the top of each
+file.
+
 DWARF line info behind `-g`, so gdb steps through `.qela` source and names
 frames. `qela run` compiles and executes in one step. `qela fmt` formats over
-the token stream, so comments survive and the output is idempotent.
+the token stream, so comments survive and the output is idempotent. A
+shebang first line is skipped, so scripts run as `#!/usr/bin/env qela run`;
+`qela -` reads the source from stdin. `qela --lsp` is a language server in
+the same binary: diagnostics, hover and go-to-definition over JSON-RPC.
+
+`examples/lisp/` is a Lisp interpreter written in Qela — lexer, reader,
+evaluator with closures and macros, REPL — that self-tests through
+`qela test . tests.lisp`.
 
 ## Building
 
 ```sh
 make                  # builds stage0, the C bootstrap compiler
-tools/bootstrap.sh    # stage0 -> S1a -> S2 -> S3, then ships S2
+make build            # the real compiler: stage0 -> S1a -> S2 -> S3, ships S2
+make install          # installs build/bootstrap/s2 to /usr/local/bin/qela
 ```
 
 `tools/bootstrap.sh` is the real gate: it rebuilds the compiler with itself
 twice and requires the last two to be byte-identical, then runs the test
 corpus and end-to-end checks for the standard library, coroutines, channels,
-the collector, `run` and `fmt`.
+the collector, `run` and `fmt`, stdin and shebang, the panic backtrace,
+`qela test` and the lisp example.
 
 The compiler you use is `build/bootstrap/s2`. `./qela` is a throwaway
 bootstrap that exists only to compile the first stage.
@@ -84,7 +102,8 @@ bootstrap that exists only to compile the first stage.
 src/        stage0: the bootstrap compiler in C. Frozen; never shipped.
 srcql/      the real compiler, in Qela
 std/        the standard library, also baked into the binary
-tests/      corpus, run by tools/run-tests.sh
+examples/   programs written in Qela (a lisp interpreter)
+tests/      corpus, run by tools/run-tests.sh or `qela test tests/*.qela`
 bench/      size benchmarks with C equivalents
 docs/       BOOTSTRAP.md, STATUS.md
 ```
