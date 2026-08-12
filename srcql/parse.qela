@@ -61,6 +61,7 @@ fn declare_var(name str, ty *Type, pos i64) *Var {
 	var v *Var = arena_alloc(sizeof(Var), 8) as *Var;
 	v.name = name;
 	v.ty = ty;
+	v.pos = pos;
 	if (cur_func as i64 != 0) {
 		v.next = cur_func.locals;
 		cur_func.locals = v;
@@ -378,7 +379,7 @@ fn parse_postfix(t **Token) *Node {
 			continue;
 		}
 		if (tok_consume(t, ".")) {
-			var m *Node = new_node(ND_MEMBER, p);
+			var m *Node = new_node(ND_MEMBER, (*t).pos);
 			m.lhs = n;
 			m.name = (*t).text;
 			*t = (*t).next;
