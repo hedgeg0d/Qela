@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Randomized differential tester for stage0 and S2.
 
-Generates syntactically valid Qela programs: scalar expressions, function
-calls with up to four parameters including recursion, if/else and bounded
-while loops, structs small and large (below and above the 16-byte
-by-value limit), fixed-size arrays, enums with payloads and exhaustive
-match. Evaluates the expected result in Python, compiles with the given
-compiler, runs, and compares exit codes. On mismatch, shrinks and saves a
-minimal reproducer to tests/regress/<seed>.qela.
+Generates syntactically valid Qela programs: scalar expressions (including
+division and remainder with nonzero constant divisors), function calls with
+up to four parameters including recursion, if/else and bounded while loops,
+nested loops, compound assignments, a global variable, structs small and
+large (below and above the 16-byte by-value limit), fixed-size arrays,
+enums with payloads and exhaustive match. Evaluates the expected result in
+Python, compiles with the given compiler, runs, and compares both the exit
+code and the stdout. On mismatch, shrinks and saves a minimal reproducer to
+tests/regress/<seed>.qela.
 
 The model mirrors x86 semantics exactly: truncating division, 6-bit shift
 counts, signed wrapping. A mismatch means a real compiler bug, so the model
@@ -223,6 +225,23 @@ def exec_stmt(st, env: dict):
     if kind == "asgn":
         set_lvalue(st[1], eval_expr(st[2], env), env)
         return None
+    if kind == "opasgn":
+        old = eval_expr(st[1], env)
+        rhs = eval_expr(st[3], env)
+        op = st[2]
+        if op == "+":   new = wrap(old + rhs)
+        elif op == "-": new = wrap(old - rhs)
+        elif op == "*": new = wrap(old * rhs)
+        elif op == "/": new = 0 if rhs == 0 else wrap(int(abs(old) / abs(rhs)) * (-1 if (old < 0) != (rhs < 0) else 1))
+        elif op == "%": new = 0 if rhs == 0 else wrap(-(abs(old) % abs(rhs)) if old < 0 else abs(old) % abs(rhs))
+        elif op == "&": new = wrap(old & rhs)
+        elif op == "|": new = wrap(old | rhs)
+        elif op == "^": new = wrap(old ^ rhs)
+        elif op == "<<": new = wrap(old << (rhs & 63))
+        elif op == ">>": new = wrap(old >> (rhs & 63))
+        else: new = old
+        set_lvalue(st[1], new, env)
+        return None
     if kind == "if":
         if eval_expr(st[1], env) != 0:
             return exec_block(st[2], env)
@@ -247,7 +266,7 @@ def exec_stmt(st, env: dict):
 
 # ── code emission ───────────────────────────────────────────────────────
 
-BINOPS = ["+","-","*","&","|","^","<<",">>",
+BINOPS = ["+","-","*","&","|","^","<<",">>","/","%",
           "==","!=","<","<=",">",">="]
 UNARY = ["-", "!"]
 
@@ -295,6 +314,8 @@ def render_stmt(st, ind: int) -> str:
         return f"{pad}var {st[1]} {st[2]} = {emit(st[3], set())};"
     if kind == "asgn":
         return f"{pad}{emit(st[1], set())} = {emit(st[2], set())};"
+    if kind == "opasgn":
+        return f"{pad}{emit(st[1], set())} {st[2]}= {emit(st[3], set())};"
     if kind == "ret":
         return f"{pad}return {emit(st[1], set())};"
     if kind == "if":
@@ -330,20 +351,29 @@ class Program:
     """Helpers, declarations and main-body statements. Shrinking drops
     statements and re-evaluates, so no expectation goes stale."""
 
-    def __init__(self, helpers, decls, stmts, ret_expr):
+    def __init__(self, helpers, decls, stmts, ret_expr,
+                 g_init=None, print_var=None):
         self.helpers = helpers
         self.decls = decls      # ("decl", name, ty, value-node)
         self.stmts = stmts
         self.ret_expr = ret_expr
+        self.g_init = g_init    # global `var gv int = ...`, or None
+        self.print_var = print_var  # prints this var's value before return
 
-    def run(self) -> int:
-        env = {}
+    def run(self) -> tuple:
+        """Returns (exit code, stdout text)."""
+        env = {"gv": self.g_init} if self.g_init is not None else {}
         for d in self.decls:
             exec_stmt(d, env)
         r = exec_block(self.stmts, env)
+        out = ""
         if r is None:
+            # The print sits between the statements and the return
+            # expression, so an early return skips it -- mirror that.
+            if self.print_var is not None:
+                out = str(wrap(env[self.print_var])) + "\n"
             r = eval_expr(self.ret_expr, env)
-        return wrap(r) & 0xff
+        return wrap(r) & 0xff, out
 
     def render(self) -> str:
         out = []
@@ -355,18 +385,29 @@ class Program:
                 parts.append(vname if arity == 0 else
                              f"{vname}({', '.join(['int'] * arity)})")
             out.append(f"enum {ename} {{ {', '.join(parts)}, }}")
+        if self.print_var is not None:
+            out.append('import "std/fmt.qela";')
+            out.append('import "std/io.qela";')
+        if self.g_init is not None:
+            out.append(f"var gv int = {self.g_init};")
         for h in self.helpers:
             out.append(HELPERS[h][0])
         out.append("fn main() int {")
         out += [render_stmt(d, 1) for d in self.decls]
         out += [render_stmt(s, 1) for s in self.stmts]
+        if self.print_var is not None:
+            out.append(f"    var ob Buf;")
+            out.append(f"    fmt_i64(&ob, {self.print_var});")
+            out.append(f"    write_str(STDOUT, buf_str(&ob));")
+            out.append(f"    write_str(STDOUT, \"\\n\");")
         out.append(f"    return {emit(self.ret_expr, set())};")
         out.append("}")
         return "\n".join(out) + "\n"
 
     def without(self, i):
         return Program(self.helpers, self.decls,
-                       self.stmts[:i] + self.stmts[i + 1:], self.ret_expr)
+                       self.stmts[:i] + self.stmts[i + 1:], self.ret_expr,
+                       self.g_init, self.print_var)
 
 
 # ── generator ───────────────────────────────────────────────────────────
@@ -377,6 +418,7 @@ class Gen:
         self.md = max_depth
         self.help = []          # scalar helper names usable in expressions
         self.agg = []           # struct/enum helper names usable in calls
+        self.gv = False         # set when a global variable is generated
 
     def leaf(self, vars_used: set, depth: int = 0) -> tuple:
         # At the depth limit only a plain scalar: calls and indexing would
@@ -391,6 +433,8 @@ class Gen:
                 return ("true",) if self.rng.random() < 0.5 else ("false",)
             if k == 3:
                 return ("chr", self.rng.choice("abcdefg0123\n\t"))
+            if self.gv and self.rng.random() < 0.5:
+                return ("var", "gv")
             return ("var", self.rng.choice(["v0", "v1", "v2"]))
         k = self.rng.randint(0, 10)
         if k == 0:
@@ -402,6 +446,8 @@ class Gen:
         if k == 3:
             return ("chr", self.rng.choice("abcdefg0123\n\t"))
         if k == 4:
+            if self.gv and self.rng.random() < 0.5:
+                return ("var", "gv")
             return ("var", self.rng.choice(["v0", "v1", "v2"]))
         if k == 5:
             return ("mem", ("var", "p"), self.rng.choice(["x", "y"]))
@@ -418,6 +464,8 @@ class Gen:
                 args.append(arg)
             return ("call", name, args)
         if k == 8:
+            if self.gv and self.rng.random() < 0.5:
+                return ("var", "gv")
             return ("var", self.rng.choice(["v0", "v1", "v2"]))
         return self.agg_call(depth + 1)
 
@@ -466,7 +514,11 @@ class Gen:
 
     def binop(self, depth: int, vused: set) -> tuple:
         op = self.rng.choice(BINOPS)
-        return (op, self.expr(depth + 1, vused), self.expr(depth + 1, vused))
+        rhs = self.expr(depth + 1, vused)
+        if op in ("/", "%"):
+            # The divisor must be nonzero: Qela divides at runtime.
+            rhs = ("+", ("&", rhs, ("int", "i64", 15)), ("int", "i64", 1))
+        return (op, self.expr(depth + 1, vused), rhs)
 
     def unary(self, depth: int, vused: set) -> tuple:
         op = self.rng.choice(UNARY)
@@ -515,25 +567,38 @@ class Gen:
         return e
 
     def stmt(self, allow_flow: bool, depth: int) -> list:
-        k = self.rng.randint(0, 9)
+        k = self.rng.randint(0, 11)
         if k < 3:
-            tgt = ("var", self.rng.choice(["v0", "v1", "v2"]))
+            if self.gv and self.rng.random() < 0.3:
+                tgt = ("var", "gv")
+            else:
+                tgt = ("var", self.rng.choice(["v0", "v1", "v2"]))
             return [("asgn", tgt, self.expr(0, set()))]
         if k == 3:
+            if self.gv and self.rng.random() < 0.3:
+                tgt = ("var", "gv")
+            else:
+                tgt = ("var", self.rng.choice(["v0", "v1", "v2"]))
+            op = self.rng.choice(["+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>"])
+            rhs = self.expr(0, set())
+            if op in ("/", "%"):
+                rhs = ("+", ("&", rhs, ("int", "i64", 15)), ("int", "i64", 1))
+            return [("opasgn", tgt, op, rhs)]
+        if k == 4:
             return [("asgn", ("mem", ("var", "p"), self.rng.choice(["x", "y"])),
                      self.expr(0, set()))]
-        if k == 4:
+        if k == 5:
             tgt = self.rng.choice(["p", "w", "b"])
             ty = {"p": "Pair", "w": "Wide", "b": "Bag"}[tgt]
             return [("asgn", ("var", tgt), self.struct_value(ty))]
-        if k == 5:
+        if k == 6:
             idx = ("&", self.expr(0, set()), ("int", "i64", 3))
             return [("asgn", ("idx", ("var", "a"), idx), self.expr(0, set()))]
-        if k == 6:
+        if k == 7:
             variant, arity = self.rng.choice([("B", 1), ("C", 2)])
             args = [self.expr(0, set()) for _ in range(arity)]
             return [("asgn", ("var", "e"), ("enumlit", "E", variant, args))]
-        if k == 7 and allow_flow:
+        if k == 8 and allow_flow:
             body_t = self.stmts(True, depth + 1, self.rng.randint(1, 2))
             body_f = self.stmts(True, depth + 1, self.rng.randint(1, 2))
             if self.rng.random() < 0.3:
@@ -541,23 +606,26 @@ class Gen:
             if self.rng.random() < 0.3:
                 body_f.append(("ret", self.expr(0, set())))
             return [("if", self.cond(0), body_t, body_f)]
-        if k == 8 and allow_flow and depth == 0:
-            if self.rng.random() < 0.5:
+        if k == 9 and allow_flow:
+            # A nested loop uses its own induction variable, or the outer
+            # one's counter would be clobbered.
+            iv = "i" if depth % 2 == 0 else "j"
+            if self.rng.random() < 0.5 and depth == 0:
                 # The elidable pattern: the loop bound equals the array
                 # length, and the index is the induction variable itself.
                 body = self.stmts(True, depth + 1, self.rng.randint(1, 2))
-                body.append(("asgn", ("idx", ("var", "a"), ("var", "i")),
+                body.append(("asgn", ("idx", ("var", "a"), ("var", iv)),
                              self.expr(0, set())))
-                body.append(("asgn", ("var", "i"),
-                             ("+", ("var", "i"), ("int", "i64", 1))))
-                return [("asgn", ("var", "i"), ("int", "i64", 0)),
-                        ("while", ("<", ("var", "i"), ("int", "i64", 4)), body)]
+                body.append(("asgn", ("var", iv),
+                             ("+", ("var", iv), ("int", "i64", 1))))
+                return [("asgn", ("var", iv), ("int", "i64", 0)),
+                        ("while", ("<", ("var", iv), ("int", "i64", 4)), body)]
             bound = self.rng.randint(1, 3)
             body = self.stmts(True, depth + 1, self.rng.randint(1, 3))
-            body.append(("asgn", ("var", "i"),
-                         ("+", ("var", "i"), ("int", "i64", 1))))
-            return [("asgn", ("var", "i"), ("int", "i64", 0)),
-                    ("while", ("<", ("var", "i"), ("int", "i64", bound)), body)]
+            body.append(("asgn", ("var", iv),
+                         ("+", ("var", iv), ("int", "i64", 1))))
+            return [("asgn", ("var", iv), ("int", "i64", 0)),
+                    ("while", ("<", ("var", iv), ("int", "i64", bound)), body)]
         arms = []
         arms.append(("A", [], [("ret", self.arm_expr([]))]))
         arms.append(("B", ["mb0"], [("ret", self.arm_expr(["mb0"]))]))
@@ -585,6 +653,11 @@ def generate(seed: int, stmts: int = 8, max_depth: int = 4) -> Program:
     gen.agg = struct_help + big_help + enum_help
     helpers = gen.help + gen.agg
 
+    g_init = None
+    if rng.random() < 0.7:
+        g_init = rng.randint(-50, 50)
+        gen.gv = True
+
     decls = [
         ("decl", "v0", "int", ("int", "i64", rng.randint(0, 10))),
         ("decl", "v1", "int", ("int", "i64", rng.randint(0, 10))),
@@ -595,17 +668,28 @@ def generate(seed: int, stmts: int = 8, max_depth: int = 4) -> Program:
         ("decl", "e", "E", ("enumlit", "E", "A", [])),
         ("decl", "a", "[4]int", ("arraylit",)),
         ("decl", "i", "int", ("int", "i64", 0)),
+        ("decl", "j", "int", ("int", "i64", 0)),
     ]
 
     body = gen.stmts(True, 0, stmts + rng.randint(0, 3))
-    return Program(helpers, decls, body, gen.expr(0, set()))
+    print_var = rng.choice(["v0", "v1", "v2", None])
+    return Program(helpers, decls, body, gen.expr(0, set()),
+                   g_init, print_var)
 
 
 # ── compile & run ───────────────────────────────────────────────────────
 
-def compile_and_run(src: str, compiler: str, timeout: float = 10.0) -> Optional[int]:
+def compile_and_run(src: str, compiler: str, tmpdir: str,
+                    timeout: float = 10.0) -> Optional[tuple]:
+    """Returns (exit code, stdout) or None on compile/timeout failure.
+
+    The temp source lives in tmpdir so that relative imports ("std/...")
+    resolve for stage0, which -- unlike S2 -- has no embedded stdlib to
+    fall back to.
+    """
     try:
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".qela", delete=False) as sf:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".qela", delete=False,
+                                         dir=tmpdir) as sf:
             sf.write(src); sf.flush()
             sp = sf.name
         bp = sp + ".bin"
@@ -615,7 +699,7 @@ def compile_and_run(src: str, compiler: str, timeout: float = 10.0) -> Optional[
             return None
         os.chmod(bp, 0o755)
         r = subprocess.run([bp], capture_output=True, timeout=timeout)
-        return r.returncode
+        return r.returncode, r.stdout.decode(errors="replace")
     except subprocess.TimeoutExpired:
         return None
     except Exception:
@@ -629,17 +713,17 @@ def compile_and_run(src: str, compiler: str, timeout: float = 10.0) -> Optional[
                     pass
 
 
-def save_regression(seed: int, src: str, expected: int, got, regdir: str):
+def save_regression(seed: int, src: str, expected, got, regdir: str):
     os.makedirs(regdir, exist_ok=True)
     p = os.path.join(regdir, f"{seed}.qela")
     with open(p, "w") as f:
-        f.write(f"// expect-exit: {expected}\n// got: {got}\n{src}")
+        f.write(f"// expect-exit: {expected[0]}\n// got: {got}\n{src}")
     return p
 
 
 # ── shrinker ────────────────────────────────────────────────────────────
 
-def shrink(prog: Program, compiler: str, timeout: float) -> Program:
+def shrink(prog: Program, compiler: str, tmpdir: str, timeout: float) -> Program:
     """Drop statements while the mismatch survives. Each candidate is
     re-evaluated: removing a statement changes what the program should
     return, so the original expectation does not carry over."""
@@ -652,7 +736,7 @@ def shrink(prog: Program, compiler: str, timeout: float) -> Program:
             if not cand.stmts: continue
             src = cand.render()
             expected = cand.run()
-            got = compile_and_run(src, compiler, timeout)
+            got = compile_and_run(src, compiler, tmpdir, timeout)
             if got is not None and got != expected:
                 best = cand
                 changed = True
@@ -677,12 +761,24 @@ def main():
     comp = args.compiler
     ok = fail = crash = 0
 
+    # Temp sources go into tests/out with a std/ link, so relative imports
+    # resolve for stage0 (no embedded stdlib) as well as for S2.
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    tmpdir = os.path.join(root, "tests", "out")
+    os.makedirs(tmpdir, exist_ok=True)
+    stdlink = os.path.join(tmpdir, "std")
+    if not os.path.exists(stdlink):
+        try:
+            os.symlink(os.path.join(root, "std"), stdlink)
+        except OSError:
+            pass
+
     for i in range(args.n):
         seed = (args.seed + i) if args.seed is not None else random.randint(0, 2**31-1)
         prog = generate(seed, args.stmts, args.max_depth)
         src = prog.render()
         expected = prog.run()
-        got = compile_and_run(src, comp, args.timeout)
+        got = compile_and_run(src, comp, tmpdir, args.timeout)
 
         if got is None:
             crash += 1
@@ -692,10 +788,10 @@ def main():
         else:
             print(f"FAIL seed={seed}: expected {expected}, got {got}")
             if args.shrink:
-                prog = shrink(prog, comp, args.timeout)
+                prog = shrink(prog, comp, tmpdir, args.timeout)
                 src = prog.render()
                 expected = prog.run()
-                got = compile_and_run(src, comp, args.timeout)
+                got = compile_and_run(src, comp, tmpdir, args.timeout)
             save_regression(seed, src, expected, got, args.regress_dir)
             fail += 1
 
