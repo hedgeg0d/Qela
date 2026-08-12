@@ -1,0 +1,165 @@
+// 01_obj.qela — the object model.
+//
+// Everything the interpreter manipulates is an Obj: a tagged union of a
+// fixnum, an interned symbol, a string, a cons cell, a builtin name, or a
+// closure. Nothing is ever freed — the arena keeps the whole session, which
+// is exactly right for an interactive REPL.
+//
+// The enum references the structs by pointer, so the structs are declared
+// first; the full definitions follow the enum.
+
+import "std/arena.qela";
+import "std/str.qela";
+
+struct ConsCell;
+struct Closure;
+struct Env;
+
+enum Obj {
+	Nil,
+	Int(i64),
+	Sym(str),
+	Str(str),
+	Cons(*ConsCell),
+	Builtin(str),
+	Lambda(*Closure),
+}
+
+struct ConsCell {
+	car Obj,
+	cdr Obj,
+}
+
+struct Closure {
+	params Obj,
+	body  Obj,
+	env   *Env,
+	macro bool,
+}
+
+struct EnvEntry {
+	name str,
+	val  Obj,
+	next *EnvEntry,
+}
+
+struct Env {
+	first  *EnvEntry,
+	parent *Env,
+}
+
+// ── error channel ──
+//
+// Qela has no exceptions, so the interpreter carries one global error flag
+// and message; every eval step checks it after the sub-expressions it
+// evaluated. The REPL clears it before each top-level form.
+
+var g_err bool = false;
+var g_msg str;
+
+fn obj_err(msg str) Obj {
+	g_err = true;
+	g_msg = msg;
+	return Obj.Nil;
+}
+
+// ── allocation ──
+
+fn obj_cons(a Obj, d Obj) Obj {
+	var c *ConsCell = arena_alloc(sizeof(ConsCell), 8) as *ConsCell;
+	c.car = a;
+	c.cdr = d;
+	return Obj.Cons(c);
+}
+
+fn obj_closure(params Obj, body Obj, env *Env, is_macro bool) Obj {
+	var c *Closure = arena_alloc(sizeof(Closure), 8) as *Closure;
+	c.params = params;
+	c.body = body;
+	c.env = env;
+	c.macro = is_macro;
+	return Obj.Lambda(c);
+}
+
+fn env_new(parent *Env) *Env {
+	var e *Env = arena_alloc(sizeof(Env), 8) as *Env;
+	e.first = 0 as *EnvEntry;
+	e.parent = parent;
+	return e;
+}
+
+// ── symbol interning ──
+//
+// Symbols with the same name share one str, so eq? can compare by content
+// and printing gets the original spelling.
+
+struct SymNode {
+	s    str,
+	next *SymNode,
+}
+
+var g_syms *SymNode;
+
+fn sym_intern(name str) Obj {
+	var n *SymNode = g_syms;
+	while (n as i64 != 0) {
+		if (str_eq(n.s, name)) { return Obj.Sym(n.s); }
+		n = n.next;
+	}
+	var node *SymNode = arena_alloc(sizeof(SymNode), 8) as *SymNode;
+	node.s = str_dup(name);
+	node.next = g_syms;
+	g_syms = node;
+	return Obj.Sym(node.s);
+}
+
+// ── predicates and accessors ──
+
+fn obj_is_nil(o Obj) bool {
+	match (o) {
+		Nil => { return true; }
+		_ => { return false; }
+	}
+	return false;
+}
+
+fn obj_is_pair(o Obj) bool {
+	match (o) {
+		Cons(c) => { return true; }
+		_ => { return false; }
+	}
+	return false;
+}
+
+fn obj_car(o Obj) Obj {
+	match (o) {
+		Cons(c) => { return c.car; }
+		_ => { return Obj.Nil; }
+	}
+	return Obj.Nil;
+}
+
+fn obj_cdr(o Obj) Obj {
+	match (o) {
+		Cons(c) => { return c.cdr; }
+		_ => { return Obj.Nil; }
+	}
+	return Obj.Nil;
+}
+
+fn obj_car_cell(o Obj) *ConsCell {
+	match (o) {
+		Cons(c) => { return c; }
+		_ => { return 0 as *ConsCell; }
+	}
+	return 0 as *ConsCell;
+}
+
+fn obj_is_list(o Obj) bool {
+	match (o) {
+		Nil => { return true; }
+		Cons(c) => { return obj_is_list(c.cdr); }
+		_ => { return false; }
+	}
+	return false;
+}

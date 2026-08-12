@@ -250,6 +250,12 @@ EOF
 	fail "qela . does not merge a directory into one program"
 printf '    ok\n'
 
+step "qela . lisp example"
+( cd "$root/examples/lisp" && "$root/$OUT/s2" . -o "$tmp2/lisp" &&
+  "$tmp2/lisp" --test 2>&1 | grep -q '50 passed, 0 failed' ) ||
+	fail "the lisp example fails its self-test"
+printf '    ok\n'
+
 step "language server"
 QELA="$OUT/s2" python3 tools/lsp-test.py ||
 	fail "the language server fails the scripted conversation"

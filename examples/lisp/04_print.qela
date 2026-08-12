@@ -1,0 +1,74 @@
+// 04_print.qela — the printer.
+//
+// Obj to text. `write` quotes strings and escapes their content, `display`
+// prints them raw. Improper lists print as (a . b).
+
+import "std/buf.qela";
+import "std/fmt.qela";
+
+fn pr_escape(b *Buf, s str) {
+	var i i64 = 0;
+	while (i < s.len) {
+		var c u8 = s.ptr[i];
+		if (c == '"') { buf_u8(b, '\\'); buf_u8(b, '"'); }
+		else if (c == '\\') { buf_u8(b, '\\'); buf_u8(b, '\\'); }
+		else if (c == '\n') { buf_u8(b, '\\'); buf_u8(b, 'n'); }
+		else if (c == '\t') { buf_u8(b, '\\'); buf_u8(b, 't'); }
+		else { buf_u8(b, c); }
+		i = i + 1;
+	}
+}
+
+fn pr_list(b *Buf, c *ConsCell, quoted bool) {
+	pr_obj(b, c.car, quoted);
+	match (c.cdr) {
+		Nil => {
+			buf_u8(b, ')');
+		}
+		Cons(n) => {
+			buf_u8(b, ' ');
+			pr_list(b, n, quoted);
+		}
+		_ => {
+			fmt_str(b, " . ");
+			pr_obj(b, c.cdr, quoted);
+			buf_u8(b, ')');
+		}
+	}
+}
+
+fn pr_obj(b *Buf, o Obj, quoted bool) {
+	match (o) {
+		Nil => { fmt_str(b, "nil"); }
+		Int(v) => { fmt_i64(b, v); }
+		Sym(s) => { fmt_str(b, s); }
+		Str(s) => {
+			if (quoted) {
+				buf_u8(b, '"');
+				pr_escape(b, s);
+				buf_u8(b, '"');
+			} else {
+				fmt_str(b, s);
+			}
+		}
+		Cons(c) => {
+			buf_u8(b, '(');
+			pr_list(b, c, quoted);
+		}
+		Builtin(n) => {
+			fmt_str(b, "#<builtin ");
+			fmt_str(b, n);
+			buf_u8(b, '>');
+		}
+		Lambda(c) => {
+			fmt_str(b, "#<lambda>");
+		}
+	}
+	return;
+}
+
+fn pr_str(o Obj, quoted bool) str {
+	var b Buf;
+	pr_obj(&b, o, quoted);
+	return buf_str(&b);
+}
