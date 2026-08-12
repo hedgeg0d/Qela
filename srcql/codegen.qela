@@ -799,6 +799,10 @@ fn store_imm(ty *Type, v i64) {
 
 fn stmt_assign(n *Node) bool {
 	if (!direct_local(n.lhs)) { return stmt_store_imm(n); }
+	if (n.lhs.varp.has_reg && !in_reg(n.rhs, n.lhs.varp.reg) &&
+	    gen_into(n.rhs, n.lhs.varp.reg)) {
+		return true;
+	}
 	var r *Node = n.rhs;
 	if (r.lhs as i64 != 0 && r.lhs.kind == ND_VAR &&
 	    r.lhs.varp as i64 == n.lhs.varp as i64 && r.rhs as i64 != 0) {
@@ -996,10 +1000,71 @@ fn ld_rm(reg int, n *Node) { rm_rex(reg, n); b1(0x8b); rm_modrm(reg, n); }
 fn st_rm(n *Node, reg int) { rm_rex(reg, n); b1(0x89); rm_modrm(reg, n); }
 
 fn alu_rax_rm(op0 i64, op1 i64, n *Node) {
-	rm_rex(RAX, n);
+	alu_reg_rm(op0, op1, RAX, n);
+}
+
+fn alu_reg_rm(op0 i64, op1 i64, reg int, n *Node) {
+	rm_rex(reg, n);
 	if (op0 != 0) { b1(op0); }
 	b1(op1);
-	rm_modrm(RAX, n);
+	rm_modrm(reg, n);
+}
+
+fn alu_reg_imm(ext int, reg int, v i64) {
+	rex_w(0, reg);
+	if (v >= -128 && v <= 127) {
+		b1(0x83);
+		modrm(3, ext, reg);
+		b1(v);
+	} else {
+		b1(0x81);
+		modrm(3, ext, reg);
+		b4(v);
+	}
+}
+
+fn rm_op_for(kind int) i64 {
+	if (kind == ND_ADD)    { return 0x03; }
+	if (kind == ND_SUB)    { return 0x2b; }
+	if (kind == ND_BITAND) { return 0x23; }
+	if (kind == ND_BITOR)  { return 0x0b; }
+	return 0x33;
+}
+
+fn simple_operand(n *Node) bool {
+	if (n.kind == ND_NUM) { return fits_imm32(n.val); }
+	return direct_local(n);
+}
+
+fn in_reg(n *Node, reg int) bool {
+	return n.kind == ND_VAR && n.varp.has_reg && n.varp.reg == reg;
+}
+
+// Evaluate n straight into dst instead of through rax. Only side-effect-free
+// operands qualify, and the right side must not live in dst, since the left
+// side lands there first.
+fn gen_into(n *Node, dst int) bool {
+	if (n.kind == ND_NUM && fits_imm32(n.val)) { mov_reg_imm(dst, n.val); return true; }
+	if (direct_local(n)) {
+		if (!in_reg(n, dst)) { ld_rm(dst, n); }
+		return true;
+	}
+	var k int = n.kind;
+	if (k != ND_ADD && k != ND_SUB && k != ND_BITAND && k != ND_BITOR && k != ND_BITXOR) {
+		return false;
+	}
+	if (n.ty.kind == TY_PTR || n.lhs.ty.kind == TY_PTR || n.rhs.ty.kind == TY_PTR) {
+		return false;
+	}
+	if (!simple_operand(n.lhs) || !simple_operand(n.rhs)) { return false; }
+	if (in_reg(n.rhs, dst)) { return false; }
+	if (!gen_into(n.lhs, dst)) { return false; }
+	if (n.rhs.kind == ND_NUM) {
+		alu_reg_imm(alu_ext_for(k), dst, n.rhs.val);
+		return true;
+	}
+	alu_reg_rm(0, rm_op_for(k), dst, n.rhs);
+	return true;
 }
 
 fn alu_rm_imm(ext int, n *Node, v i64) {
@@ -1507,8 +1572,7 @@ fn gen_ret(n *Node) {
 		if (wide) { pop_reg(RDX); }
 		pop_reg(RAX);
 	}
-	gen_restore();
-	b1(0xc9); b1(0xc3);
+	gen_epilogue();
 }
 
 fn gen_for(n *Node) {
@@ -1637,6 +1701,7 @@ fn always_returns(n *Node) bool {
 // Promoted locals live in callee-saved registers, so each function saves the
 // ones it uses into reserved slots at the top of its own frame.
 fn reg_used(f *Func, reg int) bool {
+	if (reg < 12 && reg != 3) { return false; }
 	var v *Var = f.locals;
 	while (v as i64 != 0) {
 		if (v.has_reg && v.reg == reg) { return true; }
@@ -1648,8 +1713,8 @@ fn reg_used(f *Func, reg int) bool {
 fn saved_slot(f *Func, reg int) i64 {
 	var k i64 = 0;
 	var i int = 0;
-	while (i < RA_NREG) {
-		var r int = ra_pool(i);
+	while (i < RA_NSAVED) {
+		var r int = ra_saved(i);
 		if (reg_used(f, r)) {
 			k = k + 1;
 			if (r == reg) { return k * 8; }
@@ -1659,10 +1724,18 @@ fn saved_slot(f *Func, reg int) i64 {
 	return 0;
 }
 
+var gen_frameless bool;
+
+fn gen_epilogue() {
+	gen_restore();
+	if (!gen_frameless) { b1(0xc9); }
+	b1(0xc3);
+}
+
 fn gen_restore() {
 	var i int = 0;
-	while (i < RA_NREG) {
-		var r int = ra_pool(i);
+	while (i < RA_NSAVED) {
+		var r int = ra_saved(i);
 		if (reg_used(gen_fn, r)) { ld_local(r, saved_slot(gen_fn, r)); }
 		i = i + 1;
 	}
@@ -1677,16 +1750,21 @@ fn gen_func(f *Func) {
 	cur_defers = 0 as *DeferScope;
 	defer_depth = 0;
 
-	push_reg(RBP);
-	depth = depth - 1;
-	mov_reg_reg(RBP, RSP);
-	if (f.stack_size != 0) {
-		alu_rax_imm_reg(5, RSP, f.stack_size as i64);
+	// A leaf function with nothing in its frame needs no frame: every local it
+	// has is in a register and nothing below rsp is ever addressed.
+	gen_frameless = f.leaf && f.stack_size == 0;
+	if (!gen_frameless) {
+		push_reg(RBP);
+		depth = depth - 1;
+		mov_reg_reg(RBP, RSP);
+		if (f.stack_size != 0) {
+			alu_rax_imm_reg(5, RSP, f.stack_size as i64);
+		}
 	}
 
 	var si int = 0;
-	while (si < RA_NREG) {
-		var sr int = ra_pool(si);
+	while (si < RA_NSAVED) {
+		var sr int = ra_saved(si);
 		if (reg_used(f, sr)) { st_local(saved_slot(f, sr), sr); }
 		si = si + 1;
 	}
@@ -1714,8 +1792,7 @@ fn gen_func(f *Func) {
 
 	if (!always_returns(f.body)) {
 		mov_reg_imm(RAX, 0);
-		gen_restore();
-		b1(0xc9); b1(0xc3);
+		gen_epilogue();
 	}
 	gen_bounds_trampoline();
 }
