@@ -401,6 +401,27 @@ fn direct_local(n *Node) bool {
 	return n.ty.size == 8;
 }
 
+// rax = base + idx*scale. A power-of-two element size folds the scaling and
+// the addition into a single lea.
+fn lea_scale_ok(scale int) bool {
+	return scale == 1 || scale == 2 || scale == 4 || scale == 8;
+}
+
+fn lea_index(scale int, base int, idx int) bool {
+	if (!lea_scale_ok(scale)) { return false; }
+	var sh i64 = 0;
+	if (scale == 2) { sh = 1; }
+	if (scale == 4) { sh = 2; }
+	if (scale == 8) { sh = 3; }
+	var rex i64 = 0x48;
+	if (idx >= 8) { rex = rex | 2; }
+	if (base >= 8) { rex = rex | 1; }
+	b1(rex); b1(0x8d);
+	modrm(0, RAX, 4);
+	b1((sh << 6) | (((idx as i64) & 7) << 3) | ((base as i64) & 7));
+	return true;
+}
+
 fn gen_addr(n *Node) {
 	var k int = n.kind;
 	if (k == ND_VAR) {
@@ -430,8 +451,33 @@ fn gen_addr(n *Node) {
 				modrm(3, RDI, RAX);
 				jump_bounds(0x83);
 			}
+			pop_reg(RDI);
+			if (!lea_index(lt.base.size, RDI, RAX)) {
+				scale_by(lt.base.size);
+				rex_w(RDI, RAX);
+				b1(0x01);
+				modrm(3, RDI, RAX);
+			}
+			return;
+		}
+
+		if (lt.kind == TY_ARRAY) { gen_addr(n.lhs); } else { gen_expr(n.lhs); }
+		var idx int = RDI;
+		if (direct_local(n.rhs)) {
+			// A promoted index needs no copy: it can be the lea index directly.
+			if (n.rhs.varp.has_reg && lea_scale_ok(lt.base.size)) {
+				idx = n.rhs.varp.reg;
+			} else {
+				ld_rm(RDI, n.rhs);
+			}
+			if (lt.kind == TY_ARRAY && !opt_no_bounds) {
+				rex_w(0, idx);
+				b1(0x81);
+				modrm(3, 7, idx);
+				b4(lt.len);
+				jump_bounds(0x83);
+			}
 		} else {
-			if (lt.kind == TY_ARRAY) { gen_addr(n.lhs); } else { gen_expr(n.lhs); }
 			push_reg(RAX);
 			gen_expr(n.rhs);
 			if (lt.kind == TY_ARRAY && !opt_no_bounds) {
@@ -439,12 +485,17 @@ fn gen_addr(n *Node) {
 				b4(lt.len);
 				jump_bounds(0x83);
 			}
+			mov_reg_reg(RDI, RAX);
+			pop_reg(RAX);
 		}
-		scale_by(lt.base.size);
-		pop_reg(RDI);
-		rex_w(RDI, RAX);
-		b1(0x01);
-		modrm(3, RDI, RAX);
+		if (!lea_index(lt.base.size, RAX, idx)) {
+			mov_reg_imm(RCX, lt.base.size as i64);
+			b1(0x48); b1(0x0f); b1(0xaf);
+			modrm(3, RDI, RCX);
+			rex_w(RDI, RAX);
+			b1(0x01);
+			modrm(3, RDI, RAX);
+		}
 		return;
 	}
 	if (k == ND_SLICE) {
@@ -729,8 +780,17 @@ fn gen_opassign(n *Node) {
 
 // An assignment written as a statement discards its result, so it can write
 // straight to the slot without routing the value through rax.
+// mov [rax], imm: a constant store needs no round trip through rax and no
+// temporary for the address.
+fn store_imm(ty *Type, v i64) {
+	if (ty.size == 1) { b1(0xc6); modrm(0, 0, RAX); b1(v); return; }
+	if (ty.size == 2) { b1(0x66); b1(0xc7); modrm(0, 0, RAX); b1(v); b1(v >> 8); return; }
+	if (ty.size == 4) { b1(0xc7); modrm(0, 0, RAX); b4(v); return; }
+	b1(0x48); b1(0xc7); modrm(0, 0, RAX); b4(v);
+}
+
 fn stmt_assign(n *Node) bool {
-	if (!direct_local(n.lhs)) { return false; }
+	if (!direct_local(n.lhs)) { return stmt_store_imm(n); }
 	var r *Node = n.rhs;
 	if (r.lhs as i64 != 0 && r.lhs.kind == ND_VAR &&
 	    r.lhs.varp as i64 == n.lhs.varp as i64 && r.rhs as i64 != 0) {
@@ -744,6 +804,17 @@ fn stmt_assign(n *Node) bool {
 	}
 	rbp_mem(0xc7, 0, -(n.lhs.varp.offset as i64));
 	b4(n.rhs.val);
+	return true;
+}
+
+fn stmt_store_imm(n *Node) bool {
+	if (n.rhs.kind != ND_NUM) { return false; }
+	var ty *Type = n.lhs.ty;
+	if (is_aggregate(ty)) { return false; }
+	if (ty.size == 8 && !fits_imm32(n.rhs.val)) { return false; }
+	if (n.lhs.kind == ND_VAR && n.lhs.varp.has_reg) { return false; }
+	gen_addr(n.lhs);
+	store_imm(ty, n.rhs.val);
 	return true;
 }
 
