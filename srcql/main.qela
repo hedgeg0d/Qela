@@ -65,6 +65,9 @@ fn reset_compile() {
 	funcs_tail = 0 as *Func;
 	macro_list = 0 as *Macro;
 	macro_tail = 0 as *Macro;
+	top_asm_head = 0 as *Node;
+	top_asm_tail = 0 as *Node;
+	entry_name = "";
 	named_types = 0 as *Named;
 	tmpls = 0 as *Tmpl;
 	ct_stack = 0 as *CTFrame;

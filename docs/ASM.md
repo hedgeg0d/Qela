@@ -107,3 +107,23 @@ modrm bytes below are written for rax. The register field is
 | out dx, al | `0xee` | out dx, eax = `0xef` |
 
 `tests/asmref.qela` exercises most of the user-space rows on real hardware.
+## The image entry
+
+```qela
+asm { 0x1badb002, 0, 0xe4524ffe };   // multiboot header, first bytes of the file
+
+var stack_top [65536]u8;
+
+entry start;                          // the ELF entry; suppresses call-main stub
+
+fn naked start() {
+	asm(0x48, 0xbc, $stack_top);      // mov rsp, stack_top
+	asm(0xe9, $rel qela_main);        // jmp qela_main
+}
+```
+
+`$name` embeds an 8-byte absolute address (the `movabs`/`mov r64, imm64`
+operand); `$rel name` embeds a rel32 slot (the `jmp`/`call` operand). Both
+patch at link time, functions and globals alike. Multi-byte constants are
+byte strings in print order: a 32-bit little-endian value like the
+multiboot magic is written as its byte-reversed hex (`0x02b0ad1b`).
