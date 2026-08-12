@@ -7,13 +7,13 @@ Updated 2026-08-03. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **156 600 B** |
-| S2 under xz -9 (proxy for upx --lzma) | 36 236 B, ~3.5% of the 1 MiB budget |
-| stage1 sources | 6 233 lines of Qela |
-| Emitted code vs `gcc -Os` on `bench/` | **355%** (M4 gate wants ≤150%) |
+| **S2 — the shipped compiler, Qela compiled by itself** | **159 368 B** |
+| S2 under xz -9 (proxy for upx --lzma) | 38 700 B, ~3.7% of the 1 MiB budget |
+| stage1 sources | 6 043 lines of Qela |
+| Emitted code vs `gcc -Os` on `bench/` | **278%**, or **238%** without bounds checks (M4 gate wants ≤150%) |
 
 Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the
-28-test corpus under S2, the embedded stdlib resolving outside the source tree,
+29-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, and `run`/`fmt`.
 
 ## Done
@@ -45,25 +45,36 @@ directory with nothing but the compiler present.
 
 ## Not done
 
-### 1. Register allocation — the one real gap (M4)
+### 1. Emitted code size (M4)
 
-Emitted code sits at 355% of `gcc -Os`. Instruction selection is already done
-(direct locals, immediate and memory operands, fused compare-and-branch), so
-what remains is register allocation. Two halves, worth splitting:
+278% of `gcc -Os`, down from 355%. Register allocation is **done**:
+`srcql/regalloc.qela` promotes scalar locals whose address is never taken into
+rbx and r12–r15 for their whole live range. Ranges come from a linear walk of
+the tree, loops stretch every range that touches them, and registers go to the
+most-referenced candidate first, weighted by loop depth. A function saves only
+the registers it uses, into reserved slots at the top of its own frame.
 
-**1a. Register stack for expression temporaries.** Every intermediate value
-currently goes through `push`/`pop`. Keeping the top few in scratch registers
-(rcx, rsi, r8, r9) and spilling only past that depth needs no liveness
-analysis and is local to `gen_expr` in `srcql/codegen.qela`. One session,
-moderate risk, gets part of the way.
+Instruction selection now covers: direct locals as register or memory operands,
+commutative operand swapping, in-place updates (`v op= e` and `v = v op e`),
+immediate stores through a computed address, `lea` for indexing with a promoted
+index register, comparing a load in place, and short-form branches — the unit is
+emitted repeatedly, each pass shortening the branches that turned out to be
+within a byte, until nothing more shrinks.
 
-**1b. Promoting locals to registers.** mem2reg plus liveness plus linear scan,
-with callee-saved registers for values crossing calls. This is the expensive
-half and the one that would actually reach 150%. A separate session.
+What is left, in order of what it would buy:
 
-Note that ~40% of the current figure is bounds checking, which C does not do:
-`sieve` is 400 bytes with checks and 236 without. Either measure with
-`--no-bounds-checks` or raise the gate, but decide deliberately.
+- **Bounds checks are ~25% of the figure** and C does not do them: `sieve` is
+  304 bytes with checks and 232 without. Each check is `cmp` plus a `jae` to the
+  panic stub at the end of the code, which is always too far for a short branch.
+  A per-function trampoline would make most of those two bytes instead of six.
+- **Loop-invariant addresses.** `lea flags(%rip),%rax` is re-emitted on every
+  access to a global array inside a loop. Folding the global's absolute address
+  into the addressing mode (`movb $1, disp32(,%r12,1)`) removes both the `lea`
+  and the add — the data fixup has to learn to patch an absolute displacement.
+- **Common subexpressions.** Nothing is reused between statements.
+
+Reaching 150% with checks on is unlikely; without them it is in range. Decide
+deliberately which number the gate should measure.
 
 ### 2. LSP in the same binary
 
@@ -81,8 +92,9 @@ doing only after 1b, so the second backend inherits a real allocator.
 
 - `tools/torture.py` still generates only straight-line scalar expressions —
   no calls, branches, structs or enums. **Every bug found in the last several
-  sessions would have slipped past it.** This is the cheapest way to buy
-  confidence and should come before any allocator work.
+  sessions would have slipped past it**, including the two the register
+  allocator would have been most likely to introduce. Still the cheapest way to
+  buy confidence.
 - Unbuffered channels (true rendezvous); channels currently carry `i64`, with
   pointers passed by cast.
 - `genblob.py --min` to strip comments and indentation from the embedded
