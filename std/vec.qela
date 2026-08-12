@@ -1,0 +1,72 @@
+import "arena.qela";
+
+// A growable vector of any element type, on the arena. The slice view is
+// the bridge to the language's checked iteration and slicing:
+//
+//   var v Vec(i64);
+//   vec_init(&v);
+//   vec_push(&v, 7);
+//   for x in vec_view(&v) { ... }   // bounds-checked, like any []i64
+//
+// Elements are copied on push; the backing array doubles through the
+// arena and is never freed, so a vector's lifetime is the program's.
+
+struct Vec(T) {
+	data *T,
+	len  i64,
+	cap  i64,
+}
+
+fn vec_init(comptime T: type, v *Vec(T)) {
+	v.data = 0 as *T;
+	v.len = 0;
+	v.cap = 0;
+}
+
+fn vec_push(comptime T: type, v *Vec(T), x T) {
+	if (v.len >= v.cap) {
+		var cap i64 = v.cap;
+		if (cap == 0) { cap = 8; }
+		while (cap < v.len + 1) { cap = cap * 2; }
+		var nd *T = arena_alloc(cap * sizeof(T), 8) as *T;
+		var i i64 = 0;
+		while (i < v.len) {
+			*(nd + i) = *(v.data + i);
+			i = i + 1;
+		}
+		v.data = nd;
+		v.cap = cap;
+	}
+	*(v.data + v.len) = x;
+	v.len = v.len + 1;
+}
+
+// Out of range reads return a zeroed element, like list_get.
+fn vec_get(comptime T: type, v *Vec(T), i i64) T {
+	if (i < 0 || i >= v.len) {
+		var z T;
+		return z;
+	}
+	return *(v.data + i);
+}
+
+fn vec_pop(comptime T: type, v *Vec(T)) T {
+	if (v.len == 0) {
+		var z T;
+		return z;
+	}
+	v.len = v.len - 1;
+	return *(v.data + v.len);
+}
+
+fn vec_clear(comptime T: type, v *Vec(T)) {
+	v.len = 0;
+}
+
+// The whole vector as a slice: checked indexing, slicing and for-in.
+fn vec_view(comptime T: type, v *Vec(T)) []T {
+	var s []T;
+	s.ptr = v.data;
+	s.len = v.len;
+	return s;
+}
