@@ -1,0 +1,22 @@
+// expect-exit: 0
+// expect-out: 25 9 30 16
+// expect-out: 81 16
+// Parse-time expression macros: the body is parsed once with the
+// parameters as placeholders, and every call clones it with the argument
+// trees substituted. Substitution is trees, not text — sq(2 + 1) needs no
+// parentheses — and the expansion is type-checked and bounds-checked like
+// any other expression.
+import "std/io.qela";
+
+macro sq(x) = x * x;
+macro t_sq(x) = sq(x) * sq(x);
+macro lerp(a, b, t) = a + (b - a) * t;
+macro sh(x, k) = x << k;
+macro sixteen() = 16;
+
+fn main() int {
+	var n i64 = 5;
+	write_str(STDOUT, "${sq(n)} ${sq(2 + 1)} ${lerp(10, 20, 2)} ${sh(2, 3)}\n");
+	write_str(STDOUT, "${t_sq(3)} ${sixteen()}\n");
+	return 0;
+}
