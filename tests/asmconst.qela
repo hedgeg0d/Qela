@@ -1,0 +1,14 @@
+// stage1-only
+// expect-exit: 42
+// asm operands may be comptime constants: a global with a constant init
+// (let OPCODE = 0x48) or any constant expression folds to a byte.
+let MOV_RAX_IMM = 0x48;
+let MOV_IMM32 = 0xc7;
+let C0 = 0xc0;
+let RET = 0xc3;
+let MODRM_SELF = 0xc0;
+
+fn main() int {
+	var r i64 = asm(MOV_RAX_IMM, MOV_IMM32, MODRM_SELF, 0x2a, 0, 0, 0);
+	return r as int;
+}
