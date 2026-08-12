@@ -868,6 +868,10 @@ fn stmt_assign(n *Node) bool {
 	    gen_into(n.rhs, n.lhs.varp.reg)) {
 		return true;
 	}
+	if (n.lhs.varp.has_reg && spine_ok(n.rhs, n.lhs.varp)) {
+		emit_spine(n.rhs, n.lhs);
+		return true;
+	}
 	var r *Node = n.rhs;
 	if (r.lhs as i64 != 0 && r.lhs.kind == ND_VAR &&
 	    r.lhs.varp as i64 == n.lhs.varp as i64 && r.rhs as i64 != 0) {
@@ -935,6 +939,42 @@ fn stmt_update(v *Node, k int, e *Node) bool {
 
 fn stmt_opassign(n *Node) bool {
 	return stmt_update(n.lhs, n.val as int, n.rhs);
+}
+
+fn refs_var(e *Node, v *Var) bool {
+	if (e as i64 == 0) { return false; }
+	if (e.kind == ND_VAR && e.varp as i64 == v as i64) { return true; }
+	if (refs_var(e.lhs, v) || refs_var(e.rhs, v)) { return true; }
+	if (refs_var(e.cond, v) || refs_var(e.then, v) || refs_var(e.els, v)) { return true; }
+	var a *Node = e.args;
+	while (a as i64 != 0) {
+		if (refs_var(a, v)) { return true; }
+		a = a.next;
+	}
+	return false;
+}
+
+// v = ((v op a) op b) is v op= a; v op= b. Each step updates the register in
+// place, so nothing is copied back at the end. Only promoted locals qualify:
+// they cannot be aliased, and no operand may read v, or the rewrite would see
+// a value the original expression had not produced yet.
+fn spine_ok(e *Node, v *Var) bool {
+	if (e.kind == ND_VAR) { return e.varp as i64 == v as i64; }
+	var k int = e.kind;
+	if (k != ND_ADD && k != ND_SUB && k != ND_BITAND && k != ND_BITOR && k != ND_BITXOR) {
+		return false;
+	}
+	if (e.ty.size != 8 || e.ty.kind == TY_PTR) { return false; }
+	if (e.lhs.ty.kind == TY_PTR || e.rhs.ty.kind == TY_PTR) { return false; }
+	if (refs_var(e.rhs, v)) { return false; }
+	return spine_ok(e.lhs, v);
+}
+
+fn emit_spine(e *Node, dst *Node) {
+	if (e.kind == ND_VAR) { return; }
+	emit_spine(e.lhs, dst);
+	gen_expr(e.rhs);
+	alu_rm_reg(alu_op_for(e.kind), dst, RAX);
 }
 
 fn gen_exprstmt(n *Node) {
@@ -1005,6 +1045,15 @@ fn gen_binop_imm(n *Node, v i64) bool {
 	if (k == ND_ADD || k == ND_SUB || k == ND_BITAND || k == ND_BITOR ||
 	    k == ND_BITXOR) {
 		gen_expr(n.lhs);
+		// Masking to a byte or a halfword is a zero-extending move.
+		if (k == ND_BITAND && v == 255) {
+			b1(0x0f); b1(0xb6); modrm(3, RAX, RAX);
+			return true;
+		}
+		if (k == ND_BITAND && v == 65535) {
+			b1(0x0f); b1(0xb7); modrm(3, RAX, RAX);
+			return true;
+		}
 		alu_rax_imm(alu_ext_for(k), v);
 		return true;
 	}
