@@ -18,6 +18,23 @@ fn fmt_i64(b *Buf, v i64) {
 	while (n > 0) { n = n - 1; buf_u8(b, rev[n]); }
 }
 
+// Same as fmt_i64 but writes directly to a file descriptor: no Buf
+// allocation, no copy. Used by diagnostics on stderr.
+fn fmt_i64_to_fd(fd i64, v i64) {
+	var neg bool = v < 0;
+	if (neg) { v = -v; }
+	var rev [24]u8;
+	var n i64 = 0;
+	if (v == 0) { rev[0] = '0'; n = 1; }
+	while (v > 0) {
+		rev[n] = ('0' as i64 + v % 10) as u8;
+		v = v / 10;
+		n = n + 1;
+	}
+	if (neg) { rev[n] = '-'; n = n + 1; }
+	while (n > 0) { n = n - 1; sys_write(fd, &rev[n], 1); }
+}
+
 fn fmt_hex(b *Buf, v i64) {
 	var hex [16]u8;
 	hex[0] = '0'; hex[1] = '1'; hex[2] = '2'; hex[3] = '3';

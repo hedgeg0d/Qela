@@ -169,6 +169,7 @@ struct Var {
 	pos       i64,
 	arg_stack bool,
 	pnext     *Var,
+	reads     i64,
 }
 
 struct Node {
@@ -304,16 +305,24 @@ let CV_VOID = 3;
 //
 // std/fmt.qela
 //   fmt_i64(b *Buf, v i64)                fmt_hex(b *Buf, v i64)
-//   fmt_str(b *Buf, s str)
+//   fmt_str(b *Buf, s str)                fmt_i64_to_fd(fd i64, v i64)
 //   fmt_begin() Buf                       fmt_put_str(b Buf, s str) Buf
 //   fmt_put_i64(b Buf, v i64) Buf         fmt_put_hex(b Buf, v i64) Buf
 //   fmt_result(b Buf) str
+//
+// std/sys.qela
+//   sys_getenv(name str) str              sys_isatty() i64
 //
 // srcql/diag.qela
 //   set_module_dir(path str)
 //   diag_add_file(path str, src str) int
 //   diag_line_for(file_id int, off i64) int
 //   error_at(pos i64, msg str)            does not return
+//   warn_at(pos i64, msg str)             note_at(pos i64, msg str)
+//   hint_at(pos i64, msg str)             diag_secondary(pos i64, msg str)
+//   diag_macro_push(name str, pos i64)    diag_macro_pop()
+//   diag_setup()                          diag_reset()
+//   opt_warn bool    opt_color int (0=auto 1=always 2=never)
 //
 // srcql/lex.qela
 //   lex(src str, base i64) *Token
