@@ -137,6 +137,12 @@ struct Var {
 	by_ref    bool,
 	data_off  i64,
 	init      i64,
+	has_reg   bool,
+	no_reg    bool,
+	reg       int,
+	lo        i64,
+	hi        i64,
+	uses      i64,
 }
 
 struct Node {
@@ -174,6 +180,7 @@ struct Func {
 	locals     *Var,
 	ret        *Type,
 	stack_size int,
+	nsaved     int,
 	body       *Node,
 	ret_slot   *Var,
 	addr       i64,
