@@ -1,6 +1,7 @@
 import "comp.qela";
 import "diag.qela";
 import "type.qela";
+import "regalloc.qela";
 
 let RAX = 0;
 let RCX = 1;
@@ -364,6 +365,7 @@ fn direct_local(n *Node) bool {
 fn gen_addr(n *Node) {
 	var k int = n.kind;
 	if (k == ND_VAR) {
+		if (n.varp.has_reg) { error_at(n.pos, "internal: address of a promoted local"); }
 		if (n.varp.is_global) { add_dataref(n.varp); }
 		else if (n.varp.by_ref) { ld_local(RAX, n.varp.offset as i64); }
 		else { lea_local(RAX, n.varp.offset as i64); }
@@ -647,6 +649,25 @@ fn gen_logical(n *Node) {
 }
 
 fn gen_opassign(n *Node) {
+	if (n.lhs.kind == ND_VAR && n.lhs.varp.has_reg) {
+		ld_rm(RAX, n.lhs);
+		push_reg(RAX);
+		gen_expr(n.rhs);
+		if (n.lhs.ty.kind == TY_PTR) { scale_by(n.lhs.ty.base.size); }
+		mov_reg_reg(RDI, RAX);
+		pop_reg(RAX);
+
+		var rop Node;
+		rop.kind = n.val as int;
+		rop.ty = n.lhs.ty;
+		rop.lhs = n.lhs;
+		rop.pos = n.pos;
+		gen_binop(&rop);
+
+		truncate_to(n.lhs.ty);
+		st_rm(n.lhs, RAX);
+		return;
+	}
 	gen_addr(n.lhs);
 	push_reg(RAX);
 	load(n.lhs.ty);
@@ -671,23 +692,58 @@ fn gen_opassign(n *Node) {
 // straight to the slot without routing the value through rax.
 fn stmt_assign(n *Node) bool {
 	if (!direct_local(n.lhs)) { return false; }
-	if (n.rhs.kind != ND_NUM) { return false; }
-	if (n.rhs.val == 0 || !fits_imm32(n.rhs.val)) { return false; }
+	var r *Node = n.rhs;
+	if (r.lhs as i64 != 0 && r.lhs.kind == ND_VAR &&
+	    r.lhs.varp as i64 == n.lhs.varp as i64 && r.rhs as i64 != 0) {
+		if (stmt_update(n.lhs, r.kind, r.rhs)) { return true; }
+	}
+	if (n.rhs.kind != ND_NUM || !fits_imm32(n.rhs.val)) { return false; }
+	if (n.rhs.val == 0 && !n.lhs.varp.has_reg) { return false; }
+	if (n.lhs.varp.has_reg) {
+		mov_reg_imm(n.lhs.varp.reg, n.rhs.val);
+		return true;
+	}
 	rbp_mem(0xc7, 0, -(n.lhs.varp.offset as i64));
 	b4(n.rhs.val);
 	return true;
 }
 
-fn stmt_opassign(n *Node) bool {
-	if (!direct_local(n.lhs)) { return false; }
-	if (n.lhs.ty.kind == TY_PTR) { return false; }
-	if (n.rhs.kind != ND_NUM || !fits_imm32(n.rhs.val)) { return false; }
-	var k int = n.val as int;
+fn alu_op_for(kind int) i64 {
+	if (kind == ND_ADD)    { return 0x01; }
+	if (kind == ND_SUB)    { return 0x29; }
+	if (kind == ND_BITAND) { return 0x21; }
+	if (kind == ND_BITOR)  { return 0x09; }
+	return 0x31;
+}
+
+fn alu_rm_reg(op i64, n *Node, reg int) {
+	rm_rex(reg, n);
+	b1(op);
+	rm_modrm(reg, n);
+}
+
+// v op= e as a statement: fold the update into one instruction against the
+// slot or register holding v, instead of loading it and storing it back.
+// Only promoted locals take a computed operand: a local still in the frame may
+// be aliased, and the slow path reads it before evaluating the right side.
+fn stmt_update(v *Node, k int, e *Node) bool {
+	if (!direct_local(v)) { return false; }
+	if (v.ty.kind == TY_PTR) { return false; }
 	if (k != ND_ADD && k != ND_SUB && k != ND_BITAND && k != ND_BITOR && k != ND_BITXOR) {
 		return false;
 	}
-	alu_mem_imm(alu_ext_for(k), n.lhs.varp.offset as i64, n.rhs.val);
+	if (e.kind == ND_NUM && fits_imm32(e.val)) {
+		alu_rm_imm(alu_ext_for(k), v, e.val);
+		return true;
+	}
+	if (!v.varp.has_reg) { return false; }
+	gen_expr(e);
+	alu_rm_reg(alu_op_for(k), v, RAX);
 	return true;
+}
+
+fn stmt_opassign(n *Node) bool {
+	return stmt_update(n.lhs, n.val as int, n.rhs);
 }
 
 fn gen_exprstmt(n *Node) {
@@ -792,58 +848,61 @@ fn gen_binop_imm(n *Node, v i64) bool {
 	return false;
 }
 
-// rax <op> [rbp-off], for the common case of a machine-word local on the
-// right: one instruction instead of a load, a push and a pop.
-fn alu_rax_mem(op0 i64, op1 i64, off i64) {
-	b1(0x48);
-	if (op0 != 0) { b1(op0); }
-	b1(op1);
-	var disp i64 = -off;
+// A direct local is one r/m operand: either the register it was promoted to or
+// its frame slot. Both encode the same instruction forms, so every fast path
+// below works unchanged whichever one it is.
+fn rm_rex(reg int, n *Node) {
+	if (n.varp.has_reg) { rex_w(reg, n.varp.reg); } else { rex_w(reg, RBP); }
+}
+
+fn rm_modrm(reg int, n *Node) {
+	if (n.varp.has_reg) {
+		modrm(3, reg, n.varp.reg);
+		return;
+	}
+	var disp i64 = -(n.varp.offset as i64);
 	if (disp >= -128 && disp <= 127) {
-		modrm(1, RAX, RBP);
+		modrm(1, reg, RBP);
 		b1(disp);
 	} else {
-		modrm(2, RAX, RBP);
+		modrm(2, reg, RBP);
 		b4(disp);
 	}
 }
 
-fn alu_mem_imm(ext int, off i64, v i64) {
-	b1(0x48);
-	var disp i64 = -off;
+fn ld_rm(reg int, n *Node) { rm_rex(reg, n); b1(0x8b); rm_modrm(reg, n); }
+fn st_rm(n *Node, reg int) { rm_rex(reg, n); b1(0x89); rm_modrm(reg, n); }
+
+fn alu_rax_rm(op0 i64, op1 i64, n *Node) {
+	rm_rex(RAX, n);
+	if (op0 != 0) { b1(op0); }
+	b1(op1);
+	rm_modrm(RAX, n);
+}
+
+fn alu_rm_imm(ext int, n *Node, v i64) {
+	rm_rex(0, n);
 	if (v >= -128 && v <= 127) {
 		b1(0x83);
-		if (disp >= -128 && disp <= 127) {
-			modrm(1, ext, RBP);
-			b1(disp);
-		} else {
-			modrm(2, ext, RBP);
-			b4(disp);
-		}
+		rm_modrm(ext, n);
 		b1(v);
 	} else {
 		b1(0x81);
-		if (disp >= -128 && disp <= 127) {
-			modrm(1, ext, RBP);
-			b1(disp);
-		} else {
-			modrm(2, ext, RBP);
-			b4(disp);
-		}
+		rm_modrm(ext, n);
 		b4(v);
 	}
 }
 
-fn gen_binop_mem(n *Node, off i64) bool {
+fn gen_binop_mem(n *Node, val *Node, rm *Node) bool {
 	var k int = n.kind;
-	gen_expr(n.lhs);
-	if (k == ND_ADD)    { alu_rax_mem(0, 0x03, off); return true; }
-	if (k == ND_SUB)    { alu_rax_mem(0, 0x2b, off); return true; }
-	if (k == ND_BITAND) { alu_rax_mem(0, 0x23, off); return true; }
-	if (k == ND_BITOR)  { alu_rax_mem(0, 0x0b, off); return true; }
-	if (k == ND_BITXOR) { alu_rax_mem(0, 0x33, off); return true; }
-	if (k == ND_MUL)    { alu_rax_mem(0x0f, 0xaf, off); return true; }
-	alu_rax_mem(0, 0x3b, off);
+	gen_expr(val);
+	if (k == ND_ADD)    { alu_rax_rm(0, 0x03, rm); return true; }
+	if (k == ND_SUB)    { alu_rax_rm(0, 0x2b, rm); return true; }
+	if (k == ND_BITAND) { alu_rax_rm(0, 0x23, rm); return true; }
+	if (k == ND_BITOR)  { alu_rax_rm(0, 0x0b, rm); return true; }
+	if (k == ND_BITXOR) { alu_rax_rm(0, 0x33, rm); return true; }
+	if (k == ND_MUL)    { alu_rax_rm(0x0f, 0xaf, rm); return true; }
+	alu_rax_rm(0, 0x3b, rm);
 	setcc(cmp_cc_for(n));
 	return true;
 }
@@ -858,6 +917,17 @@ fn mem_binop_ok(n *Node) bool {
 	return direct_local(n.rhs);
 }
 
+// For a commutative operator a direct local on the left folds in just as well,
+// once the sides are evaluated the other way round.
+fn swap_binop_ok(n *Node) bool {
+	var k int = n.kind;
+	if (k != ND_ADD && k != ND_BITAND && k != ND_BITOR && k != ND_BITXOR &&
+	    k != ND_MUL && k != ND_EQ && k != ND_NE) {
+		return false;
+	}
+	return direct_local(n.lhs) && !direct_local(n.rhs);
+}
+
 fn is_compare(n *Node) bool {
 	var k int = n.kind;
 	return k == ND_EQ || k == ND_NE || k == ND_LT || k == ND_LE;
@@ -869,13 +939,17 @@ fn gen_compare(n *Node) i64 {
 	var lt *Type = n.lhs.ty;
 	if (n.rhs.kind == ND_NUM && fits_imm32(n.rhs.val) &&
 	    (lt.kind != TY_PTR || n.rhs.val == 0)) {
+		if (direct_local(n.lhs)) {
+			alu_rm_imm(7, n.lhs, n.rhs.val);
+			return cmp_cc_for(n);
+		}
 		gen_expr(n.lhs);
 		alu_rax_imm(7, n.rhs.val);
 		return cmp_cc_for(n);
 	}
 	if (lt.kind != TY_PTR && direct_local(n.rhs)) {
 		gen_expr(n.lhs);
-		alu_rax_mem(0, 0x3b, n.rhs.varp.offset as i64);
+		alu_rax_rm(0, 0x3b, n.rhs);
 		return cmp_cc_for(n);
 	}
 	gen_expr(n.rhs);
@@ -1013,7 +1087,7 @@ fn gen_expr(n *Node) {
 	if (k == ND_COMPTIME) { mov_reg_imm(RAX, n.val); return; }
 	if (k == ND_SIZEOF) { mov_reg_imm(RAX, n.typeval.size as i64); return; }
 	if (k == ND_VAR) {
-		if (direct_local(n)) { ld_local(RAX, n.varp.offset as i64); return; }
+		if (direct_local(n)) { ld_rm(RAX, n); return; }
 		gen_lvalue(n);
 		return;
 	}
@@ -1040,7 +1114,7 @@ fn gen_expr(n *Node) {
 	if (k == ND_ASSIGN) {
 		if (direct_local(n.lhs)) {
 			gen_expr(n.rhs);
-			st_local(n.lhs.varp.offset as i64, RAX);
+			st_rm(n.lhs, RAX);
 			return;
 		}
 		gen_addr(n.lhs);
@@ -1057,6 +1131,7 @@ fn gen_expr(n *Node) {
 	if (k == ND_ENUMLIT) { gen_enumlit(n); return; }
 	if (k == ND_STRUCTLIT) { gen_structlit(n); return; }
 	if (k == ND_ZERO) {
+		if (n.varp.has_reg) { mov_reg_imm(n.varp.reg, 0); return; }
 		var off i64 = n.varp.offset as i64;
 		var size int = n.varp.ty.size;
 		if (size <= 8 && !is_aggregate(n.varp.ty)) {
@@ -1140,7 +1215,10 @@ fn gen_expr(n *Node) {
 	}
 
 	if (!ptr_diff && lt.kind != TY_PTR && mem_binop_ok(n)) {
-		if (gen_binop_mem(n, n.rhs.varp.offset as i64)) { return; }
+		if (gen_binop_mem(n, n.lhs, n.rhs)) { return; }
+	}
+	if (!ptr_diff && lt.kind != TY_PTR && rt.kind != TY_PTR && swap_binop_ok(n)) {
+		if (gen_binop_mem(n, n.rhs, n.lhs)) { return; }
 	}
 
 	gen_expr(n.rhs);
@@ -1165,6 +1243,15 @@ fn run_defers(ds *DeferScope) {
 		gen_stmt(d.lhs);
 		d = d.els;
 	}
+}
+
+fn any_defers() bool {
+	var ds *DeferScope = cur_defers;
+	while (ds as i64 != 0) {
+		if (ds.list as i64 != 0) { return true; }
+		ds = ds.prev;
+	}
+	return false;
 }
 
 fn unwind_to(target int) {
@@ -1251,7 +1338,7 @@ fn gen_ret(n *Node) {
 	} else {
 		mov_reg_imm(RAX, 0);
 	}
-	if (cur_defers as i64 != 0) {
+	if (any_defers()) {
 		var wide bool = false;
 		if (n.lhs as i64 != 0 && is_aggregate(n.lhs.ty)) {
 			wide = n.lhs.ty.size > 8 && n.lhs.ty.size <= 16;
@@ -1262,6 +1349,7 @@ fn gen_ret(n *Node) {
 		if (wide) { pop_reg(RDX); }
 		pop_reg(RAX);
 	}
+	gen_restore();
 	b1(0xc9); b1(0xc3);
 }
 
@@ -1282,8 +1370,13 @@ fn gen_for(n *Node) {
 	var i i64 = 0;
 	while (i < lp.cont.n) { patch_here(lp.cont.p[i]); i = i + 1; }
 	if (n.step as i64 != 0) { gen_expr(n.step); }
-	b1(0xe9);
-	b4(top - (code.n + 4));
+	var back i64 = top - (code.n + 2);
+	if (back >= -128 && back <= 127) {
+		b1(0xeb); b1(back);
+	} else {
+		b1(0xe9);
+		b4(top - (code.n + 4));
+	}
 
 	i = 0;
 	while (i < lp.brk.n) { patch_here(lp.brk.p[i]); i = i + 1; }
@@ -1366,6 +1459,57 @@ fn gen_stmt(n *Node) {
 	gen_expr(n);
 }
 
+// Control cannot fall out of a block whose last statement returns, so the
+// implicit "return 0" tail is dead.
+fn always_returns(n *Node) bool {
+	if (n as i64 == 0) { return false; }
+	if (n.kind == ND_RET) { return true; }
+	if (n.kind == ND_BLOCK) {
+		var last *Node = 0 as *Node;
+		var s *Node = n.body;
+		while (s as i64 != 0) { last = s; s = s.next; }
+		return always_returns(last);
+	}
+	if (n.kind == ND_IF) {
+		return always_returns(n.then) && always_returns(n.els);
+	}
+	return false;
+}
+
+// Promoted locals live in callee-saved registers, so each function saves the
+// ones it uses into reserved slots at the top of its own frame.
+fn reg_used(f *Func, reg int) bool {
+	var v *Var = f.locals;
+	while (v as i64 != 0) {
+		if (v.has_reg && v.reg == reg) { return true; }
+		v = v.next;
+	}
+	return false;
+}
+
+fn saved_slot(f *Func, reg int) i64 {
+	var k i64 = 0;
+	var i int = 0;
+	while (i < RA_NREG) {
+		var r int = ra_pool(i);
+		if (reg_used(f, r)) {
+			k = k + 1;
+			if (r == reg) { return k * 8; }
+		}
+		i = i + 1;
+	}
+	return 0;
+}
+
+fn gen_restore() {
+	var i int = 0;
+	while (i < RA_NREG) {
+		var r int = ra_pool(i);
+		if (reg_used(gen_fn, r)) { ld_local(r, saved_slot(gen_fn, r)); }
+		i = i + 1;
+	}
+}
+
 fn gen_func(f *Func) {
 	f.addr = code.n;
 	line_mark(f.pos);
@@ -1382,6 +1526,13 @@ fn gen_func(f *Func) {
 		alu_rax_imm_reg(5, RSP, f.stack_size as i64);
 	}
 
+	var si int = 0;
+	while (si < RA_NREG) {
+		var sr int = ra_pool(si);
+		if (reg_used(f, sr)) { st_local(saved_slot(f, sr), sr); }
+		si = si + 1;
+	}
+
 	var ri int = 0;
 	if (f.ret_slot as i64 != 0) {
 		st_local(f.ret_slot.offset as i64, call_reg(ri));
@@ -1390,7 +1541,8 @@ fn gen_func(f *Func) {
 	var i int = 0;
 	while (i < f.nparams) {
 		var v *Var = func_param(f, i);
-		st_local(v.offset as i64, call_reg(ri));
+		if (v.has_reg) { mov_reg_reg(v.reg, call_reg(ri)); }
+		else { st_local(v.offset as i64, call_reg(ri)); }
 		ri = ri + 1;
 		if (is_aggregate(v.ty) && !v.by_ref && v.ty.size > 8) {
 			st_local((v.offset as i64) - 8, call_reg(ri));
@@ -1401,8 +1553,11 @@ fn gen_func(f *Func) {
 
 	gen_stmt(f.body);
 
-	mov_reg_imm(RAX, 0);
-	b1(0xc9); b1(0xc3);
+	if (!always_returns(f.body)) {
+		mov_reg_imm(RAX, 0);
+		gen_restore();
+		b1(0xc9); b1(0xc3);
+	}
 }
 
 fn layout_globals(globals *Var) {

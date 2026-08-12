@@ -2,6 +2,7 @@ import "comp.qela";
 import "diag.qela";
 import "type.qela";
 import "funcs.qela";
+import "regalloc.qela";
 import "opt.qela";
 import "../std/io.qela";
 import "std_blob.qela";
@@ -1028,16 +1029,19 @@ fn parse(tok *Token) *Unit {
 		if (f.nct == 0) {
 			type_func(f);
 			opt_func(f);
+			regalloc(f);
 
-			var off i64 = 0;
+			var off i64 = (f.nsaved as i64) * 8;
 			var v *Var = f.locals;
 			while (v as i64 != 0) {
-				var size i64 = v.ty.size as i64;
-				var al i64 = v.ty.align as i64;
-				if (v.by_ref) { size = 8; al = 8; }
-				else if (size < 8) { size = 8; }
-				off = (off + size + al - 1) & ~(al - 1);
-				v.offset = off as int;
+				if (!v.has_reg) {
+					var size i64 = v.ty.size as i64;
+					var al i64 = v.ty.align as i64;
+					if (v.by_ref) { size = 8; al = 8; }
+					else if (size < 8) { size = 8; }
+					off = (off + size + al - 1) & ~(al - 1);
+					v.offset = off as int;
+				}
 				v = v.next;
 			}
 			f.stack_size = ((off + 15) & ~15) as int;
