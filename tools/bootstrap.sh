@@ -16,6 +16,10 @@ fail() { printf '\033[31mFAIL\033[0m: %s\n' "$1"; exit 1; }
 [ -x "$STAGE0" ] || fail "no stage0 at $STAGE0 (run make)"
 [ -f "$ENTRY" ] || fail "no entry point at $ENTRY"
 
+# A stale blob would ship an old standard library.
+step "regenerate the embedded stdlib"
+python3 tools/genblob.py || fail "genblob failed"
+
 # An unfinished stage1 can exit 0 without writing anything, so check the file.
 compile() {
 	rm -f "$3"
@@ -47,5 +51,23 @@ printf '\n\033[32mM7 GATE PASSED\033[0m: S2 == S3, %s bytes\n' \
 
 step "test corpus under S2"
 QELA="$OUT/s2" tools/run-tests.sh || fail "S2 does not pass the test corpus"
+
+step "embedded stdlib, outside the source tree"
+root=$(pwd)
+tmp=$(mktemp -d)
+cat > "$tmp/embed.qela" <<'EOF'
+import "std/io.qela";
+import "std/fmt.qela";
+fn main() int {
+	var b Buf;
+	fmt_i64(&b, 6 * 7);
+	if (b.n == 2 && b.p[0] == '4' && b.p[1] == '2') { return 0; }
+	return 1;
+}
+EOF
+( cd "$tmp" && "$root/$OUT/s2" embed.qela -o embed && ./embed ) ||
+	fail "the embedded stdlib does not resolve without std/ on disk"
+rm -rf "$tmp"
+printf '    ok\n'
 
 printf '\nShipping binary: %s\n' "$OUT/s2"
