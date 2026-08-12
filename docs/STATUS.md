@@ -7,9 +7,9 @@ Updated 2026-08-03. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **217 088 B** |
-| S2 under `upx --lzma` (measured 2026-08-03) | 50 852 B, ~4.9% of the 1 MiB budget |
-| S2 under xz -9 (proxy for upx) | 52 996 B |
+| **S2 — the shipped compiler, Qela compiled by itself** | **220 296 B** |
+| S2 under `upx --lzma` (measured 2026-08-03) | 51 388 B, ~4.9% of the 1 MiB budget |
+| S2 under xz -9 (proxy for upx) | 53 636 B |
 | stage1 sources | 9 100 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **193%** without bounds checks (M4 gate wants ≤150%) |
 
@@ -65,6 +65,16 @@ compiler's own `../std/...` imports in the file table.
 unseeded program is reproducible; the top bit is masked so `%` in
 `rand_range` never sees a negative operand. The repl imports it, so
 `rand_range(1, 7)` is a one-liner there.
+
+**Expression macros.** `macro sq(x) = x * x;` — the body is parsed once
+with the parameters as placeholder locals, and every call clones it with
+the argument trees substituted. Substitution is trees, not text: no
+parentheses around arguments, no comma problems, and the expansion goes
+through the ordinary type check and bounds checks. A call clones the
+argument per use, so an argument evaluates as many times as the body names
+it (the classic macro contract). Macros resolve at parse time, so they must
+be defined before use; up to six parameters, expression bodies only. No new
+node kinds: the expansion is pure parse-time.
 when it is not written out; `syscall`; `asm(byte, byte, ...)` for raw machine
 code with the result convention that whatever's left in `RAX` is the
 expression's value, same as `syscall`; `assert(cond, "msg")` and
