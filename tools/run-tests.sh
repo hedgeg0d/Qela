@@ -2,6 +2,7 @@
 # Each test declares its expectations in leading comments:
 #   // expect-exit: 42
 #   // expect-out: some text
+#   // stage1-only        a feature stage0 does not have; skipped under ./qela
 set -u
 
 QELA="${QELA:-./qela}"
@@ -14,6 +15,11 @@ fail=0
 for src in tests/*.qela; do
 	name=$(basename "$src" .qela)
 	bin="$OUT/$name"
+
+	if grep -q '^// stage1-only' "$src" && [ "$QELA" = "./qela" ]; then
+		printf 'skip %-16s stage1-only\n' "$name"
+		continue
+	fi
 
 	want_exit=$(sed -n 's|^// expect-exit: ||p' "$src")
 	want_out=$(sed -n 's|^// expect-out: ||p' "$src")
