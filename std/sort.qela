@@ -1,0 +1,21 @@
+// Hoare quicksort over a slice of i64, bootstrap-subset-safe.
+
+fn sort_i64(s []i64, lo i64, hi i64) {
+	if (lo >= hi) { return; }
+	var pivot i64 = s[(lo + hi) / 2];
+	var i i64 = lo;
+	var j i64 = hi;
+	while (i <= j) {
+		while (s[i] < pivot) { i = i + 1; }
+		while (s[j] > pivot) { j = j - 1; }
+		if (i <= j) {
+			var t i64 = s[i];
+			s[i] = s[j];
+			s[j] = t;
+			i = i + 1;
+			j = j - 1;
+		}
+	}
+	sort_i64(s, lo, j);
+	sort_i64(s, i, hi);
+}

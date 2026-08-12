@@ -113,6 +113,8 @@ fn js_str() str {
 	while (true) {
 		var c u8 = js_take();
 		if (c == '"') { break; }
+		// The buffer ends: the message is truncated, not consumed forever.
+		if (c == 0) { break; }
 		if (c == '\\') {
 			var e u8 = js_take();
 			if (e == 'n') { buf_u8(&b, '\n'); }
@@ -164,7 +166,7 @@ fn js_value() *JVal {
 			tail = v;
 			js_skip_ws();
 			var d u8 = js_take();
-			if (d == '}') { break; }
+			if (d == '}' || d == 0) { break; }
 		}
 		o.item = head.next;
 		return o;
@@ -182,7 +184,7 @@ fn js_value() *JVal {
 			tail = v;
 			js_skip_ws();
 			var d u8 = js_take();
-			if (d == ']') { break; }
+			if (d == ']' || d == 0) { break; }
 		}
 		a.item = head.next;
 		return a;
@@ -595,7 +597,7 @@ fn lsp_publish(diag_path str) {
 		var line *JVal = j_get(d, "line");
 		var col *JVal = j_get(d, "col");
 		var msg *JVal = j_get(d, "msg");
-		if (msg as i64 != 0) {
+		if (msg as i64 != 0 && line as i64 != 0 && col as i64 != 0) {
 			var one *JVal = j_new(J_OBJ);
 			j_push(one, "range", j_pos_obj((line.n - 1) as int, (col.n - 1) as int));
 			j_push(one, "severity", j_numv(1));

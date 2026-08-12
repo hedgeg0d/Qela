@@ -56,17 +56,25 @@ static ComptimeVal ct_eval_block(Node *n);
 static void        ct_eval_for(Node *n);
 
 static ComptimeVal ct_call(Func *f, Node *args) {
+	/* A call is a boundary: a callee's return, break or continue must not
+	   leak into the caller, or the caller's block would stop at the first
+	   statement after the call and return the callee's value. */
+	bool        save_r = ct_returning;
+	bool        save_b = ct_broke;
+	bool        save_c = ct_continued;
+	ComptimeVal save_v = ct_ret_val;
 	ct_push_frame();
 	int i = 0;
 	for (Node *a = args; a; a = a->next, i++) {
 		if (i >= f->nparams) break;
 		ct_declare(f->params[i]->name, ct_eval_expr(a));
 	}
-	ct_returning = false;
-	ct_broke = false;
-	ct_continued = false;
 	ComptimeVal ret = ct_eval_block(f->body);
 	ct_pop_frame();
+	ct_returning = save_r;
+	ct_broke = save_b;
+	ct_continued = save_c;
+	ct_ret_val = save_v;
 	return ret;
 }
 
@@ -116,7 +124,8 @@ static void ct_eval_for(Node *n) {
 		ct_broke = false;
 		ct_continued = false;
 		ct_run_stmt(n->body);
-		if (ct_broke || ct_returning) break;
+		if (ct_broke) { ct_broke = false; break; }
+		if (ct_returning) break;
 		if (n->step) ct_run_stmt(n->step);
 	}
 }
@@ -229,8 +238,12 @@ static ComptimeVal ct_eval_expr(Node *n) {
 			case ND_ADD: r = a + b; break;
 			case ND_SUB: r = a - b; break;
 			case ND_MUL: r = a * b; break;
-			case ND_DIV: r = b ? a / b : 0; break;
-			case ND_MOD: r = b ? a % b : 0; break;
+			case ND_DIV:
+				if (!b) error_at(n->pos, "division by zero in a constant expression");
+				r = a / b; break;
+			case ND_MOD:
+				if (!b) error_at(n->pos, "division by zero in a constant expression");
+				r = a % b; break;
 			case ND_BITAND: r = a & b; break;
 			case ND_BITOR:  r = a | b; break;
 			case ND_BITXOR: r = a ^ b; break;
