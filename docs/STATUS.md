@@ -7,9 +7,9 @@ Updated 2026-08-03. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **222 288 B** |
+| **S2 — the shipped compiler, Qela compiled by itself** | **222 392 B** |
 | S2 under `upx --lzma` (measured 2026-08-03) | 51 388 B, ~4.9% of the 1 MiB budget |
-| S2 under xz -9 (proxy for upx) | 53 924 B |
+| S2 under xz -9 (proxy for upx) | 54 036 B |
 | stage1 sources | 9 100 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **193%** without bounds checks (M4 gate wants ≤150%) |
 
@@ -77,7 +77,12 @@ own `iretq`/`ret` from `asm`. The contract is enforced at parse time — no
 parameters, locals, returns, defers or calls (only `asm` and `syscall`).
 An `asm` operand may be any comptime constant — `let OPCODE = 0x48;
 asm(OPCODE, ...)` or `asm(0x48 | 0x80)` — folded at type time, so opcodes
-have names without a single new keyword.
+have names without a single new keyword. A value wider than a byte is a
+byte string in hex: `asm(0x48c7c0)` emits `48 c7 c0`. `docs/ASM.md` is the
+reference: the common encodings as one-`let` rows (mov/add/sub/cmp/jmp/
+syscall/iretq/lgdt...), each verified on real hardware in `tests/asmref.qela`.
+This is the whole "assembler": bytes with names, no mnemonics, no encoder
+in the compiler.
 
 **Expression macros.** `macro sq(x) = x * x;` — the body is parsed once
 with the parameters as placeholder locals, and every call clones it with
