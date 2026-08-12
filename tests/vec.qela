@@ -1,0 +1,44 @@
+// expect-exit: 0
+// stage1-only
+// expect-out: 570
+// expect-out: 0
+// expect-out: 40
+// expect-out: 0
+// The generic vector: push, grow, out-of-range reads as zero, struct
+// elements, the slice view with checked for-in iteration.
+import "std/io.qela";
+import "std/vec.qela";
+
+struct P {
+	x i64,
+	y i64,
+}
+
+fn main() int {
+	var v Vec(i64);
+	vec_init(&v);
+	var i i64 = 0;
+	while (i < 20) {
+		vec_push(&v, i * 3);
+		i = i + 1;
+	}
+	var t i64 = 0;
+	for x in vec_view(&v) { t = t + x; }
+	write_str(STDOUT, "${t}\n");
+	write_str(STDOUT, "${vec_get(&v, 100)}\n");
+
+	var pv Vec(P);
+	vec_init(&pv);
+	var k i64 = 0;
+	while (k < 5) {
+		var p P;
+		p.x = k;
+		p.y = k * 10;
+		vec_push(&pv, p);
+		k = k + 1;
+	}
+	write_str(STDOUT, "${vec_get(&pv, 4).y}\n");
+	vec_clear(&pv);
+	write_str(STDOUT, "${pv.len}\n");
+	return 0;
+}
