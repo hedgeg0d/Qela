@@ -1,0 +1,28 @@
+// stage1-only
+// expect-exit: 109
+// A buffered channel hands every value across: two producers and one
+// consumer on a two-slot buffer. Sends and takes balance, so nobody is
+// ever left blocked, and the sum is order-independent: 10+11+12+13+20+21+22.
+import "std/chan.qela";
+
+var ch Chan(i64);
+var got i64 = 0;
+
+fn producer(n i64, base i64) {
+	var i i64 = 0;
+	while (i < n) { ch <- base + i; i = i + 1; }
+}
+
+fn consumer(n i64) {
+	var i i64 = 0;
+	while (i < n) { got = got + <-ch; i = i + 1; }
+}
+
+fn main() int {
+	chan_init(&ch, 2);
+	spawn producer(4, 10);
+	spawn producer(3, 20);
+	spawn consumer(7);
+	coro_run_all();
+	return got as int;
+}
