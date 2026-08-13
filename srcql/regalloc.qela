@@ -88,6 +88,17 @@ fn ra_deny(n *Node) {
 	if (n.kind == ND_VAR) { n.varp.no_reg = true; }
 }
 
+// Opaque bytes can clobber any register, so a function with any asm(...)
+// anywhere in it keeps every local in its frame slot, not just the ones
+// live across the asm point.
+fn ra_deny_all() {
+	var v *Var = ra_fn.locals;
+	while (v as i64 != 0) {
+		v.no_reg = true;
+		v = v.next;
+	}
+}
+
 fn ra_extend(from i64, to i64) {
 	var v *Var = ra_fn.locals;
 	while (v as i64 != 0) {
@@ -112,7 +123,8 @@ fn ra_walk(n *Node) {
 	// Temporaries are always addressed through the frame.
 	if (n.tmp as i64 != 0) { n.tmp.no_reg = true; }
 
-	if (k == ND_CALL || k == ND_SYSCALL) { ra_calls = true; }
+	if (k == ND_CALL || k == ND_SYSCALL || k == ND_ASM) { ra_calls = true; }
+	if (k == ND_ASM) { ra_deny_all(); return; }
 	if (k == ND_VAR || k == ND_ZERO) { ra_use(n.varp); return; }
 	if (k == ND_ADDR) { ra_deny(n.lhs); ra_walk(n.lhs); return; }
 	if (k == ND_MATCH) {
