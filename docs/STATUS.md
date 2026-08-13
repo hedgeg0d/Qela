@@ -7,7 +7,7 @@ Updated 2026-08-04. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **261 936 B** |
+| **S2 — the shipped compiler, Qela compiled by itself** | **263 088 B** |
 | S2 under `upx --lzma` (measured 2026-08-04) | 60 380 B, ~5.8% of the 1 MiB budget |
 | S2 under xz -9 (proxy for upx) | 63 532 B |
 | stage1 sources | 10 569 lines of Qela |
@@ -257,7 +257,15 @@ on. The corpus now covers coroutines, channels, the collector, deadlock
 reporting and a busy-consumer regression under S2.
 
 **Memory.** Arena by default; `std/gc.qela` is a conservative mark-sweep
-collector rooted in the callee-saved registers, the stack and the data segment.
+collector rooted in the callee-saved registers, the stack and the data
+segment. **`arena_mark()`/`arena_reset(m)` (2026-08-04)** checkpoint and
+rewind the bump pointer: `ArenaMark` carries `{ptr, left}`, so scoped
+temporaries (a parse, a request, one loop iteration) free in one call with
+no free-list, no bookkeeping per allocation. Safe across a chunk-growth
+boundary because `arena_alloc` never returns memory to the OS — the old
+chunk stays mapped, so rewinding into it is always valid; it does not zero
+on reset, so memory reused past a rewind reads stale bytes. Costs +1152 B
+in S2. Pinned by `tests/arenamark.qela`.
 
 **Tooling.** Diagnostics with a caret; own ELF writer; DWARF line info and a
 symbol table behind `-g` (gdb steps through `.qela` and names frames);
