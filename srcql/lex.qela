@@ -176,6 +176,137 @@ fn is_punct_single(c u8) bool {
 	       c == '$';
 }
 
+// ── decimal literal -> f64 bits, pure integer arithmetic ──
+//
+// stage0 has no float support, so this must never use one: it converts a
+// decimal digit string to the nearest IEEE754 double using only i64 ops, via
+// a big-decimal digit array repeatedly halved/doubled toward [1,2). Skips
+// subnormals (flushes to 0) and ties round half-up, not half-to-even -- both
+// acceptable for a hobby compiler, not for a libc.
+//
+// value = sum(buf[i] * 10^(pt-1-(i-start))) for i in [start,end).
+let DTOA_CAP = 4300;
+let DTOA_MID = 2150;
+
+fn dtoa_trim(buf *u8, start *i64, end i64, pt *i64) {
+	while (*start < end - 1 && buf[*start] == '0') {
+		*start = *start + 1;
+		*pt = *pt - 1;
+	}
+}
+
+// May prepend one digit at start-1. A prepended digit shifts every existing
+// digit's index relative to start, so pt (which is defined relative to
+// start) has to move with it or every digit's weight silently changes by a
+// factor of 10.
+fn dtoa_mul2(buf *u8, start *i64, end i64, pt *i64) {
+	var carry i64 = 0;
+	var i i64 = end - 1;
+	while (i >= *start) {
+		var v i64 = (buf[i] as i64 - '0') * 2 + carry;
+		buf[i] = (v % 10 + '0') as u8;
+		carry = v / 10;
+		i = i - 1;
+	}
+	if (carry != 0) {
+		*start = *start - 1;
+		buf[*start] = (carry + '0') as u8;
+		*pt = *pt + 1;
+	}
+}
+
+// May append one digit at end.
+fn dtoa_div2(buf *u8, start i64, end *i64) {
+	var borrow i64 = 0;
+	var i i64 = start;
+	while (i < *end) {
+		var v i64 = borrow * 10 + (buf[i] as i64 - '0');
+		buf[i] = (v / 2 + '0') as u8;
+		borrow = v % 2;
+		i = i + 1;
+	}
+	if (borrow != 0) {
+		buf[*end] = '5';
+		*end = *end + 1;
+	}
+}
+
+fn dtoa_inf_bits() i64 { return 0x7ff0000000000000; }
+
+// digits: significant decimal digits, no sign, no '.', no exponent marker.
+// point: digits[0] carries weight 10^(point-1). Returns the unsigned-magnitude
+// bit pattern of the nearest f64 (0 or +inf on under/overflow).
+fn dec_to_f64_bits(digits *u8, ndigits i64, point i64) i64 {
+	var i i64 = 0;
+	var allzero bool = true;
+	while (i < ndigits) { if (digits[i] != '0') { allzero = false; } i = i + 1; }
+	if (allzero) { return 0; }
+
+	var buf *u8 = arena_alloc(DTOA_CAP, 1);
+	i = 0;
+	while (i < ndigits) { buf[DTOA_MID + i] = digits[i]; i = i + 1; }
+	var start i64 = DTOA_MID;
+	var end i64 = DTOA_MID + ndigits;
+	var pt i64 = point;
+	dtoa_trim(buf, &start, end, &pt);
+
+	var e2 i64 = 0;
+	var iters i64 = 0;
+	while (true) {
+		if (pt <= 0) {
+			if (iters > 1100) { return 0; }
+			dtoa_mul2(buf, &start, end, &pt);
+			dtoa_trim(buf, &start, end, &pt);
+			e2 = e2 - 1;
+			iters = iters + 1;
+			continue;
+		}
+		if (pt >= 2) {
+			if (iters > 1100) { return dtoa_inf_bits(); }
+			dtoa_div2(buf, start, &end);
+			dtoa_trim(buf, &start, end, &pt);
+			e2 = e2 + 1;
+			iters = iters + 1;
+			continue;
+		}
+		if (buf[start] >= '2') {
+			if (iters > 1100) { return dtoa_inf_bits(); }
+			dtoa_div2(buf, start, &end);
+			dtoa_trim(buf, &start, end, &pt);
+			e2 = e2 + 1;
+			iters = iters + 1;
+			continue;
+		}
+		break;
+	}
+
+	// buf[start] == '1' here: subtract it and extract 52 mantissa bits plus
+	// one round bit, doubling the remaining fraction each step.
+	buf[start] = '0';
+	var mant i64 = 0;
+	var bi i64 = 0;
+	while (bi < 53) {
+		dtoa_mul2(buf, &start, end, &pt);
+		var bit i64 = 0;
+		if (buf[start] == '1') { bit = 1; buf[start] = '0'; }
+		if (bi < 52) {
+			mant = (mant << 1) | bit;
+		} else if (bit == 1) {
+			mant = mant + 1;
+		}
+		bi = bi + 1;
+	}
+	if (mant >= 4503599627370496) {
+		mant = 0;
+		e2 = e2 + 1;
+	}
+
+	var expf i64 = e2 + 1023;
+	if (expf >= 2047) { return dtoa_inf_bits(); }
+	if (expf <= 0) { return 0; }
+	return (expf << 52) | mant;
+}
+
 fn lex(src str, base i64) *Token {
 	lex_base = base;
 	var head Token;
@@ -235,7 +366,9 @@ fn lex(src str, base i64) *Token {
 		if (is_digit(src.ptr[i])) {
 			var start i64 = i;
 			var val i64 = 0;
+			var is_hex bool = false;
 			if (src.ptr[i] == '0' && i + 1 < src.len && (src.ptr[i+1] == 'x' || src.ptr[i+1] == 'X')) {
+				is_hex = true;
 				i = i + 2;
 				while (i < src.len) {
 					var c u8 = src.ptr[i];
@@ -253,6 +386,56 @@ fn lex(src str, base i64) *Token {
 					i = i + 1;
 				}
 			}
+			var intpart_end i64 = i;
+
+			var is_float bool = false;
+			var frac_start i64 = i;
+			var frac_len i64 = 0;
+			if (!is_hex && i < src.len && src.ptr[i] == '.' && i + 1 < src.len && is_digit(src.ptr[i+1])) {
+				is_float = true;
+				i = i + 1;
+				frac_start = i;
+				while (i < src.len && is_digit(src.ptr[i])) { i = i + 1; }
+				frac_len = i - frac_start;
+			}
+			var point i64 = intpart_end - start;
+			if (!is_hex && i < src.len && (src.ptr[i] == 'e' || src.ptr[i] == 'E')) {
+				var j i64 = i + 1;
+				var eneg bool = false;
+				if (j < src.len && (src.ptr[j] == '+' || src.ptr[j] == '-')) {
+					eneg = src.ptr[j] == '-';
+					j = j + 1;
+				}
+				if (j < src.len && is_digit(src.ptr[j])) {
+					is_float = true;
+					var e i64 = 0;
+					while (j < src.len && is_digit(src.ptr[j])) {
+						e = e * 10 + (src.ptr[j] as i64 - '0');
+						j = j + 1;
+					}
+					if (eneg) { e = -e; }
+					point = point + e;
+					i = j;
+				}
+			}
+
+			if (is_float) {
+				var intlen i64 = intpart_end - start;
+				var ndigits i64 = intlen + frac_len;
+				var digits *u8 = arena_alloc(ndigits, 1);
+				var k i64 = 0;
+				while (k < intlen) { digits[k] = src.ptr[start + k]; k = k + 1; }
+				k = 0;
+				while (k < frac_len) { digits[intlen + k] = src.ptr[frac_start + k]; k = k + 1; }
+				var ft *Token = push_token(TK_FLOAT, start);
+				ft.val = dec_to_f64_bits(digits, ndigits, point);
+				var fs str;
+				fs.ptr = src.ptr + start;
+				fs.len = i - start;
+				ft.text = fs;
+				continue;
+			}
+
 			var t *Token = push_token(TK_NUM, start);
 			t.val = val;
 			var s str;
