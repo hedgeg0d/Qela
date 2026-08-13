@@ -565,6 +565,14 @@ fn parse_primary(t **Token) *Node {
 		*t = (*t).next;
 		return num_node(v, p);
 	}
+	if ((*t).kind == TK_FLOAT) {
+		var v i64 = (*t).val;
+		var p i64 = (*t).pos;
+		*t = (*t).next;
+		var n *Node = num_node(v, p);
+		n.ty = type_lookup("f64");
+		return n;
+	}
 	if ((*t).kind == TK_STR) {
 		var p i64 = (*t).pos;
 		var id int = add_str((*t).sval);

@@ -1,0 +1,48 @@
+// stage1-only
+// expect-exit: 1
+// f64/f32: literals, arithmetic, comparisons, casts, params/returns,
+// struct fields, arrays -- floats live in general registers as raw bits
+// and only touch xmm for the instant an SSE op needs them.
+fn addf(a f64, b f64) f64 { return a + b; }
+
+struct P { x f64, y f64, }
+
+fn main() int {
+	var a f64 = 1.5;
+	var b f64 = 2.25;
+	if (a + b != 3.75) { return 0; }
+	if (b - a != 0.75) { return 0; }
+	if (a * 2.0 != 3.0) { return 0; }
+	if (b / a != 1.5) { return 0; }
+	if (!(a < b) || !(b > a)) { return 0; }
+	if (-a != -1.5) { return 0; }
+
+	var h i64 = 5;
+	if (h as f64 != 5.0) { return 0; }
+	var i f64 = 5.0;
+	if (i as i64 != 5) { return 0; }
+
+	var k f32 = 1.25;
+	var l f32 = k + (1.0 as f32);
+	if (l != (2.25 as f32)) { return 0; }
+
+	if (addf(1.25, 2.5) != 3.75) { return 0; }
+
+	var p P = P{x: 1.0, y: 2.0};
+	if (p.x + p.y != 3.0) { return 0; }
+
+	var arr [3]f64;
+	arr[0] = 1.1;
+	arr[1] = 2.2;
+	var t f64 = arr[0] + arr[1];
+	if (t <= 3.29 || t >= 3.31) { return 0; }
+
+	var m f64 = 100000.0;
+	var n f64 = 0.0001;
+	if (m * n != 10.0) { return 0; }
+
+	var neg f64 = -0.5;
+	if (neg >= 0.0) { return 0; }
+
+	return 1;
+}
