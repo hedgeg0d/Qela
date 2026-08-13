@@ -1,5 +1,6 @@
 import "comp.qela";
 import "../std/fmt.qela";
+import "../std/sys.qela";
 
 struct FileInfo {
 	path str,
@@ -14,6 +15,77 @@ var module_dir str;
 // diagnostic into lsp_diag_path and dies, and the parent session survives.
 var lsp_mode bool = false;
 var lsp_diag_path str;
+
+// Diagnostic levels. 1=error, 2=warning, 3=note, 4=hint. Source order is
+// enforced by a single emit path; levels only change the prefix word and
+// the colour.
+let DIAG_ERROR = 1;
+let DIAG_WARN  = 2;
+let DIAG_NOTE  = 3;
+let DIAG_HINT  = 4;
+
+// User-facing flags. Defaults: warnings on, colour auto.
+var opt_warn  bool = true;
+var opt_color int  = 0;   // 0=auto, 1=always, 2=never
+
+// Resolved at diag_setup() and never changes. The colour paths cost one
+// branch per emit; caching means the resolution (isatty, NO_COLOR, TERM)
+// happens once at boot.
+var diag_colored bool = false;
+var diag_setup_done bool = false;
+
+// ANSI escapes are built on demand: bootstrap subset forbids global `str`
+// initializers, so the bytes go into a local Buf each emit. The Buf init
+// is cheap (a few stores) and runs only when coloured output is on, so the
+// cold path stays free.
+fn esc_red()  str { var b Buf; buf_bytes(&b, "\033[31m".ptr, 5); return buf_str(&b); }
+fn esc_yel()  str { var b Buf; buf_bytes(&b, "\033[33m".ptr, 5); return buf_str(&b); }
+fn esc_dim()  str { var b Buf; buf_bytes(&b, "\033[2m".ptr,  4); return buf_str(&b); }
+fn esc_bold() str { var b Buf; buf_bytes(&b, "\033[1m".ptr,  4); return buf_str(&b); }
+fn esc_rst()  str { var b Buf; buf_bytes(&b, "\033[0m".ptr,  4); return buf_str(&b); }
+
+// A pending secondary span to be printed after the primary. Errors may have
+// one, warnings too. Hint/note may set their own pos; secondary is a span
+// the same emit attaches to (e.g. "previous declaration here"). sec_msg is
+// a str which the bootstrap subset forbids initing globally; it stays empty
+// until the first diag_secondary sets it.
+var sec_pos i64 = -1;
+var sec_msg str;
+var sec_set bool = false;
+
+fn diag_secondary(pos i64, msg str) {
+	sec_pos = pos;
+	sec_msg = msg;
+	sec_set = true;
+}
+
+fn diag_clear_secondary() {
+	sec_set = false;
+}
+
+// A backtrace of macro expansion sites, head = innermost. Pushed by
+// parse.qela at macro call sites; popped after the call body type-checks.
+// Always walked on emit: the push/pop are zero-cost when no macros are
+// used (the linked list is empty), and the walk is cheaper than gating
+// on a global flag we can't import without a cycle.
+struct MacroSite {
+	prev  *MacroSite,
+	name  str,
+	pos   i64,
+}
+var macro_top *MacroSite;
+
+fn diag_macro_push(name str, pos i64) {
+	var m *MacroSite = arena_alloc(sizeof(MacroSite), 8) as *MacroSite;
+	m.prev = macro_top;
+	m.name = name;
+	m.pos = pos;
+	macro_top = m;
+}
+
+fn diag_macro_pop() {
+	if (macro_top as i64 != 0) { macro_top = macro_top.prev; }
+}
 
 fn set_module_dir(path str) {
 	module_dir = path;
@@ -81,7 +153,51 @@ fn diag_col_for(file_id int, off i64) int {
 	return (off - start + 1) as int;
 }
 
-// A double-quoted, escaped JSON string.
+fn diag_want_color() bool {
+	if (opt_color == 1) { return true; }
+	if (opt_color == 2) { return false; }
+	// auto: not a tty or NO_COLOR set or TERM=dumb => no colour
+	if (sys_isatty() != 0) { return false; }
+	var nc str = sys_getenv("NO_COLOR");
+	if (nc.len > 0) { return false; }
+	var term str = sys_getenv("TERM");
+	if (term.len > 0) {
+		if (str_eq(term, "dumb")) { return false; }
+	}
+	return true;
+}
+
+// Called from compile_src once, before any diag_emit. Caches the colour
+// decision so per-emit cost is one branch.
+fn diag_setup() {
+	if (diag_setup_done) { return; }
+	diag_setup_done = true;
+	diag_colored = diag_want_color();
+}
+
+// Resets between compiles so the colour decision is re-evaluated. Called
+// from reset_compile(); diag_setup() will run again on the next compile.
+fn diag_reset() {
+	diag_setup_done = false;
+	diag_colored = false;
+	sec_set = false;
+	macro_top = 0 as *MacroSite;
+}
+
+fn level_word(lvl int) str {
+	if (lvl == 1) { return "error"; }
+	if (lvl == 2) { return "warning"; }
+	if (lvl == 3) { return "note"; }
+	return "hint";
+}
+
+fn level_color(lvl int) str {
+	if (lvl == 1) { return esc_red(); }
+	if (lvl == 2) { return esc_yel(); }
+	return esc_dim();
+}
+
+// A double-quoted, escaped JSON string. Used only in LSP mode.
 fn js_esc(b *Buf, s str) {
 	buf_u8(b, '"');
 	var i i64 = 0;
@@ -107,17 +223,28 @@ fn js_esc(b *Buf, s str) {
 	buf_u8(b, '"');
 }
 
-fn error_at(pos i64, msg str) {
+// One diagnostic on stderr. Always called; never sys_exit. The primary
+// site is printed, then a caret line, then any attached secondary span.
+fn diag_emit(lvl int, pos i64, msg str) {
+	if (lvl == 2 && !opt_warn) { return; }
 	var id int = diag_file_of(pos);
 	var off i64 = diag_offset_of(pos);
+	var line int = diag_line_for(id, off);
+	var col int = diag_col_for(id, off);
+	var src str = files[id].src;
+
+	// LSP mode: write a JSON record and return. The parent picks it up
+	// after the child dies. Severity is the level (1=error, 2=warning).
 	if (lsp_mode) {
 		var b Buf;
 		fmt_str(&b, "{\"file\":");
 		js_esc(&b, files[id].path);
 		fmt_str(&b, ",\"line\":");
-		fmt_i64(&b, diag_line_for(id, off) as i64);
+		fmt_i64(&b, line as i64);
 		fmt_str(&b, ",\"col\":");
-		fmt_i64(&b, diag_col_for(id, off) as i64);
+		fmt_i64(&b, col as i64);
+		fmt_str(&b, ",\"sev\":");
+		fmt_i64(&b, lvl as i64);
 		fmt_str(&b, ",\"msg\":");
 		js_esc(&b, msg);
 		buf_u8(&b, '}');
@@ -127,15 +254,120 @@ fn error_at(pos i64, msg str) {
 			sys_write(fd, b.p, b.n);
 			sys_close(fd);
 		}
-		sys_exit(1);
+		if (sec_set) { diag_clear_secondary(); }
+		return;
 	}
-	eprint(files[id].path);
+
+	// Header: path:line:col: level: msg
+	if (diag_colored) {
+		var lc str = level_color(lvl);
+		sys_write(STDERR, lc.ptr, lc.len);
+	}
+	sys_write(STDERR, files[id].path.ptr, files[id].path.len);
 	eprint(":");
-	eprint_i64(diag_line_for(id, off) as i64);
+	fmt_i64_to_fd(STDERR, line as i64);
 	eprint(":");
-	eprint_i64(diag_col_for(id, off) as i64);
-	eprint(": error: ");
-	eprint(msg);
+	fmt_i64_to_fd(STDERR, col as i64);
+	eprint(": ");
+	eprint(level_word(lvl));
+	eprint(": ");
+	if (diag_colored) {
+		var rst str = esc_rst();
+		sys_write(STDERR, rst.ptr, rst.len);
+	}
+	sys_write(STDERR, msg.ptr, msg.len);
 	eprint("\n");
+
+	// Caret line: "  N | <source line>", then "     | ^".
+	var ls i64 = off;
+	while (ls > 0 && src.ptr[ls - 1] != '\n') { ls = ls - 1; }
+	var le i64 = off;
+	while (le < src.len && src.ptr[le] != '\n') { le = le + 1; }
+	var src_line str;
+	src_line.ptr = src.ptr + ls;
+	src_line.len = le - ls;
+	eprint("  ");
+	fmt_i64_to_fd(STDERR, line as i64);
+	eprint(" | ");
+	sys_write(STDERR, src_line.ptr, src_line.len);
+	eprint("\n");
+
+	// Gutter: enough spaces to align under the source line's column.
+	var digits int = 1;
+	var v int = line;
+	while (v >= 10) { v = v / 10; digits = digits + 1; }
+	var i int = 0;
+	while (i < digits) { eprint(" "); i = i + 1; }
+	eprint("  | ");
+	var one [1]u8;
+	var k int = 1;
+	while (k < col) {
+		one[0] = src.ptr[ls + k - 1];
+		sys_write(STDERR, &one[0], 1);
+		k = k + 1;
+	}
+	if (diag_colored) {
+		var b str = esc_bold();
+		sys_write(STDERR, b.ptr, b.len);
+	}
+	eprint("^");
+	if (diag_colored) {
+		var rst str = esc_rst();
+		sys_write(STDERR, rst.ptr, rst.len);
+	}
+	eprint("\n");
+
+	// Attached secondary span (e.g. "previous declaration here").
+	if (sec_set) {
+		var sid int = diag_file_of(sec_pos);
+		var soff i64 = diag_offset_of(sec_pos);
+		var sline int = diag_line_for(sid, soff);
+		var scol int = diag_col_for(sid, soff);
+		if (diag_colored) {
+			var d str = esc_dim();
+			sys_write(STDERR, d.ptr, d.len);
+		}
+		eprint("  = ");
+		sys_write(STDERR, files[sid].path.ptr, files[sid].path.len);
+		eprint(":");
+		fmt_i64_to_fd(STDERR, sline as i64);
+		eprint(":");
+		fmt_i64_to_fd(STDERR, scol as i64);
+		eprint(": ");
+		sys_write(STDERR, sec_msg.ptr, sec_msg.len);
+		eprint("\n");
+		if (diag_colored) {
+			var rst str = esc_rst();
+			sys_write(STDERR, rst.ptr, rst.len);
+		}
+	}
+
+	// Macro backtrace. The push/pop calls run unconditionally, but if no
+	// macros were used the list is empty and the loop is a no-op.
+	var m *MacroSite = macro_top;
+	while (m as i64 != 0) {
+		eprint("  = in expansion of macro '");
+		sys_write(STDERR, m.name.ptr, m.name.len);
+		eprint("'\n");
+		m = m.prev;
+	}
+	diag_clear_secondary();
+}
+
+// Convenience: emit a diagnostic then die. Used for compile errors.
+fn error_at(pos i64, msg str) {
+	diag_emit(DIAG_ERROR, pos, msg);
 	sys_exit(1);
+}
+
+fn warn_at(pos i64, msg str) {
+	diag_emit(DIAG_WARN, pos, msg);
+}
+
+fn note_at(pos i64, msg str) {
+	diag_emit(DIAG_NOTE, pos, msg);
+}
+
+fn hint_at(pos i64, msg str) {
+	diag_emit(DIAG_HINT, pos, msg);
 }

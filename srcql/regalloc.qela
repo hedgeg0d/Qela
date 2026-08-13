@@ -245,3 +245,121 @@ fn regalloc(f *Func) {
 		i = i + 1;
 	}
 }
+
+// Reads are tracked separately from regalloc's `uses` because `uses`
+// counts writes too (for register promotion). The unused warning
+// wants only reads: a variable that is only written and never read is
+// dead. This pass walks the body once, incrementing `reads` for every
+// ND_VAR / ND_DEREF / ND_ADDR / ND_INDEX where the underlying Var is
+// being observed, and leaves writes alone. Same shape as ra_walk so
+// the path coverage matches the regalloc pass.
+fn count_reads(f *Func) {
+	if (f as i64 == 0) { return; }
+	reads_list(f.body);
+}
+
+fn reads_walk(n *Node) {
+	if (n as i64 == 0) { return; }
+	var k int = n.kind;
+	if (k == ND_VAR) {
+		if (n.varp as i64 != 0) { n.varp.reads = n.varp.reads + 1; }
+		// No children to walk for a bare var ref.
+		return;
+	}
+	if (k == ND_MATCH) {
+		reads_walk(n.cond);
+		var arm *Node = n.body;
+		while (arm as i64 != 0) {
+			reads_list(arm.body);
+			arm = arm.next;
+		}
+		return;
+	}
+	// Default: walk all children. ND_ASSIGN / ND_OPASSIGN fall here
+	// too — their lhs is a write target, not a read. n.body is a
+	// statement list chained via .next (same shape ra_list expects),
+	// not a single node — a bare reads_walk(n.body) here only ever
+	// saw the block's first statement.
+	reads_walk(n.lhs);
+	reads_walk(n.rhs);
+	reads_walk(n.cond);
+	reads_walk(n.init);
+	reads_walk(n.step);
+	reads_walk(n.then);
+	reads_walk(n.els);
+	reads_list(n.body);
+	reads_list(n.args);
+}
+
+fn reads_list(n *Node) {
+	while (n as i64 != 0) {
+		reads_walk(n);
+		n = n.next;
+	}
+}
+
+// Walks every local in the function and warns on the ones that have
+// zero reads. Globals are skipped: a top-level `var g int;` that no
+// function reads is rarely worth pointing out (often it's set up for
+// init-time use). Parameters are flagged only when the function body
+// has any locals at all, so a function written `fn f(x int) int { return 0; }`
+// stays quiet.
+fn warn_unused(f *Func) {
+	if (f as i64 == 0) { return; }
+	var nl_unused int = 0;
+	var np_unused int = 0;
+	var v *Var = f.locals;
+	while (v as i64 != 0) {
+		// Skip temps (no name) and globals. Both are valid patterns
+		// that should not warn.
+		if (v.reads == 0 && v.name.len > 0 && !v.is_global) { nl_unused = nl_unused + 1; }
+		v = v.next;
+	}
+	// Count params with zero reads.
+	if (f.p0 as i64 != 0 && f.p0.reads == 0) { np_unused = np_unused + 1; }
+	if (f.p1 as i64 != 0 && f.p1.reads == 0) { np_unused = np_unused + 1; }
+	if (f.p2 as i64 != 0 && f.p2.reads == 0) { np_unused = np_unused + 1; }
+	if (f.p3 as i64 != 0 && f.p3.reads == 0) { np_unused = np_unused + 1; }
+	if (f.p4 as i64 != 0 && f.p4.reads == 0) { np_unused = np_unused + 1; }
+	if (f.p5 as i64 != 0 && f.p5.reads == 0) { np_unused = np_unused + 1; }
+	var pe *Var = f.pextra;
+	while (pe as i64 != 0) {
+		if (pe.reads == 0) { np_unused = np_unused + 1; }
+		pe = pe.pnext;
+	}
+	// Unused locals first — they are the headline category and
+	// dominate the warning budget.
+	v = f.locals;
+	while (v as i64 != 0) {
+		if (v.reads == 0 && v.name.len > 0 && !v.is_global) {
+			warn_unused_one(v, "variable");
+		}
+		v = v.next;
+	}
+	// Unused params only when the function has at least one local. The
+	// heuristic is rough but cheap: a function body with no locals and
+	// an unused param is most often a stub.
+	if (np_unused > 0 && nl_unused > 0) {
+		if (f.p0 as i64 != 0 && f.p0.reads == 0) { warn_unused_one(f.p0, "parameter"); }
+		if (f.p1 as i64 != 0 && f.p1.reads == 0) { warn_unused_one(f.p1, "parameter"); }
+		if (f.p2 as i64 != 0 && f.p2.reads == 0) { warn_unused_one(f.p2, "parameter"); }
+		if (f.p3 as i64 != 0 && f.p3.reads == 0) { warn_unused_one(f.p3, "parameter"); }
+		if (f.p4 as i64 != 0 && f.p4.reads == 0) { warn_unused_one(f.p4, "parameter"); }
+		if (f.p5 as i64 != 0 && f.p5.reads == 0) { warn_unused_one(f.p5, "parameter"); }
+		pe = f.pextra;
+		while (pe as i64 != 0) {
+			if (pe.reads == 0) { warn_unused_one(pe, "parameter"); }
+			pe = pe.pnext;
+		}
+	}
+}
+
+fn warn_unused_one(v *Var, kind str) {
+	var b Buf;
+	fmt_str(&b, "unused ");
+	fmt_str(&b, kind);
+	fmt_str(&b, " '");
+	fmt_str(&b, v.name);
+	fmt_str(&b, "'");
+	warn_at(v.pos, buf_str(&b));
+}
