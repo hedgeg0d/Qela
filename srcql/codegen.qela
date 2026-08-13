@@ -13,6 +13,7 @@ let RDI = 7;
 let R8  = 8;
 let R9  = 9;
 let R10 = 10;
+let R11 = 11;
 
 fn call_reg(i int) int {
 	if (i == 0) { return RDI; }
@@ -87,6 +88,12 @@ var datarefs_tail *DataFixup;
 var str_off *i64;
 var bounds_checks I64List;
 var fn_bounds I64List;
+var assert_sites I64List;
+var assert_msgs I64List;
+var panic_msg_at I64List;
+var panic_msg_ids I64List;
+var bt_base_refs I64List;
+var bt_jmps I64List;
 var funcaddrs_head *CallFixup;
 var funcaddrs_tail *CallFixup;
 var coro_stub_at i64 = -1;
@@ -95,6 +102,7 @@ var gc_base_refs I64List;
 var gc_end_refs I64List;
 
 var opt_no_bounds bool = false;
+var opt_backtrace bool = false;
 var gen_unit *Unit;
 
 fn b1(v i64) { buf_u8(&code, (v & 255) as u8); }
@@ -379,10 +387,121 @@ fn jump_bounds(cc i64) {
 fn gen_bounds_trampoline() {
 	if (fn_bounds.n == 0) { return; }
 	patch_all(&fn_bounds);
-	b1(0xe9);
+	// With backtraces on this becomes a call, so the return address left on
+	// the stack names the function that tripped the check.
+	if (opt_backtrace) { b1(0xe8); } else { b1(0xe9); }
 	ilist_push(&bounds_checks, code.n);
 	b4(0);
 	fn_bounds.n = 0;
+}
+
+// assert(cond, "msg") emits test; jnz over a direct call to the message's
+// stub. The call is a fixed five bytes, so the jnz is always in short range
+// and nothing here needs branch relaxation.
+fn gen_assert(n *Node) {
+	gen_expr(n.cond);
+	test_rax();
+	var id i64 = jump(0x85);
+	b1(0xe8);
+	ilist_push(&assert_sites, code.n);
+	ilist_push(&assert_msgs, n.args.val);
+	b4(0);
+	patch_here(id);
+}
+
+// ── the backtrace walker ──
+//
+// Entry: the panic stub's jmp left [rsp] = the return address of the call
+// that reached it, i.e. an address inside the panicking function, and rbp =
+// that function's frame base (or the nearest ancestor's, for a frameless
+// leaf). The walker prints the function containing [rsp], then walks the
+// rbp chain printing every caller, then exits 134.
+//
+// r8  = function table base (patched absolute)
+// rbx = address being resolved
+// r9  = frames left to walk -- rcx and r11 are clobbered by syscalls
+fn gen_bt_walker() {
+	b1(0x41); b1(0xb8);                       // mov r8d, imm32
+	ilist_push(&bt_base_refs, code.n);
+	b4(0);
+	b1(0x48); b1(0x8b); b1(0x1c); b1(0x24);   // mov rbx, [rsp]
+	b1(0xe8);
+	var c1 i64 = code.n;                      // call bt_print (rel32 field)
+	b4(0);
+	b1(0x49); b1(0xc7); b1(0xc1); b4(32);     // mov r9, 32 (REX.W|REX.B)
+	var loop_at i64 = code.n;
+	b1(0x48); b1(0x85); b1(0xed);             // test rbp, rbp
+	var jz_exit i64 = code.n;
+	b1(0x74); b1(0);                          // jz exit
+	b1(0x48); b1(0x8b); b1(0x5d); b1(0x08);   // mov rbx, [rbp+8]
+	b1(0xe8);
+	var c2 i64 = code.n;                      // call bt_print (rel32 field)
+	b4(0);
+	b1(0x48); b1(0x8b); b1(0x6d); b1(0x00);   // mov rbp, [rbp]
+	b1(0x49); b1(0xff); b1(0xc9);             // dec r9
+	var jnz_loop i64 = code.n;
+	b1(0x75); b1(0);                          // jnz loop
+	var exit_at i64 = code.n;
+	mov_reg_imm(RAX, 60);
+	mov_reg_imm(RDI, 134);
+	b1(0x0f); b1(0x05);
+	var print_at i64 = code.n;
+
+	// bt_print: entries are sorted by function start address, so the last
+	// entry whose start is <= rbx contains rbx. The scan keeps the best
+	// candidate in r11 (safe from the write syscall, which clobbers rcx
+	// and r11 only after the name is located).
+	b1(0x49); b1(0x8b); b1(0x00);             // mov rax, [r8]  (count)
+	b1(0x48); b1(0x85); b1(0xc0);             // test rax, rax
+	var jz_nf i64 = code.n;
+	b1(0x74); b1(0);                          // jz notfound
+	b1(0x48); b1(0x89); b1(0xc1);             // mov rcx, rax
+	b1(0x49); b1(0x8d); b1(0x50); b1(0x08);   // lea rdx, [r8+8]
+	mov_reg_imm(R11, 0);                      // best = 0
+	b1(0x49); b1(0xc7); b1(0xc2); b4(0);      // mov r10, 0
+	var scan_at i64 = code.n;
+	b1(0x8b); b1(0x02);                       // mov eax, [rdx]
+	alu_rax_imm(0, ELF_BASE);                 // add rax, ELF_BASE
+	b1(0x48); b1(0x39); b1(0xd8);             // cmp rax, rbx
+	var ja_end i64 = code.n;
+	b1(0x77); b1(0);                          // ja endscan
+	b1(0x49); b1(0x89); b1(0xd3);             // mov r11, rdx
+	b1(0x48); b1(0x83); b1(0xc2); b1(0x08);   // add rdx, 8
+	b1(0x49); b1(0xff); b1(0xc2);             // inc r10
+	b1(0x49); b1(0x39); b1(0xca);             // cmp r10, rcx
+	var jb_scan i64 = code.n;
+	b1(0x72); b1(0);                          // jb scan
+	var endscan_at i64 = code.n;
+	b1(0x4d); b1(0x85); b1(0xdb);             // test r11, r11
+	var jz_nf2 i64 = code.n;
+	b1(0x74); b1(0);                          // jz notfound
+	mov_reg_reg(RDX, R11);                    // rdx = best entry
+	b1(0x8b); b1(0x72); b1(0x04);             // mov esi, [rdx+4]
+	b1(0x48); b1(0xc1); b1(0xe1); b1(0x03);   // shl rcx, 3
+	b1(0x48); b1(0x01); b1(0xce);             // add rsi, rcx
+	rex_w(R8, RSI); b1(0x01); modrm(3, R8, RSI); // add rsi, r8
+	b1(0x48); b1(0x83); b1(0xc6); b1(0x08);   // add rsi, 8
+	b1(0x48); b1(0x89); b1(0xf7);             // mov rdi, rsi
+	b1(0x31); b1(0xc0);                       // xor eax, eax
+	b1(0x48); b1(0xc7); b1(0xc1); b4(-1);     // mov rcx, -1
+	b1(0xf2); b1(0xae);                       // repne scasb
+	b1(0x48); b1(0xf7); b1(0xd1);             // not rcx
+	b1(0x48); b1(0xff); b1(0xc9);             // dec rcx  (length)
+	mov_reg_imm(RAX, 1);
+	mov_reg_imm(RDI, 2);
+	mov_reg_reg(RDX, RCX);
+	b1(0x0f); b1(0x05);
+	var notfound_at i64 = code.n;
+	b1(0xc3);                                 // ret
+
+	code.p[jz_exit + 1] = (exit_at - (jz_exit + 2)) as u8;
+	code.p[jnz_loop + 1] = (loop_at - (jnz_loop + 2)) as u8;
+	code.p[jz_nf + 1] = (notfound_at - (jz_nf + 2)) as u8;
+	code.p[jz_nf2 + 1] = (notfound_at - (jz_nf2 + 2)) as u8;
+	code.p[ja_end + 1] = (endscan_at - (ja_end + 2)) as u8;
+	code.p[jb_scan + 1] = (scan_at - (jb_scan + 2)) as u8;
+	buf_patch32(&code, c1, print_at - (c1 + 4));
+	buf_patch32(&code, c2, print_at - (c2 + 4));
 }
 
 fn by_ref_ty(ty *Type) bool {
@@ -1589,6 +1708,7 @@ fn gen_expr(n *Node) {
 		while (a as i64 != 0) { b1(a.val); a = a.next; }
 		return;
 	}
+	if (k == ND_ASSERT) { gen_assert(n); return; }
 	if (k == ND_FUNCADDR) { add_funcaddr(n.name, n.pos); return; }
 	if (k == ND_CALL) {
 		if (str_eq(n.name, "coro_switch")) { gen_coro_switch(n); return; }
@@ -2036,15 +2156,29 @@ fn layout_globals(globals *Var) {
 	bss_size = bss - gdata.n;
 }
 
-fn gen_panic_stub(msg_id int) {
-	add_strref(RSI, msg_id);
+// The message pointer points at the string bytes, not at the {ptr, len}
+// header add_strref would hand out, so these carry their own fixup list,
+// patched with bytes_off after layout. With backtraces on, the stub jumps
+// to the walker instead of exiting, so the caller of the trampoline call
+// below is still on the stack when the walker reads it.
+fn gen_panic_stub(msg_id int, msg_len i64) {
+	b1(0xbe);
+	ilist_push(&panic_msg_at, code.n);
+	ilist_push(&panic_msg_ids, msg_id as i64);
+	b4(0);
 	mov_reg_imm(RAX, 1);
 	mov_reg_imm(RDI, 2);
-	mov_reg_imm(RDX, 25);
+	mov_reg_imm(RDX, msg_len);
 	b1(0x0f); b1(0x05);
-	mov_reg_imm(RAX, 60);
-	mov_reg_imm(RDI, 134);
-	b1(0x0f); b1(0x05);
+	if (opt_backtrace) {
+		b1(0xe9);
+		ilist_push(&bt_jmps, code.n);
+		b4(0);
+	} else {
+		mov_reg_imm(RAX, 60);
+		mov_reg_imm(RDI, 134);
+		b1(0x0f); b1(0x05);
+	}
 }
 
 fn reset_code() {
@@ -2053,6 +2187,12 @@ fn reset_code() {
 	br_at.n = 0;
 	br_grew = false;
 	bounds_checks.n = 0;
+	assert_sites.n = 0;
+	assert_msgs.n = 0;
+	panic_msg_at.n = 0;
+	panic_msg_ids.n = 0;
+	bt_base_refs.n = 0;
+	bt_jmps.n = 0;
 	coro_switch_refs.n = 0;
 	coro_switch_at = -1;
 	coro_stub_refs.n = 0;
@@ -2072,6 +2212,9 @@ fn reset_code() {
 }
 
 fn emit_code(u *Unit, main_fn *Func, panic_id int, hdr i64) {
+	// rbp is not guaranteed zero at process entry, so the backtrace walker
+	// needs a sentinel main returns into.
+	b1(0x48); b1(0x31); b1(0xed);             // xor rbp, rbp
 	if (main_fn.nparams == 2) {
 		b1(0x48); b1(0x8b); b1(0x3c); b1(0x24);
 		b1(0x48); b1(0x8d); b1(0x74); b1(0x24); b1(8);
@@ -2091,11 +2234,54 @@ fn emit_code(u *Unit, main_fn *Func, panic_id int, hdr i64) {
 
 	if (bounds_checks.n != 0) {
 		var panic_addr i64 = code.n;
-		gen_panic_stub(panic_id);
+		gen_panic_stub(panic_id, 21);
 		var i i64 = 0;
 		while (i < bounds_checks.n) {
 			buf_patch32(&code, bounds_checks.p[i], panic_addr - (bounds_checks.p[i] + 4));
 			i = i + 1;
+		}
+	}
+
+	// One stub per distinct assert message, patched at every site that uses
+	// it. The message length is looked up here, at emit time.
+	if (assert_sites.n != 0) {
+		var ai i64 = 0;
+		while (ai < assert_sites.n) {
+			var msg i64 = assert_msgs.p[ai];
+			var dup bool = false;
+			var bi i64 = 0;
+			while (bi < ai) {
+				if (assert_msgs.p[bi] == msg) { dup = true; }
+				bi = bi + 1;
+			}
+			if (!dup) {
+				var len i64 = 0;
+				var ls *StrLit = u.strs;
+				while (ls as i64 != 0) {
+					if (ls.id == (msg as int)) { len = ls.s.len; }
+					ls = ls.next;
+				}
+				var sa i64 = code.n;
+				gen_panic_stub(msg as int, len);
+				var ci i64 = 0;
+				while (ci < assert_sites.n) {
+					if (assert_msgs.p[ci] == msg) {
+						buf_patch32(&code, assert_sites.p[ci], sa - (assert_sites.p[ci] + 4));
+					}
+					ci = ci + 1;
+				}
+			}
+			ai = ai + 1;
+		}
+	}
+
+	if (opt_backtrace && (bounds_checks.n != 0 || assert_sites.n != 0)) {
+		var wa i64 = code.n;
+		gen_bt_walker();
+		var ji i64 = 0;
+		while (ji < bt_jmps.n) {
+			buf_patch32(&code, bt_jmps.p[ji], wa - (bt_jmps.p[ji] + 4));
+			ji = ji + 1;
 		}
 	}
 
@@ -2141,6 +2327,14 @@ fn codegen(u *Unit, img *Image) {
 		buf_u8(&rodata, 0);
 		s = s.next;
 	}
+	// The bounds-check panic message lives right after the user strings, so
+	// the shared panic stub writes real text instead of whatever happens to
+	// be at the start of rodata. It goes before the alignment pad: the data
+	// segment must stay word-aligned or the GC's word reads miss every
+	// pointer in it. The stub's length must match: 21.
+	var pmsg str = "index out of bounds\n";
+	bytes_off[panic_id] = rodata.n;
+	buf_bytes(&rodata, pmsg.ptr, pmsg.len);
 	while ((rodata.n & 7) != 0) { buf_u8(&rodata, 0); }
 
 	s = u.strs;
@@ -2167,6 +2361,45 @@ fn codegen(u *Unit, img *Image) {
 		emit_code(u, main_fn, panic_id, hdr);
 		if (!br_grew || pass >= 8) { break; }
 		pass = pass + 1;
+	}
+
+	// The backtrace's function table: u64 count, then one {u32 delta from
+	// ELF_BASE, u32 name_off} per function in source order, then the
+	// NUL-terminated names. The walker resolves an address with a linear
+	// scan, so the table is deliberately unsorted.
+	var bt_table_off i64 = -1;
+	if (opt_backtrace && (bounds_checks.n != 0 || assert_sites.n != 0)) {
+		var cnt i64 = 0;
+		var ft *Func = u.funcs;
+		while (ft as i64 != 0) {
+			if (ft.nct == 0) { cnt = cnt + 1; }
+			ft = ft.next;
+		}
+		bt_table_off = rodata.n;
+		buf_u64(&rodata, cnt);
+		var entries_off i64 = rodata.n;
+		var zi i64 = 0;
+		while (zi < cnt) { buf_u64(&rodata, 0); zi = zi + 1; }
+		var name_off i64 = 0;
+		var ei i64 = 0;
+		ft = u.funcs;
+		while (ft as i64 != 0) {
+			if (ft.nct == 0) {
+				var eo i64 = entries_off + ei * 8;
+				var delta i64 = hdr + ft.addr;
+				var k3 i64 = 0;
+				while (k3 < 4) {
+					rodata.p[eo + k3] = ((delta >> (k3 * 8)) & 255) as u8;
+					rodata.p[eo + 4 + k3] = ((name_off >> (k3 * 8)) & 255) as u8;
+					k3 = k3 + 1;
+				}
+				buf_bytes(&rodata, ft.name.ptr, ft.name.len);
+				buf_u8(&rodata, 0);
+				name_off = name_off + ft.name.len + 1;
+				ei = ei + 1;
+			}
+			ft = ft.next;
+		}
 	}
 
 	var dbase i64 = ELF_BASE + SEG_GAP + hdr + code.n + rodata.n;
@@ -2205,6 +2438,18 @@ fn codegen(u *Unit, img *Image) {
 	}
 
 	var rodata_vaddr i64 = ELF_BASE + hdr + code.n;
+	var pm i64 = 0;
+	while (pm < panic_msg_at.n) {
+		buf_patch32(&code, panic_msg_at.p[pm], rodata_vaddr + bytes_off[panic_msg_ids.p[pm]]);
+		pm = pm + 1;
+	}
+	if (bt_table_off >= 0) {
+		var bi2 i64 = 0;
+		while (bi2 < bt_base_refs.n) {
+			buf_patch32(&code, bt_base_refs.p[bi2], rodata_vaddr + bt_table_off);
+			bi2 = bi2 + 1;
+		}
+	}
 	s = u.strs;
 	while (s as i64 != 0) {
 		var abs i64 = rodata_vaddr + bytes_off[s.id];
