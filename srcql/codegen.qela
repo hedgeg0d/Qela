@@ -59,6 +59,36 @@ struct StrFixup { next *StrFixup, at i64, id int, }
 struct DataFixup;
 struct DataFixup { next *DataFixup, at i64, varp *Var, }
 
+// `qela -c` output: every fixup the exe path would patch is kept as a
+// relocation instead. at is the byte offset inside its section; kind is the
+// x86-64 relocation type; name resolves through the object's symbol table
+// (functions, globals and the generated `.Lstr` symbols).
+var relocs_head *Reloc;
+var relocs_tail *Reloc;
+var rodata_relocs_head *Reloc;
+var rodata_relocs_tail *Reloc;
+
+// String relocations carry the string's id in Reloc.id (name is empty);
+// every other relocation names its symbol. The object writer turns the id
+// into the generated `.Lstr<N>` symbol.
+fn push_reloc(at i64, name str, kind int) {
+	var f *Reloc = arena_alloc(sizeof(Reloc), 8) as *Reloc;
+	f.at = at;
+	f.name = name;
+	f.kind = kind;
+	if (relocs_tail as i64 == 0) { relocs_head = f; } else { relocs_tail.next = f; }
+	relocs_tail = f;
+}
+
+fn push_reloc_id(at i64, id i64, kind int) {
+	var f *Reloc = arena_alloc(sizeof(Reloc), 8) as *Reloc;
+	f.at = at;
+	f.id = id;
+	f.kind = kind;
+	if (relocs_tail as i64 == 0) { relocs_head = f; } else { relocs_tail.next = f; }
+	relocs_tail = f;
+}
+
 struct Loop;
 struct Loop { prev *Loop, brk I64List, cont I64List, depth int, }
 
@@ -105,6 +135,10 @@ var gc_end_refs I64List;
 
 var opt_no_bounds bool = false;
 var opt_backtrace bool = false;
+// `qela -c`: emit a relocatable object instead of a static binary. The
+// relocation list replaces the address patching, and the ELF writer's
+// object path builds a .o the system linker can consume.
+var opt_object bool = false;
 var gen_unit *Unit;
 
 fn b1(v i64) { buf_u8(&code, (v & 255) as u8); }
@@ -322,6 +356,7 @@ fn add_call(name str, pos i64) {
 	if (calls_tail as i64 == 0) { calls_head = f; } else { calls_tail.next = f; }
 	calls_tail = f;
 	b4(0);
+	if (opt_object) { push_reloc(f.at, name, R_PLT32); }
 }
 
 // `$rel name` in asm operands: a rel32 slot patched like a call target.
@@ -333,6 +368,7 @@ fn add_callref(name str, pos i64) {
 	f.pos = pos;
 	if (calls_tail as i64 == 0) { calls_head = f; } else { calls_tail.next = f; }
 	calls_tail = f;
+	if (opt_object) { push_reloc(f.at, name, R_PC32); }
 }
 
 // `$name` in asm operands: an 8-byte absolute address slot.
@@ -345,6 +381,7 @@ fn add_absref(name str, pos i64) {
 	f.pos = pos;
 	if (asmrefs_tail as i64 == 0) { asmrefs_head = f; } else { asmrefs_tail.next = f; }
 	asmrefs_tail = f;
+	if (opt_object) { push_reloc(f.at, name, R_64); }
 }
 
 fn add_strref(reg int, id int) {
@@ -356,6 +393,7 @@ fn add_strref(reg int, id int) {
 	if (strrefs_tail as i64 == 0) { strrefs_head = f; } else { strrefs_tail.next = f; }
 	strrefs_tail = f;
 	b4(0);
+	if (opt_object) { push_reloc_id(f.at, id as i64, R_32S); }
 }
 
 fn add_dataref(v *Var) {
@@ -366,6 +404,7 @@ fn add_dataref(v *Var) {
 	if (datarefs_tail as i64 == 0) { datarefs_head = f; } else { datarefs_tail.next = f; }
 	datarefs_tail = f;
 	b4(0);
+	if (opt_object) { push_reloc(f.at, v.name, R_32S); }
 }
 
 fn add_funcaddr(name str, pos i64) {
@@ -379,6 +418,7 @@ fn add_funcaddr(name str, pos i64) {
 	else { funcaddrs_tail.next = f; }
 	funcaddrs_tail = f;
 	buf_u64(&code, 0);
+	if (opt_object) { push_reloc(f.at, name, R_64); }
 }
 
 fn add_rax_imm(v i64) {
@@ -2280,6 +2320,9 @@ fn gen_restore() {
 }
 
 fn gen_func(f *Func) {
+	// An extern declaration has no body; the symbol comes from the linker
+	// (only valid under -c, which skips this whole path).
+	if (f.body as i64 == 0) { return; }
 	f.addr = code.n;
 	line_mark(f.pos);
 	depth = 0;
@@ -2432,6 +2475,10 @@ fn reset_code() {
 	datarefs_tail = 0 as *DataFixup;
 	funcaddrs_head = 0 as *CallFixup;
 	funcaddrs_tail = 0 as *CallFixup;
+	relocs_head = 0 as *Reloc;
+	relocs_tail = 0 as *Reloc;
+	rodata_relocs_head = 0 as *Reloc;
+	rodata_relocs_tail = 0 as *Reloc;
 	lines_head = 0 as *LineRow;
 	lines_tail = 0 as *LineRow;
 }
@@ -2572,6 +2619,50 @@ fn codegen(u *Unit, img *Image) {
 	}
 
 	layout_globals(u.globals);
+	if (opt_object) {
+		// `-c`: no entry, no panic stub, no gc roots. Code plus the
+		// relocation list is all the object needs; the exe patching below
+		// is skipped entirely.
+		var pass int = 0;
+		while (true) {
+			reset_code();
+			var f *Func = u.funcs;
+			while (f as i64 != 0) {
+				if (f.nct == 0 && f.body as i64 != 0) { gen_func(f); }
+				f = f.next;
+			}
+			if (!br_grew || pass >= 8) { break; }
+			pass = pass + 1;
+		}
+		img.code = code;
+		img.rodata = rodata;
+		img.data = gdata;
+		img.bss_size = bss_size;
+		img.nph = 1;
+		img.funcs = u.funcs;
+		img.globals = u.globals;
+		img.strs = u.strs;
+		img.nstrs = u.nstrs;
+		img.str_off = str_off;
+		img.bytes_off = bytes_off;
+		img.relocs = relocs_head;
+		// The string headers in .rodata carry their own relocation (the ptr
+		// field points at the bytes), collected after the pass loop because
+		// reset_code clears the relocation lists at every pass boundary.
+		var sr *StrLit = u.strs;
+		while (sr as i64 != 0) {
+			var fr *Reloc = arena_alloc(sizeof(Reloc), 8) as *Reloc;
+			fr.at = str_off[sr.id];
+			fr.id = sr.id as i64;
+			fr.kind = R_64;
+			if (rodata_relocs_tail as i64 == 0) { rodata_relocs_head = fr; }
+			else { rodata_relocs_tail.next = fr; }
+			rodata_relocs_tail = fr;
+			sr = sr.next;
+		}
+		img.rodata_relocs = rodata_relocs_head;
+		return;
+	}
 	var nph int = 1;
 	if (gdata.n + bss_size > 0) { nph = 2; }
 	var hdr i64 = EHDR_SZ + PHDR_SZ * (nph as i64);
@@ -2652,6 +2743,10 @@ fn codegen(u *Unit, img *Image) {
 		if (at as i64 == 0) {
 			emsg("undefined function '"); emsg(af.name); emsg("'"); efail(af.pos);
 		}
+		if (at.body as i64 == 0) {
+			emsg("extern '"); emsg(af.name);
+			emsg("' is not linked (extern needs -c and the linker)"); efail(af.pos);
+		}
 		var abs2 i64 = ELF_BASE + hdr + at.addr;
 		var j i64 = 0;
 		while (j < 8) {
@@ -2666,6 +2761,10 @@ fn codegen(u *Unit, img *Image) {
 		var target *Func = find_func(cf.name);
 		if (target as i64 == 0) {
 			emsg("undefined function '"); emsg(cf.name); emsg("'"); efail(cf.pos);
+		}
+		if (target.body as i64 == 0) {
+			emsg("extern '"); emsg(cf.name);
+			emsg("' is not linked (extern needs -c and the linker)"); efail(cf.pos);
 		}
 		buf_patch32(&code, cf.at, target.addr - (cf.at + 4));
 		cf = cf.next;
