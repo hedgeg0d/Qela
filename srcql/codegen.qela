@@ -82,6 +82,7 @@ var datarefs_head *DataFixup;
 var datarefs_tail *DataFixup;
 var str_off *i64;
 var bounds_checks I64List;
+var fn_bounds I64List;
 var funcaddrs_head *CallFixup;
 var funcaddrs_tail *CallFixup;
 var coro_stub_at i64 = -1;
@@ -310,9 +311,8 @@ fn add_call(name str, pos i64) {
 }
 
 fn add_strref(reg int, id int) {
-	rex_w(reg, RBP);
-	b1(0x8d);
-	modrm(0, reg, RBP);
+	if (reg >= 8) { b1(0x41); }
+	b1(0xb8 + ((reg as i64) & 7));
 	var f *StrFixup = arena_alloc(sizeof(StrFixup), 8) as *StrFixup;
 	f.at = code.n;
 	f.id = id;
@@ -322,8 +322,7 @@ fn add_strref(reg int, id int) {
 }
 
 fn add_dataref(v *Var) {
-	b1(0x48); b1(0x8d);
-	modrm(0, RAX, RBP);
+	b1(0xb8);
 	var f *DataFixup = arena_alloc(sizeof(DataFixup), 8) as *DataFixup;
 	f.at = code.n;
 	f.varp = v;
@@ -366,11 +365,20 @@ fn scale_by(size int) {
 	modrm(3, RAX, RCX);
 }
 
+// A bounds check jumps to a trampoline at the end of its own function rather
+// than to the panic stub at the end of the image, so branch relaxation can
+// bring it down to two bytes.
 fn jump_bounds(cc i64) {
-	b1(0x0f);
-	b1(cc);
+	ilist_push(&fn_bounds, jump(cc));
+}
+
+fn gen_bounds_trampoline() {
+	if (fn_bounds.n == 0) { return; }
+	patch_all(&fn_bounds);
+	b1(0xe9);
 	ilist_push(&bounds_checks, code.n);
 	b4(0);
+	fn_bounds.n = 0;
 }
 
 fn by_ref_ty(ty *Type) bool {
@@ -1701,6 +1709,7 @@ fn gen_func(f *Func) {
 		i = i + 1;
 	}
 
+	fn_bounds.n = 0;
 	gen_stmt(f.body);
 
 	if (!always_returns(f.body)) {
@@ -1708,6 +1717,7 @@ fn gen_func(f *Func) {
 		gen_restore();
 		b1(0xc9); b1(0xc3);
 	}
+	gen_bounds_trampoline();
 }
 
 fn layout_globals(globals *Var) {
@@ -1904,8 +1914,7 @@ fn codegen(u *Unit, img *Image) {
 
 	var sf *StrFixup = strrefs_head;
 	while (sf as i64 != 0) {
-		var target i64 = code.n + str_off[sf.id];
-		buf_patch32(&code, sf.at, target - (sf.at + 4));
+		buf_patch32(&code, sf.at, ELF_BASE + hdr + code.n + str_off[sf.id]);
 		sf = sf.next;
 	}
 
@@ -1923,8 +1932,7 @@ fn codegen(u *Unit, img *Image) {
 
 	var df *DataFixup = datarefs_head;
 	while (df as i64 != 0) {
-		var target i64 = SEG_GAP + code.n + rodata.n + df.varp.data_off;
-		buf_patch32(&code, df.at, target - (df.at + 4));
+		buf_patch32(&code, df.at, dbase + df.varp.data_off);
 		df = df.next;
 	}
 
