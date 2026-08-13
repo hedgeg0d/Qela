@@ -38,14 +38,12 @@ fn map_get(m *Map, key str) *u8 {
 }
 
 fn map_put(m *Map, key str, val *u8) {
-	// Update existing key.
 	var i i64 = 0;
 	while (i < m.n) {
 		var e *MapEntry = m.entries + i;
 		if (str_eq(key, e.key)) { e.val = val; return; }
 		i = i + 1;
 	}
-	// New entry.
 	map_grow(m, 1);
 	var e *MapEntry = m.entries + m.n;
 	e.key = key;
