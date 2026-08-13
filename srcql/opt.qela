@@ -1,4 +1,5 @@
 import "comp.qela";
+import "type.qela";
 
 fn trunc_val(v i64, t *Type) i64 {
 	if (t.size == 1) {
@@ -24,6 +25,10 @@ fn const_fold(n *Node) {
 
 	if (n.kind == ND_CAST) {
 		const_fold(n.lhs);
+		if (n.lhs.kind == ND_NUM && n.lhs.ty as i64 != 0 &&
+		    (is_float(n.ty) || is_float(n.lhs.ty))) {
+			return;
+		}
 		if (n.lhs.kind == ND_NUM) {
 			var v i64 = n.lhs.val;
 			if (n.ty.kind == TY_BOOL) { n.val = (v != 0) as i64; }
@@ -35,7 +40,16 @@ fn const_fold(n *Node) {
 
 	if (n.kind == ND_NEG) {
 		const_fold(n.lhs);
-		if (n.lhs.kind == ND_NUM) { n.val = -n.lhs.val; n.kind = ND_NUM; }
+		if (n.lhs.kind == ND_NUM) {
+			if (n.lhs.ty as i64 != 0 && is_float(n.lhs.ty)) {
+				var mask i64 = 0x8000000000000000;
+				if (n.lhs.ty.size == 4) { mask = 0x80000000; }
+				n.val = n.lhs.val ^ mask;
+			} else {
+				n.val = -n.lhs.val;
+			}
+			n.kind = ND_NUM;
+		}
 		return;
 	}
 	if (n.kind == ND_BITNOT) {
@@ -53,6 +67,14 @@ fn const_fold(n *Node) {
 	    n.kind == ND_MOD || n.kind == ND_BITAND || n.kind == ND_BITOR || n.kind == ND_BITXOR ||
 	    n.kind == ND_SHL || n.kind == ND_SHR || n.kind == ND_EQ || n.kind == ND_NE ||
 	    n.kind == ND_LT || n.kind == ND_LE || n.kind == ND_AND || n.kind == ND_OR) {
+		// A float's bits are not an integer: folding two float literals
+		// through this integer arithmetic would corrupt them. Leave them
+		// for codegen, which knows the real operation.
+		if (n.lhs as i64 != 0 && n.lhs.ty as i64 != 0 && is_float(n.lhs.ty)) {
+			const_fold(n.lhs);
+			const_fold(n.rhs);
+			return;
+		}
 		const_fold(n.lhs);
 		// Short-circuit: once the left side decides an && or ||, the right
 		// side never runs at runtime, so folding it would both be wrong and

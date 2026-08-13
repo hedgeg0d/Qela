@@ -86,6 +86,147 @@ fn fmt_result(b Buf) str {
 	return s;
 }
 
+// ── float printing, pure integer arithmetic ──
+//
+// This module is part of the bootstrap subset (stage0 compiles it directly,
+// with no float support at all -- see lex.qela's dec_to_f64_bits for the
+// same constraint on the parse side), so a float never appears here as a
+// value: the caller passes the raw IEEE754 bit pattern as an i64 and this
+// converts it to decimal digit-by-digit on a binary big-number array.
+let FDIG_CAP = 1200;
+
+// Divides the MSB-first bit array by 10 in place; returns the remainder,
+// the next decimal digit from the low end (used to print an exact integer).
+fn fdig_div10(a *u8, start i64, end i64) i64 {
+	var rem i64 = 0;
+	var i i64 = start;
+	while (i < end) {
+		var cur i64 = rem * 2 + (a[i] as i64);
+		a[i] = (cur / 10) as u8;
+		rem = cur % 10;
+		i = i + 1;
+	}
+	return rem;
+}
+
+// Multiplies the MSB-first bit array by 10 in place; the overflow past the
+// array's own width is the next decimal digit (used to print a fraction).
+fn fdig_mul10(a *u8, start i64, end i64) i64 {
+	var carry i64 = 0;
+	var i i64 = end - 1;
+	while (i >= start) {
+		var v i64 = (a[i] as i64) * 10 + carry;
+		a[i] = (v % 2) as u8;
+		carry = v / 2;
+		i = i - 1;
+	}
+	return carry;
+}
+
+fn fdig_allzero(a *u8, start i64, end i64) bool {
+	var i i64 = start;
+	while (i < end) {
+		if (a[i] != 0) { return false; }
+		i = i + 1;
+	}
+	return true;
+}
+
+// bits: the raw IEEE754 double bit pattern. Ties round half-up rather than
+// half-to-even and denormals print as 0 -- acceptable for a hobby compiler,
+// not for a libc (dec_to_f64_bits carries the same limitations).
+fn fmt_f64_bits(b *Buf, bits i64) {
+	var sign i64 = (bits >> 63) & 1;
+	var expf i64 = (bits >> 52) & 0x7ff;
+	var mant i64 = bits & 0xfffffffffffff;
+
+	if (sign != 0) { buf_u8(b, '-'); }
+
+	if (expf == 0x7ff) {
+		if (mant == 0) { fmt_str(b, "inf"); } else { fmt_str(b, "nan"); }
+		return;
+	}
+	if (expf == 0 && mant == 0) { fmt_str(b, "0"); return; }
+
+	var m i64 = mant;
+	var e i64 = 0;
+	if (expf == 0) {
+		e = 1 - 1023 - 52;
+	} else {
+		m = mant | 0x10000000000000;
+		e = expf - 1023 - 52;
+	}
+
+	// m's 53 significant bits, MSB first.
+	var mbits [53]u8;
+	var i i64 = 0;
+	while (i < 53) {
+		mbits[i] = ((m >> (52 - i)) & 1) as u8;
+		i = i + 1;
+	}
+
+	if (e >= 0) {
+		// An exact integer: pad m with e zero bits and read decimal digits
+		// off the low end.
+		var n i64 = 53 + e;
+		var arr *u8 = arena_alloc(n, 1);
+		i = 0;
+		while (i < 53) { arr[i] = mbits[i]; i = i + 1; }
+		i = 53;
+		while (i < n) { arr[i] = 0; i = i + 1; }
+
+		var digs *u8 = arena_alloc(n, 1);
+		var nd i64 = 0;
+		while (!fdig_allzero(arr, 0, n) && nd < FDIG_CAP) {
+			digs[nd] = fdig_div10(arr, 0, n) as u8;
+			nd = nd + 1;
+		}
+		if (nd == 0) { buf_u8(b, '0'); }
+		else {
+			i = nd;
+			while (i > 0) { i = i - 1; buf_u8(b, ('0' as i64 + (digs[i] as i64)) as u8); }
+		}
+		return;
+	}
+
+	var w i64 = -e;
+	if (w >= 53) { buf_u8(b, '0'); }
+	else { fmt_i64(b, m >> w); }
+	buf_u8(b, '.');
+
+	var frac *u8 = arena_alloc(w, 1);
+	if (w > 53) {
+		i = 0;
+		while (i < w - 53) { frac[i] = 0; i = i + 1; }
+		var j i64 = 0;
+		while (j < 53) { frac[w - 53 + j] = mbits[j]; j = j + 1; }
+	} else {
+		i = 0;
+		while (i < w) { frac[i] = mbits[53 - w + i]; i = i + 1; }
+	}
+
+	// A double carries at most ~17 significant decimal digits; past that the
+	// exact binary-to-decimal expansion is just noise. Leading zeros before
+	// the first nonzero digit do not count against the cap.
+	var printed i64 = 0;
+	var any bool = false;
+	var sig i64 = 0;
+	while (printed < w && sig < 17) {
+		if (fdig_allzero(frac, 0, w)) { break; }
+		var d i64 = fdig_mul10(frac, 0, w);
+		buf_u8(b, ('0' as i64 + d) as u8);
+		any = true;
+		printed = printed + 1;
+		if (d != 0 || sig > 0) { sig = sig + 1; }
+	}
+	if (!any) { buf_u8(b, '0'); }
+}
+
+fn fmt_put_f64_bits(b Buf, bits i64) Buf {
+	fmt_f64_bits(&b, bits);
+	return b;
+}
+
 fn eprint_i64(v i64) {
 	var b Buf;
 	fmt_i64(&b, v);
