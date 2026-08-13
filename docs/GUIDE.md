@@ -527,6 +527,44 @@ fn main(argc int, argv **u8) int {
 }
 ```
 
+### Function values
+
+A function name used as a value is its address, and a variable or parameter
+of a function type can carry it and be called through it:
+
+```qela
+fn add(a i64, b i64) i64 { return a + b; }
+fn mul(a i64, b i64) i64 { return a * b; }
+
+var cb fn(i64, i64) i64 = add;   // explicit signature
+var cb2 = add;                   // inferred from the initializer
+cb(1, 2);                        // -> 3, an indirect call
+cb = mul;                        // reassign, same signature
+```
+
+A function type reads `fn(t1, t2) ret`; functions with no parameters are
+`fn() ret`. The signature is part of the type, so only a function of the
+same signature fits — structural equality, whitespace-free. You can pass and
+return them:
+
+```qela
+fn apply_twice(f fn(i64) i64, x i64) i64 { return f(f(x)); }
+fn negate(a i64) i64 { return -a; }
+apply_twice(negate, 5);   // 5
+```
+
+`std/sortcmp.qela` is the standard-library showcase: the quicksort with a
+caller-supplied comparator, `sort_cmp(s, 0, n - 1, lt)` where
+`fn lt(a i64, b i64) bool` returns `a < b`.
+
+Limits, all checked at compile time: a function value is only the address —
+**no closures**, so a `cmp` must be a real function, not a capture of local
+state; at most **six parameters**, each fitting in one register (no `str`,
+no aggregate); the return type must fit in two words (a >16-byte aggregate
+is rejected); and a generic function cannot be used as a value (there is no
+monomorphized address to take). Stage1-only: stage0, the frozen bootstrap,
+has no function values.
+
 ## 10. Pointers and memory
 
 Pointers are first-class. `&x` takes an address, `*p` dereferences, and the
