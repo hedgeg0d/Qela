@@ -1,6 +1,11 @@
 var arena_ptr i64 = 0;
 var arena_left i64 = 0;
 
+struct ArenaMark {
+	ptr i64,
+	left i64,
+}
+
 fn arena_alloc(size i64, align i64) *u8 {
 	var pad i64 = 0;
 	if (align > 1) {
@@ -22,4 +27,21 @@ fn arena_alloc(size i64, align i64) *u8 {
 	arena_ptr = arena_ptr + size;
 	arena_left = arena_left - size;
 	return p;
+}
+
+// Bump position, to rewind to later. The chunk itself is never unmapped
+// (arena_alloc never frees anything back to the OS), so rewinding across
+// a chunk boundary is safe: the old chunk is still valid, mapped memory.
+// Bytes freed by a rewind keep whatever was in them; arena_alloc never
+// zeroes, so a value re-allocated over freed memory reads stale bytes.
+fn arena_mark() ArenaMark {
+	var m ArenaMark;
+	m.ptr = arena_ptr;
+	m.left = arena_left;
+	return m;
+}
+
+fn arena_reset(m ArenaMark) {
+	arena_ptr = m.ptr;
+	arena_left = m.left;
 }
