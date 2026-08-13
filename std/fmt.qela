@@ -86,13 +86,10 @@ fn fmt_result(b Buf) str {
 	return s;
 }
 
-// ── float printing, pure integer arithmetic ──
-//
-// This module is part of the bootstrap subset (stage0 compiles it directly,
-// with no float support at all -- see lex.qela's dec_to_f64_bits for the
-// same constraint on the parse side), so a float never appears here as a
-// value: the caller passes the raw IEEE754 bit pattern as an i64 and this
-// converts it to decimal digit-by-digit on a binary big-number array.
+// Float printing, pure integer arithmetic: stage0 compiles this module with
+// no float support, so a float never appears here as a value — the caller
+// passes the raw IEEE754 bit pattern as an i64, converted digit-by-digit on
+// a binary big-number array.
 let FDIG_CAP = 1200;
 
 // Divides the MSB-first bit array by 10 in place; returns the remainder,
