@@ -1,0 +1,74 @@
+// expect-exit: 42
+// Leaf functions take r8-r11 for their locals, which are also argument
+// registers. A promotion must never overwrite an incoming argument, and a
+// function with no frame must still return the right value.
+struct Pair { a i64, b i64, }
+struct Wide { a i64, b i64, c i64, }
+
+fn six(a int, b int, c int, d int, e int, f int) int {
+	var s int = a;
+	var t int = b + c;
+	var u int = d + e;
+	return s + t + u + f;
+}
+
+fn five(a i64, b i64, c i64, d i64, e i64) i64 {
+	var x i64 = a * 2;
+	var y i64 = b + c;
+	var z i64 = d - e;
+	var w i64 = x + y;
+	return w + z;
+}
+
+fn pair_sum(p Pair) i64 {
+	var x i64 = p.a;
+	var y i64 = p.b;
+	return x + y;
+}
+
+fn wide_sum(w Wide) i64 {
+	var x i64 = w.a;
+	var y i64 = w.b;
+	var z i64 = w.c;
+	return x + y + z;
+}
+
+fn make_pair(a i64, b i64) Pair {
+	var p Pair;
+	p.a = a;
+	p.b = b;
+	return p;
+}
+
+fn loopy(n i64) i64 {
+	var acc i64 = 0;
+	var i i64 = 0;
+	var step i64 = 3;
+	while (i < n) {
+		acc = acc + i * step;
+		i = i + 1;
+	}
+	return acc;
+}
+
+// not a leaf: everything here must fall back to callee-saved registers
+fn caller(n i64) i64 {
+	var a i64 = loopy(n);
+	var b i64 = five(1, 2, 3, 4, 5);
+	var c i64 = six(1, 2, 3, 4, 5, 6) as i64;
+	return a + b + c;
+}
+
+fn main() int {
+	if (six(1, 2, 3, 4, 5, 6) != 21) { return 1; }
+	if (five(1, 2, 3, 4, 5) != 6) { return 2; }
+	if (pair_sum(make_pair(7, 8)) != 15) { return 3; }
+
+	var w Wide;
+	w.a = 1; w.b = 2; w.c = 4;
+	if (wide_sum(w) != 7) { return 4; }
+
+	if (loopy(5) != 30) { return 5; }
+	if (caller(5) != 57) { return 6; }
+	return 42;
+}

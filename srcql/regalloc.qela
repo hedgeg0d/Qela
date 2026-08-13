@@ -9,10 +9,43 @@ import "funcs.qela";
 // a defer body stretches its ranges to the end of the function, because it is
 // emitted out of order at every exit.
 
-let RA_NREG = 5;
+let RA_NSAVED = 5;
 let RA_FOREVER = 0x7fffffffffffff;
 
-fn ra_pool(i int) int {
+// Callee-saved registers cost a save and a restore. A function that makes no
+// calls pays nothing for r8-r11, so those come first there. r10 and r11 are
+// never argument registers; r8 and r9 are free only when this function's own
+// parameters do not reach them, or the prologue would overwrite an incoming
+// argument before reading it.
+fn ra_free(i int) int {
+	if (i == 0) { return 10; }
+	if (i == 1) { return 11; }
+	if (i == 2) { return 9; }
+	return 8;
+}
+
+fn ra_argregs(f *Func) int {
+	var ri int = 0;
+	if (f.ret_slot as i64 != 0) { ri = ri + 1; }
+	var i int = 0;
+	while (i < f.nparams) {
+		var v *Var = func_param(f, i);
+		ri = ri + 1;
+		if (is_aggregate(v.ty) && !v.by_ref && v.ty.size > 8) { ri = ri + 1; }
+		i = i + 1;
+	}
+	return ri;
+}
+
+fn ra_nfree(f *Func) int {
+	if (!f.leaf) { return 0; }
+	var nin int = ra_argregs(f);
+	if (nin <= 4) { return 4; }
+	if (nin <= 5) { return 3; }
+	return 2;
+}
+
+fn ra_saved(i int) int {
 	if (i == 0) { return 3; }
 	if (i == 1) { return 12; }
 	if (i == 2) { return 13; }
@@ -20,9 +53,20 @@ fn ra_pool(i int) int {
 	return 15;
 }
 
+fn ra_nreg(f *Func) int {
+	return RA_NSAVED + ra_nfree(f);
+}
+
+fn ra_pool(f *Func, i int) int {
+	var nf int = ra_nfree(f);
+	if (i < nf) { return ra_free(i); }
+	return ra_saved(i - nf);
+}
+
 var ra_pos i64;
 var ra_loop int;
 var ra_fn *Func;
+var ra_calls bool;
 
 fn ra_weight() i64 {
 	var w i64 = 1;
@@ -68,6 +112,7 @@ fn ra_walk(n *Node) {
 	// Temporaries are always addressed through the frame.
 	if (n.tmp as i64 != 0) { n.tmp.no_reg = true; }
 
+	if (k == ND_CALL || k == ND_SYSCALL) { ra_calls = true; }
 	if (k == ND_VAR || k == ND_ZERO) { ra_use(n.varp); return; }
 	if (k == ND_ADDR) { ra_deny(n.lhs); ra_walk(n.lhs); return; }
 	if (k == ND_MATCH) {
@@ -153,6 +198,8 @@ fn regalloc(f *Func) {
 	ra_fn = f;
 	ra_pos = 0;
 	ra_loop = 0;
+	ra_calls = false;
+	f.leaf = false;
 	if (f.ret_slot as i64 != 0) { f.ret_slot.no_reg = true; }
 
 	var i int = 0;
@@ -162,20 +209,22 @@ fn regalloc(f *Func) {
 		i = i + 1;
 	}
 	ra_walk(f.body);
+	f.leaf = !ra_calls;
 
+	var n int = ra_nreg(f);
 	i = 0;
-	while (i < RA_NREG) {
-		while (ra_pick(ra_pool(i))) { }
+	while (i < n) {
+		while (ra_pick(ra_pool(f, i))) { }
 		i = i + 1;
 	}
 
 	f.nsaved = 0;
 	i = 0;
-	while (i < RA_NREG) {
+	while (i < RA_NSAVED) {
 		var used bool = false;
 		var v *Var = f.locals;
 		while (v as i64 != 0) {
-			if (v.has_reg && v.reg == ra_pool(i)) { used = true; }
+			if (v.has_reg && v.reg == ra_saved(i)) { used = true; }
 			v = v.next;
 		}
 		if (used) { f.nsaved = f.nsaved + 1; }
