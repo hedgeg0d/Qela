@@ -109,10 +109,24 @@ fn reset_compile() {
 	dw_abbrev.n = 0;
 	dw_sym.n = 0;
 	dw_strtab.n = 0;
+	// Diagnostic state: secondary span and macro backtrace must not leak
+	// between compiles. The colour decision is re-evaluated at the top of
+	// compile_src (so multi-compile processes like `qela test` see the right
+	// tty state for each compile).
+	sec_set = false;
+	sec_pos = -1;
+	macro_top = 0 as *MacroSite;
+	diag_setup_done = false;
+	diag_colored = false;
+	// Keyword list for "did you mean" suggestions is built once and the
+	// str slots point into rodata, so no reset needed across compiles.
 }
 
 fn compile_src(name str, src str, output str) {
 	reset_compile();
+	// Resolve colour once per compile, after reset cleared the cached value.
+	// Cheap: one isatty + two env reads, never on the hot path.
+	diag_setup();
 	var file int = diag_add_file(name, src);
 	set_module_dir(name);
 	var unit *Unit = parse(lex(src, (file as i64) << FILE_SHIFT));
@@ -564,7 +578,7 @@ fn cmd_repl(argc int, argv **u8) int {
 }
 
 fn cmd_help() int {
-	write_str(STDOUT, "usage: qela <file.qela> [-o output] [options]\n       qela . [dir]   build a project from a directory\n       qela run <file.qela> [args]\n       qela test <file.qela|dir> [files...] [-- args]\n       qela fmt <file.qela>\n       qela repl\n       qela --lsp\n       qela --dump-std <module>\n\ncompile a Qela program to a static binary; '-' reads the source\nfrom stdin. A directory merges every .qela file in it into one\nprogram (entry: main.qela, or the sole file) -- no imports needed\nbetween project files. 'run' compiles to a temp file and executes\nit, and panics print a backtrace there. 'test' runs the program and\nchecks its leading comments: // expect-exit: N, // expect-out: text\n(one line each, compared in order) and // expect-compile-error;\nseveral files can be tested in one run -- '--' separates the\nprogram arguments, e.g. qela test a.qela b.qela -- 5 6. 'repl'\ncompiles each line as an expression and prints its value.\n\nstrings interpolate, so n = ${40 + 2} prints 42 and pointers\nrender as hex; the expression is evaluated at runtime.\n\noptions:\n  -o <file>        output path (default: input name without .qela)\n  -g               DWARF line info and symbols for gdb\n  --backtrace      print function frames on panic\n  --no-bounds-checks   disable index checks\n  -h, --help       this text\n");
+	write_str(STDOUT, "usage: qela <file.qela> [-o output] [options]\n       qela . [dir]   build a project from a directory\n       qela run <file.qela> [args]\n       qela test <file.qela|dir> [files...] [-- args]\n       qela fmt <file.qela>\n       qela repl\n       qela --lsp\n       qela --dump-std <module>\n\ncompile a Qela program to a static binary; '-' reads the source\nfrom stdin. A directory merges every .qela file in it into one\nprogram (entry: main.qela, or the sole file) -- no imports needed\nbetween project files. 'run' compiles to a temp file and executes\nit, and panics print a backtrace there. 'test' runs the program and\nchecks its leading comments: // expect-exit: N, // expect-out: text\n(one line each, compared in order) and // expect-compile-error;\nseveral files can be tested in one run -- '--' separates the\nprogram arguments, e.g. qela test a.qela b.qela -- 5 6. 'repl'\ncompiles each line as an expression and prints its value.\n\nstrings interpolate, so n = ${40 + 2} prints 42 and pointers\nrender as hex; the expression is evaluated at runtime.\n\noptions:\n  -o <file>        output path (default: input name without .qela)\n  -g               DWARF line info and symbols for gdb\n  --backtrace         print function frames on panic\n  --no-bounds-checks  disable index checks\n  --no-warn           suppress warnings\n  --color=auto|always|never  control coloured diagnostics (auto: tty + NO_COLOR)\n  -h, --help          this text\n");
 	return 0;
 }
 
@@ -613,6 +627,16 @@ fn main(argc int, argv **u8) int {
 			opt_no_bounds = true;
 		} else if (str_eq(a, "--backtrace")) {
 			opt_backtrace = true;
+		} else if (str_eq(a, "--no-warn")) {
+			opt_warn = false;
+		} else if (a.len > 7 && str_eq(str_slice(a, 0, 7), "--color")) {
+			// --color=auto | always | never. The "=" is at offset 7.
+			if (a.len < 9 || a.ptr[7] != '=') { die("error: --color needs =auto|always|never"); }
+			var v str = str_slice(a, 8, a.len);
+			if (str_eq(v, "auto")) { opt_color = 0; }
+			else if (str_eq(v, "always")) { opt_color = 1; }
+			else if (str_eq(v, "never")) { opt_color = 2; }
+			else { die("error: --color must be auto, always, or never"); }
 		} else if (str_eq(a, "-h") || str_eq(a, "--help")) {
 			return cmd_help();
 		} else if (str_eq(a, "-")) {
