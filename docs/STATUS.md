@@ -7,9 +7,9 @@ Updated 2026-08-03. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **216 088 B** |
-| S2 under `upx --lzma` (measured 2026-08-03) | 50 428 B, ~4.8% of the 1 MiB budget |
-| S2 under xz -9 (proxy for upx) | 52 540 B |
+| **S2 — the shipped compiler, Qela compiled by itself** | **217 088 B** |
+| S2 under `upx --lzma` (measured 2026-08-03) | 50 852 B, ~4.9% of the 1 MiB budget |
+| S2 under xz -9 (proxy for upx) | 52 996 B |
 | stage1 sources | 9 100 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **193%** without bounds checks (M4 gate wants ≤150%) |
 
@@ -59,6 +59,12 @@ only the child. Stateless: every line is a fresh program. `read_line` in
 **Import path normalization.** `dir/../std/x.qela` normalizes to
 `std/x.qela`, so the auto-import of `std/fmt.qela` dedups against the
 compiler's own `../std/...` imports in the file table.
+
+**`std/rand.qela`.** Deterministic xorshift64*: `rand_init(seed)`,
+`rand_u64()`, `rand_range(lo, hi)`. The default seed is fixed, so an
+unseeded program is reproducible; the top bit is masked so `%` in
+`rand_range` never sees a negative operand. The repl imports it, so
+`rand_range(1, 7)` is a one-liner there.
 when it is not written out; `syscall`; `asm(byte, byte, ...)` for raw machine
 code with the result convention that whatever's left in `RAX` is the
 expression's value, same as `syscall`; `assert(cond, "msg")` and
