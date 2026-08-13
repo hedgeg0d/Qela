@@ -32,16 +32,6 @@ fn is_ident_char(c u8) bool {
 	return is_letter(c) || is_digit(c);
 }
 
-fn lex_src_eq(src str, hi i64, lit str) bool {
-	if (hi - hi != lit.len) { return false; }
-	var i i64 = 0;
-	while (i < lit.len) {
-		if (src.ptr[hi + i] != lit.ptr[i]) { return false; }
-		i = i + 1;
-	}
-	return true;
-}
-
 fn is_keyword(src str, start i64, end i64) bool {
 	if (end - start == 2) {
 		if (src.ptr[start] == 'f' && src.ptr[start + 1] == 'n') { return true; }

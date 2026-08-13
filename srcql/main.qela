@@ -28,6 +28,9 @@ fn default_output(path str) str {
 // Prints an embedded module, so the shipped library stays readable without
 // a copy on disk. Accepts "fmt", "fmt.qela" or "std/fmt.qela".
 fn dump_std(name str) int {
+	// tools/genblob.py bakes every std/ module as the path "std/<name>.qela";
+	// the 4 and 5 are len("std/") and len(".qela"), and must move in lockstep
+	// with the prefix and suffix there.
 	var i int = 0;
 	var n int = std_blob_count();
 	while (i < n) {
@@ -52,6 +55,16 @@ fn dump_std(name str) int {
 // compile — file table, string table, functions, types, templates, the
 // code/rodata/data buffers, DWARF — is cleared here so one process can
 // compile any number of programs (qela test runs a whole corpus).
+//
+// Contract: every `var` in srcql/ that survives a single codegen pass
+// must be reset either here (between compiles) or in reset_code (between
+// relaxation passes). The lists that grow with each emitted function —
+// call/string/data fixups, the bounds trampoline targets, the panic-stub
+// sites, the backtrace references, the GC roots, the per-function line
+// rows — are reset by reset_code at the start of every pass, so they
+// never need clearing here. Code/rodata/data buffers are cleared in both:
+// reset_code at every pass boundary (per-branch relaxation), and here
+// for a clean slate before the first pass of the next compile.
 fn reset_compile() {
 	nfiles = 0;
 	nstrs = 0;
@@ -142,8 +155,23 @@ fn merge_file(path str, tail *Token, head **Token) *Token {
 	return t;
 }
 
-var g_dir_names [48]str;
+var g_dir_names [1024]str;
 var g_dir_n int = 0;
+
+// A per-process counter for /tmp/qela-* paths. The pid alone collides on
+// reuse; a counter differentiates parallel invocations and reused pids.
+var qela_tmp_seq int = 0;
+
+fn qela_mktmp(prefix str) str {
+	qela_tmp_seq = qela_tmp_seq + 1;
+	var b Buf;
+	fmt_str(&b, "/tmp/");
+	fmt_str(&b, prefix);
+	fmt_i64(&b, sys_getpid() as i64);
+	buf_u8(&b, '-');
+	fmt_i64(&b, qela_tmp_seq as i64);
+	return buf_str(&b);
+}
 
 // Lists a directory's .qela files into g_dir_names, sorted by name.
 fn dir_list(dir str) {
@@ -154,7 +182,7 @@ fn dir_list(dir str) {
 	var start i64 = 0;
 	while (i < list.n) {
 		if (list.p[i] == '\n') {
-			if (g_dir_n >= 48) { die("error: too many .qela files in the directory"); }
+			if (g_dir_n >= 1024) { die("error: too many .qela files in the directory"); }
 			g_dir_names[g_dir_n].ptr = list.p + start;
 			g_dir_names[g_dir_n].len = i - start;
 			g_dir_n = g_dir_n + 1;
@@ -247,10 +275,7 @@ fn cmd_run(argc int, argv **u8) int {
 	// deterministic for the bootstrap gate, which never sets this flag.
 	opt_backtrace = true;
 
-	var tb Buf;
-	fmt_str(&tb, "/tmp/qela-run-");
-	fmt_i64(&tb, sys_getpid());
-	var tmp str = buf_str(&tb);
+	var tmp str = qela_mktmp("qela-run-");
 	var tmpc *u8 = cstr(tmp);
 
 	if (str_eq(input, "-")) { compile_src("<stdin>", read_stdin(), tmp); }
@@ -362,7 +387,7 @@ fn test_one(input str, src str, prog_argv **u8, nprog int) int {
 	if (expect_has(src, "expect-compile-error")) {
 		var pid i64 = sys_fork();
 		if (pid == 0) {
-			compile_file(input, "/tmp/qela-test-reject");
+			compile_file(input, qela_mktmp("qela-test-reject-"));
 			sys_exit(0);
 		}
 		var status [1]i64;
@@ -376,10 +401,7 @@ fn test_one(input str, src str, prog_argv **u8, nprog int) int {
 		return 0;
 	}
 
-	var tb Buf;
-	fmt_str(&tb, "/tmp/qela-test-");
-	fmt_i64(&tb, sys_getpid());
-	var tmp str = buf_str(&tb);
+	var tmp str = qela_mktmp("qela-test-");
 	var tmpc *u8 = cstr(tmp);
 	var ob Buf;
 	fmt_str(&ob, tmp);
@@ -506,10 +528,7 @@ fn cmd_repl(argc int, argv **u8) int {
 		if (line.ptr[line.len - 1] == '\n') { line.len = line.len - 1; }
 		if (line.len == 0) { continue; }
 
-		var tb Buf;
-		fmt_str(&tb, "/tmp/qela-repl-");
-		fmt_i64(&tb, sys_getpid());
-		var tmp str = buf_str(&tb);
+		var tmp str = qela_mktmp("qela-repl-");
 		var tmpc *u8 = cstr(tmp);
 		var src Buf;
 		fmt_str(&src, "import \"std/io.qela\";\nimport \"std/rand.qela\";\nfn main() int {\n\twrite_str(STDOUT, \"");
