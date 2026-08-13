@@ -1,0 +1,7 @@
+// expect-compile-error
+// A runtime i64 can no longer narrow to i32 silently.
+fn f() i64 { return 5; }
+fn main() int {
+	var x i32 = f();
+	return 0;
+}
