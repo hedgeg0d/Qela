@@ -120,6 +120,42 @@ EOF
 ( cd "$tmp2" && "$root/$OUT/s2" chan.qela -o chan && ./chan ) ||
 	fail "channels do not deliver every value"
 printf '    ok\n'
+
+step "garbage collector"
+cat > "$tmp2/gc.qela" <<'EOF'
+import "std/gc.qela";
+struct Node { val i64, next *Node, }
+var head *Node;
+fn push(v i64) {
+	var n *Node = gc_alloc(sizeof(Node)) as *Node;
+	n.val = v;
+	n.next = head;
+	head = n;
+}
+fn sum() i64 {
+	var t i64 = 0;
+	var p *Node = head;
+	while (p as i64 != 0) { t = t + p.val; p = p.next; }
+	return t;
+}
+fn main() int {
+	var i i64 = 0;
+	while (i < 50) { push(i); i = i + 1; }
+	var before i64 = sum();
+	i = 0;
+	while (i < 2000) { var junk *u8 = gc_alloc(64); junk[0] = 1; i = i + 1; }
+	var peak i64 = gc_live_bytes();
+	gc_collect();
+	var kept i64 = gc_live_bytes();
+	if (sum() != before) { return 1; }
+	if (kept >= peak) { return 2; }
+	if (kept == 0) { return 3; }
+	return 0;
+}
+EOF
+( cd "$tmp2" && "$root/$OUT/s2" gc.qela -o gc && ./gc ) ||
+	fail "the collector loses reachable objects or reclaims nothing"
+printf '    ok\n'
 rm -rf "$tmp2"
 
 printf '\nShipping binary: %s\n' "$OUT/s2"
