@@ -63,6 +63,13 @@ fn ct_void() ComptimeVal {
 }
 
 fn ct_call(f *Func, args *Node) ComptimeVal {
+	// A call is a boundary: a callee's return, break or continue must not
+	// leak into the caller, or the caller's block would stop at the first
+	// statement after the call and return the callee's value.
+	var save_r bool = ct_returning;
+	var save_b bool = ct_broke;
+	var save_c bool = ct_continued;
+	var save_v ComptimeVal = ct_ret_val;
 	ct_push_frame();
 	var a *Node = args;
 	var i int = 0;
@@ -79,11 +86,12 @@ fn ct_call(f *Func, args *Node) ComptimeVal {
 		a = a.next;
 		i = i + 1;
 	}
-	ct_returning = false;
-	ct_broke = false;
-	ct_continued = false;
 	var ret ComptimeVal = ct_eval_block(f.body);
 	ct_pop_frame();
+	ct_returning = save_r;
+	ct_broke = save_b;
+	ct_continued = save_c;
+	ct_ret_val = save_v;
 	return ret;
 }
 
@@ -128,7 +136,7 @@ fn ct_eval_for(n *Node) {
 		ct_broke = false;
 		ct_continued = false;
 		ct_run_stmt(n.body);
-		if (ct_broke) { break; }
+		if (ct_broke) { ct_broke = false; break; }
 		if (ct_returning) { break; }
 		if (n.step as i64 != 0) { ct_run_stmt(n.step); }
 	}
@@ -246,8 +254,8 @@ fn ct_eval_expr(n *Node) ComptimeVal {
 			if (n.val == ND_ADD)     { r = a + b; }
 			else if (n.val == ND_SUB)    { r = a - b; }
 			else if (n.val == ND_MUL)    { r = a * b; }
-			else if (n.val == ND_DIV)    { if (b != 0) { r = a / b; } }
-			else if (n.val == ND_MOD)    { if (b != 0) { r = a % b; } }
+			else if (n.val == ND_DIV)    { if (b == 0) { error_at(n.pos, "division by zero in a constant expression"); } r = a / b; }
+			else if (n.val == ND_MOD)    { if (b == 0) { error_at(n.pos, "division by zero in a constant expression"); } r = a % b; }
 			else if (n.val == ND_BITAND) { r = a & b; }
 			else if (n.val == ND_BITOR)  { r = a | b; }
 			else if (n.val == ND_BITXOR) { r = a ^ b; }
