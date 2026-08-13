@@ -1,0 +1,10 @@
+// expect-exit: 134
+// The elision is narrow: the loop bound 5 does not match the [4] array, so
+// the check stays and the write to a[4] panics instead of corrupting
+// memory.
+fn main() int {
+	var a [4]int;
+	var i int = 0;
+	while (i < 5) { a[i] = i; i = i + 1; }
+	return a[0];
+}
