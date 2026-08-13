@@ -233,8 +233,8 @@ fn o_str_name(id i64, data_sym bool) str {
 
 // Linear scan; object files are small enough that the string ids dominate
 // and a hash table is not worth the bytes. A nameless relocation is a
-// string: R_32S slots (in code) point at the {ptr, len} header, R_64 slots
-// (the header's own ptr, in .rodata) point at the bytes.
+// string: PC-relative slots (in code) point at the {ptr, len} header, R_64
+// slots (the header's own ptr, in .rodata) point at the bytes.
 fn o_sym_index(img *Image, r *Reloc) int {
 	var want str = r.name;
 	if (want.len == 0) {
@@ -246,16 +246,19 @@ fn o_sym_index(img *Image, r *Reloc) int {
 		if (str_eq(o_names[i], want)) { return i; }
 		i = i + 1;
 	}
-	die("error: internal: unresolved symbol in object");
+	var dmsg Buf;
+	fmt_str(&dmsg, "error: internal: unresolved symbol: ");
+	fmt_str(&dmsg, want);
+	die(buf_str(&dmsg));
 	return -1;
 }
 
-fn o_build_syms(img *Image, sec_text int, sec_rodata int, sec_data int, sec_bss int) {
+fn o_build_syms(img *Image, sec_text int, sec_rodata int, sec_drro int, sec_data int, sec_bss int) {
 	o_add("", STB_LOCAL << 4 | STT_NOTYPE, 0, 0, 0);
 
-	// Locals first (the linker reads the boundary at sh_info), then the
-	// extern globals. Two passes: an extern definition exports its symbol,
-	// an extern declaration is an UNDEF the linker must fill.
+	// Locals first, then the globals: the linker reads the boundary at
+	// sh_info, so no STB_GLOBAL may precede the first STB_LOCAL. Imports are
+	// UNDEF globals the linker must fill, extern definitions export.
 	var f *Func = img.funcs;
 	while (f as i64 != 0) {
 		if (f.nct != 0) { f = f.next; continue; }
@@ -271,6 +274,7 @@ fn o_build_syms(img *Image, sec_text int, sec_rodata int, sec_data int, sec_bss 
 
 	var v *Var = img.globals;
 	while (v as i64 != 0) {
+		if (v.extern) { v = v.next; continue; }
 		var sec int = sec_bss;
 		var val i64 = v.data_off - img.data.n;
 		if (v.init as i64 != 0) { sec = sec_data; val = v.data_off; }
@@ -279,10 +283,30 @@ fn o_build_syms(img *Image, sec_text int, sec_rodata int, sec_data int, sec_bss 
 	}
 
 	var s *StrLit = img.strs;
+	var hdr_off i64 = 0;
+	if (s as i64 != 0) { hdr_off = img.str_off[s.id]; }
 	while (s as i64 != 0) {
-		o_add(o_str_name(s.id as i64, false), STB_LOCAL << 4 | STT_OBJECT, sec_rodata, img.str_off[s.id], 16);
+		o_add(o_str_name(s.id as i64, false), STB_LOCAL << 4 | STT_OBJECT, sec_drro, img.str_off[s.id] - hdr_off, 16);
 		o_add(o_str_name(s.id as i64, true), STB_LOCAL << 4 | STT_OBJECT, sec_rodata, img.bytes_off[s.id], s.s.len);
 		s = s.next;
+	}
+
+	v = img.globals;
+	while (v as i64 != 0) {
+		if (!v.extern) { v = v.next; continue; }
+		if (!v.has_init) {
+			// An imported extern: an UNDEF the linker must fill from the
+			// C side. No section, no size.
+			o_add(v.name, STB_GLOBAL << 4 | STT_OBJECT, 0, 0, 0);
+			v = v.next;
+			continue;
+		}
+		var sec2 int = sec_bss;
+		var val2 i64 = v.data_off - img.data.n;
+		if (v.init as i64 != 0) { sec2 = sec_data; val2 = v.data_off; }
+		// An extern with an initializer exports the symbol for the C side.
+		o_add(v.name, STB_GLOBAL << 4 | STT_OBJECT, sec2, val2, v.ty.size as i64);
+		v = v.next;
 	}
 
 	f = img.funcs;
@@ -341,8 +365,8 @@ fn o_sym_rec(f *Buf, i int) {
 	buf_u64(f, o_size[i]);
 }
 
-fn o_rela_rec(f *Buf, r *Reloc, img *Image) {
-	buf_u64(f, r.at);
+fn o_rela_rec(f *Buf, r *Reloc, img *Image, base i64) {
+	buf_u64(f, r.at - base);
 	buf_u64(f, (o_sym_index(img, r) as i64) << 32 | (r.kind as i64));
 	// PC-relative slots resolve from the *next* instruction; the linker's P
 	// is the slot's own address, so a -4 addend aligns the two (gcc emits
@@ -354,29 +378,36 @@ fn o_rela_rec(f *Buf, r *Reloc, img *Image) {
 
 fn write_object(path str, img *Image) {
 	var has_rr bool = img.rodata_relocs as i64 != 0;
+	// The string headers ({ptr, len}) live in .data.rel.ro, not .rodata: the
+	// ptr is a relocation the loader must write, and a reloc in a plain
+	// read-only section forces DT_TEXTREL in a PIE. relro turns the section
+	// read-only again after relocation.
 	var sec_text int = 1;
 	var sec_rodata int = 2;
-	var sec_data int = 3;
-	var sec_bss int = 4;
-	var sec_relatext int = 5;
-	var sec_relaro int = 6;
-	var sec_symtab int = 7;
-	var sec_strtab int = 8;
-	var sec_shstr int = 9;
-	if (!has_rr) { sec_relaro = -1; sec_symtab = 6; sec_strtab = 7; sec_shstr = 8; }
+	var sec_drro int = 3;
+	var sec_data int = 4;
+	var sec_bss int = 5;
+	var sec_relatext int = 6;
+	var sec_reladrro int = 7;
+	var sec_symtab int = 8;
+	var sec_strtab int = 9;
+	var sec_shstr int = 10;
+	if (!has_rr) { sec_drro = -1; sec_data = 3; sec_bss = 4; sec_reladrro = -1; sec_symtab = 6; sec_strtab = 7; sec_shstr = 8; }
 
-	o_build_syms(img, sec_text, sec_rodata, sec_data, sec_bss);
+	o_build_syms(img, sec_text, sec_rodata, sec_drro, sec_data, sec_bss);
 
 	var text_off i64 = 64;
 	var rodata_off i64 = (text_off + img.code.n + 7) & ~7;
+	var hdr_off i64 = 0;
+	if (has_rr) { hdr_off = img.str_off[img.strs.id]; }
 	var data_off i64 = (rodata_off + img.rodata.n + 7) & ~7;
 	var bss_off i64 = (data_off + img.data.n + 7) & ~7;
 	var relatext_off i64 = (bss_off + 7) & ~7;
 	var n_rt i64 = o_rela_count(img.relocs);
 	var n_rr i64 = 0;
 	if (has_rr) { n_rr = o_rela_count(img.rodata_relocs); }
-	var relaro_off i64 = relatext_off + n_rt * 24;
-	var symtab_off i64 = relaro_off + n_rr * 24;
+	var reladrro_off i64 = relatext_off + n_rt * 24;
+	var symtab_off i64 = reladrro_off + n_rr * 24;
 
 	// strtab and shstrtab first, so the offsets are known.
 	var strtab Buf;
@@ -393,11 +424,13 @@ fn write_object(path str, img *Image) {
 	var n_text = shstr.n;
 	o_str_bytes(&shstr, ".text");
 	var n_rodata = shstr.n; o_str_bytes(&shstr, ".rodata");
+	var n_drro = shstr.n;
+	if (has_rr) { o_str_bytes(&shstr, ".data.rel.ro"); }
 	var n_data = shstr.n;   o_str_bytes(&shstr, ".data");
 	var n_bss = shstr.n;    o_str_bytes(&shstr, ".bss");
 	var n_relatext = shstr.n; o_str_bytes(&shstr, ".rela.text");
-	var n_relaro = shstr.n;
-	if (has_rr) { o_str_bytes(&shstr, ".rela.rodata"); }
+	var n_reladrro = shstr.n;
+	if (has_rr) { o_str_bytes(&shstr, ".rela.data.rel.ro"); }
 	var n_symtab = shstr.n; o_str_bytes(&shstr, ".symtab");
 	var n_strtab = shstr.n; o_str_bytes(&shstr, ".strtab");
 	var n_shstr = shstr.n;  o_str_bytes(&shstr, ".shstrtab");
@@ -428,7 +461,7 @@ fn write_object(path str, img *Image) {
 	buf_u16(&f, 0);
 	buf_u16(&f, 0);
 	buf_u16(&f, 64);
-	var nsh int = 10;
+	var nsh int = 11;
 	if (!has_rr) { nsh = 9; }
 	buf_u16(&f, nsh);
 	buf_u16(&f, sec_shstr);
@@ -442,10 +475,10 @@ fn write_object(path str, img *Image) {
 	while (f.n < relatext_off) { buf_u8(&f, 0); }
 
 	var r *Reloc = img.relocs;
-	while (r as i64 != 0) { o_rela_rec(&f, r, img); r = r.next; }
-	while (f.n < relaro_off) { buf_u8(&f, 0); }
+	while (r as i64 != 0) { o_rela_rec(&f, r, img, 0); r = r.next; }
+	while (f.n < reladrro_off) { buf_u8(&f, 0); }
 	r = img.rodata_relocs;
-	while (r as i64 != 0) { o_rela_rec(&f, r, img); r = r.next; }
+	while (r as i64 != 0) { o_rela_rec(&f, r, img, hdr_off); r = r.next; }
 	while (f.n < symtab_off) { buf_u8(&f, 0); }
 	var si int = 0;
 	while (si < o_nsyms) { o_sym_rec(&f, si); si = si + 1; }
@@ -469,8 +502,13 @@ fn write_object(path str, img *Image) {
 	a.name = n_text; a.off = text_off; a.size = img.code.n; a.align = 16;
 	o_shdr(&f, &a);
 	a.typ = SHT_PROGBITS; a.flags = SHF_ALLOC;
-	a.name = n_rodata; a.off = rodata_off; a.size = img.rodata.n; a.align = 8;
+	a.name = n_rodata; a.off = rodata_off; a.size = hdr_off; a.align = 8;
 	o_shdr(&f, &a);
+	if (has_rr) {
+		a.typ = SHT_PROGBITS; a.flags = SHF_ALLOC | SHF_WRITE;
+		a.name = n_drro; a.off = rodata_off + hdr_off; a.size = img.rodata.n - hdr_off; a.align = 8;
+		o_shdr(&f, &a);
+	}
 	a.typ = SHT_PROGBITS; a.flags = SHF_ALLOC | SHF_WRITE;
 	a.name = n_data; a.off = data_off; a.size = img.data.n; a.align = 8;
 	o_shdr(&f, &a);
@@ -482,7 +520,7 @@ fn write_object(path str, img *Image) {
 	o_shdr(&f, &a);
 	if (has_rr) {
 		a.typ = SHT_RELA;
-		a.name = n_relaro; a.off = relaro_off; a.size = n_rr * 24; a.link = sec_symtab; a.info = sec_rodata;
+		a.name = n_reladrro; a.off = reladrro_off; a.size = n_rr * 24; a.link = sec_symtab; a.info = sec_drro;
 		o_shdr(&f, &a);
 	}
 	a.typ = SHT_SYMTAB; a.flags = 0;
