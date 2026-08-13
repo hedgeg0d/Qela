@@ -46,6 +46,7 @@ examples as you go.
 20. [The compiler as a tool](#20-the-compiler-as-a-tool)
 21. [Raw machine code](#21-raw-machine-code)
 22. [Where to look next](#22-where-to-look-next)
+23. [Compiler flags reference](#23-compiler-flags-reference)
 
 ---
 
@@ -795,6 +796,24 @@ The standard library is deliberately small — each module is a few dozen to a
 couple of hundred lines of Qela and you can read the source with
 `qela --dump-std io.qela` or in `std/`.
 
+### The ones you will use most
+
+| task | reach for |
+|---|---|
+| print a string | `write_str(STDOUT, "..." )` from `std/sys.qela` |
+| print a number / anything | string interpolation `"x = ${x}"` (auto-imports `std/fmt.qela`) |
+| print to stderr | `eprint("...")` from `std/sys.qela` |
+| read a whole file | `read_file(path)` → `str` |
+| read a line from stdin | `read_line()` → `str`, `""` at EOF |
+| build a string / binary data | `Buf` + `buf_u8` / `buf_bytes` / `buf_str` |
+| growable array of anything | `Vec(T)`: `vec_init`, `vec_push`, `vec_get`, `vec_view` |
+| dictionary | `Map`: `map_put`, `map_get` (keys `str`, values `*u8`) |
+| list of pointers | `List`: `list_push`, `list_get` |
+| random number | `rand_range(lo, hi)` in `[lo, hi)` |
+| sort `i64`s | `sort_i64(slice, 0, n-1)` |
+| allocate | `arena_alloc(size, align)` — never frees |
+| object lifetimes that are not stack-shaped | `gc_alloc`, `gc_collect` |
+
 ### sys — raw syscalls
 
 `std/sys.qela`. Constants for syscall numbers (`SYS_READ`, `SYS_WRITE`,
@@ -1186,3 +1205,66 @@ fn naked start() {
   inside. Relevant only if you start hacking on the compiler.
 - The standard library itself, `std/` (or `qela --dump-std`): 15 small
   files, all of it readable Qela.
+
+## 23. Compiler flags reference
+
+The compiler is one binary; the subcommands (`run`, `test`, `fmt`, `repl`,
+`.`), `--lsp` and `--dump-std` are described in sections 3 and 20. This is
+the rest of the command line, flag by flag.
+
+### Output
+
+| flag | meaning |
+|---|---|
+| *(no input flag)* | compile `file.qela` to a static executable |
+| `-o <file>` | output path; default is the input name without `.qela` |
+| `-` | read the source from stdin (as `<stdin>`) |
+
+```sh
+qela hello.qela -o hello && ./hello
+echo 'fn main() int { return 7; }' | qela - -o /tmp/seven && /tmp/seven
+```
+
+### Debugging
+
+| flag | meaning |
+|---|---|
+| `-g` | DWARF line info and a symbol table: `gdb` steps through the `.qela` source and names frames. Adds real ELF section headers, so `objdump -d` disassembles too — plain compiles ship no section headers at all and objdump finds nothing to show |
+| `--backtrace` | print the function call chain on panic. Off by default on plain compiles (the deterministic output the bootstrap gate compares); `qela run` always sets it |
+
+```sh
+qela crash.qela -g          # then: gdb ./crash
+qela crash.qela --backtrace # panic names the frames
+qela run crash.qela         # same, always on
+```
+
+### Runtime checks
+
+| flag | meaning |
+|---|---|
+| `--no-bounds-checks` | drop every runtime index check from the output. Smaller and faster, and a bad index becomes memory garbage instead of an abort — use only after the checked build is proven |
+
+### Diagnostics
+
+| flag | meaning |
+|---|---|
+| `--no-warn` | suppress warnings (unused variable, shadowed name) |
+| `--color=auto\|always\|never` | coloured diagnostics; `auto` is a tty and `NO_COLOR` unset |
+| `-h`, `--help` | the full usage text |
+
+```sh
+qela w.qela --no-warn         # build with warnings silenced
+qela w.qela --color=never     # plain output for a pipe or a log
+qela -h
+```
+
+### Worth remembering
+
+- The default build is the *smallest* one: no section headers, no debug
+  info. Add `-g` only when you need gdb or objdump.
+- These flags belong to the plain-compile path, which `qela .` also uses, so
+  `qela . -o out` works. `qela run` and `qela test` do **not** take them:
+  every argument after the input file goes to the program, not the compiler
+  (`qela run a.qela --no-bounds-checks` would hand the flag to `a` itself).
+- `--dump-std <module>` prints a standard module's source — the best way to
+  see exactly what a std function does.
