@@ -15,7 +15,9 @@ Qela is a compiled systems language for x86-64 Linux:
   is why there is no `interface`, no exceptions, and why the standard library
   is a handful of small files. Floats are the exception that proves the rule:
   `f32`/`f64` cost no calling convention — a float is raw bits in an ordinary
-  register, with SSE only at the instant of an operation.
+  register, with SSE only at the instant of an operation. On the `extern`
+  boundary the compiler marshals scalar floats into the SysV XMM registers,
+  so floats cross into C directly.
 - **Memory is an arena by default**, with a scoped `arena_mark`/`arena_reset`
   rewind, a K&R `std/heap.qela` malloc/free/realloc for blocks that come back,
   and an optional conservative garbage collector for programs whose lifetimes
@@ -246,7 +248,11 @@ var half f32 = a as f32;    // f64 -> f32
 
 Inside, a float is raw bits in an ordinary register; SSE registers appear only
 for the moment of an operation, so parameters, returns, struct fields and
-arrays work like any 4- or 8-byte value. Interpolation prints floats
+arrays work like any 4- or 8-byte value. (On the `extern` boundary — a call
+to or from a C function — scalar floats marshal into the SysV XMM registers
+instead, so `f32`/`f64` arguments and results cross into C directly; an
+extern function whose parameters would spill to the stack is a compile
+error.) Interpolation prints floats
 (`"${a}"` → `1.5`). Floats are not comptime constants, subnormal literals
 flush to zero, and printing rounds half-up rather than half-to-even — fine for
 games and numerics, not a libc.
@@ -591,7 +597,14 @@ undefined symbol for the linker to resolve; `extern fn f(a i64) i64 { ... }`
 to the object). `str` crosses the ABI
 as a `{ptr, len}` pair — a two-word C struct; aggregates over 16 bytes pass
 by pointer as always, and struct layout is natural order, so a Qela `struct`
-and the matching C `struct` alias each other. See `qela -c` in §20.
+and the matching C `struct` alias each other. A **scalar float** argument or
+result crosses in the SysV XMM register, not the GPR it lives in at home: the
+compiler marshals float arguments into `xmm0` and up at the call site,
+re-stages incoming floats out of XMM on the callee side, and returns a float
+result through `xmm0`. So `extern fn GetFrameTime() f32;` and `extern fn
+DrawCircle(x int, y int, r f32, c Color) void;` call raylib directly. An
+extern function whose parameters would spill to the stack is rejected (the
+marshalling is register-only). See `qela -c` in §20.
 
 ## 10. Pointers and memory
 

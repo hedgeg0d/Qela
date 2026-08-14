@@ -1,0 +1,24 @@
+// expect-exit: 0
+// stage1-only
+// Scalar floats cross the extern boundary in xmm registers (SysV), not in
+// the GPRs Qela uses internally. A body-ful extern function is the C-facing
+// shape: its parameters are staged from the SysV registers and its float
+// result goes back through xmm0. These calls go through exactly the same
+// marshalled path a call to C uses, so a float value corrupted anywhere in
+// it (wrong xmm index, a clobbered incoming register, a forgotten result
+// move) shows up as a wrong exit code.
+extern fn mix(i i64, x f32, j i64, y f64) f64 {
+	return i as f64 + x as f64 + j as f64 + y;
+}
+extern fn f32ret(x f32) f32 {
+	return x * (2.0 as f32);
+}
+fn main() int {
+	var r f64 = mix(1, 2.5, 3, 4.5);
+	if (r != 11.0) { return 1; }
+	var q f32 = f32ret(2.5);
+	if (q != 5.0) { return 2; }
+	var s f32 = f32ret(mix(0, 1.5, 0, 0.5) as f32);
+	if (s != 4.0) { return 3; }
+	return 0;
+}
