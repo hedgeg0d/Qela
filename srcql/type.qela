@@ -81,6 +81,7 @@ fn fn_type_new(ret *Type) *Type {
 // called through a generic register-only path, so anything that would spill
 // (str, an aggregate, a >8-byte value) is rejected here instead.
 fn func_type_of(f *Func) *Type {
+	if (f.ret as i64 == 0) { f.ret = infer_lambda_ret(f); }
 	var t *Type = fn_type_new(f.ret);
 	var head Member;
 	var tail *Member = &head;
@@ -99,6 +100,41 @@ fn func_type_of(f *Func) *Type {
 	}
 	t.members = head.next;
 	return t;
+}
+
+// A lambda has no explicit return type, so it is inferred from the body's
+// returns. The expressions are typed here, before the body walk; the walk
+// re-types them, which is harmless. Runs before type_ret sees the body, so
+// cur_fn_typing.ret is never null when a return is checked.
+fn lambda_collect(n *Node, out **Type) {
+	if (n as i64 == 0) { return; }
+	if (n.kind == ND_RET && n.lhs as i64 != 0) {
+		add_type(n.lhs);
+		var t *Type = n.lhs.ty;
+		if (*out as i64 == 0) { *out = t; }
+		else if (!same_type(*out, t)) {
+			emsg("lambda returns values of different types"); efail(n.pos);
+		}
+		return;
+	}
+	lambda_collect(n.lhs, out);
+	lambda_collect(n.rhs, out);
+	lambda_collect(n.cond, out);
+	lambda_collect(n.then, out);
+	lambda_collect(n.els, out);
+	lambda_collect(n.init, out);
+	lambda_collect(n.step, out);
+	lambda_collect(n.body, out);
+	var a *Node = n.args;
+	while (a as i64 != 0) { lambda_collect(a, out); a = a.next; }
+	lambda_collect(n.next, out);
+}
+
+fn infer_lambda_ret(f *Func) *Type {
+	var found *Type = 0 as *Type;
+	lambda_collect(f.body, &found);
+	if (found as i64 == 0) { return ty_void; }
+	return found;
 }
 
 fn type_array(base *Type, len i64) *Type {
@@ -757,6 +793,7 @@ fn monomorphize_call(n *Node, f *Func) {
 fn type_func(f *Func) {
 	type_init();
 	cur_fn_typing = f;
+	if (f.ret as i64 == 0) { f.ret = infer_lambda_ret(f); }
 	if (is_aggregate(f.ret) && f.ret.size > 16) {
 		f.ret_slot = alloc_temp(type_ptr(f.ret));
 	}
