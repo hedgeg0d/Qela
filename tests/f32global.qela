@@ -1,0 +1,12 @@
+// expect-exit: 58
+// stage1-only
+// Float globals: the stored constant is the f64 bit pattern, which must be
+// narrowed to f32 for a 4-byte slot (otherwise the low half of the pattern
+// lands in the slot and the global reads 0.0), and a negated float literal
+// must flip the IEEE sign bit, not two's-complement the bits.
+var G f32 = 900.0;
+var N f32 = -340.0;
+var D f64 = 2.5;
+fn main() int {
+	return (G / 10.0 as f32) as i64 as int + (N / 10.0 as f32) as i64 as int + (D as i64 as int);
+}
