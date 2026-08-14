@@ -490,6 +490,9 @@ fn alloc_temp(ty *Type) *Var {
 }
 
 fn to_value(n *Node) *Node {
+	if (n.ty.kind == TY_TYPE) {
+		error_at(n.pos, "a type name cannot be used as a value here");
+	}
 	if (n.ty.kind == TY_ARRAY) { return cast_to(n, decayed(n.ty)); }
 	return n;
 }
