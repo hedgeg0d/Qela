@@ -196,6 +196,28 @@ loop that reboxes a different type every pass -- a leak would balloon the
 heap, and a wrong free order would hang or crash well before it
 finishes; it runs in ~40 ms.
 
+**Scalar float marshalling on the extern boundary (2026-08-05).** Floats
+now cross `extern` directly. Qela computes with floats as raw bits in
+integer registers, but a call to (or from) a C-facing function goes
+through the SysV convention: float arguments land in `xmm0` and up with
+their own counter, integer arguments keep the GPRs with their own, and a
+float result returns in `xmm0`. On the callee side `gen_extern_params`
+re-stages incoming SysV integer registers from the stack (pushed all at
+once so later float loads cannot clobber them) and pulls floats out of
+XMM into their Qela word slots; the epilogue pushes a float result from
+RAX back into `xmm0`. The marshalling applies to every call to an
+`extern`-marked function, whether it has a body or not, so the same code
+serves both crossing directions. The new `gpr_to_xmm`/`xmm_to_gpr`
+helpers carry a correct REX prefix for `r8`/`r9` (the older float moves
+never saw a register that high). SysV marshalling is register-only: a
+parameter that would spill is a compile error in `parse.qela` ("an
+extern function takes at most six register words"), and indirect calls
+through function pointers and aggregate floats (`Vector2` and friends)
+are not marshalled. Pinned by `tests/externfloat.qela` and
+`tests/externfloat_reject.qela`; the crossing is verified against gcc in
+both directions. `examples/flappy/` now calls `GetFrameTime` and
+`DrawCircle` directly and `glue.c` is gone.
+
 **Float global initializers (2026-08-05).** Two constants bugs, both found
 while writing the raylib example (`examples/flappy/`): an `f32` global
 initializer stored the *f64* bit pattern in the 4-byte slot — the low half
@@ -209,12 +231,12 @@ bootstrap subset has no float, and subnormal doubles are below the f32
 range anyway, so they underflow to zero), and `eval_const` mirrors
 `opt.qela`'s sign-flip for float negation. Pinned by
 `tests/f32global.qela` (`// stage1-only`). `examples/flappy/` — Flappy
-Bird against raylib, `-c` + `gcc -lraylib`, with a two-function C glue for
-the float calls (Qela keeps floats in GPRs, SysV wants XMM; everything
-else — ints, pointers, `bool`, `str` as `const char*`, `Color` by value —
-crosses directly). Verified headless by driving `update()` with stub
-externs, and on the display by a `TakeScreenshot` of frame 30 (sky,
-ground, green strip, yellow bird, score all present).
+Bird against raylib, `-c` + `gcc -lraylib`, everything crossing directly
+now that scalar floats marshal to SysV XMM registers (ints, pointers,
+`bool`, `str` as `const char*`, `Color` by value, and the floats of
+`GetFrameTime` and `DrawCircle`). Verified headless by driving
+`update()` with stub externs, and on the display by a `TakeScreenshot` of
+frame 30 (sky, ground, green strip, yellow bird, score all present).
 
 **C interop, first cut (2026-08-04).** `extern fn` declares a function whose
 body lives elsewhere, and `qela -c file.qela -o file.o` emits a relocatable
