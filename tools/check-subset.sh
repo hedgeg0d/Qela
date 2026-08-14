@@ -14,14 +14,46 @@ strip() {
 	sed -e 's|//.*||' -e 's|"[^"]*"|""|g' "$1"
 }
 
+# The subset binds whatever stage1 is built from: srcql/ plus the std modules it
+# imports, directly or through another. The rest of std/ is compiled by stage1
+# itself and may use the whole language.
+boot_std=$(grep -ho 'import "\.\./std/[A-Za-z_0-9]*\.qela"' srcql/*.qela |
+	sed 's|.*/std/||;s|\.qela"||' | sort -u | tr '\n' ' ')
+changed=1
+while [ "$changed" = 1 ]; do
+	changed=0
+	for m in $boot_std; do
+		deps=$(grep -ho 'import "[A-Za-z_0-9]*\.qela"' "std/$m.qela" 2>/dev/null |
+			sed 's|import "||;s|\.qela"||')
+		for d in $deps; do
+			case " $boot_std " in
+			*" $d "*) ;;
+			*) boot_std="$boot_std $d "; changed=1 ;;
+			esac
+		done
+	done
+done
+
+in_bootstrap() {
+	case "$1" in
+	srcql/*) return 0 ;;
+	esac
+	case " $boot_std " in
+	*" $(basename "$1" .qela) "*) return 0 ;;
+	esac
+	return 1
+}
+
 for f in srcql/*.qela std/*.qela; do
 	[ -e "$f" ] || continue
 
-	for kw in comptime match defer; do
-		if strip "$f" | grep -qw "$kw"; then
-			report "$f:" "uses '$kw', forbidden in stage1 sources"
-		fi
-	done
+	if in_bootstrap "$f"; then
+		for kw in comptime match defer; do
+			if strip "$f" | grep -qw "$kw"; then
+				report "$f:" "uses '$kw', forbidden in stage1 sources"
+			fi
+		done
+	fi
 
 	case "$f" in
 	std/*) ;;

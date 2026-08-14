@@ -1,0 +1,69 @@
+// expect-exit: 42
+// stage1-only
+// Parameterized types: instantiation, use inside a generic function where the
+// argument is still a variable, self-reference, and inference of the type
+// argument from the value arguments.
+struct Pair(T) { a T, b T, }
+struct Node(T) { next *Node(T), v T, }
+struct Map(K, V) { k K, v V, }
+enum Opt(T) { None, Some(T), }
+
+fn mk(comptime T: type, x T, y T) Pair(T) {
+	var p Pair(T);
+	p.a = x;
+	p.b = y;
+	return p;
+}
+
+fn first(comptime T: type, p *Pair(T)) T { return p.a; }
+
+fn total(comptime T: type, head *Node(T)) T {
+	var sum T;
+	var it *Node(T) = head;
+	while (it as i64 != 0) {
+		sum = sum + it.v;
+		it = it.next;
+	}
+	return sum;
+}
+
+fn main() int {
+	// Layout follows the argument, not the variable.
+	if (sizeof(Pair(u8)) != 2) { return 1; }
+	if (sizeof(Pair(i64)) != 16) { return 2; }
+	if (sizeof(Map(u8, i64)) != 16) { return 3; }
+
+	var p Pair(u8) = mk(u8, 3, 4);
+	if ((p.a as i64) + (p.b as i64) != 7) { return 4; }
+
+	// The type argument is inferred here.
+	if ((first(&p) as i64) != 3) { return 5; }
+	var q Pair(i64) = mk(i64, 11, 22);
+	if (first(&q) != 11) { return 6; }
+
+	var c Node(i64);
+	var b Node(i64);
+	var a Node(i64);
+	c.v = 3; c.next = 0 as *Node(i64);
+	b.v = 2; b.next = &c;
+	a.v = 1; a.next = &b;
+	if (total(&a) != 6) { return 7; }
+
+	var o Opt(i64) = Opt(i64).Some(9);
+	match (o) {
+		Some(v) => { if (v != 9) { return 8; } }
+		None => { return 9; }
+	}
+
+	var e Opt(u8) = Opt(u8).None;
+	match (e) {
+		Some(v) => { return 10; }
+		None => { }
+	}
+
+	var m Map(u8, i64);
+	m.k = 7;
+	m.v = 1000;
+	if ((m.k as i64) + m.v != 1007) { return 11; }
+	return 42;
+}
