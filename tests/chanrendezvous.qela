@@ -1,0 +1,43 @@
+// stage1-only
+// expect-exit: 42
+// An unbuffered channel hands a value straight across: the sender blocks
+// until the receiver takes it, and main itself takes part as a receiver.
+import "std/chan.qela";
+
+var ch Chan(i64);
+var got i64 = 0;
+
+fn producer() {
+	ch <- 10;
+	ch <- 20;
+}
+
+var ch2 Chan(i64);
+var total i64 = 0;
+
+fn talker(n i64, base i64) {
+	var i i64 = 0;
+	while (i < n) { ch2 <- base + i; i = i + 1; }
+}
+
+fn listener(n i64) {
+	var i i64 = 0;
+	while (i < n) { total = total + <-ch2; i = i + 1; }
+}
+
+fn main() int {
+	chan_init(&ch, 0);
+	spawn producer();
+	got = <-ch;
+	got = got + <-ch;
+	coro_run_all();
+	if (got != 30) { return 1; }
+
+	chan_init(&ch2, 0);
+	spawn talker(4, 1);
+	spawn talker(3, 100);
+	spawn listener(7);
+	coro_run_all();
+	if (total != 313) { return 2; }
+	return 42;
+}
