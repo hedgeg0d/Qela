@@ -1,0 +1,24 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: 5
+// expect-out: hello
+// expect-out: 1 2
+// The runtime-checked box: a `~` local can be reassigned across unrelated
+// types, and `as` reads it back out with a tag check. No arithmetic on the
+// boxed value itself -- it has to be cast out first.
+import "std/io.qela";
+
+struct Point { x i64, y i64 }
+
+fn main() int {
+	var ~n = 5;
+	write_str(STDOUT, "${n as i64}\n");
+
+	n = "hello";
+	write_str(STDOUT, "${n as str}\n");
+
+	var ~p = Point{x: 1, y: 2};
+	var q Point = p as Point;
+	write_str(STDOUT, "${q.x} ${q.y}\n");
+	return 0;
+}
