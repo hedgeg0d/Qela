@@ -93,6 +93,7 @@ is larger — see `STATUS.md`.
 | `match` | would force the AST to be modelled as enums; use an `int` kind and `if` chains |
 | `defer` | nothing to unwind, all memory comes from the arena |
 | `syscall(...)` outside `std/` | system calls go through `std/sys.qela` |
+| `asm(...)` | a user-facing feature for now, not leaned on by the compiler's own sources |
 | global aggregates with an initializer | stage0 cannot emit them; fill tables at startup |
 | more than 6 parameters | pass a context struct by pointer |
 

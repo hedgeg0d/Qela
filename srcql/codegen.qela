@@ -1511,6 +1511,11 @@ fn gen_expr(n *Node) {
 		b1(0x0f); b1(0x05);
 		return;
 	}
+	if (k == ND_ASM) {
+		var a *Node = n.args;
+		while (a as i64 != 0) { b1(a.val); a = a.next; }
+		return;
+	}
 	if (k == ND_FUNCADDR) { add_funcaddr(n.name, n.pos); return; }
 	if (k == ND_CALL) {
 		if (str_eq(n.name, "coro_switch")) { gen_coro_switch(n); return; }
