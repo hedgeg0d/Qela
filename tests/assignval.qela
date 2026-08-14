@@ -1,0 +1,22 @@
+// expect-exit: 42
+// Assignment and compound assignment are expressions. Their value has to
+// survive, so the statement-only fast paths must not fire here.
+fn sink(a i64) i64 { return a; }
+
+fn main() int {
+	var x i64 = 0;
+	if (sink(x = 5) != 5) { return 1; }
+	if (sink(x += 5) != 10) { return 2; }
+	if (sink(x -= 3) != 7) { return 3; }
+	if (sink(x |= 8) != 15) { return 4; }
+	if (sink(x &= 12) != 12) { return 5; }
+	if (sink(x ^= 5) != 9) { return 6; }
+	if (x != 9) { return 7; }
+
+	// the same shapes as statements, where the fast paths do fire
+	var w i64 = 0;
+	w = 5;
+	w += 40;
+	w -= 3;
+	return w as int;
+}
