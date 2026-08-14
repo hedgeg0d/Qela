@@ -67,6 +67,40 @@ fn type_new_var(name str) *Type {
 	return t;
 }
 
+// A function type: the return type in base, the parameters as a Member list
+// (name unused). size/align are the pointer that carries the address.
+fn fn_type_new(ret *Type) *Type {
+	type_init();
+	var t *Type = type_alloc();
+	*t = Type{kind: TY_FUNC, size: 8, align: 8, is_unsigned: true, base: ret};
+	return t;
+}
+
+// The function type for an existing Func, read off its parameter slots. Only
+// one-word parameters are representable: a function stored in a variable is
+// called through a generic register-only path, so anything that would spill
+// (str, an aggregate, a >8-byte value) is rejected here instead.
+fn func_type_of(f *Func) *Type {
+	var t *Type = fn_type_new(f.ret);
+	var head Member;
+	var tail *Member = &head;
+	var i int = 0;
+	while (i < f.nparams) {
+		var pt *Type = func_param(f, i).ty;
+		if (pt.size > 8) {
+			emsg("function '"); emsg(f.name);
+			emsg("' has a parameter too wide for a function value"); efail(f.pos);
+		}
+		var m *Member = member_alloc();
+		m.ty = pt;
+		tail.next = m;
+		tail = m;
+		i = i + 1;
+	}
+	t.members = head.next;
+	return t;
+}
+
 fn type_array(base *Type, len i64) *Type {
 	var t *Type = type_alloc();
 	*t = Type{kind: TY_ARRAY, size: (base.size as i64 * len) as int,
@@ -199,6 +233,19 @@ fn type_name(t *Type) str {
 		fmt_str(&b, type_name(t.base));
 		return buf_str(&b);
 	}
+	if (t.kind == TY_FUNC) {
+		var b Buf;
+		fmt_str(&b, "fn(");
+		var m *Member = t.members;
+		while (m as i64 != 0) {
+			fmt_str(&b, type_name(m.ty));
+			if (m.next as i64 != 0) { fmt_str(&b, ", "); }
+			m = m.next;
+		}
+		fmt_str(&b, ") ");
+		fmt_str(&b, type_name(t.base));
+		return buf_str(&b);
+	}
 	return t.name;
 }
 
@@ -260,6 +307,17 @@ fn same_type(a *Type, b *Type) bool {
 		return a.len == b.len && same_type(a.base, b.base);
 	}
 	if (a.kind == TY_STRUCT || a.kind == TY_ENUM) { return false; }
+	if (a.kind == TY_FUNC) {
+		if (!same_type(a.base, b.base)) { return false; }
+		var ma *Member = a.members;
+		var mb *Member = b.members;
+		while (ma as i64 != 0 && mb as i64 != 0) {
+			if (!same_type(ma.ty, mb.ty)) { return false; }
+			ma = ma.next;
+			mb = mb.next;
+		}
+		return (ma as i64 == mb as i64);
+	}
 	return a.size == b.size && a.is_unsigned == b.is_unsigned;
 }
 
@@ -468,6 +526,26 @@ fn tsubst(t *Type) *Type {
 			return generic_instance(t.tmpl, b0, b1);
 		}
 		return t;
+	}
+	if (t.kind == TY_FUNC) {
+		var rb *Type = tsubst(t.base);
+		var changed bool = rb as i64 != t.base as i64;
+		var head Member;
+		var tail *Member = &head;
+		var m *Member = t.members;
+		while (m as i64 != 0) {
+			var mb *Type = tsubst(m.ty);
+			if (mb as i64 != m.ty as i64) { changed = true; }
+			var nm *Member = member_alloc();
+			nm.ty = mb;
+			tail.next = nm;
+			tail = nm;
+			m = m.next;
+		}
+		if (!changed) { return t; }
+		var nt *Type = fn_type_new(rb);
+		nt.members = head.next;
+		return nt;
 	}
 	return t;
 }
@@ -989,6 +1067,7 @@ fn type_intrinsic(n *Node) bool {
 
 fn type_call(n *Node) {
 	if (type_intrinsic(n)) { return; }
+	if (n.varp as i64 != 0) { type_indirect_call(n); return; }
 	var f *Func = find_func(n.name);
 	if (f as i64 == 0) {
 		emsg("undefined function '"); emsg(n.name); emsg("'"); efail(n.pos);
@@ -1042,6 +1121,55 @@ fn type_call(n *Node) {
 	n.args = head.next;
 	n.ty = f.ret;
 	if (is_aggregate(f.ret)) { n.tmp = alloc_temp(f.ret); }
+}
+
+// A call through a function-typed variable: `cb(args)` where cb's type is
+// TY_FUNC. The signature lives on the type, so there is no function-table
+// lookup and no monomorphization: add_type rejects a generic function used
+// as a value, so everything reaching here is concrete.
+fn type_indirect_call(n *Node) {
+	var ft *Type = n.varp.ty;
+	if (ft.kind != TY_FUNC) {
+		emsg("'"); emsg(n.name); emsg("' is not a function"); efail(n.pos);
+	}
+	if (is_aggregate(ft.base) && ft.base.size > 16) {
+		emsg("a function value cannot return an aggregate wider than 16 bytes");
+		efail(n.pos);
+	}
+	var np int = 0;
+	var m *Member = ft.members;
+	while (m as i64 != 0) { np = np + 1; m = m.next; }
+	if (n.nargs != np) {
+		emsg("'"); emsg(n.name); emsg("' takes a different number of arguments"); efail(n.pos);
+	}
+	var head Node;
+	var tail *Node = &head;
+	var a *Node = n.args;
+	var pm *Member = ft.members;
+	while (a as i64 != 0) {
+		var nxt *Node = a.next;
+		a.next = 0 as *Node;
+		var want *Type = pm.ty;
+		if (is_aggregate(want)) {
+			if (!same_type(want, a.ty)) {
+				emsg("argument must have type '"); emsg_ty(want); emsg("'"); efail(a.pos);
+			}
+		} else {
+			a = to_value(a);
+			reject_aggregate(a, want, a.pos);
+			if ((want.kind == TY_PTR) != (a.ty.kind == TY_PTR)) {
+				emsg("argument must have type '"); emsg_ty(want); emsg("'"); efail(a.pos);
+			}
+			reject_float_mismatch(a, want, a.pos);
+		}
+		tail.next = cast_to(a, want);
+		tail = tail.next;
+		a = nxt;
+		pm = pm.next;
+	}
+	n.args = head.next;
+	n.ty = ft.base;
+	if (is_aggregate(n.ty)) { n.tmp = alloc_temp(n.ty); }
 }
 
 fn type_syscall(n *Node) {
@@ -1145,6 +1273,24 @@ fn add_type(n *Node) {
 		return;
 	}
 	if (k == ND_VAR) { n.ty = n.varp.ty; return; }
+	if (k == ND_FUNCADDR) {
+		var f *Func = find_func(n.name);
+		if (f as i64 == 0) {
+			var sug str = did_you_mean(n.name);
+			if (sug.len > 0) {
+				eprint("hint: did you mean '");
+				eprint(sug);
+				eprint("'?\n");
+			}
+			emsg("undefined function '"); emsg(n.name); emsg("'"); efail(n.pos);
+		}
+		if (f.nct != 0) {
+			emsg("a generic function cannot be used as a value: '");
+			emsg(n.name); emsg("'"); efail(n.pos);
+		}
+		n.ty = func_type_of(f);
+		return;
+	}
 	if (k == ND_TYPEEXPR) { n.ty = ty_type; return; }
 	if (k == ND_SIZEOF) {
 		n.ty = ty_i64;
