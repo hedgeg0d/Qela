@@ -243,7 +243,7 @@ fn setcc(cc i64) {
 	b1(0x0f);
 	b1(cc);
 	modrm(3, 0, RAX);
-	b1(0x48); b1(0x0f); b1(0xb6);
+	b1(0x0f); b1(0xb6);
 	modrm(3, RAX, RAX);
 }
 
@@ -984,6 +984,14 @@ fn gen_expr(n *Node) {
 	}
 	if (k == ND_ASSIGN) {
 		if (direct_local(n.lhs)) {
+			if (n.rhs.kind == ND_NUM && n.rhs.val != 0 && fits_imm32(n.rhs.val)) {
+				var off i64 = -(n.lhs.varp.offset as i64);
+				if (off >= -128 && off <= 127) {
+					rbp_mem(0xc7, 0, off);
+					b4(n.rhs.val);
+					return;
+				}
+			}
 			gen_expr(n.rhs);
 			st_local(n.lhs.varp.offset as i64, RAX);
 			return;
