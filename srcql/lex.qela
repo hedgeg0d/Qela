@@ -60,6 +60,7 @@ fn is_keyword(src str, start i64, end i64) bool {
 		if (src.ptr[start] == 'm' && src.ptr[start+1] == 'a' && src.ptr[start+2] == 't' && src.ptr[start+3] == 'c' && src.ptr[start+4] == 'h') { return true; }
 		if (src.ptr[start] == 'd' && src.ptr[start+1] == 'e' && src.ptr[start+2] == 'f' && src.ptr[start+3] == 'e' && src.ptr[start+4] == 'r') { return true; }
 		if (src.ptr[start] == 'f' && src.ptr[start+1] == 'a' && src.ptr[start+2] == 'l' && src.ptr[start+3] == 's' && src.ptr[start+4] == 'e') { return true; }
+		if (src.ptr[start] == 's' && src.ptr[start+1] == 'u' && src.ptr[start+2] == 'p' && src.ptr[start+3] == 'e' && src.ptr[start+4] == 'r') { return true; }
 		return false;
 	}
 	if (end - start == 6) {
