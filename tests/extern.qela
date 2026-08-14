@@ -1,0 +1,9 @@
+// expect-exit: 42
+// stage1-only
+// extern declares a function the linker must resolve; the compiler emits no
+// code for it. Declaring without calling compiles in every mode - only a
+// call without -c and the linker is an error (extern.qela).
+extern fn qela_link_fail(a i64) i64;
+fn main() int {
+	return 42;
+}
