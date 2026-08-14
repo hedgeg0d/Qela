@@ -7,13 +7,13 @@ Updated 2026-08-04. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **265 864 B** |
-| S2 under `upx --lzma` (measured 2026-08-04) | 60 380 B, ~5.8% of the 1 MiB budget |
-| S2 under xz -9 (proxy for upx) | 63 532 B |
-| stage1 sources | 10 569 lines of Qela |
+| **S2 — the shipped compiler, Qela compiled by itself** | **264 480 B** |
+| S2 under `upx --lzma` (measured 2026-08-04) | 60 940 B, ~5.8% of the 1 MiB budget |
+| S2 under xz -9 (proxy for upx) | 64 088 B |
+| stage1 sources | 10 644 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
 
-Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 92-test corpus under S2, the embedded stdlib resolving outside the source tree,
+Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 94-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
 backtrace, interpolation and the repl, the compiler flags (`-g`,
 `--backtrace`, `--no-bounds-checks`, `--dump-std`), and a scripted language
@@ -43,7 +43,9 @@ explicit casts where a byte read-modify-write used to narrow silently, and
 `u64` and back.
 
 **Floats (2026-08-04).** `f32`/`f64` (aliases `float`/`double`): literals
-(`1.5`, `2.0`, `1e3`, `1.5e2`; a digit is required on both sides of the dot),
+(`1.5`, `2.0`, `5f`, `2.5e-3` — a dot needs a digit on both sides, `f`
+suffixes the value, and an exponent keeps a dot-based literal a float; a bare
+`1e3` is the integer 1000),
 `+ - * /`, unary minus, comparisons and `==`/`!=`, `as` casts in both
 directions (float-to-int truncates), parameters and returns, struct fields,
 array elements, and interpolation (`"${x}"`). The gate stayed green throughout
@@ -401,8 +403,10 @@ a settled shape rather than a moving target.
 - Parameterized types take at most two parameters, and there is no way to
   constrain one. Both limits are in `srcql/generic.qela`.
 - `genblob.py --min` to strip comments and indentation from the embedded
-  library. Measured: saves 416 bytes packed, and costs `--dump-std` its
-  readability. Not worth it at 4.1% of budget.
+  library. Comments were instead stripped at the source (2026-08-04): only
+  comments the code cannot explain itself kept in `std/*.qela`, saving
+  ~1.4 KB in S2 with `--dump-std` still readable. The `--min` indentation
+  mangling remains not worth it.
 
 ## Rules that keep holding
 
