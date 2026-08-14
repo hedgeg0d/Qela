@@ -735,7 +735,9 @@ fn parse_function(t **Token) *Func {
 			var tv *Type = type_new_var(pn);
 			type_vars[ntype_vars] = tv;
 			ntype_vars = ntype_vars + 1;
-			var v *Var = declare_var(pn, type_lookup("type"), pp);
+			// The parameter carries the type variable itself: monomorphization
+			// reads it back from here to know what to substitute.
+			var v *Var = declare_var(pn, tv, pp);
 			f.nct = f.nct + 1;
 			if (nparams == 0) { f.p0 = v; }
 			else if (nparams == 1) { f.p1 = v; }
