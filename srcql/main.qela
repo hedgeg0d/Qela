@@ -63,6 +63,8 @@ fn reset_compile() {
 	ntype_vars = 0;
 	all_funcs = 0 as *Func;
 	funcs_tail = 0 as *Func;
+	macro_list = 0 as *Macro;
+	macro_tail = 0 as *Macro;
 	named_types = 0 as *Named;
 	tmpls = 0 as *Tmpl;
 	ct_stack = 0 as *CTFrame;
