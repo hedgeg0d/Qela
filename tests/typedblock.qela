@@ -1,0 +1,46 @@
+// stage1-only
+// expect-exit: 59
+// `T { stmts...; super v; }` in expression position: an inline
+// value-producing block, desugared at parse time to a hidden function
+// called immediately in place. Outer locals it reads become hidden
+// by-value parameters the first time they're referenced (capture_get_or_add
+// in parse.qela) -- readonly by construction, since a call argument is
+// always a copy. `super` is `return` inside that hidden function.
+struct Big { x i64, y i64, z i64 }
+
+fn main() int {
+	// no capture
+	var n0 i64 = i64 { super 10; };
+
+	// capture is readonly: mutating the copy inside the block must not
+	// change the caller's variable.
+	var a i64 = 10;
+	var n1 i64 = i64 { var b i64 = a + 1; a = a + 100; super b; };
+	// n1 == 11, a is still 10 here.
+
+	// multiple captures, register-word bookkeeping like an ordinary call.
+	var x i64 = 1;
+	var y i64 = 2;
+	var z i64 = 3;
+	var n2 i64 = i64 { super x + y + z; };
+
+	// nested typed blocks: capture chains through both levels.
+	var outer i64 = 5;
+	var n3 i64 = i64 {
+		var inner i64 = i64 { super outer * 2; };
+		super inner + outer;
+	};
+
+	// a struct >16 bytes is passed by pointer in this ABI; the capture must
+	// still read-only -- confirms the by-ref path copies to a temp rather
+	// than aliasing the caller's storage.
+	var g Big = Big { x: 1, y: 2, z: 3 };
+	var n4 i64 = i64 {
+		var s i64 = g.x + g.y + g.z;
+		g.x = 999;
+		super s;
+	};
+
+	// 10 + 11 + 10 + 6 + 15 + 6 + 1 = 59
+	return (n0 + n1 + a + n2 + n3 + n4 + g.x) as int;
+}

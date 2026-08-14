@@ -1,0 +1,8 @@
+// stage1-only
+// expect-compile-error
+// `super` is `return` for a typed block's hidden function; outside one
+// there is no block to give a value to.
+fn main() int {
+	super 1;
+	return 0;
+}
