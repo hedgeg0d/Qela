@@ -7,9 +7,9 @@ Updated 2026-08-03. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **200 264 B** |
+| **S2 — the shipped compiler, Qela compiled by itself** | **205 072 B** |
 | S2 under xz -9 (proxy for upx --lzma) | ~44 KB, ~4.3% of the 1 MiB budget |
-| stage1 sources | 8 240 lines of Qela |
+| stage1 sources | 8 560 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **193%** without bounds checks (M4 gate wants ≤150%) |
 
 Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the
@@ -80,6 +80,19 @@ conversation against it.
 `srcql/` and `std/`, written in Qela, and the standard library is carried
 inside the binary — a program importing `std/io.qela` compiles in an empty
 directory with nothing but the compiler present.
+
+**`qela test`** turns the compiler into a test runner. A file (or a whole
+directory project, merged like `qela .`) declares its expectations in leading
+comments — `// expect-exit: N`, one `// expect-out:` line per expected output
+line, compared in order, and `// expect-compile-error` for tests the compiler
+must reject. The compiler compiles, runs the binary with any remaining
+arguments (stdout and stderr captured through a temp file), compares, and
+prints `ok name` / `FAIL name: detail`, exiting with the number of failures.
+The corpus files run unchanged: `qela test tests/assertfail.qela`. The lisp
+example self-tests through it: `qela test . tests.lisp`, where the checks are
+written in lisp itself. `examples/lisp/tests.lisp` carries ~60 checks; the
+interpreter gained `and`/`or` (short-circuiting) and `equal?`/`string=?`
+builtins to support them.
 
 ## Not done
 
