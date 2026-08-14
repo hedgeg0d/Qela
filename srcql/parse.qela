@@ -1137,12 +1137,28 @@ fn parse_block(t **Token) *Node {
 	var tail *Node = &head;
 	while (!tok_eq(*t, "}")) {
 		tail.next = parse_stmt(t);
+		// A `var ~n = ...` returns itself chained to a synthetic `defer`
+		// via `.next`; walk to the real end so the next statement appends
+		// after both instead of silently overwriting the defer.
+		while (tail.next.next as i64 != 0) { tail = tail.next; }
 		tail = tail.next;
 	}
 	leave_scope();
 	tok_expect(t, "}");
 	n.body = head.next;
 	return n;
+}
+
+// A single-statement body slot (an unbraced if/while/for, a match arm, the
+// body of `for x in coll`) holds exactly one node. `parse_decl` normally
+// returns exactly one, but a `var ~n = ...` chains a synthetic `defer`
+// after itself via `.next` -- safe to fold into a block right here because
+// nothing else follows in a single-statement slot.
+fn stmt_as_body(n *Node) *Node {
+	if (n.next as i64 == 0) { return n; }
+	var b *Node = new_node(ND_BLOCK, n.pos);
+	b.body = n;
+	return b;
 }
 
 fn parse_decl(t **Token) *Node {
@@ -1183,6 +1199,52 @@ fn parse_decl(t **Token) *Node {
 		var lhs *Node = new_node(ND_VAR, p);
 		lhs.varp = v;
 		n.lhs = bin_node(ND_ASSIGN, lhs, rhs, p);
+		// `var ~n = ...` chains a hidden `defer { heap_free(n.ptr); n.ptr =
+		// 0 as *u8; }` right after itself -- built from the same node kinds
+		// a hand-written defer would use, so it goes through the ordinary
+		// type-check and codegen paths unchanged. This frees whatever box
+		// is left in `n` when its declaring block/function exits, which
+		// includes every earlier iteration's box for a redeclaration
+		// re-executing in a loop (the block's defer runs at the end of
+		// every pass through it, not just the last). The nulling matters:
+		// without it, `type_assign_dyn`'s own free-before-rebox would read
+		// the same now-freed pointer on the next iteration and free it a
+		// second time -- a double free that corrupted std/heap.qela's
+		// free list and hung the next heap_free in its pointer-chasing
+		// search, caught by tests/dyn.qela's loop before this comment was
+		// written. A single-statement body slot (if/while/for without
+		// braces, a match arm) cannot hold two nodes, so callers that
+		// assign into one such slot must route the result through
+		// `stmt_as_body` to wrap the pair in a block.
+		if (is_dyn) {
+			var dv *Node = new_node(ND_VAR, p);
+			dv.varp = v;
+			var mem *Node = new_node(ND_MEMBER, p);
+			mem.lhs = dv; mem.name = "ptr";
+			var fc *Node = new_node(ND_CALL, p);
+			fc.name = "heap_free"; fc.args = mem; fc.nargs = 1;
+			var cstmt *Node = new_node(ND_EXPRSTMT, p);
+			cstmt.lhs = fc;
+
+			var dv2 *Node = new_node(ND_VAR, p);
+			dv2.varp = v;
+			var mem2 *Node = new_node(ND_MEMBER, p);
+			mem2.lhs = dv2; mem2.name = "ptr";
+			var nilptr *Node = new_node(ND_NUM, p);
+			nilptr.val = 0;
+			var nilcast *Node = new_node(ND_CAST, p);
+			nilcast.lhs = nilptr; nilcast.ty = type_ptr(ty_u8);
+			var clr *Node = bin_node(ND_ASSIGN, mem2, nilcast, p);
+			var clrstmt *Node = new_node(ND_EXPRSTMT, p);
+			clrstmt.lhs = clr;
+			cstmt.next = clrstmt;
+
+			var body *Node = new_node(ND_BLOCK, p);
+			body.body = cstmt;
+			var dstmt *Node = new_node(ND_DEFER, p);
+			dstmt.lhs = body;
+			n.next = dstmt;
+		}
 	} else {
 		if (is_dyn) { error_at(p, "a dynamic variable needs an initializer"); }
 		var z *Node = new_node(ND_ZERO, p);
@@ -1321,8 +1383,8 @@ fn parse_stmt_inner(t **Token) *Node {
 		var n *Node = new_node(ND_IF, p);
 		n.cond = parse_expr(t);
 		tok_expect(t, ")");
-		n.then = parse_stmt(t);
-		if (tok_consume(t, "else")) { n.els = parse_stmt(t); }
+		n.then = stmt_as_body(parse_stmt(t));
+		if (tok_consume(t, "else")) { n.els = stmt_as_body(parse_stmt(t)); }
 		return n;
 	}
 
@@ -1331,7 +1393,7 @@ fn parse_stmt_inner(t **Token) *Node {
 		var n *Node = new_node(ND_FOR, p);
 		n.cond = parse_expr(t);
 		tok_expect(t, ")");
-		n.body = parse_stmt(t);
+		n.body = stmt_as_body(parse_stmt(t));
 		return n;
 	}
 
@@ -1406,7 +1468,7 @@ fn parse_stmt_inner(t **Token) *Node {
 				d.lhs = bin_node(ND_ASSIGN, lv, rhs, np);
 				var blk *Node = new_node(ND_BLOCK, np);
 				blk.body = d;
-				d.next = parse_stmt(t);
+				d.next = stmt_as_body(parse_stmt(t));
 				n.body = blk;
 				leave_scope();
 				return n;
@@ -1442,7 +1504,7 @@ fn parse_stmt_inner(t **Token) *Node {
 			if (!tok_eq(*t, ")")) { n.step = parse_expr(t); }
 			tok_expect(t, ")");
 		}
-		n.body = parse_stmt(t);
+		n.body = stmt_as_body(parse_stmt(t));
 		leave_scope();
 		return n;
 	}
@@ -1450,7 +1512,7 @@ fn parse_stmt_inner(t **Token) *Node {
 	if (tok_consume(t, "defer")) {
 		var n *Node = new_node(ND_DEFER, p);
 		in_defer_body = true;
-		n.lhs = parse_stmt(t);
+		n.lhs = stmt_as_body(parse_stmt(t));
 		in_defer_body = false;
 		return n;
 	}
@@ -1486,7 +1548,7 @@ fn parse_stmt_inner(t **Token) *Node {
 				arm.args = bh.next;
 			}
 			tok_expect(t, "=>");
-			arm.body = parse_stmt(t);
+			arm.body = stmt_as_body(parse_stmt(t));
 			leave_scope();
 			tail.next = arm;
 			tail = arm;

@@ -978,11 +978,17 @@ fn type_addsub(n *Node) {
 	n.ty = n.lhs.ty;
 }
 
-// Rewrites `dynvar = expr;` into `dynvar = (tmp = expr, dyn_box(id, &tmp,
-// sizeof(expr's type)));` -- a comma of an ordinary assign and an ordinary
-// call, both built from node kinds that already exist, so codegen needs no
-// new cases at all. `dyn_box` always boxes fresh; nothing here frees a
-// value that may already sit in `dynvar` (see docs/TASKS.md).
+// Rewrites `dynvar = expr;` into
+// `dynvar = (tmp = expr, heap_free(dynvar.ptr), dyn_box(id, &tmp,
+// sizeof(expr's type)));` -- three ordinary node kinds chained by comma, so
+// codegen needs no new cases. `tmp = expr` runs first so an expression that
+// reads the old `dynvar` (through a prior `as` cast) sees valid memory
+// before it is freed; `heap_free` on the not-yet-assigned local's
+// zeroed-at-frame-entry slot is a no-op the very first time, and on every
+// later reassignment or loop re-execution of the same `var ~n = ...` frees
+// exactly the box this write is about to replace -- the local's slot is not
+// re-zeroed between iterations for the with-initializer form, so it still
+// holds the previous box's pointer.
 fn type_assign_dyn(n *Node) {
 	if (n.rhs.ty as i64 == ty_dynval_cache as i64) {
 		error_at(n.pos, "cannot assign a dynamic value directly; cast it out with 'as' first");
@@ -1013,8 +1019,27 @@ fn type_assign_dyn(n *Node) {
 	call.typed = true;
 	type_call(call);
 
+	var oldv *Node = node_alloc();
+	oldv.kind = ND_VAR; oldv.varp = n.lhs.varp; oldv.ty = ty_dynval_cache; oldv.typed = true; oldv.pos = n.pos;
+	var ptrmem *Member = ty_dynval_cache.members;
+	while (ptrmem as i64 != 0 && !str_eq(ptrmem.name, "ptr")) { ptrmem = ptrmem.next; }
+	var oldptr *Node = node_alloc();
+	oldptr.kind = ND_MEMBER; oldptr.lhs = oldv; oldptr.member = ptrmem; oldptr.ty = type_ptr(ty_u8);
+	oldptr.typed = true; oldptr.pos = n.pos;
+
+	var freecall *Node = mk_call0("heap_free");
+	freecall.args = oldptr;
+	freecall.nargs = 1;
+	freecall.pos = n.pos;
+	freecall.typed = true;
+	type_call(freecall);
+
+	var inner *Node = node_alloc();
+	inner.kind = ND_COMMA; inner.lhs = freecall; inner.rhs = call; inner.ty = call.ty;
+	inner.typed = true; inner.pos = n.pos;
+
 	var comma *Node = node_alloc();
-	comma.kind = ND_COMMA; comma.lhs = asg; comma.rhs = call; comma.ty = call.ty;
+	comma.kind = ND_COMMA; comma.lhs = asg; comma.rhs = inner; comma.ty = inner.ty;
 	comma.typed = true; comma.pos = n.pos;
 
 	n.rhs = comma;

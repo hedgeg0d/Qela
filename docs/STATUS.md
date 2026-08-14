@@ -146,17 +146,55 @@ triple `tests/dynreject.qela` (`let ~x`), `tests/dynreject_extern.qela`
 (`extern ~var`), `tests/dynreject_direct.qela` (dynamic-to-dynamic
 assignment).
 
-**Known gap, not built:** nothing frees a `~` value's heap box yet. A
-reassigned or loop-redeclared dynamic local leaks its previous box; there
-is no scope-exit or block-exit cleanup. Wiring that in correctly needs the
-parser to attach a second, synthetic statement (a `defer dyn_free(...)`)
-to a declaration it did not itself chain -- and the block-statement chain
-is built by the caller (`parse_block`'s `tail.next = parse_stmt(t)`), not
-by `parse_decl`, so this cannot be done as a safe tree-splice from within
-type-checking without risking the exact "local chain loses the append"
-class of bug the funcs_tail fix (`docs/STATUS.md`, first-class functions)
-was written to prevent. Treated for now like the arena: it leaks until the
-process exits. Real fix is scoped out in this file.
+**`~` box cleanup (2026-08-05).** The leak above is closed by two
+complementary fixes, neither of which needed the risky tree-splice from
+`type-checking` that the original gap note ruled out.
+
+`type_assign_dyn` (`srcql/type.qela`) now frees the box already sitting in
+the target, if any, before installing the new one: the rewrite grows from
+a two-part comma to `(tmp = expr, (heap_free(dynvar.ptr), dyn_box(...)))`.
+`tmp = expr` runs first, so an expression that reads the *old* value of
+the same variable through a prior `as` cast (`n = (n as i64) + 1;`) still
+sees valid memory before the free; only then is the previous box released
+and the new one installed. This alone covers every reassignment and every
+loop iteration that redeclares the same `var ~n = ...` -- the with-
+initializer form has no separate zero step (unlike a bare `var n T;`), so
+the local's frame slot still holds the previous box's pointer between
+iterations, not zero.
+
+The remaining case -- the *last* box a `~` local ever holds, freed when
+its declaring scope exits rather than at process exit -- needed the
+parser after all, but structured differently than the original note
+assumed: `parse_decl` now chains a synthetic `defer { heap_free(n.ptr);
+n.ptr = 0 as *u8; }` onto `.next` right after the declaration it belongs
+to, the same node kinds a hand-written `defer` would parse to. Two call
+sites needed fixing to carry a two-node chain safely: `parse_block`'s
+`tail.next = parse_stmt(t)` loop now walks to the real end of whatever
+comes back instead of advancing one node at a time (a one-line change,
+since a plain statement's chain is still length one), and every single-
+statement body slot (an unbraced `if`/`while`/`for`, a match arm, the
+body of `for x in coll`) routes its result through a new `stmt_as_body`
+helper that folds a two-node return into a block -- safe specifically in
+those slots because nothing else follows there. `DeferScope` turned out to
+already be block-scoped, not function-scoped (`gen_block` runs its own
+defers on every pass through the block, including a loop's back edge) --
+the "defer stretches to the end of the function" describes
+`regalloc.qela`'s conservative live-range extension for anything a defer
+reads, not the unwind semantics -- so the synthetic defer frees on every
+loop iteration for free, with no separate "free-before-rebox" hook needed
+for that case.
+
+The `n.ptr = 0` half of the defer is load-bearing, not decoration: without
+it, the two fixes double-free the same iteration's box (the defer frees it
+at the block's end, then the *next* iteration's free-before-rebox reads
+the same now-stale pointer and frees it again), corrupting
+`std/heap.qela`'s free list and hanging the next `heap_free`'s pointer-
+chasing search in an infinite loop -- caught by running `tests/dyn.qela`'s
+new loop case under a timeout, not by the type-checker. Costs +1544 B in
+S2 for both fixes together. `tests/dyn.qela` gained a 100000-iteration
+loop that reboxes a different type every pass -- a leak would balloon the
+heap, and a wrong free order would hang or crash well before it
+finishes; it runs in ~40 ms.
 
 **Float global initializers (2026-08-05).** Two constants bugs, both found
 while writing the raylib example (`examples/flappy/`): an `f32` global
