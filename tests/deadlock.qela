@@ -1,0 +1,21 @@
+// stage1-only
+// expect-exit: 1
+// expect-out: qela: deadlock, every coroutine is blocked on a channel receive
+// The waiter blocks on an empty channel, and once main joins it nobody is
+// left who could deliver: the scheduler reports the deadlock instead of
+// spinning between the blocked pair forever.
+import "std/chan.qela";
+
+var ch Chan(i64);
+
+fn waiter() {
+	var v i64 = <-ch;
+}
+
+fn main() int {
+	chan_init(&ch, 1);
+	spawn waiter();
+	coro_run_all();
+	var v i64 = <-ch;
+	return v as int;
+}
