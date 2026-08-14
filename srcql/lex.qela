@@ -388,17 +388,24 @@ fn lex(src str, base i64) *Token {
 			}
 			var intpart_end i64 = i;
 
-			var is_float bool = false;
+			// A dot needs a digit on each side (no bare "5." or ".5") to
+			// stay clear of member access and the range operator.
+			var has_dot bool = false;
 			var frac_start i64 = i;
 			var frac_len i64 = 0;
 			if (!is_hex && i < src.len && src.ptr[i] == '.' && i + 1 < src.len && is_digit(src.ptr[i+1])) {
-				is_float = true;
+				has_dot = true;
 				i = i + 1;
 				frac_start = i;
 				while (i < src.len && is_digit(src.ptr[i])) { i = i + 1; }
 				frac_len = i - frac_start;
 			}
-			var point i64 = intpart_end - start;
+
+			// An exponent alone does not commit a literal to being a float:
+			// "1e3" is the integer 1000, matching "for ints too" -- only a
+			// negative exponent, a dot or the 'f' suffix does.
+			var has_exp bool = false;
+			var exp_val i64 = 0;
 			if (!is_hex && i < src.len && (src.ptr[i] == 'e' || src.ptr[i] == 'E')) {
 				var j i64 = i + 1;
 				var eneg bool = false;
@@ -407,17 +414,30 @@ fn lex(src str, base i64) *Token {
 					j = j + 1;
 				}
 				if (j < src.len && is_digit(src.ptr[j])) {
-					is_float = true;
+					has_exp = true;
 					var e i64 = 0;
 					while (j < src.len && is_digit(src.ptr[j])) {
 						e = e * 10 + (src.ptr[j] as i64 - '0');
 						j = j + 1;
 					}
 					if (eneg) { e = -e; }
-					point = point + e;
+					exp_val = e;
 					i = j;
 				}
 			}
+
+			// The explicit 'f' suffix is the third way (with a dot and a
+			// negative exponent) to say "this is a float": "5f" == 5.0.
+			// Not followed by an identifier char, so "5for" stays illegal
+			// rather than silently eating a keyword's first letter.
+			var has_suffix bool = false;
+			if (!is_hex && i < src.len && (src.ptr[i] == 'f' || src.ptr[i] == 'F') &&
+			    (i + 1 >= src.len || !is_ident_char(src.ptr[i+1]))) {
+				has_suffix = true;
+				i = i + 1;
+			}
+
+			var is_float bool = has_dot || has_suffix || (has_exp && exp_val < 0);
 
 			if (is_float) {
 				var intlen i64 = intpart_end - start;
@@ -427,6 +447,7 @@ fn lex(src str, base i64) *Token {
 				while (k < intlen) { digits[k] = src.ptr[start + k]; k = k + 1; }
 				k = 0;
 				while (k < frac_len) { digits[intlen + k] = src.ptr[frac_start + k]; k = k + 1; }
+				var point i64 = intlen + exp_val;
 				var ft *Token = push_token(TK_FLOAT, start);
 				ft.val = dec_to_f64_bits(digits, ndigits, point);
 				var fs str;
@@ -434,6 +455,11 @@ fn lex(src str, base i64) *Token {
 				fs.len = i - start;
 				ft.text = fs;
 				continue;
+			}
+
+			if (has_exp) {
+				var p i64 = exp_val;
+				while (p > 0) { val = val * 10; p = p - 1; }
 			}
 
 			var t *Token = push_token(TK_NUM, start);
