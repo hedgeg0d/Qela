@@ -1,0 +1,20 @@
+// expect-exit: 42
+// Implicit integer conversions only widen, and only when the value cannot
+// change. unsigned->signed widening is fine; signed->unsigned and any
+// narrowing need a constant that fits. Every line here compiles under the
+// rule, and the rejected shapes live in tests/castreject_*.qela.
+fn f() i64 { return 21; }
+fn main() int {
+	var a u8 = 1;
+	var c u32 = 2;
+	var w i64 = a;           // u8 -> i64, widening, value-preserving
+	var x i64 = c;           // u32 -> i64, widening
+	var y u64 = 3;           // signed constant that fits
+	var z u32 = 4;           // narrowing constant that fits
+	var q u8 = 5;            // narrowing constant that fits
+	var i i32 = 6;
+	var j i64 = i;           // i32 -> i64
+	if (a != 0) { }          // u8 vs constant: 0 adapts to the promoted i64
+	var r i32 = f() as i32;  // runtime narrowing must be explicit
+	return w + x + (y as i64) + z + q + j + r;
+}
