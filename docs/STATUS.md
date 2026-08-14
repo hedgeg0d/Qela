@@ -7,13 +7,13 @@ Updated 2026-08-03. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **159 368 B** |
-| S2 under xz -9 (proxy for upx --lzma) | 38 700 B, ~3.7% of the 1 MiB budget |
-| stage1 sources | 6 043 lines of Qela |
-| Emitted code vs `gcc -Os` on `bench/` | **278%**, or **238%** without bounds checks (M4 gate wants ≤150%) |
+| **S2 — the shipped compiler, Qela compiled by itself** | **155 848 B** |
+| S2 under xz -9 (proxy for upx --lzma) | 37 432 B, ~3.6% of the 1 MiB budget |
+| stage1 sources | 6 299 lines of Qela |
+| Emitted code vs `gcc -Os` on `bench/` | **226%**, or **193%** without bounds checks (M4 gate wants ≤150%) |
 
 Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the
-29-test corpus under S2, the embedded stdlib resolving outside the source tree,
+30-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, and `run`/`fmt`.
 
 ## Done
@@ -47,34 +47,49 @@ directory with nothing but the compiler present.
 
 ### 1. Emitted code size (M4)
 
-278% of `gcc -Os`, down from 355%. Register allocation is **done**:
-`srcql/regalloc.qela` promotes scalar locals whose address is never taken into
-rbx and r12–r15 for their whole live range. Ranges come from a linear walk of
-the tree, loops stretch every range that touches them, and registers go to the
-most-referenced candidate first, weighted by loop depth. A function saves only
-the registers it uses, into reserved slots at the top of its own frame.
+226% of `gcc -Os`, down from 355%; 193% with bounds checks off, which is the
+number comparable to what gcc emits. `fib` is already at 153%.
 
-Instruction selection now covers: direct locals as register or memory operands,
-commutative operand swapping, in-place updates (`v op= e` and `v = v op e`),
-immediate stores through a computed address, `lea` for indexing with a promoted
-index register, comparing a load in place, and short-form branches — the unit is
-emitted repeatedly, each pass shortening the branches that turned out to be
-within a byte, until nothing more shrinks.
+Done, in `srcql/regalloc.qela` and `srcql/codegen.qela`:
+
+- **Register promotion.** Scalar locals whose address is never taken live in a
+  register for their whole live range. Ranges come from a linear walk of the
+  tree; loops stretch every range that touches them, `defer` stretches to the
+  end of the function. Registers go to the most-referenced candidate first,
+  weighted by loop depth.
+- **Leaf functions cost nothing to enter.** A function that makes no calls takes
+  r10, r11 and whichever of r8/r9 its own parameters do not occupy, so it saves
+  and restores nothing; with no frame slots left it also drops `push rbp` and
+  `leave` entirely.
+- **Instruction selection.** Direct locals as register or memory operands,
+  commutative operand swapping, in-place updates including whole accumulator
+  chains (`s = s + a - b` becomes two updates on the register), evaluation
+  straight into a destination register, immediate stores through a computed
+  address, `lea` for indexing with a promoted index, constant indexes folded and
+  checked at compile time, comparing a load in place, masks as zero-extending
+  moves, accumulator short forms.
+- **Short branches.** The unit is emitted repeatedly, each pass shortening the
+  branches that turned out to be within a byte. Bounds checks jump to a
+  trampoline at the end of their own function so they relax too.
+- **Absolute addressing.** Globals and string literals are `mov reg, imm32`
+  rather than a RIP-relative `lea`; the image lives below 4 GiB.
 
 What is left, in order of what it would buy:
 
-- **Bounds checks are ~25% of the figure** and C does not do them: `sieve` is
-  304 bytes with checks and 232 without. Each check is `cmp` plus a `jae` to the
-  panic stub at the end of the code, which is always too far for a short branch.
-  A per-function trampoline would make most of those two bytes instead of six.
-- **Loop-invariant addresses.** `lea flags(%rip),%rax` is re-emitted on every
-  access to a global array inside a loop. Folding the global's absolute address
-  into the addressing mode (`movb $1, disp32(,%r12,1)`) removes both the `lea`
-  and the add — the data fixup has to learn to patch an absolute displacement.
+- **Redundant bounds checks.** `while (i < N) { a[i] ... }` emits a compare the
+  loop condition already made. Eliminating it needs to prove `0 <= i < N` at the
+  access. The upper half is the loop condition; the lower half needs a
+  whole-function pass showing every write to `i` keeps it non-negative.
+  **Careful:** deriving that from `a + b` with both non-negative assumes the
+  addition does not wrap, and Qela defines wrapping. An unsound elision here
+  corrupts memory rather than producing a wrong number, so it needs either an
+  overflow argument or a narrower rule.
+- **Loop-invariant addresses.** The address of a global array is recomputed on
+  every access inside a loop.
 - **Common subexpressions.** Nothing is reused between statements.
-
-Reaching 150% with checks on is unlikely; without them it is in range. Decide
-deliberately which number the gate should measure.
+- **Expression temporaries** still go through `push`/`pop`. That is already the
+  smallest encoding; replacing it with registers costs bytes, so it is a speed
+  optimization, not a size one.
 
 ### 2. LSP in the same binary
 
