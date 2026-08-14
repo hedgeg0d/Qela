@@ -119,11 +119,12 @@ a settled shape rather than a moving target.
 
 ### 3. Smaller
 
-- `tools/torture.py` still generates only straight-line scalar expressions —
-  no calls, branches, structs or enums. **Every bug found in the last several
-  sessions would have slipped past it**, including the two the register
-  allocator would have been most likely to introduce. Still the cheapest way to
-  buy confidence.
+- `tools/torture.py` now generates full programs — calls with up to four
+  parameters and recursion, `if`/`else`, bounded `while` loops, 16/24/32-byte
+  structs passed and returned by value and by reference, fixed-size arrays,
+  enums with payloads and exhaustive `match` — and evaluates them in a Python
+  model that mirrors x86 semantics exactly. Clean across 2 500 generated
+  programs under both stage0 and S2.
 - Parameterized types take at most two parameters, and there is no way to
   constrain one. Both limits are in `srcql/generic.qela`.
 - `genblob.py --min` to strip comments and indentation from the embedded
