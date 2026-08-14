@@ -1,3 +1,4 @@
+// stage1-only
 // expect-exit: 0
 // expect-out: n = 42, s = hi, sum = 3
 // The "..." string interpolation: parts of any mix of literals and

@@ -1919,7 +1919,12 @@ fn gen_ret(n *Node) {
 }
 
 fn gen_for(n *Node) {
-	if (n.init as i64 != 0) { gen_stmt(n.init); }
+	// The init may be a chain (the for-in desugar hoists the collection
+	// into a hidden variable before the index init).
+	if (n.init as i64 != 0) {
+		var si *Node = n.init;
+		while (si as i64 != 0) { gen_stmt(si); si = si.next; }
+	}
 
 	var lp Loop;
 	lp.prev = cur_loop;
