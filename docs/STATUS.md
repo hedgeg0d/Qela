@@ -7,7 +7,7 @@ Updated 2026-08-04. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **263 088 B** |
+| **S2 — the shipped compiler, Qela compiled by itself** | **265 864 B** |
 | S2 under `upx --lzma` (measured 2026-08-04) | 60 380 B, ~5.8% of the 1 MiB budget |
 | S2 under xz -9 (proxy for upx) | 63 532 B |
 | stage1 sources | 10 569 lines of Qela |
@@ -266,6 +266,17 @@ boundary because `arena_alloc` never returns memory to the OS — the old
 chunk stays mapped, so rewinding into it is always valid; it does not zero
 on reset, so memory reused past a rewind reads stale bytes. Costs +1152 B
 in S2. Pinned by `tests/arenamark.qela`.
+
+**`std/heap.qela` (2026-08-04).** A real malloc/free/realloc, K&R-style: a
+circular free list of `Header{size, nextf}` blocks, first-fit search,
+neighbor coalescing on free by address adjacency, backed by its own mmap
+regions (never shares memory with `std/arena.qela` — the two allocators are
+independent). `heap_alloc`/`heap_free`/`heap_realloc`. Unlike the arena,
+individual blocks come back and get reused; unlike `std/gc.qela`, nothing
+is scanned or reclaimed automatically — a leaked block stays leaked. Not
+thread-safe (no OS threads yet). Costs +2776 B in S2.
+`tests/heap.qela` (stage1-only) covers alloc, free-and-coalesce, and
+realloc preserving contents.
 
 **Tooling.** Diagnostics with a caret; own ELF writer; DWARF line info and a
 symbol table behind `-g` (gdb steps through `.qela` and names frames);
