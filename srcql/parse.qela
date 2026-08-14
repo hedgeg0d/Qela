@@ -1380,7 +1380,7 @@ fn parse_stmt_inner(t **Token) *Node {
 
 // ── top-level ──
 
-fn parse_function(t **Token) *Func {
+fn parse_function(t **Token, is_extern bool) *Func {
 	tok_expect(t, "fn");
 	// A naked function runs without prologue or epilogue: no frame, no
 	// implicit ret. The body is asm bytes plus bare stores, so the
@@ -1395,6 +1395,7 @@ fn parse_function(t **Token) *Func {
 	f.ret = type_lookup("void");
 	f.pos = p;
 	f.naked = naked_fn;
+	f.extern = is_extern;
 	cur_func = f;
 	type_set_fn(f);
 
@@ -1461,7 +1462,16 @@ fn parse_function(t **Token) *Func {
 	tok_expect(t, ")");
 
 	if (!tok_eq(*t, "{")) { f.ret = parse_type(t); }
-	f.body = parse_block(t);
+	if (tok_eq(*t, ";")) {
+		// `extern fn f(...) t;` -- a declaration only. A plain function
+		// still has to have a body; a bare prototype needs the extern to
+		// mean "the linker supplies this symbol".
+		if (!f.extern) { error_at((*t).pos, "function declaration without a body needs 'extern'"); }
+		f.body = 0 as *Node;
+		*t = (*t).next;
+	} else {
+		f.body = parse_block(t);
+	}
 	leave_scope();
 	ntype_vars = saved_ntype_vars;
 	cur_func = 0 as *Func;
@@ -1850,7 +1860,19 @@ fn parse(tok *Token) *Unit {
 			tok = splice_import(tok, path, ipos);
 			continue;
 		}
-		var nf *Func = parse_function(&tok);
+		// `extern fn f(...) t;` -- a declaration without a body -- declares a
+		// symbol the linker must provide, and `extern fn f(...) t { ... }`
+		// exports the function's symbol for the C side. Both only matter
+		// under `-c`; a plain compile cannot resolve the former (no linker).
+		var is_ext bool = false;
+		if (tok_eq(tok, "extern")) {
+			if (tok.next.kind != TK_KW || !str_eq(tok.next.text, "fn")) {
+				error_at(tok.pos, "expected 'fn' after 'extern'");
+			}
+			is_ext = true;
+			tok = tok.next;
+		}
+		var nf *Func = parse_function(&tok, is_ext);
 		// Appending through funcs_tail keeps mid-parse instantiations
 		// (a generic call typed by a var initializer) and lambdas in the
 		// list: the local chain alone would orphan them on the next append.

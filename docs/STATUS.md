@@ -7,17 +7,51 @@ Updated 2026-08-04. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **273 224 B** |
+| **S2 — the shipped compiler, Qela compiled by itself** | **283 800 B** |
 | S2 under `upx --lzma` (measured 2026-08-04) | 61 996 B, ~6% of the 1 MiB budget |
 | S2 under xz -9 (proxy for upx) | 65 376 B |
 | stage1 sources | 10 869 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
 
-Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 98-test corpus under S2, the embedded stdlib resolving outside the source tree,
+Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 99-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
 backtrace, interpolation and the repl, the compiler flags (`-g`,
 `--backtrace`, `--no-bounds-checks`, `--dump-std`), and a scripted language
 server conversation.
+
+## Done
+
+**C interop, first cut (2026-08-04).** `extern fn` declares a function whose
+body lives elsewhere, and `qela -c file.qela -o file.o` emits a relocatable
+ELF object instead of a runnable binary. The system linker (`gcc`, `cc`, ...)
+then joins Qela and C in either direction. A Qela `.o` exports every
+function `extern fn f(...) {...}` declares with a body as `STB_GLOBAL`, and
+`main` is exported too, so a C `main` can call into a Qela library; an
+`extern fn f(...);` with no body stays an undefined global symbol for the
+linker to resolve from C. The ABI was already SysV (six argument words in
+registers, RAX for the result), so there is no marshalling. `str` crosses as
+a `{ptr, len}` pair (a two-word C struct); aggregates over 16 bytes pass by
+pointer as always. Externs only: globals, structs, `volatile` and the rest
+are not yet shared.
+
+The object is a fresh path, not the exe writer with a flag: no startup stub,
+no entry requirement, no `main` check, no absolute-address patching. Instead
+the image is described by relocations — `R_X86_64_PLT32` on calls (addend
+-4, the linker's P is the slot itself while the CPU computes from the next
+instruction; gcc emits the same), `R_X86_64_32S` for string-header and
+global references, `R_X86_64_64` for function addresses and for the `{ptr,
+len}` headers in `.rodata` (the string bytes get a `.Lstrd<N>` symbol, the
+header a `.Lstr<N>` one). `main` returning into glibc works because nothing
+in the startup stub (zeroed locals, bounds checks, panic) depends on libc.
+Built entirely in `srcql/elf.qela` (`write_object` and the `o_*` helpers,
+`o_sym_index` scans the symbol list linearly — object files are small) and
+`srcql/codegen.qela` (`push_reloc` on every reference site; the string-header
+relocations are collected *after* the pass loop because `reset_code` clears
+the relocation lists at every pass boundary). In exe mode a call to a bodyless
+extern is a clean compile error. `tests/extern.qela` pins the declare-only
+shape; the full round trip (Qela calling C and C calling Qela, strings,
+interpolation, data and bss globals, printing) was verified by hand with
+`gcc -no-pie`. Costs +10.6 KB in S2.
 
 ## Done
 
