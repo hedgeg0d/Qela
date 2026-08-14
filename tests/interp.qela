@@ -1,0 +1,13 @@
+// expect-exit: 0
+// expect-out: n = 42, s = hi, sum = 3
+// The "..." string interpolation: parts of any mix of literals and
+// expressions, nested strings, integers formatted as decimal, strings as
+// themselves.
+import "std/io.qela";
+
+fn main() int {
+	var n i64 = 42;
+	var s str = "hi";
+	write_str(STDOUT, "n = ${n}, s = ${s}, sum = ${1 + 2}\n");
+	return 0;
+}

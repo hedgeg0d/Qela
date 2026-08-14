@@ -18,6 +18,10 @@ var scope_root *Scope;
 var cur_func *Func;
 var global_vars *Var;
 
+// Set when an interpolated string is desugared; parse() imports
+// std/fmt.qela at the next top-level splice point.
+var need_fmt bool = false;
+
 var type_vars [6]*Type;
 var ntype_vars int;
 
@@ -250,8 +254,53 @@ fn parse_primary(t **Token) *Node {
 		var p i64 = (*t).pos;
 		var id int = add_str((*t).sval);
 		*t = (*t).next;
-		var n *Node = new_node(ND_STRLIT, p);
-		n.val = id as i64;
+		var lit *Node = new_node(ND_STRLIT, p);
+		lit.val = id as i64;
+		if (!tok_eq(*t, "$")) { return lit; }
+
+		// "a=${x}b": the lexer already split the string into literal parts
+		// and "$" "{" <expr> "}" runs. The parts are collected and the
+		// whole chain becomes one ND_INTERP node, rewritten to fmt calls
+		// when types are known.
+		need_fmt = true;
+		var n *Node = new_node(ND_INTERP, p);
+		var fhead Node;
+		var ftail *Node = &fhead;
+		while (true) {
+			var lp *Node = new_node(ND_STRPART, p);
+			lp.val = 1;
+			lp.lhs = lit;
+			ftail.next = lp;
+			ftail = lp;
+
+			tok_expect(t, "$");
+			tok_expect(t, "{");
+			var ep *Node = new_node(ND_STRPART, (*t).pos);
+			ep.val = 0;
+			ep.lhs = parse_assign(t);
+			ftail.next = ep;
+			ftail = ep;
+			tok_expect(t, "}");
+
+			if ((*t).kind != TK_STR) { error_at((*t).pos, "expected a string part"); }
+			var id2 int = add_str((*t).sval);
+			var p2 i64 = (*t).pos;
+			*t = (*t).next;
+			if (!tok_eq(*t, "$")) {
+				var last *Node = new_node(ND_STRLIT, p2);
+				last.val = id2 as i64;
+				var lp2 *Node = new_node(ND_STRPART, p2);
+				lp2.val = 1;
+				lp2.lhs = last;
+				ftail.next = lp2;
+				ftail = lp2;
+				break;
+			}
+			var mlit *Node = new_node(ND_STRLIT, p2);
+			mlit.val = id2 as i64;
+			lit = mlit;
+		}
+		n.args = fhead.next;
 		return n;
 	}
 	if (tok_consume(t, "true")) { return num_node(1, (*t).pos); }
@@ -666,13 +715,55 @@ fn parse_stmt(t **Token) *Node {
 	if (tok_consume(t, "for")) {
 		var n *Node = new_node(ND_FOR, p);
 		enter_scope();
-		// for i in lo..hi
+		// for i in lo..hi / for x in collection
 		if ((*t).kind == TK_IDENT && tok_eq((*t).next, "in")) {
 			var name str = (*t).text;
 			var np i64 = (*t).pos;
 			*t = (*t).next.next;
 			var lo *Node = parse_assign(t);
-			tok_expect(t, "..");
+			if (!tok_consume(t, "..")) {
+				// for x in a: iterate by value over an array, a slice or a
+				// string. The index is a hidden local; the collection is
+				// evaluated per iteration, like the bound of the range
+				// form. The body is `var x = coll[i]` prepended, which is
+				// exactly the shape the bounds elision already knows.
+				var v *Var = declare_var(name, 0 as *Type, np);
+				// The hidden index can never collide: `$` cannot appear in
+				// an identifier, only inside a string (where interpolation
+				// needs a `{` right after it anyway).
+				var hv *Var = declare_var("_$i", type_lookup("int"), np);
+				var iv *Node = new_node(ND_VAR, np);
+				iv.varp = hv;
+				var init *Node = new_node(ND_EXPRSTMT, np);
+				init.lhs = bin_node(ND_ASSIGN, iv, num_node(0, np), np);
+				n.init = init;
+				var iv2 *Node = new_node(ND_VAR, np);
+				iv2.varp = hv;
+				var ml *Node = new_node(ND_MEMBER, np);
+				ml.lhs = lo;
+				ml.name = "len";
+				n.cond = bin_node(ND_LT, iv2, ml, np);
+				var iv3 *Node = new_node(ND_VAR, np);
+				iv3.varp = hv;
+				var step *Node = bin_node(ND_OPASSIGN, iv3, num_node(1, np), np);
+				step.val = ND_ADD;
+				n.step = step;
+				var iv4 *Node = new_node(ND_VAR, np);
+				iv4.varp = hv;
+				var rhs *Node = bin_node(ND_INDEX, lo, iv4, np);
+				add_type(rhs);
+				v.ty = rhs.ty;
+				var d *Node = new_node(ND_EXPRSTMT, np);
+				var lv *Node = new_node(ND_VAR, np);
+				lv.varp = v;
+				d.lhs = bin_node(ND_ASSIGN, lv, rhs, np);
+				var blk *Node = new_node(ND_BLOCK, np);
+				blk.body = d;
+				d.next = parse_stmt(t);
+				n.body = blk;
+				leave_scope();
+				return n;
+			}
 			var hi *Node = parse_assign(t);
 			var v *Var = declare_var(name, type_lookup("int"), np);
 			var iv *Node = new_node(ND_VAR, np);
@@ -1057,11 +1148,80 @@ fn restore_type_vars(vars **Type, n int) {
 	ntype_vars = n;
 }
 
+// "dir/../std/x.qela" normalizes to "std/x.qela", so the same module
+// reached through two relative spellings dedups in the file table.
+fn path_norm(p str) str {
+	var parts [16]str;
+	var n int = 0;
+	var i i64 = 0;
+	var start i64 = 0;
+	while (i <= p.len) {
+		if (i == p.len || p.ptr[i] == '/') {
+			var part str;
+			part.ptr = p.ptr + start;
+			part.len = i - start;
+			if (part.len == 2 && part.ptr[0] == '.' && part.ptr[1] == '.') {
+				if (n > 0) { n = n - 1; }
+			} else if (!(part.len == 1 && part.ptr[0] == '.')) {
+				parts[n] = part;
+				n = n + 1;
+			}
+			start = i + 1;
+		}
+		i = i + 1;
+	}
+	var b Buf;
+	var k int = 0;
+	while (k < n) {
+		if (k > 0) { buf_u8(&b, '/'); }
+		buf_bytes(&b, parts[k].ptr, parts[k].len);
+		k = k + 1;
+	}
+	return buf_str(&b);
+}
+
+// Loads a module and splices its tokens before `tok`, unless a file of
+// that path is already in the table. Returns the new head of the stream.
+fn splice_import(tok *Token, path str, pos i64) *Token {
+	path = path_norm(path);
+	if (diag_already_imported(path)) { return tok; }
+	var isrc str;
+	if (file_exists(path)) {
+		isrc = read_file(path);
+	} else {
+		var bi int = blob_find(path);
+		if (bi < 0) {
+			emsg("cannot open "); emsg(path); efail(pos);
+		}
+		isrc = std_blob_src(bi);
+	}
+	var fid int = diag_add_file(path, isrc);
+	var ihead *Token = lex(isrc, (fid as i64) << FILE_SHIFT);
+	var itail *Token = ihead;
+	while (itail.next as i64 != 0 && itail.next.kind != TK_EOF) {
+		itail = itail.next;
+	}
+	itail.next = tok;
+	return ihead;
+}
+
 fn parse(tok *Token) *Unit {
 	enter_scope();
 	var head Func;
 	var tail *Func = &head;
-	while (tok.kind != TK_EOF) {
+	while (true) {
+		// An interpolated string was desugared somewhere in the previous
+		// top-level item; the formatting helpers are std/fmt.qela. It is
+		// imported here, at top level, so the splice cannot land inside a
+		// function body. Checked before the EOF test: a file whose last
+		// item used interpolation has no iteration left otherwise. One
+		// file of the same path already in the table (an explicit user
+		// import) makes this a no-op.
+		if (need_fmt) {
+			need_fmt = false;
+			tok = splice_import(tok, "std/fmt.qela", tok.pos);
+		}
+		if (tok.kind == TK_EOF) { break; }
 		if (tok_eq(tok, "struct")) { parse_struct(&tok); continue; }
 		if (tok_eq(tok, "enum")) { parse_enum(&tok); continue; }
 		if (tok_eq(tok, "let") || tok_eq(tok, "var")) { parse_global(&tok); continue; }
@@ -1080,27 +1240,7 @@ fn parse(tok *Token) *Unit {
 				fmt_str(&pb, raw);
 				path = buf_str(&pb);
 			}
-
-			if (!diag_already_imported(path)) {
-				var isrc str;
-				if (file_exists(path)) {
-					isrc = read_file(path);
-				} else {
-					var bi int = blob_find(path);
-					if (bi < 0) {
-						emsg("cannot open "); emsg(path); efail(ipos);
-					}
-					isrc = std_blob_src(bi);
-				}
-				var fid int = diag_add_file(path, isrc);
-				var ihead *Token = lex(isrc, (fid as i64) << FILE_SHIFT);
-				var itail *Token = ihead;
-				while (itail.next as i64 != 0 && itail.next.kind != TK_EOF) {
-					itail = itail.next;
-				}
-				itail.next = tok;
-				tok = ihead;
-			}
+			tok = splice_import(tok, path, ipos);
 			continue;
 		}
 		tail.next = parse_function(&tok);
