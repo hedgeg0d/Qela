@@ -1,0 +1,25 @@
+// stage1-only
+// expect-exit: 244
+// x.foo(args) desugars to foo(x, args) at parse time. A struct can have a
+// field and a free function share one name: `.name` with no trailing `(`
+// is always the field, `.name(` is always the call -- no ambiguity, since
+// the two only differ by the token right after the identifier.
+struct Box { val i64, }
+
+fn val(b Box) i64 {
+	return b.val + 100;
+}
+
+fn inc(b Box, n i64) Box {
+	var r Box;
+	r.val = b.val + n;
+	return r;
+}
+
+fn main() i64 {
+	var b Box;
+	b.val = 5;
+	var f i64 = b.val;
+	var c i64 = b.inc(1).inc(2).val();
+	return f * 1000 + c;
+}
