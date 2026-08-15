@@ -1,0 +1,7 @@
+// expect-compile-error
+// A constant division by zero folds at compile time; folding it into a
+// garbage value (the old behaviour) was worse than rejecting it.
+fn main() int {
+	var x = 5 / 0;
+	return 0;
+}

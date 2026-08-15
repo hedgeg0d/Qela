@@ -54,14 +54,19 @@ fn const_fold(n *Node) {
 	    n.kind == ND_SHL || n.kind == ND_SHR || n.kind == ND_EQ || n.kind == ND_NE ||
 	    n.kind == ND_LT || n.kind == ND_LE || n.kind == ND_AND || n.kind == ND_OR) {
 		const_fold(n.lhs);
+		// Short-circuit: once the left side decides an && or ||, the right
+		// side never runs at runtime, so folding it would both be wrong and
+		// (with a constant division by zero in it) reject valid programs.
+		if (n.kind == ND_AND && n.lhs.kind == ND_NUM && n.lhs.val == 0) { n.val = 0; n.kind = ND_NUM; return; }
+		if (n.kind == ND_OR && n.lhs.kind == ND_NUM && n.lhs.val != 0)  { n.val = 1; n.kind = ND_NUM; return; }
 		const_fold(n.rhs);
 		if (n.lhs.kind == ND_NUM && n.rhs.kind == ND_NUM) {
 			var a i64 = n.lhs.val; var b i64 = n.rhs.val;
 			if (n.kind == ND_ADD)    { n.val = a + b; }
 			else if (n.kind == ND_SUB)    { n.val = a - b; }
 			else if (n.kind == ND_MUL)    { n.val = a * b; }
-			else if (n.kind == ND_DIV)    { if (b != 0) { n.val = a / b; } }
-			else if (n.kind == ND_MOD)    { if (b != 0) { n.val = a % b; } }
+			else if (n.kind == ND_DIV)    { if (b == 0) { error_at(n.pos, "division by zero in a constant expression"); } n.val = a / b; }
+			else if (n.kind == ND_MOD)    { if (b == 0) { error_at(n.pos, "division by zero in a constant expression"); } n.val = a % b; }
 			else if (n.kind == ND_BITAND) { n.val = a & b; }
 			else if (n.kind == ND_BITOR)  { n.val = a | b; }
 			else if (n.kind == ND_BITXOR) { n.val = a ^ b; }
@@ -75,9 +80,7 @@ fn const_fold(n *Node) {
 			else if (n.kind == ND_OR)     { n.val = ((a != 0) || (b != 0)) as i64; }
 			n.kind = ND_NUM;
 		}
-		if (n.kind == ND_AND && n.lhs.kind == ND_NUM && n.lhs.val == 0) { n.val = 0; n.kind = ND_NUM; }
 		if (n.kind == ND_AND && n.rhs.kind == ND_NUM && n.rhs.val == 0) { n.val = 0; n.kind = ND_NUM; }
-		if (n.kind == ND_OR && n.lhs.kind == ND_NUM && n.lhs.val != 0)  { n.val = 1; n.kind = ND_NUM; }
 		if (n.kind == ND_OR && n.rhs.kind == ND_NUM && n.rhs.val != 0)  { n.val = 1; n.kind = ND_NUM; }
 		return;
 	}
@@ -86,6 +89,9 @@ fn const_fold(n *Node) {
 fn fold_body(n *Node) {
 	if (n as i64 == 0) { return; }
 	const_fold(n);
+	// A folded node is a literal now: its children were consumed (or, for
+	// a short-circuited && / ||, never evaluated) and must not be visited.
+	if (n.kind == ND_NUM) { return; }
 	fold_body(n.lhs);
 	fold_body(n.rhs);
 	fold_body(n.cond);
