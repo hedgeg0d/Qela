@@ -6,9 +6,12 @@ import "sys.qela";
 // `ch <- v` and `<-ch` desugar to chan_send and chan_recv; the element type is
 // read off the channel, so neither is written out at the call site.
 //
-// A blocked operation yields until the buffer changes. If nothing else can
-// run, no future yield can change anything either, so that is a deadlock and
-// the program says so instead of spinning.
+// A blocked operation yields until the buffer changes. Waiting is polling:
+// a blocked coroutine has to run again to notice the change, so the
+// scheduler keeps scheduling everyone. Deadlock is detected by progress: a
+// full round of the scheduler with not a single value moved anywhere means
+// no future round can move one either, and the program says so instead of
+// spinning.
 
 struct Chan(T) {
 	buf    *T,
@@ -17,6 +20,8 @@ struct Chan(T) {
 	head   i64,
 	closed bool,
 }
+
+var chan_idle i64 = 0;
 
 fn chan_init(comptime T: type, c *Chan(T), cap i64) {
 	if (cap < 1) { cap = 1; }
@@ -31,15 +36,22 @@ fn chan_len(comptime T: type, c *Chan(T)) i64 { return c.n; }
 
 fn chan_is_closed(comptime T: type, c *Chan(T)) bool { return c.closed; }
 
-fn chan_close(comptime T: type, c *Chan(T)) { c.closed = true; }
+fn chan_close(comptime T: type, c *Chan(T)) {
+	c.closed = true;
+	chan_idle = 0;
+}
+
+fn chan_die(what str) {
+	eprint("qela: deadlock, every coroutine is blocked on a channel ");
+	eprint(what);
+	eprint("\n");
+	sys_exit(1);
+}
 
 fn chan_block(what str) {
-	if (!coro_yield()) {
-		eprint("qela: deadlock, every coroutine is blocked on a channel ");
-		eprint(what);
-		eprint("\n");
-		sys_exit(1);
-	}
+	chan_idle = chan_idle + 1;
+	if (chan_idle > coro_slots() + 1) { chan_die(what); }
+	if (!coro_yield()) { chan_die(what); }
 }
 
 fn chan_send(comptime T: type, c *Chan(T), v T) {
@@ -52,6 +64,7 @@ fn chan_send(comptime T: type, c *Chan(T), v T) {
 	if (slot >= c.cap) { slot = slot - c.cap; }
 	c.buf[slot] = v;
 	c.n = c.n + 1;
+	chan_idle = 0;
 }
 
 // Returns a zeroed element once a closed channel has drained; pair it with
@@ -66,5 +79,6 @@ fn chan_recv(comptime T: type, c *Chan(T)) T {
 	c.head = c.head + 1;
 	if (c.head >= c.cap) { c.head = 0; }
 	c.n = c.n - 1;
+	chan_idle = 0;
 	return v;
 }
