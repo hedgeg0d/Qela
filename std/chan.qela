@@ -2,36 +2,36 @@ import "coro.qela";
 import "arena.qela";
 import "sys.qela";
 
-// Buffered channels over the cooperative scheduler. `ch <- v` and `<-ch`
-// desugar to chan_send and chan_recv, both of which hand control to another
-// coroutine while they cannot make progress.
+// Buffered channels of any element type, over the cooperative scheduler.
+// `ch <- v` and `<-ch` desugar to chan_send and chan_recv; the element type is
+// read off the channel, so neither is written out at the call site.
 //
 // A blocked operation yields until the buffer changes. If nothing else can
 // run, no future yield can change anything either, so that is a deadlock and
 // the program says so instead of spinning.
 
-struct Chan {
-	buf    *i64,
+struct Chan(T) {
+	buf    *T,
 	cap    i64,
 	n      i64,
 	head   i64,
 	closed bool,
 }
 
-fn chan_init(c *Chan, cap i64) {
+fn chan_init(comptime T: type, c *Chan(T), cap i64) {
 	if (cap < 1) { cap = 1; }
-	c.buf = arena_alloc(cap * 8, 8) as *i64;
+	c.buf = arena_alloc(cap * sizeof(T), 8) as *T;
 	c.cap = cap;
 	c.n = 0;
 	c.head = 0;
 	c.closed = false;
 }
 
-fn chan_len(c *Chan) i64 { return c.n; }
+fn chan_len(comptime T: type, c *Chan(T)) i64 { return c.n; }
 
-fn chan_is_closed(c *Chan) bool { return c.closed; }
+fn chan_is_closed(comptime T: type, c *Chan(T)) bool { return c.closed; }
 
-fn chan_close(c *Chan) { c.closed = true; }
+fn chan_close(comptime T: type, c *Chan(T)) { c.closed = true; }
 
 fn chan_block(what str) {
 	if (!coro_yield()) {
@@ -42,7 +42,7 @@ fn chan_block(what str) {
 	}
 }
 
-fn chan_send(c *Chan, v i64) {
+fn chan_send(comptime T: type, c *Chan(T), v T) {
 	if (c.closed) {
 		eprint("qela: send on a closed channel\n");
 		sys_exit(1);
@@ -50,20 +50,19 @@ fn chan_send(c *Chan, v i64) {
 	while (c.n == c.cap) { chan_block("send"); }
 	var slot i64 = c.head + c.n;
 	if (slot >= c.cap) { slot = slot - c.cap; }
-	var p *i64 = c.buf as *i64;
-	p[slot] = v;
+	c.buf[slot] = v;
 	c.n = c.n + 1;
 }
 
-// Returns 0 once a closed channel has drained; pair it with chan_is_closed
-// when zero is a valid value.
-fn chan_recv(c *Chan) i64 {
+// Returns a zeroed element once a closed channel has drained; pair it with
+// chan_is_closed when the zero value is also a valid one.
+fn chan_recv(comptime T: type, c *Chan(T)) T {
+	var zero T;
 	while (c.n == 0) {
-		if (c.closed) { return 0; }
+		if (c.closed) { return zero; }
 		chan_block("receive");
 	}
-	var p *i64 = c.buf as *i64;
-	var v i64 = p[c.head];
+	var v T = c.buf[c.head];
 	c.head = c.head + 1;
 	if (c.head >= c.cap) { c.head = 0; }
 	c.n = c.n - 1;
