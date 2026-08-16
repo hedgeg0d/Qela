@@ -1,46 +1,41 @@
-// expect-exit: 0
-fn id(comptime T: type, x T) T {
-	return x;
-}
-
+// expect-exit: 42
+// The type variable of a generic function has to be substituted for the
+// concrete type. While it was not, a T-typed value silently kept the 8-byte
+// size of the variable itself and overwrote its neighbours in memory.
 fn swap(comptime T: type, a *T, b *T) {
 	var tmp T = *a;
 	*a = *b;
 	*b = tmp;
 }
+struct Small { a i64, b i64, }
 
-fn set_val(comptime T: type, p *T, v T) {
-	*p = v;
-}
-
-struct Point3 {
-	x int,
-	y int,
-	z int,
-}
+fn sizeof_of(comptime T: type) i64 { return sizeof(T); }
 
 fn main() int {
-	var a i64 = id(i64, 10);
-	var b i64 = id(i64, 20);
-	swap(i64, &a, &b); // a=20, b=10
+	var arr [4]u8;
+	arr[0] = 1; arr[1] = 2; arr[2] = 3; arr[3] = 4;
+	swap(u8, &arr[0], &arr[1]);
+	if (arr[0] != 2) { return 1; }
+	if (arr[1] != 1) { return 2; }
+	if (arr[2] != 3) { return 3; }
+	if (arr[3] != 4) { return 4; }
 
-	var c u8 = id(u8, 5);
-	set_val(u8, &c, 7); // c=7
+	var w [4]i16;
+	w[0] = 300; w[1] = 1; w[2] = 2; w[3] = 3;
+	swap(i16, &w[0], &w[1]);
+	if (w[0] != 1) { return 5; }
+	if (w[1] != 300) { return 6; }
+	if (w[2] != 2) { return 7; }
 
-	var p Point3;
-	p.x = 1; p.y = 2; p.z = 3;
-	var px *int = &p.x;
-	var pz *int = &p.z;
-	swap(int, px, pz); // x=3, z=1
+	var s Small;
+	s.a = 9; s.b = 8;
+	var s2 Small;
+	s2.a = 1; s2.b = 2;
+	swap(Small, &s, &s2);
+	if (s.a != 1 || s.b != 2) { return 8; }
+	if (s2.a != 9 || s2.b != 8) { return 9; }
 
-	var sz int = sizeof(Point3); // 24
-	// comptime: factorial 5! = 1*2*3*4*5 = 120
-	var ct int = comptime {
-		var v int = 1;
-		for i in 1..6 { v *= i; }
-		return v;
-	};
-	// 20 + 10 + 7 + 30 + 20 + 10 + 24 + 120 = 241
-	var total int = (a as int) + (b as int) + (c as int) + p.x*10 + p.y*10 + p.z*10 + sz + ct;
-	return total - 241;
+	if (sizeof_of(u8) != 1) { return 10; }
+	if (sizeof_of(Small) != 16) { return 11; }
+	return 42;
 }

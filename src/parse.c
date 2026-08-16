@@ -736,7 +736,9 @@ static Func *function(Token **t) {
 			if (f->nct == 6) error_at(name->pos, "too many comptime parameters");
 			Type *tv = type_new_var(name->text);
 			type_vars[ntype_vars++] = tv;
-			Var *p = declare(name->text, ty_type, name->pos);
+			/* The parameter carries the type variable itself: monomorphization
+			 * reads it back from here to know what to substitute. */
+			Var *p = declare(name->text, tv, name->pos);
 			parse_type(t);
 			f->params[f->nparams++] = p;
 			f->nct++;
