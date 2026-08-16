@@ -5,6 +5,7 @@ import "funcs.qela";
 import "regalloc.qela";
 import "generic.qela";
 import "opt.qela";
+import "bounds.qela";
 import "../std/io.qela";
 import "std_blob.qela";
 
@@ -1107,6 +1108,7 @@ fn parse(tok *Token) *Unit {
 		if (f.nct == 0) {
 			type_func(f);
 			opt_func(f);
+			elide_bounds(f);
 			regalloc(f);
 
 			var off i64 = (f.nsaved as i64) * 8;
