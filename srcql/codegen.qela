@@ -827,11 +827,22 @@ fn arg_direct_ok(a *Node) bool {
 	return arg_leaf_ok(a.lhs) && arg_leaf_ok(a.rhs);
 }
 
-fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64) {
+// marshall is set for a call to an extern-marked function (SysV on the
+// other side): scalar float arguments land in xmm registers with their own
+// counter, and the integer arguments are packed into the GPR registers by
+// their own counter, exactly as SysV classifies them.
+fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) {
 	var dest [14]int;
 	var src [14]i64;
+	var fmm [14]int;
+	var fsz [14]int;
 	var nd int = 0;
 	var ri int = 0;
+	var xi int = 0;
+	{
+		var fi int = 0;
+		while (fi < 14) { fmm[fi] = -1; fsz[fi] = 0; fi = fi + 1; }
+	}
 
 	var av [14]i64;
 	var an int = 0;
@@ -846,8 +857,12 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64) {
 	var direct_from int = an;
 	// The direct-argument fast path assumes every argument lands in a
 	// register; a call with stack-spilled arguments always takes the slow,
-	// evaluate-then-place path instead.
-	while (!has_overflow && direct_from > 0 && arg_direct_ok(av[direct_from - 1] as *Node)) {
+	// evaluate-then-place path instead. A marshalled float argument can never
+	// take the fast path: its value has to move into an xmm register, and
+	// gen_into does not know about those.
+	while (!has_overflow && direct_from > 0 &&
+	       !(marshall && is_float((av[direct_from - 1] as *Node).ty)) &&
+	       arg_direct_ok(av[direct_from - 1] as *Node)) {
 		direct_from = direct_from - 1;
 	}
 	var ai int = 0;
@@ -926,7 +941,12 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64) {
 				continue;
 			}
 			push_reg(RAX);
-			if (first_in_rax && nd == 0) {
+			if (marshall && is_float(a.ty)) {
+				fmm[nd] = xi;
+				fsz[nd] = a.ty.size;
+				xi = xi + 1;
+				dest[nd] = RAX;
+			} else if (first_in_rax && nd == 0) {
 				dest[nd] = RAX;
 			} else {
 				if (sys) { dest[nd] = sys_reg(ri); } else { dest[nd] = call_reg(ri); }
@@ -939,7 +959,10 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64) {
 	}
 	while (nd > 0) {
 		nd = nd - 1;
-		if (src[nd] == 0) {
+		if (fmm[nd] >= 0) {
+			pop_reg(RAX);
+			gpr_to_xmm(fmm[nd], RAX, fsz[nd]);
+		} else if (src[nd] == 0) {
 			pop_reg(dest[nd]);
 		} else {
 			var sn *Node = src[nd] as *Node;
@@ -1005,6 +1028,37 @@ fn xmm_from_gpr(xmm int, gpr int, sz int) {
 fn gpr_from_xmm(gpr int, xmm int, sz int) {
 	b1(0x66);
 	if (sz == 8) { rex_w(xmm, gpr); }
+	b1(0x0f); b1(0x7e);
+	modrm(3, xmm, gpr);
+}
+
+// SysV marshalling at the extern boundary: floats cross in xmm registers
+// while Qela's own convention keeps them in integer registers. Unlike the
+// helpers above, the REX fields here are right for r8/r9 -- the originals
+// never see a register >= 8, so they get away with swapping the two.
+
+fn gpr_to_xmm(xmm int, gpr int, sz int) {
+	b1(0x66);
+	var rex i64 = 0;
+	if (sz == 8) {
+		rex = 0x48;
+		if (xmm >= 8) { rex = rex | 4; }
+		if (gpr >= 8) { rex = rex | 1; }
+		b1(rex);
+	}
+	b1(0x0f); b1(0x6e);
+	modrm(3, xmm, gpr);
+}
+
+fn xmm_to_gpr(gpr int, xmm int, sz int) {
+	b1(0x66);
+	var rex i64 = 0;
+	if (sz == 8) {
+		rex = 0x48;
+		if (xmm >= 8) { rex = rex | 4; }
+		if (gpr >= 8) { rex = rex | 1; }
+		b1(rex);
+	}
 	b1(0x0f); b1(0x7e);
 	modrm(3, xmm, gpr);
 }
@@ -1179,10 +1233,13 @@ fn gen_structlit(n *Node) {
 
 fn gen_call(n *Node) {
 	if (n.varp as i64 != 0) { gen_indirect_call(n); return; }
+	var cf *Func = find_func(n.name);
+	var marshall bool = false;
+	if (cf as i64 != 0) { marshall = cf.extern; }
 	var ret_mem bool = is_aggregate(n.ty) && n.ty.size > 16;
 	var hidden i64 = -1;
 	if (ret_mem) { hidden = n.tmp.offset as i64; }
-	gen_args(n, false, false, hidden);
+	gen_args(n, false, false, hidden, marshall);
 
 	var odd bool = (depth & 1) != 0;
 	if (odd) {
@@ -1195,6 +1252,11 @@ fn gen_call(n *Node) {
 	if (overflow_pushed > 0) {
 		alu_rax_imm_reg(0, RSP, 8 * overflow_pushed);
 		depth = depth - (overflow_pushed as int);
+	}
+	// A marshalled call's float result comes back in xmm0 (SysV), but Qela
+	// reads its own results from rax.
+	if (marshall && is_float(n.ty)) {
+		xmm_to_gpr(RAX, 0, n.ty.size);
 	}
 	if (is_aggregate(n.ty) && !ret_mem) {
 		var off i64 = n.tmp.offset as i64;
@@ -1214,7 +1276,7 @@ fn gen_indirect_call(n *Node) {
 	var ret_mem bool = is_aggregate(n.ty) && n.ty.size > 16;
 	var hidden i64 = -1;
 	if (ret_mem) { hidden = n.tmp.offset as i64; }
-	gen_args(n, false, false, hidden);
+	gen_args(n, false, false, hidden, false);
 
 	var odd bool = (depth & 1) != 0;
 	if (odd) {
@@ -1831,7 +1893,7 @@ var coro_switch_refs I64List;
 // return address that the call pushed onto whichever stack is current,
 // which is exactly how control lands back where a coroutine left off.
 fn gen_coro_switch(n *Node) {
-	gen_args(n, false, false, -1);
+	gen_args(n, false, false, -1, false);
 	b1(0xe8);
 	ilist_push(&coro_switch_refs, code.n);
 	b4(0);
@@ -1973,7 +2035,7 @@ fn gen_expr(n *Node) {
 		return;
 	}
 	if (k == ND_SYSCALL) {
-		gen_args(n, true, true, -1);
+		gen_args(n, true, true, -1, false);
 		b1(0x0f); b1(0x05);
 		return;
 	}
@@ -1994,7 +2056,7 @@ fn gen_expr(n *Node) {
 			return;
 		}
 		if (str_eq(n.name, "gc_save_regs")) {
-			gen_args(n, false, false, -1);
+			gen_args(n, false, false, -1, false);
 			b1(0x48); b1(0x89); b1(0x1f);            // mov [rdi], rbx
 			b1(0x48); b1(0x89); b1(0x6f); b1(0x08);  // mov [rdi+8], rbp
 			b1(0x4c); b1(0x89); b1(0x67); b1(0x10);  // mov [rdi+16], r12
@@ -2348,6 +2410,11 @@ fn gen_asm_operands(a *Node) {
 
 fn gen_epilogue() {
 	gen_restore();
+	// An exported extern function returns a float in xmm0 (SysV), where the
+	// body left it in rax.
+	if (gen_fn.extern && gen_fn.ret as i64 != 0 && is_float(gen_fn.ret)) {
+		gpr_to_xmm(0, RAX, gen_fn.ret.size);
+	}
 	if (!gen_frameless) { b1(0xc9); }
 	b1(0xc3);
 }
@@ -2357,6 +2424,57 @@ fn gen_restore() {
 	while (i < RA_NSAVED) {
 		var r int = ra_saved(i);
 		if (reg_used(gen_fn, r)) { ld_local(r, saved_slot(gen_fn, r)); }
+		i = i + 1;
+	}
+}
+
+// A C caller passes an exported extern function's arguments the SysV way:
+// the non-float words packed into the integer registers on their own count,
+// the floats in xmm registers on theirs. Qela reads each parameter from a
+// fixed word position, so the incoming integer registers are staged on the
+// stack first -- loading a parameter into its home (register or frame slot)
+// could otherwise clobber an argument register a later parameter is still
+// sitting in. The xmm registers are never written, so the floats just wait.
+fn gen_extern_params(f *Func) {
+	var nreg int = 0;
+	if (f.ret_slot as i64 != 0) { nreg = nreg + 1; }
+	var i int = 0;
+	while (i < f.nparams) {
+		var v *Var = func_param(f, i);
+		if (v.arg_stack) { i = i + 1; continue; }
+		if (is_float(v.ty)) { i = i + 1; continue; }
+		if (is_aggregate(v.ty) && !v.by_ref && v.ty.size > 8) { nreg = nreg + 2; }
+		else { nreg = nreg + 1; }
+		i = i + 1;
+	}
+	var k int = nreg - 1;
+	while (k >= 0) { push_reg(call_reg(k)); k = k - 1; }
+
+	if (f.ret_slot as i64 != 0) {
+		pop_reg(RAX);
+		st_local(f.ret_slot.offset as i64, RAX);
+	}
+	var xi int = 0;
+	i = 0;
+	while (i < f.nparams) {
+		var v *Var = func_param(f, i);
+		if (v.arg_stack) { i = i + 1; continue; }
+		if (is_float(v.ty)) {
+			xmm_to_gpr(RAX, xi, v.ty.size);
+			xi = xi + 1;
+			if (v.has_reg) { mov_reg_reg(v.reg, RAX); }
+			else { st_local(v.offset as i64, RAX); }
+		} else if (is_aggregate(v.ty) && !v.by_ref && v.ty.size > 8) {
+			pop_reg(RAX);
+			pop_reg(RDX);
+			if (v.has_reg) { mov_reg_reg(v.reg, RAX); }
+			else { st_local(v.offset as i64, RAX); }
+			st_local((v.offset as i64) - 8, RDX);
+		} else {
+			pop_reg(RAX);
+			if (v.has_reg) { mov_reg_reg(v.reg, RAX); }
+			else { st_local(v.offset as i64, RAX); }
+		}
 		i = i + 1;
 	}
 }
@@ -2400,27 +2518,31 @@ fn gen_func(f *Func) {
 		}
 
 		var ri int = 0;
-		if (f.ret_slot as i64 != 0) {
-			st_local(f.ret_slot.offset as i64, call_reg(ri));
-			ri = ri + 1;
-		}
-		var i int = 0;
-		while (i < f.nparams) {
-			var v *Var = func_param(f, i);
-			if (v.arg_stack) {
-				// Already sitting at the right rbp-relative offset from the
-				// caller's pushes -- nothing to move, and ri must not advance.
-				i = i + 1;
-				continue;
-			}
-			if (v.has_reg) { mov_reg_reg(v.reg, call_reg(ri)); }
-			else { st_local(v.offset as i64, call_reg(ri)); }
-			ri = ri + 1;
-			if (is_aggregate(v.ty) && !v.by_ref && v.ty.size > 8) {
-				st_local((v.offset as i64) - 8, call_reg(ri));
+		if (f.extern) {
+			gen_extern_params(f);
+		} else {
+			if (f.ret_slot as i64 != 0) {
+				st_local(f.ret_slot.offset as i64, call_reg(ri));
 				ri = ri + 1;
 			}
-			i = i + 1;
+			var i int = 0;
+			while (i < f.nparams) {
+				var v *Var = func_param(f, i);
+				if (v.arg_stack) {
+					// Already sitting at the right rbp-relative offset from the
+					// caller's pushes -- nothing to move, and ri must not advance.
+					i = i + 1;
+					continue;
+				}
+				if (v.has_reg) { mov_reg_reg(v.reg, call_reg(ri)); }
+				else { st_local(v.offset as i64, call_reg(ri)); }
+				ri = ri + 1;
+				if (is_aggregate(v.ty) && !v.by_ref && v.ty.size > 8) {
+					st_local((v.offset as i64) - 8, call_reg(ri));
+					ri = ri + 1;
+				}
+				i = i + 1;
+			}
 		}
 	}
 
