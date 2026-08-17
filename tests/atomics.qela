@@ -1,0 +1,26 @@
+// stage1-only
+// expect-exit: 42
+// atomic_cas/atomic_add/atomic_load/atomic_store/fence are codegen
+// intrinsics with no Qela definition (lock cmpxchg/xadd, plain mov, mfence).
+
+var x i64 = 5;
+
+fn main() int {
+	if (atomic_load(&x) != 5) { return 1; }
+
+	var old i64 = atomic_add(&x, 3);
+	if (old != 5) { return 2; }
+	if (x != 8) { return 3; }
+
+	if (!atomic_cas(&x, 8, 100)) { return 4; }
+	if (x != 100) { return 5; }
+
+	if (atomic_cas(&x, 8, 200)) { return 6; }
+	if (x != 100) { return 7; }
+
+	atomic_store(&x, 7);
+	if (x != 7) { return 8; }
+
+	fence();
+	return 42;
+}
