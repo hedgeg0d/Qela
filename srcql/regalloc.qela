@@ -275,11 +275,17 @@ fn reads_walk(n *Node) {
 		}
 		return;
 	}
-	// Default: walk all children. ND_ASSIGN / ND_OPASSIGN fall here
-	// too — their lhs is a write target, not a read. n.body is a
-	// statement list chained via .next (same shape ra_list expects),
-	// not a single node — a bare reads_walk(n.body) here only ever
-	// saw the block's first statement.
+	// A plain `x = ...;` does not read x -- only compound targets
+	// (a[i] = .., p.f = .., *p = ..) still need their lhs walked, since
+	// that reads the base/index, not the assigned-to storage itself.
+	if (k == ND_ASSIGN && n.lhs as i64 != 0 && n.lhs.kind == ND_VAR) {
+		reads_walk(n.rhs);
+		return;
+	}
+	// Default: walk all children. n.body is a statement list chained
+	// via .next (same shape ra_list expects), not a single node -- a
+	// bare reads_walk(n.body) here only ever saw the block's first
+	// statement.
 	reads_walk(n.lhs);
 	reads_walk(n.rhs);
 	reads_walk(n.cond);
