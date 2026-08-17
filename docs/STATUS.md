@@ -32,10 +32,13 @@ when it is not written out; `syscall`; `main(argc, argv)`; bounds checks.
 **Concurrency.** `spawn f(...)`, `coro_yield`, `coro_run_all` on separate
 stacks; `Chan(T)`, buffered channels of any element type, and rendezvous at
 `chan_init(&ch, 0)` where the sender hands the value across directly. `ch <- v`
-and `<-ch` infer that type. Waiting is polling over the scheduler, so a
-deadlock is detected by progress: a full round of the scheduler with no value
-moved anywhere is reported rather than spun on. The corpus now covers
-coroutines, channels, the collector and deadlock reporting under S2.
+and `<-ch` infer that type. Waiting is polling over the scheduler. A deadlock
+is when every coroutine that could run is parked inside a wait and no channel
+has changed since — `chan_nblocked` counts the parked, `chan_epoch` advances on
+every channel state change including rendezvous handoffs, and both staying
+still long enough for everyone to have had a turn is reported rather than spun
+on. The corpus now covers coroutines, channels, the collector, deadlock
+reporting and a busy-consumer regression under S2.
 
 **Memory.** Arena by default; `std/gc.qela` is a conservative mark-sweep
 collector rooted in the callee-saved registers, the stack and the data segment.
