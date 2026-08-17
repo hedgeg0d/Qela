@@ -1,0 +1,9 @@
+// stage1-only
+// expect-compile-error
+// The message must be a literal: a variable would need an argument-passing
+// convention the jumped-to panic stub does not have.
+fn main() int {
+	var m str = "hello";
+	assert(1 == 2, m);
+	return 0;
+}
