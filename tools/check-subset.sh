@@ -61,6 +61,9 @@ for f in srcql/*.qela std/*.qela; do
 		if strip "$f" | grep -qE '(^|[^_[:alnum:]])syscall *\('; then
 			report "$f:" "raw syscall, wrap it in std/sys.qela"
 		fi
+		if strip "$f" | grep -qE '(^|[^_[:alnum:]])asm *\('; then
+			report "$f:" "asm(...) is not allowed in stage1's own sources"
+		fi
 		;;
 	esac
 
