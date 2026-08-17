@@ -198,6 +198,11 @@ EOF
   "$root/$OUT/s2" run one.qela; [ $? -eq 12 ] ) ||
 	fail "fmt is not idempotent, or run does not forward the exit status"
 printf '    ok\n'
+
+step "language server"
+QELA="$OUT/s2" python3 tools/lsp-test.py ||
+	fail "the language server fails the scripted conversation"
+printf '    ok\n'
 rm -rf "$tmp2"
 
 printf '\nShipping binary: %s\n' "$OUT/s2"

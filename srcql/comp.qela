@@ -160,6 +160,7 @@ struct Var {
 	lo        i64,
 	hi        i64,
 	uses      i64,
+	pos       i64,
 }
 
 struct Node {
