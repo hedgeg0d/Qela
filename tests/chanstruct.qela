@@ -1,0 +1,41 @@
+// stage1-only
+// expect-exit: 30
+// A channel of a 16-byte struct: the aggregate is copied whole and the
+// values arrive in order. amount = id * 3, so the sum is 0+3+6+9+12.
+import "std/chan.qela";
+
+struct Msg { id i64, amount i64, }
+
+var mch Chan(Msg);
+var total i64 = 0;
+var bad i64 = 0;
+
+fn sender(n i64) {
+	var i i64 = 0;
+	while (i < n) {
+		var m Msg;
+		m.id = i;
+		m.amount = i * 3;
+		mch <- m;
+		i = i + 1;
+	}
+}
+
+fn receiver(n i64) {
+	var i i64 = 0;
+	while (i < n) {
+		var m Msg = <-mch;
+		if (m.id != i || m.amount != i * 3) { bad = bad + 1; }
+		total = total + m.amount;
+		i = i + 1;
+	}
+}
+
+fn main() int {
+	chan_init(&mch, 2);
+	spawn sender(5);
+	spawn receiver(5);
+	coro_run_all();
+	if (bad != 0) { return 1; }
+	return total as int;
+}
