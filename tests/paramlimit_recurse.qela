@@ -1,0 +1,12 @@
+// stage1-only
+// expect-exit: 15
+// The spilled 7th parameter (an accumulator) survives self-recursion, and
+// each nested call re-spills it correctly alongside the existing call-depth
+// and stack-alignment tracking.
+fn rec(n int, p1 int, p2 int, p3 int, p4 int, p5 int, acc int) int {
+	if (n == 0) { return acc; }
+	return rec(n - 1, p1, p2, p3, p4, p5, acc + n);
+}
+fn main() int {
+	return rec(5, 0, 0, 0, 0, 0, 0);
+}
