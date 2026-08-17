@@ -9,12 +9,16 @@ import "sys.qela";
 // chan_init with cap 0 is a rendezvous: the sender blocks until a receiver
 // takes the value, and buf[0] is the single handoff slot.
 //
-// A blocked operation yields until the buffer changes. Waiting is polling:
-// a blocked coroutine has to run again to notice the change, so the
-// scheduler keeps scheduling everyone. Deadlock is detected by progress: a
-// full round of the scheduler with not a single value moved anywhere means
-// no future round can move one either, and the program says so instead of
-// spinning.
+// A blocked operation yields until the channel changes. Waiting is polling:
+// a blocked coroutine has to run again to notice the change, so the scheduler
+// keeps scheduling everyone.
+//
+// Deadlock is when every coroutine that could run is parked inside a wait and
+// no channel has changed since. Counting the waits alone is not enough — a
+// sender may be blocked while the receiver is busy doing something else, and
+// that program is fine. So the test is the two together: everyone parked, and
+// the epoch, which every channel state change bumps, standing still for long
+// enough that each of them has had its turn to wake up.
 
 struct Chan(T) {
 	buf     *T,
@@ -25,7 +29,10 @@ struct Chan(T) {
 	waiting bool,
 }
 
-var chan_idle i64 = 0;
+var chan_nblocked int = 0;
+var chan_epoch i64 = 0;
+var chan_stall int = 0;
+var chan_stall_epoch i64 = -1;
 
 fn chan_init(comptime T: type, c *Chan(T), cap i64) {
 	if (cap < 1) { cap = 0; }
@@ -45,7 +52,7 @@ fn chan_is_closed(comptime T: type, c *Chan(T)) bool { return c.closed; }
 
 fn chan_close(comptime T: type, c *Chan(T)) {
 	c.closed = true;
-	chan_idle = 0;
+	chan_epoch = chan_epoch + 1;
 }
 
 fn chan_die(what str) {
@@ -56,9 +63,18 @@ fn chan_die(what str) {
 }
 
 fn chan_block(what str) {
-	chan_idle = chan_idle + 1;
-	if (chan_idle > coro_slots() + 1) { chan_die(what); }
+	chan_nblocked = chan_nblocked + 1;
+	if (chan_nblocked >= coro_live()) {
+		if (chan_epoch == chan_stall_epoch) {
+			chan_stall = chan_stall + 1;
+			if (chan_stall > coro_live() + 1) { chan_die(what); }
+		} else {
+			chan_stall_epoch = chan_epoch;
+			chan_stall = 1;
+		}
+	}
 	if (!coro_yield()) { chan_die(what); }
+	chan_nblocked = chan_nblocked - 1;
 }
 
 fn chan_send(comptime T: type, c *Chan(T), v T) {
@@ -70,6 +86,7 @@ fn chan_send(comptime T: type, c *Chan(T), v T) {
 		while (c.waiting) { chan_block("send"); }
 		c.buf[0] = v;
 		c.waiting = true;
+		chan_epoch = chan_epoch + 1;
 		while (c.waiting) { chan_block("send"); }
 		return;
 	}
@@ -78,7 +95,7 @@ fn chan_send(comptime T: type, c *Chan(T), v T) {
 	if (slot >= c.cap) { slot = slot - c.cap; }
 	c.buf[slot] = v;
 	c.n = c.n + 1;
-	chan_idle = 0;
+	chan_epoch = chan_epoch + 1;
 }
 
 // Returns a zeroed element once a closed channel has drained; pair it with
@@ -92,7 +109,7 @@ fn chan_recv(comptime T: type, c *Chan(T)) T {
 		}
 		var v T = c.buf[0];
 		c.waiting = false;
-		chan_idle = 0;
+		chan_epoch = chan_epoch + 1;
 		return v;
 	}
 	while (c.n == 0) {
@@ -103,6 +120,6 @@ fn chan_recv(comptime T: type, c *Chan(T)) T {
 	c.head = c.head + 1;
 	if (c.head >= c.cap) { c.head = 0; }
 	c.n = c.n - 1;
-	chan_idle = 0;
+	chan_epoch = chan_epoch + 1;
 	return v;
 }

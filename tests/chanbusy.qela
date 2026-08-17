@@ -1,0 +1,26 @@
+// expect-exit: 0
+// stage1-only
+// A sender blocked on a full channel is not a deadlock while the receiver is
+// still doing work. Counting blocked calls alone used to kill this program.
+import "std/chan.qela";
+var c Chan(i64);
+var got i64 = 0;
+fn slow_consumer(n i64) {
+	var i i64 = 0;
+	while (i < n) {
+		// a long stretch of cooperative work before each receive
+		var k i64 = 0;
+		while (k < 20) { coro_yield(); k = k + 1; }
+		got = got + <-c;
+		i = i + 1;
+	}
+}
+fn producer(n i64) { var i i64 = 0; while (i < n) { c <- i; i = i + 1; } }
+fn main() int {
+	chan_init(&c, 1);
+	spawn producer(10);
+	spawn slow_consumer(10);
+	coro_run_all();
+	if (got != 45) { return 1; }
+	return 0;
+}
