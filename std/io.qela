@@ -63,3 +63,56 @@ fn write_file(path str, data *u8, n i64) {
 	}
 	sys_close(fd);
 }
+
+// The full x86-64 struct stat is 144 bytes; the kernel writes all of it,
+// and a smaller struct would let the syscall clobber the stack frame. The
+// mode field sits at offset 24, and st_blksize (the last word we name) at
+// 56, but the size must stay 144.
+struct Stat {
+	d0 i64, d1 i64, d2 i64, mode i64, d4 i64, d5 i64, d6 i64,
+	d7 i64, d8 i64, d9 i64, d10 i64, d11 i64, d12 i64, d13 i64,
+	d14 i64, d15 i64, d16 i64, d17 i64,
+}
+
+fn is_dir(path str) bool {
+	var st Stat;
+	if (sys_stat(cstr(path), &st as *u8) != 0) { return false; }
+	return (st.mode & 0xf000) == 0x4000;
+}
+
+// Appends the names of the .qela files in a directory, one per line, to
+// out. getdents64 entries are: ino u64, off i64, reclen u16, type u8, name.
+// Entries come in directory order, so the caller sorts before use.
+fn read_dir(path str, out *Buf) {
+	var fd i64 = sys_open_read(cstr(path));
+	if (fd < 0) {
+		eprint("error: cannot open directory ");
+		eprint(path);
+		eprint("\n");
+		sys_exit(1);
+	}
+	var chunk [2048]u8;
+	while (true) {
+		var got i64 = sys_getdents(fd, &chunk[0], 2048);
+		if (got <= 0) { break; }
+		var off i64 = 0;
+		while (off < got) {
+			var p i64 = off;
+			var reclen i64 = (chunk[p + 16] as i64) | ((chunk[p + 17] as i64) << 8);
+			if (chunk[p + 18] == 8) {  // DT_REG
+				var n i64 = 0;
+				while (chunk[p + 19 + n] != 0) { n = n + 1; }
+				if (n > 5 &&
+				    chunk[p + 19 + n - 5] == '.' && chunk[p + 19 + n - 4] == 'q' &&
+				    chunk[p + 19 + n - 3] == 'e' && chunk[p + 19 + n - 2] == 'l' &&
+				    chunk[p + 19 + n - 1] == 'a') {
+					var k i64 = 0;
+					while (k < n) { buf_u8(out, chunk[p + 19 + k]); k = k + 1; }
+					buf_u8(out, '\n');
+				}
+			}
+			off = off + reclen;
+		}
+	}
+	sys_close(fd);
+}
