@@ -549,7 +549,7 @@ fn gen_bt_walker() {
 	var jnz_loop i64 = code.n;
 	b1(0x75); b1(0);                          // jnz loop
 	var exit_at i64 = code.n;
-	mov_reg_imm(RAX, 60);
+	mov_reg_imm(RAX, 231);   // exit_group: a crash kills every thread, not just this one
 	mov_reg_imm(RDI, 134);
 	b1(0x0f); b1(0x05);
 	var print_at i64 = code.n;
@@ -1945,6 +1945,54 @@ fn gen_coro_stub() {
 	b1(0x0f); b1(0x0b);                  // ud2: coro_finish never returns
 }
 
+// clone()'s child resumes at the very next instruction after the syscall,
+// on a brand-new stack that holds none of the caller's frames -- an
+// ordinary compiled function epilogue's `ret` would pop garbage off it. So
+// this never lets compiled code run on that path: fn/arg are carried across
+// the syscall in r12/r13 (syscall only clobbers rcx/r11), and the child
+// branch calls fn directly and exits without ever executing a `ret`.
+//
+// r12/r13 are callee-saved: the register allocator may be keeping a
+// caller's local live in either across this call, so their old values are
+// saved on the parent's own stack and restored before falling through --
+// the child never reaches that path, it exits instead.
+fn gen_thread_clone(n *Node) {
+	gen_args(n, false, false, -1, false);   // fn->rdi, arg->rsi, stack->rdx, flags->rcx
+	push_reg(12);
+	push_reg(13);
+	mov_reg_reg(12, RDI);                   // r12 = fn
+	mov_reg_reg(13, RSI);                   // r13 = arg
+	mov_reg_reg(RSI, RDX);                  // rsi = child stack
+	mov_reg_reg(RDI, RCX);                  // rdi = flags
+	mov_reg_imm(RDX, 0);                    // rdx = parent tid ptr
+	mov_reg_imm(10, 0);                     // r10 = child tid ptr
+	mov_reg_imm(R8, 0);                     // r8  = tls
+	mov_reg_imm(RAX, 56);                   // SYS_CLONE
+	b1(0x0f); b1(0x05);                     // syscall
+
+	test_rax();
+	b1(0x0f); b1(0x85);                     // jnz rel32 (rax != 0 -> parent)
+	var jnz_at i64 = code.n;
+	b4(0);
+
+	// Child: call fn(arg), then exit with its return value.
+	mov_reg_reg(RDI, 13);
+	b1(0x41); b1(0xff); modrm(3, 2, 12);    // call r12
+	mov_reg_reg(RDI, RAX);
+	mov_reg_imm(RAX, 60);                   // SYS_EXIT
+	b1(0x0f); b1(0x05);
+	b1(0x0f); b1(0x0b);                     // ud2: sys_exit never returns
+
+	var rel i64 = code.n - (jnz_at + 4);
+	code.p[jnz_at] = (rel & 255) as u8;
+	code.p[jnz_at + 1] = ((rel >> 8) & 255) as u8;
+	code.p[jnz_at + 2] = ((rel >> 16) & 255) as u8;
+	code.p[jnz_at + 3] = ((rel >> 24) & 255) as u8;
+	// Parent lands here with rax still holding clone()'s result.
+	pop_reg(13);
+	pop_reg(12);
+}
+
 fn gen_expr(n *Node) {
 	var k int = n.kind;
 
@@ -2107,6 +2155,10 @@ fn gen_expr(n *Node) {
 		}
 		if (str_eq(n.name, "fence")) {
 			b1(0x0f); b1(0xae); b1(0xf0); // mfence
+			return;
+		}
+		if (str_eq(n.name, "thread_clone")) {
+			gen_thread_clone(n);
 			return;
 		}
 		gen_call(n);
@@ -2681,7 +2733,7 @@ fn gen_panic_stub(msg_id int, msg_len i64) {
 		ilist_push(&bt_jmps, code.n);
 		b4(0);
 	} else {
-		mov_reg_imm(RAX, 60);
+		mov_reg_imm(RAX, 231);   // exit_group: a crash kills every thread, not just this one
 		mov_reg_imm(RDI, 134);
 		b1(0x0f); b1(0x05);
 	}
@@ -2741,7 +2793,7 @@ fn emit_code(u *Unit, main_fn *Func, panic_id int, hdr i64) {
 		add_call("main", 0);
 		b1(0x89);
 		modrm(3, RAX, RDI);
-		mov_reg_imm(RAX, 60);
+		mov_reg_imm(RAX, 231);   // exit_group: authoritative over any worker threads still running
 		b1(0x0f); b1(0x05);
 	} else if (top_asm_head as i64 != 0) {
 		gen_asm_operands(top_asm_head);
