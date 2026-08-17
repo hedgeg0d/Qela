@@ -233,12 +233,12 @@ fn o_str_name(id i64, data_sym bool) str {
 
 // Linear scan; object files are small enough that the string ids dominate
 // and a hash table is not worth the bytes. A nameless relocation is a
-// string: PC-relative slots (in code) point at the {ptr, len} header, R_64
-// slots (the header's own ptr, in .rodata) point at the bytes.
+// string: PC-relative slots (in code) point at the {ptr, len} header,
+// REL_ABS64 slots (the header's own ptr, in .rodata) point at the bytes.
 fn o_sym_index(img *Image, r *Reloc) int {
 	var want str = r.name;
 	if (want.len == 0) {
-		if (r.kind == R_64) { want = o_str_name(r.id, true); }
+		if (r.kind == REL_ABS64) { want = o_str_name(r.id, true); }
 		else { want = o_str_name(r.id, false); }
 	}
 	var i int = 0;
@@ -365,14 +365,22 @@ fn o_sym_rec(f *Buf, i int) {
 	buf_u64(f, o_size[i]);
 }
 
+// The only place that knows REL_* purposes map to R_X86_64_* type numbers.
+fn elf_reloc_type(kind int) int {
+	if (kind == REL_ABS64) { return 1; }        // R_X86_64_64
+	if (kind == REL_PCREL32) { return 2; }      // R_X86_64_PC32
+	if (kind == REL_PCREL32_PLT) { return 4; }  // R_X86_64_PLT32
+	return 11;                                  // R_X86_64_32S
+}
+
 fn o_rela_rec(f *Buf, r *Reloc, img *Image, base i64) {
 	buf_u64(f, r.at - base);
-	buf_u64(f, (o_sym_index(img, r) as i64) << 32 | (r.kind as i64));
+	buf_u64(f, (o_sym_index(img, r) as i64) << 32 | (elf_reloc_type(r.kind) as i64));
 	// PC-relative slots resolve from the *next* instruction; the linker's P
 	// is the slot's own address, so a -4 addend aligns the two (gcc emits
 	// the same). Absolute relocations carry no addend.
 	var add i64 = 0;
-	if (r.kind == R_PLT32 || r.kind == R_PC32) { add = -4; }
+	if (r.kind == REL_PCREL32_PLT || r.kind == REL_PCREL32) { add = -4; }
 	buf_u64(f, add);
 }
 
