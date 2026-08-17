@@ -1,0 +1,41 @@
+// stage1-only
+// expect-exit: 42
+// go() spawns onto a pool of real OS threads; results come back over a
+// channel. Exercises thread_pool_init/go together with the whole stack
+// underneath: clone, tvar-scoped per-thread coroutine schedulers, atomics,
+// and a channel shared across threads.
+import "std/thread.qela";
+import "std/chan.qela";
+
+let N = 200;
+
+var results Chan(i64);
+
+fn worker(n i64) i64 {
+	var sq i64 = n * n;
+	chan_send(&results, sq);
+	return 0;
+}
+
+fn main() int {
+	chan_init(&results, 16);
+	thread_pool_init(4);
+
+	var i i64 = 0;
+	while (i < N) {
+		go(worker, i, 0, 0, 0, 0);
+		i = i + 1;
+	}
+
+	var sum i64 = 0;
+	var got i64 = 0;
+	while (got < N) {
+		sum = sum + chan_recv(&results);
+		got = got + 1;
+	}
+
+	// sum of squares 0..N-1
+	var want i64 = (N - 1) * N * (2 * N - 1) / 6;
+	if (sum != want) { return 1; }
+	return 42;
+}
