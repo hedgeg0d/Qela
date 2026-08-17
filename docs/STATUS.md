@@ -9,7 +9,7 @@ Updated 2026-08-03. Read `BOOTSTRAP.md` first; it constrains everything below.
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
 | **S2 — the shipped compiler, Qela compiled by itself** | **179 832 B** |
 | S2 under xz -9 (proxy for upx --lzma) | 43 248 B, ~4.1% of the 1 MiB budget |
-| stage1 sources | 6 653 lines of Qela |
+| stage1 sources | 7 454 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **226%**, or **193%** without bounds checks (M4 gate wants ≤150%) |
 
 Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the
@@ -125,7 +125,7 @@ a settled shape rather than a moving target.
   constrain one. Both limits are in `srcql/generic.qela`.
 - `genblob.py --min` to strip comments and indentation from the embedded
   library. Measured: saves 416 bytes packed, and costs `--dump-std` its
-  readability. Not worth it at 3.7% of budget.
+  readability. Not worth it at 4.1% of budget.
 
 ## Rules that keep holding
 
