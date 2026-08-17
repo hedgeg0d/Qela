@@ -1,0 +1,359 @@
+// 06_eval.qela — the evaluator.
+//
+// Lexical scoping with linked environments. Special forms are recognized by
+// the operator symbol before anything is evaluated: quote, if, cond,
+// define (including the (define (f a b) ...) sugar), lambda, let, let*,
+// begin, set!, while and defmacro. Everything else is an application:
+// the operator is evaluated, arguments are evaluated left to right, and
+// builtins or closures run. A macro binds its parameters to the raw
+// argument expressions, evaluates its body, and evaluates the result once
+// more in the caller's environment.
+
+import "std/buf.qela";
+import "std/fmt.qela";
+import "std/str.qela";
+
+fn env_find(env *Env, name str) *EnvEntry {
+	var e *Env = env;
+	while (e as i64 != 0) {
+		var en *EnvEntry = e.first;
+		while (en as i64 != 0) {
+			if (str_eq(en.name, name)) { return en; }
+			en = en.next;
+		}
+		e = e.parent;
+	}
+	return 0 as *EnvEntry;
+}
+
+fn ev_undefined(name str) Obj {
+	var mb Buf;
+	fmt_str(&mb, "undefined: ");
+	fmt_str(&mb, name);
+	return obj_err(buf_str(&mb));
+}
+
+fn ev_lookup(env *Env, name str) Obj {
+	var en *EnvEntry = env_find(env, name);
+	if (en as i64 == 0) { return ev_undefined(name); }
+	return en.val;
+}
+
+fn env_define(env *Env, name str, val Obj) {
+	var en *EnvEntry = arena_alloc(sizeof(EnvEntry), 8) as *EnvEntry;
+	en.name = name;
+	en.val = val;
+	en.next = env.first;
+	env.first = en;
+}
+
+fn ev_set(env *Env, name str, val Obj) bool {
+	var en *EnvEntry = env_find(env, name);
+	if (en as i64 == 0) { return false; }
+	en.val = val;
+	return true;
+}
+
+// Binds a parameter list to a list of values in a fresh child env. A
+// dotted tail binds the remaining arguments: (lambda (a . rest) ...).
+fn ev_bind_params(env *Env, params Obj, args Obj) bool {
+	var p Obj = params;
+	var a Obj = args;
+	while (obj_is_pair(p)) {
+		if (!obj_is_pair(a)) {
+			obj_err("wrong number of arguments");
+			return false;
+		}
+		match (obj_car(p)) {
+			Sym(s) => { env_define(env, s, obj_car(a)); }
+			_ => {
+				obj_err("parameter must be a symbol");
+				return false;
+			}
+		}
+		p = obj_cdr(p);
+		a = obj_cdr(a);
+	}
+	match (p) {
+		Nil => {
+			if (!obj_is_nil(a)) {
+				obj_err("too many arguments");
+				return false;
+			}
+		}
+		Sym(rest) => {
+			env_define(env, rest, a);
+		}
+		_ => {
+			obj_err("bad parameter list");
+			return false;
+		}
+	}
+	return true;
+}
+
+// Evaluates a sequence of forms; the last value is the value.
+fn ev_body(env *Env, body Obj) Obj {
+	var last Obj = Obj.Nil;
+	while (obj_is_pair(body)) {
+		last = ev_eval(env, obj_car(body));
+		if (g_err) { return Obj.Nil; }
+		body = obj_cdr(body);
+	}
+	return last;
+}
+
+fn ev_eval_args(env *Env, args Obj) Obj {
+	var head Obj = Obj.Nil;
+	var tail *ConsCell = 0 as *ConsCell;
+	while (obj_is_pair(args)) {
+		var v Obj = ev_eval(env, obj_car(args));
+		if (g_err) { return Obj.Nil; }
+		var cell *ConsCell = arena_alloc(sizeof(ConsCell), 8) as *ConsCell;
+		cell.car = v;
+		cell.cdr = Obj.Nil;
+		if (tail as i64 == 0) { head = Obj.Cons(cell); }
+		else { tail.cdr = Obj.Cons(cell); }
+		tail = cell;
+		args = obj_cdr(args);
+	}
+	return head;
+}
+
+fn ev_call(cl *Closure, args Obj) Obj {
+	if (g_err) { return Obj.Nil; }
+	var env *Env = env_new(cl.env);
+	if (!ev_bind_params(env, cl.params, args)) { return Obj.Nil; }
+	return ev_body(env, cl.body);
+}
+
+fn ev_apply(fn0 Obj, args Obj) Obj {
+	if (g_err) { return Obj.Nil; }
+	match (fn0) {
+		Builtin(name) => { return bl_call(name, args); }
+		Lambda(cl) => { return ev_call(cl, args); }
+		_ => { return obj_err("not a function"); }
+	}
+	return Obj.Nil;
+}
+
+// ── special forms ──
+
+fn ev_quote(c *ConsCell) Obj {
+	var rest Obj = c.cdr;
+	if (!obj_is_pair(rest)) { return obj_err("quote: missing expression"); }
+	return obj_car(rest);
+}
+
+fn ev_if(env *Env, c *ConsCell) Obj {
+	var rest Obj = c.cdr;
+	if (!obj_is_pair(rest)) { return obj_err("if: missing condition"); }
+	var cond Obj = ev_eval(env, obj_car(rest));
+	if (g_err) { return Obj.Nil; }
+	var tail Obj = obj_cdr(rest);
+	if (obj_is_nil(cond)) {
+		if (obj_is_pair(tail)) {
+			var els Obj = obj_cdr(tail);
+			if (obj_is_pair(els)) { return ev_eval(env, obj_car(els)); }
+		}
+		return Obj.Nil;
+	}
+	if (obj_is_pair(tail)) { return ev_eval(env, obj_car(tail)); }
+	return Obj.Nil;
+}
+
+fn ev_cond(env *Env, c *ConsCell) Obj {
+	var clauses Obj = c.cdr;
+	while (obj_is_pair(clauses)) {
+		var cl Obj = obj_car(clauses);
+		if (!obj_is_pair(cl)) { return obj_err("cond: bad clause"); }
+		var test Obj = obj_car(cl);
+		var acts Obj = obj_cdr(cl);
+		match (test) {
+			Sym(s) => {
+				if (str_eq(s, "else")) { return ev_body(env, acts); }
+			}
+			_ => { }
+		}
+		var r Obj = ev_eval(env, test);
+		if (g_err) { return Obj.Nil; }
+		if (!obj_is_nil(r)) { return ev_body(env, acts); }
+		clauses = obj_cdr(clauses);
+	}
+	return Obj.Nil;
+}
+
+fn ev_define(env *Env, c *ConsCell) Obj {
+	var rest Obj = c.cdr;
+	if (!obj_is_pair(rest)) { return obj_err("define: missing name"); }
+	var name0 Obj = obj_car(rest);
+	var val0 Obj = obj_cdr(rest);
+	// (define (f a b) body...) is (define f (lambda (a b) body...)).
+	if (obj_is_pair(name0)) {
+		match (obj_car(name0)) {
+			Sym(fname) => {
+				var lam Obj = obj_closure(obj_cdr(name0), val0, env, false);
+				env_define(env, fname, lam);
+				return Obj.Sym(fname);
+			}
+			_ => { return obj_err("define: bad function name"); }
+		}
+	}
+	match (name0) {
+		Sym(s) => {
+			if (!obj_is_pair(val0)) { return obj_err("define: missing value"); }
+			var v Obj = ev_eval(env, obj_car(val0));
+			if (g_err) { return Obj.Nil; }
+			env_define(env, s, v);
+			return Obj.Sym(s);
+		}
+		_ => { return obj_err("define: name must be a symbol"); }
+	}
+	return Obj.Nil;
+}
+
+fn ev_lambda(env *Env, c *ConsCell) Obj {
+	var rest Obj = c.cdr;
+	if (!obj_is_pair(rest)) { return obj_err("lambda: missing parameter list"); }
+	return obj_closure(obj_car(rest), obj_cdr(rest), env, false);
+}
+
+fn ev_defmacro(env *Env, c *ConsCell) Obj {
+	var rest Obj = c.cdr;
+	if (!obj_is_pair(rest)) { return obj_err("defmacro: missing parameter list"); }
+	var head Obj = obj_car(rest);
+	if (!obj_is_pair(head)) { return obj_err("defmacro: bad macro name"); }
+	match (obj_car(head)) {
+		Sym(name) => {
+			var mac Obj = obj_closure(obj_cdr(head), obj_cdr(rest), env, true);
+			env_define(env, name, mac);
+			return Obj.Sym(name);
+		}
+		_ => { return obj_err("defmacro: bad macro name"); }
+	}
+	return Obj.Nil;
+}
+
+fn ev_let(env *Env, c *ConsCell, sequential bool) Obj {
+	var rest Obj = c.cdr;
+	if (!obj_is_pair(rest)) { return obj_err("let: missing bindings"); }
+	var nenv *Env = env_new(env);
+	var binds Obj = obj_car(rest);
+	var body Obj = obj_cdr(rest);
+	while (obj_is_pair(binds)) {
+		var b Obj = obj_car(binds);
+		if (!obj_is_pair(b)) { return obj_err("let: bad binding"); }
+		match (obj_car(b)) {
+			Sym(s) => {
+				var vx Obj = obj_cdr(b);
+				if (!obj_is_pair(vx)) { return obj_err("let: missing value"); }
+				var src *Env = env;
+				if (sequential) { src = nenv; }
+				var v Obj = ev_eval(src, obj_car(vx));
+				if (g_err) { return Obj.Nil; }
+				env_define(nenv, s, v);
+			}
+			_ => { return obj_err("let: name must be a symbol"); }
+		}
+		binds = obj_cdr(binds);
+	}
+	return ev_body(nenv, body);
+}
+
+fn ev_begin(env *Env, c *ConsCell) Obj {
+	return ev_body(env, c.cdr);
+}
+
+fn ev_set_bang(env *Env, c *ConsCell) Obj {
+	var rest Obj = c.cdr;
+	if (!obj_is_pair(rest)) { return obj_err("set!: missing name"); }
+	var name0 Obj = obj_car(rest);
+	var val0 Obj = obj_cdr(rest);
+	if (!obj_is_pair(val0)) { return obj_err("set!: missing value"); }
+	match (name0) {
+		Sym(s) => {
+			var v Obj = ev_eval(env, obj_car(val0));
+			if (g_err) { return Obj.Nil; }
+			if (!ev_set(env, s, v)) {
+				var mb Buf;
+				fmt_str(&mb, "set!: undefined: ");
+				fmt_str(&mb, s);
+				return obj_err(buf_str(&mb));
+			}
+			return Obj.Nil;
+		}
+		_ => { return obj_err("set!: name must be a symbol"); }
+	}
+	return Obj.Nil;
+}
+
+fn ev_while(env *Env, c *ConsCell) Obj {
+	var rest Obj = c.cdr;
+	if (!obj_is_pair(rest)) { return obj_err("while: missing condition"); }
+	var cond Obj = obj_car(rest);
+	var body Obj = obj_cdr(rest);
+	while (true) {
+		var r Obj = ev_eval(env, cond);
+		if (g_err) { return Obj.Nil; }
+		if (obj_is_nil(r)) { return Obj.Nil; }
+		ev_body(env, body);
+		if (g_err) { return Obj.Nil; }
+	}
+	return Obj.Nil;
+}
+
+// A macro binds raw argument expressions, evaluates its body to an
+// expansion, and evaluates that in the caller's environment.
+fn ev_macro(call_env *Env, cl *Closure, raw Obj) Obj {
+	var env *Env = env_new(cl.env);
+	if (!ev_bind_params(env, cl.params, raw)) { return Obj.Nil; }
+	var expansion Obj = ev_body(env, cl.body);
+	if (g_err) { return Obj.Nil; }
+	return ev_eval(call_env, expansion);
+}
+
+fn ev_apply_form(env *Env, c *ConsCell) Obj {
+	// Special forms first: the operator symbol decides, nothing evaluates.
+	match (c.car) {
+		Sym(s) => {
+			if (str_eq(s, "quote")) { return ev_quote(c); }
+			if (str_eq(s, "if")) { return ev_if(env, c); }
+			if (str_eq(s, "cond")) { return ev_cond(env, c); }
+			if (str_eq(s, "define")) { return ev_define(env, c); }
+			if (str_eq(s, "lambda")) { return ev_lambda(env, c); }
+			if (str_eq(s, "defmacro")) { return ev_defmacro(env, c); }
+			if (str_eq(s, "let")) { return ev_let(env, c, false); }
+			if (str_eq(s, "let*")) { return ev_let(env, c, true); }
+			if (str_eq(s, "begin")) { return ev_begin(env, c); }
+			if (str_eq(s, "set!")) { return ev_set_bang(env, c); }
+			if (str_eq(s, "while")) { return ev_while(env, c); }
+		}
+		_ => { }
+	}
+	// Ordinary application: operator, then arguments.
+	var fn0 Obj = ev_eval(env, c.car);
+	if (g_err) { return Obj.Nil; }
+	match (fn0) {
+		Lambda(cl) => {
+			if (cl.macro) { return ev_macro(env, cl, c.cdr); }
+		}
+		_ => { }
+	}
+	var args Obj = ev_eval_args(env, c.cdr);
+	if (g_err) { return Obj.Nil; }
+	return ev_apply(fn0, args);
+}
+
+fn ev_eval(env *Env, o Obj) Obj {
+	if (g_err) { return Obj.Nil; }
+	match (o) {
+		Nil => { return Obj.Nil; }
+		Int(v) => { return Obj.Int(v); }
+		Str(s) => { return Obj.Str(s); }
+		Sym(s) => { return ev_lookup(env, s); }
+		Cons(c) => { return ev_apply_form(env, c); }
+		Builtin(n) => { return Obj.Builtin(n); }
+		Lambda(cl) => { return Obj.Lambda(cl); }
+	}
+	return Obj.Nil;
+}
