@@ -22,7 +22,7 @@ $ ldd hello
 ```
 
 The design goal is the most language per byte. The compiler is currently
-227 656 B — 52 764 B packed with `upx --lzma`, about 5.0% of its own
+231 368 B — 53 620 B packed with `upx --lzma`, about 5.1% of its own
 1 MiB budget.
 
 ## What it has
