@@ -1213,6 +1213,15 @@ fn add_type(n *Node) {
 		if (!is_numeric(n.ty) && n.ty.kind != TY_VOID) {
 			error_at(n.pos, "unsupported cast target");
 		}
+		// A slice/array/str-to-pointer cast would silently take the low
+		// 8 bytes of the aggregate, which for a string literal is the
+		// rodata header's address, not the data pointer. Force the user
+		// to be explicit via the .ptr field.
+		if (n.ty.kind == TY_PTR &&
+		    (n.lhs.ty.kind == TY_STRUCT || n.lhs.ty.kind == TY_ARRAY ||
+		     n.lhs.ty.kind == TY_SLICE)) {
+			error_at(n.pos, "cast from str/array/slice to a pointer is not allowed; use the .ptr field");
+		}
 		return;
 	}
 
