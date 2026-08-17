@@ -1,0 +1,745 @@
+import "comp.qela";
+import "diag.qela";
+import "lex.qela";
+import "parse.qela";
+import "type.qela";
+import "codegen.qela";
+import "../std/io.qela";
+
+// The language server, in the same binary as the compiler: `qela --lsp`.
+// JSON-RPC over Content-Length framed stdio.
+//
+// A compile runs in a forked child. The compiler still dies on its first
+// error, so the child does the dying: it records structured diagnostics into
+// a file and exits, and the parent session lives on. After a successful
+// compile the child also writes the hover/definition index, which the
+// parent reads back.
+//
+// The arena never frees, so a long session grows, but a message is small;
+// nothing here can be helped without making the whole compiler grow.
+
+// ── session state ──
+
+var lsp_uri str;
+var lsp_path str;
+var lsp_text str;
+var lsp_seq i64 = 0;
+var lsp_shutdown bool = false;
+
+// ── JSON values ──
+
+let J_NULL = 0;
+let J_BOOL = 1;
+let J_NUM  = 2;
+let J_STR  = 3;
+let J_ARR  = 4;
+let J_OBJ  = 5;
+
+// A value is one node; object members carry their key, array elements do
+// not. Members and elements link through next.
+struct JVal {
+	kind int,
+	next *JVal,
+	key  str,
+	s    str,
+	n    i64,
+	b    bool,
+	item *JVal,
+}
+
+fn j_new(kind int) *JVal {
+	var v *JVal = arena_alloc(sizeof(JVal), 8) as *JVal;
+	v.kind = kind;
+	return v;
+}
+
+fn j_numv(n i64) *JVal {
+	var v *JVal = j_new(J_NUM);
+	v.n = n;
+	return v;
+}
+
+fn j_strv(s str) *JVal {
+	var v *JVal = j_new(J_STR);
+	v.s = s;
+	return v;
+}
+
+fn j_boolv(b bool) *JVal {
+	var v *JVal = j_new(J_BOOL);
+	v.b = b;
+	return v;
+}
+
+fn j_push(o *JVal, key str, v *JVal) {
+	v.key = key;
+	v.next = o.item;
+	o.item = v;
+}
+
+// ── JSON parser ──
+
+var js_src str;
+var js_i i64;
+
+fn js_skip_ws() {
+	while (js_i < js_src.len) {
+		var c u8 = js_src.ptr[js_i];
+		if (c != ' ' && c != '\t' && c != '\n' && c != '\r') { return; }
+		js_i = js_i + 1;
+	}
+}
+
+fn js_peek() u8 {
+	if (js_i >= js_src.len) { return 0; }
+	return js_src.ptr[js_i];
+}
+
+fn js_take() u8 {
+	var c u8 = js_peek();
+	js_i = js_i + 1;
+	return c;
+}
+
+fn js_hex(c u8) i64 {
+	if (c >= '0' && c <= '9') { return (c - '0') as i64; }
+	if (c >= 'a' && c <= 'f') { return (c - 'a' + 10) as i64; }
+	return (c - 'A' + 10) as i64;
+}
+
+fn js_str() str {
+	js_take();
+	var b Buf;
+	while (true) {
+		var c u8 = js_take();
+		if (c == '"') { break; }
+		if (c == '\\') {
+			var e u8 = js_take();
+			if (e == 'n') { buf_u8(&b, '\n'); }
+			else if (e == 't') { buf_u8(&b, '\t'); }
+			else if (e == 'r') { buf_u8(&b, '\r'); }
+			else if (e == 'u') {
+				var u i64 = (js_hex(js_take()) << 12) | (js_hex(js_take()) << 8) |
+				            (js_hex(js_take()) << 4) | js_hex(js_take());
+				buf_u8(&b, u as u8);
+			} else {
+				buf_u8(&b, e);
+			}
+		} else {
+			buf_u8(&b, c);
+		}
+	}
+	return buf_str(&b);
+}
+
+fn js_num() i64 {
+	var neg bool = false;
+	if (js_peek() == '-') { neg = true; js_i = js_i + 1; }
+	var v i64 = 0;
+	while (js_i < js_src.len && js_src.ptr[js_i] >= '0' && js_src.ptr[js_i] <= '9') {
+		v = v * 10 + ((js_src.ptr[js_i] - '0') as i64);
+		js_i = js_i + 1;
+	}
+	if (neg) { v = -v; }
+	return v;
+}
+
+fn js_value() *JVal {
+	js_skip_ws();
+	var c u8 = js_peek();
+	if (c == '{') {
+		js_i = js_i + 1;
+		var o *JVal = j_new(J_OBJ);
+		js_skip_ws();
+		if (js_peek() == '}') { js_i = js_i + 1; return o; }
+		var head JVal;
+		var tail *JVal = &head;
+		while (true) {
+			var k *JVal = js_value();
+			js_skip_ws();
+			if (js_peek() == ':') { js_i = js_i + 1; }
+			var v *JVal = js_value();
+			v.key = k.s;
+			tail.next = v;
+			tail = v;
+			js_skip_ws();
+			var d u8 = js_take();
+			if (d == '}') { break; }
+		}
+		o.item = head.next;
+		return o;
+	}
+	if (c == '[') {
+		js_i = js_i + 1;
+		var a *JVal = j_new(J_ARR);
+		js_skip_ws();
+		if (js_peek() == ']') { js_i = js_i + 1; return a; }
+		var head JVal;
+		var tail *JVal = &head;
+		while (true) {
+			var v *JVal = js_value();
+			tail.next = v;
+			tail = v;
+			js_skip_ws();
+			var d u8 = js_take();
+			if (d == ']') { break; }
+		}
+		a.item = head.next;
+		return a;
+	}
+	if (c == '"') {
+		var v *JVal = j_new(J_STR);
+		v.s = js_str();
+		return v;
+	}
+	if (c == 't') { js_i = js_i + 3; var v *JVal = j_new(J_BOOL); v.b = true; return v; }
+	if (c == 'f') { js_i = js_i + 4; var v *JVal = j_new(J_BOOL); v.b = false; return v; }
+	if (c == 'n') { js_i = js_i + 4; return j_new(J_NULL); }
+	if (c == '-' || (c >= '0' && c <= '9')) {
+		var v *JVal = j_new(J_NUM);
+		v.n = js_num();
+		return v;
+	}
+	return j_new(J_NULL);
+}
+
+fn j_get(o *JVal, key str) *JVal {
+	if (o as i64 == 0) { return 0 as *JVal; }
+	var m *JVal = o.item;
+	while (m as i64 != 0) {
+		if (str_eq(m.key, key)) { return m; }
+		m = m.next;
+	}
+	return 0 as *JVal;
+}
+
+// ── JSON writer ──
+
+fn j_write(b *Buf, v *JVal) {
+	if (v as i64 == 0) { fmt_str(b, "null"); return; }
+	if (v.kind == J_NULL) { fmt_str(b, "null"); }
+	else if (v.kind == J_BOOL) {
+		if (v.b) { fmt_str(b, "true"); } else { fmt_str(b, "false"); }
+	} else if (v.kind == J_NUM) { fmt_i64(b, v.n); }
+	else if (v.kind == J_STR) { js_esc(b, v.s); }
+	else if (v.kind == J_ARR) {
+		buf_u8(b, '[');
+		var first bool = true;
+		var e *JVal = v.item;
+		while (e as i64 != 0) {
+			if (!first) { buf_u8(b, ','); }
+			first = false;
+			j_write(b, e);
+			e = e.next;
+		}
+		buf_u8(b, ']');
+	} else {
+		buf_u8(b, '{');
+		var first bool = true;
+		var m *JVal = v.item;
+		while (m as i64 != 0) {
+			if (!first) { buf_u8(b, ','); }
+			first = false;
+			js_esc(b, m.key);
+			buf_u8(b, ':');
+			j_write(b, m);
+			m = m.next;
+		}
+		buf_u8(b, '}');
+	}
+}
+
+// ── framing ──
+
+var lsp_in Buf;
+
+fn lsp_read_more() bool {
+	var p *u8 = arena_alloc(4096, 1);
+	var got i64 = sys_read(0, p, 4096);
+	if (got <= 0) { return false; }
+	var i i64 = 0;
+	while (i < got) { buf_u8(&lsp_in, p[i]); i = i + 1; }
+	return true;
+}
+
+fn lsp_header_len(hdr str) i64 {
+	var v i64 = 0;
+	var seen_digit bool = false;
+	var i i64 = 0;
+	while (i < hdr.len) {
+		var c u8 = hdr.ptr[i];
+		if (c >= '0' && c <= '9') {
+			v = v * 10 + ((c - '0') as i64);
+			seen_digit = true;
+		} else if (seen_digit) {
+			return v;
+		}
+		i = i + 1;
+	}
+	return v;
+}
+
+// Blocks until one whole frame is buffered, then parses and consumes it.
+fn lsp_frame() *JVal {
+	while (true) {
+		var end i64 = -1;
+		var i i64 = 0;
+		while (i + 3 < lsp_in.n) {
+			if (lsp_in.p[i] == '\r' && lsp_in.p[i + 1] == '\n' &&
+			    lsp_in.p[i + 2] == '\r' && lsp_in.p[i + 3] == '\n') {
+				end = i;
+				break;
+			}
+			i = i + 1;
+		}
+		if (end < 0) {
+			if (!lsp_read_more()) { return 0 as *JVal; }
+			continue;
+		}
+		var hdr str = str_slice(buf_str(&lsp_in), 0, end);
+		var len i64 = lsp_header_len(hdr);
+		var total i64 = end + 4 + len;
+		if (lsp_in.n < total) {
+			if (!lsp_read_more()) { return 0 as *JVal; }
+			continue;
+		}
+		var body str = str_slice(buf_str(&lsp_in), end + 4, total);
+		var rem i64 = lsp_in.n - total;
+		var k i64 = 0;
+		while (k < rem) { lsp_in.p[k] = lsp_in.p[total + k]; k = k + 1; }
+		lsp_in.n = rem;
+		js_src = body;
+		js_i = 0;
+		return js_value();
+	}
+}
+
+fn lsp_send(b *Buf) {
+	var hb Buf;
+	fmt_str(&hb, "Content-Length: ");
+	fmt_i64(&hb, b.n as i64);
+	fmt_str(&hb, "\r\n\r\n");
+	sys_write(1, hb.p, hb.n);
+	sys_write(1, b.p, b.n);
+}
+
+fn lsp_respond(id *JVal, result *JVal) {
+	var b Buf;
+	fmt_str(&b, "{\"jsonrpc\":\"2.0\",\"id\":");
+	if (id as i64 == 0) { fmt_str(&b, "null"); }
+	else { j_write(&b, id); }
+	fmt_str(&b, ",\"result\":");
+	j_write(&b, result);
+	buf_u8(&b, '}');
+	lsp_send(&b);
+}
+
+fn lsp_notify(method str, params *JVal) {
+	var b Buf;
+	fmt_str(&b, "{\"jsonrpc\":\"2.0\",\"method\":");
+	js_esc(&b, method);
+	fmt_str(&b, ",\"params\":");
+	j_write(&b, params);
+	buf_u8(&b, '}');
+	lsp_send(&b);
+}
+
+// ── the index: written by the child, read by the parent ──
+
+// Tab-separated: file line col len info dfile dline dcol, one entry per
+// identifier. dline 0 means no definition.
+var idx_n int = 0;
+var idx_file [512]str;
+var idx_line [512]int;
+var idx_col  [512]int;
+var idx_len  [512]int;
+var idx_info [512]str;
+var idx_dfile [512]str;
+var idx_dline [512]int;
+var idx_dcol  [512]int;
+
+fn lsp_field(s str, k int) str {
+	var i i64 = 0;
+	var cur int = 0;
+	var start i64 = 0;
+	while (i <= s.len) {
+		if (i == s.len || s.ptr[i] == '\t') {
+			if (cur == k) { return str_slice(s, start, i); }
+			cur = cur + 1;
+			start = i + 1;
+		}
+		i = i + 1;
+	}
+	return "";
+}
+
+fn lsp_field_num(s str, k int) int {
+	var f str = lsp_field(s, k);
+	var v i64 = 0;
+	var i i64 = 0;
+	while (i < f.len) {
+		v = v * 10 + ((f.ptr[i] - '0') as i64);
+		i = i + 1;
+	}
+	return v as int;
+}
+
+fn lsp_parse_idx_line(line str, k int) {
+	idx_file[k] = lsp_field(line, 0);
+	idx_line[k] = lsp_field_num(line, 1);
+	idx_col[k] = lsp_field_num(line, 2);
+	idx_len[k] = lsp_field_num(line, 3);
+	idx_info[k] = lsp_field(line, 4);
+	idx_dfile[k] = lsp_field(line, 5);
+	idx_dline[k] = lsp_field_num(line, 6);
+	idx_dcol[k] = lsp_field_num(line, 7);
+}
+
+fn lsp_load_index(path str) {
+	idx_n = 0;
+	if (!file_exists(path)) { return; }
+	var txt str = read_file(path);
+	var i i64 = 0;
+	while (i < txt.len && idx_n < 512) {
+		var ls i64 = i;
+		while (i < txt.len && txt.ptr[i] != '\n') { i = i + 1; }
+		var line str = str_slice(txt, ls, i);
+		if (i < txt.len) { i = i + 1; }
+		lsp_parse_idx_line(line, idx_n);
+		idx_n = idx_n + 1;
+	}
+}
+
+fn lsp_find(line int, col int) int {
+	var i int = 0;
+	while (i < idx_n) {
+		if (str_eq(idx_file[i], lsp_path) && idx_line[i] == line + 1 &&
+		    col >= idx_col[i] - 1 && col < idx_col[i] - 1 + idx_len[i]) {
+			return i;
+		}
+		i = i + 1;
+	}
+	return -1;
+}
+
+// ── index writer, runs in the child ──
+
+struct IdxEnt {
+	name  str,
+	info  str,
+	pos   i64,
+	dpos  i64,
+}
+
+fn lsp_sig(b *Buf, f *Func) {
+	fmt_str(b, "fn ");
+	fmt_str(b, f.name);
+	buf_u8(b, '(');
+	var i int = 0;
+	while (i < f.nparams) {
+		if (i > 0) { fmt_str(b, ", "); }
+		var v *Var = f.p0;
+		if (i == 1) { v = f.p1; }
+		else if (i == 2) { v = f.p2; }
+		else if (i == 3) { v = f.p3; }
+		else if (i == 4) { v = f.p4; }
+		else if (i == 5) { v = f.p5; }
+		fmt_str(b, type_name(v.ty));
+		i = i + 1;
+	}
+	buf_u8(b, ')');
+	buf_u8(b, ' ');
+	fmt_str(b, type_name(f.ret));
+}
+
+fn idx_entry(b *Buf, e *IdxEnt) {
+	var fid int = diag_file_of(e.pos);
+	var off i64 = diag_offset_of(e.pos);
+	fmt_str(b, diag_path_of(fid));
+	buf_u8(b, '\t');
+	fmt_i64(b, diag_line_for(fid, off) as i64);
+	buf_u8(b, '\t');
+	fmt_i64(b, diag_col_for(fid, off) as i64);
+	buf_u8(b, '\t');
+	fmt_i64(b, e.name.len);
+	buf_u8(b, '\t');
+	fmt_str(b, e.info);
+	buf_u8(b, '\t');
+	if (e.dpos != -1) {
+		var did int = diag_file_of(e.dpos);
+		var doff i64 = diag_offset_of(e.dpos);
+		fmt_str(b, diag_path_of(did));
+		buf_u8(b, '\t');
+		fmt_i64(b, diag_line_for(did, doff) as i64);
+		buf_u8(b, '\t');
+		fmt_i64(b, diag_col_for(did, doff) as i64);
+	} else {
+		buf_u8(b, '\t');
+		buf_u8(b, '0');
+		buf_u8(b, '\t');
+		buf_u8(b, '0');
+	}
+	buf_u8(b, '\n');
+}
+
+fn idx_walk(b *Buf, n *Node) {
+	while (n as i64 != 0) {
+		idx_node(b, n);
+		n = n.next;
+	}
+}
+
+fn idx_node(b *Buf, n *Node) {
+	var e *IdxEnt = arena_alloc(sizeof(IdxEnt), 8) as *IdxEnt;
+	if (n.kind == ND_VAR && n.varp as i64 != 0) {
+		var info Buf;
+		fmt_str(&info, "var ");
+		fmt_str(&info, n.varp.name);
+		buf_u8(&info, ' ');
+		fmt_str(&info, type_name(n.varp.ty));
+		e.name = n.varp.name;
+		e.info = buf_str(&info);
+		e.pos = n.pos;
+		e.dpos = n.varp.pos;
+		idx_entry(b, e);
+	} else if (n.kind == ND_CALL || n.kind == ND_FUNCADDR) {
+		var f *Func = find_func(n.name);
+		if (f as i64 != 0) {
+			var info Buf;
+			lsp_sig(&info, f);
+			e.name = n.name;
+			e.info = buf_str(&info);
+			e.pos = n.pos;
+			e.dpos = f.pos;
+			idx_entry(b, e);
+		}
+	} else if (n.kind == ND_MEMBER && n.member as i64 != 0) {
+		var info Buf;
+		fmt_str(&info, "field ");
+		fmt_str(&info, n.member.name);
+		buf_u8(&info, ' ');
+		fmt_str(&info, type_name(n.member.ty));
+		e.name = n.member.name;
+		e.info = buf_str(&info);
+		e.pos = n.pos;
+		e.dpos = n.member.pos;
+		idx_entry(b, e);
+	}
+	idx_walk(b, n.lhs);
+	idx_walk(b, n.rhs);
+	idx_walk(b, n.cond);
+	idx_walk(b, n.then);
+	idx_walk(b, n.els);
+	idx_walk(b, n.init);
+	idx_walk(b, n.step);
+	idx_walk(b, n.body);
+	idx_walk(b, n.args);
+}
+
+fn lsp_write_index(unit *Unit, path str) {
+	var b Buf;
+	var f *Func = unit.funcs;
+	while (f as i64 != 0) {
+		idx_walk(&b, f.body);
+		f = f.next;
+	}
+	write_file(path, b.p, b.n);
+}
+
+// ── a compile, inside the forked child ──
+
+// The temp paths ride through globals: fork inherits them, and four str
+// parameters would not fit in the argument registers.
+var lsp_tmp_src str;
+var lsp_tmp_idx str;
+
+fn lsp_child() {
+	lsp_mode = true;
+	var src str = read_file(lsp_tmp_src);
+	var file int = diag_add_file(lsp_path, src);
+	var unit *Unit = parse(lex(src, (file as i64) << FILE_SHIFT));
+	var img Image;
+	codegen(unit, &img);
+	lsp_write_index(unit, lsp_tmp_idx);
+	sys_exit(0);
+}
+
+fn lsp_unlink(path str) {
+	var p *u8 = cstr(path);
+	sys_unlink(p);
+}
+
+// ── handlers ──
+
+fn j_pos_obj(line int, col int) *JVal {
+	var o *JVal = j_new(J_OBJ);
+	var sl *JVal = j_new(J_OBJ);
+	var cl *JVal = j_new(J_OBJ);
+	j_push(sl, "line", j_numv(line as i64));
+	j_push(sl, "character", j_numv(col as i64));
+	j_push(cl, "line", j_numv(line as i64));
+	j_push(cl, "character", j_numv((col + 1) as i64));
+	j_push(o, "start", sl);
+	j_push(o, "end", cl);
+	return o;
+}
+
+fn lsp_publish(diag_path str) {
+	var ds *JVal = j_new(J_ARR);
+	if (file_exists(diag_path)) {
+		var txt str = read_file(diag_path);
+		js_src = txt;
+		js_i = 0;
+		var d *JVal = js_value();
+		var file *JVal = j_get(d, "file");
+		var line *JVal = j_get(d, "line");
+		var col *JVal = j_get(d, "col");
+		var msg *JVal = j_get(d, "msg");
+		if (msg as i64 != 0) {
+			var one *JVal = j_new(J_OBJ);
+			j_push(one, "range", j_pos_obj((line.n - 1) as int, (col.n - 1) as int));
+			j_push(one, "severity", j_numv(1));
+			j_push(one, "message", j_strv(msg.s));
+			j_push(ds, "", one);
+		}
+	}
+	var params *JVal = j_new(J_OBJ);
+	j_push(params, "uri", j_strv(lsp_uri));
+	j_push(params, "diagnostics", ds);
+	lsp_notify("textDocument/publishDiagnostics", params);
+}
+
+fn lsp_compile() {
+	var base Buf;
+	fmt_str(&base, "/tmp/qela-lsp-");
+	fmt_i64(&base, sys_getpid());
+	fmt_str(&base, "-");
+	fmt_i64(&base, lsp_seq);
+	lsp_seq = lsp_seq + 1;
+	var s Buf;
+	fmt_str(&s, buf_str(&base));
+	fmt_str(&s, ".qela");
+	var tmp_src str = buf_str(&s);
+	var db Buf;
+	fmt_str(&db, buf_str(&base));
+	fmt_str(&db, ".diag");
+	var diag_path str = buf_str(&db);
+	var ib Buf;
+	fmt_str(&ib, buf_str(&base));
+	fmt_str(&ib, ".idx");
+	var idx_path str = buf_str(&ib);
+
+	write_file(tmp_src, lsp_text.ptr, lsp_text.len);
+	lsp_tmp_src = tmp_src;
+	lsp_tmp_idx = idx_path;
+	lsp_diag_path = diag_path;
+	var pid i64 = sys_fork();
+	if (pid == 0) {
+		lsp_child();
+	}
+	var status [1]i64;
+	sys_wait4(pid, &status[0] as *u8);
+	lsp_publish(diag_path);
+	lsp_load_index(idx_path);
+	lsp_unlink(tmp_src);
+	lsp_unlink(diag_path);
+	lsp_unlink(idx_path);
+}
+
+fn lsp_doc(uri_str str, text_str str) {
+	lsp_uri = uri_str;
+	lsp_text = text_str;
+	lsp_path = "";
+	if (uri_str.len >= 7 && uri_str.ptr[7] == '/') {
+		lsp_path = str_slice(uri_str, 7, uri_str.len);
+	}
+	lsp_compile();
+}
+
+fn lsp_hover(params *JVal) *JVal {
+	var pos *JVal = j_get(params, "position");
+	var line *JVal = j_get(pos, "line");
+	var ch *JVal = j_get(pos, "character");
+	var k int = lsp_find(line.n as int, ch.n as int);
+	if (k < 0) { return 0 as *JVal; }
+	var o *JVal = j_new(J_OBJ);
+	j_push(o, "contents", j_strv(idx_info[k]));
+	return o;
+}
+
+fn lsp_def(params *JVal) *JVal {
+	var pos *JVal = j_get(params, "position");
+	var line *JVal = j_get(pos, "line");
+	var ch *JVal = j_get(pos, "character");
+	var k int = lsp_find(line.n as int, ch.n as int);
+	if (k < 0 || idx_dline[k] == 0) { return 0 as *JVal; }
+	var ub Buf;
+	fmt_str(&ub, "file://");
+	fmt_str(&ub, idx_dfile[k]);
+	var loc *JVal = j_new(J_OBJ);
+	j_push(loc, "uri", j_strv(buf_str(&ub)));
+	j_push(loc, "range", j_pos_obj(idx_dline[k] - 1, idx_dcol[k] - 1));
+	var arr *JVal = j_new(J_ARR);
+	j_push(arr, "", loc);
+	return arr;
+}
+
+fn lsp_handle(req *JVal) {
+	var id *JVal = j_get(req, "id");
+	var method *JVal = j_get(req, "method");
+	var params *JVal = j_get(req, "params");
+	if (method as i64 == 0) { return; }
+	var m str = method.s;
+	if (str_eq(m, "initialize")) {
+		var cap *JVal = j_new(J_OBJ);
+		j_push(cap, "textDocumentSync", j_numv(1));
+		j_push(cap, "hoverProvider", j_boolv(true));
+		j_push(cap, "definitionProvider", j_boolv(true));
+		var info *JVal = j_new(J_OBJ);
+		j_push(info, "name", j_strv("qela"));
+		j_push(info, "version", j_strv("0.1"));
+		var res *JVal = j_new(J_OBJ);
+		j_push(res, "capabilities", cap);
+		j_push(res, "serverInfo", info);
+		lsp_respond(id, res);
+	} else if (str_eq(m, "initialized")) {
+	} else if (str_eq(m, "shutdown")) {
+		lsp_respond(id, 0 as *JVal);
+		lsp_shutdown = true;
+	} else if (str_eq(m, "exit")) {
+		sys_exit(0);
+	} else if (str_eq(m, "textDocument/didOpen")) {
+		var td *JVal = j_get(params, "textDocument");
+		var uri *JVal = j_get(td, "uri");
+		var text *JVal = j_get(td, "text");
+		if (uri as i64 != 0 && text as i64 != 0) { lsp_doc(uri.s, text.s); }
+	} else if (str_eq(m, "textDocument/didChange")) {
+		var td *JVal = j_get(params, "textDocument");
+		var uri *JVal = j_get(td, "uri");
+		var cc *JVal = j_get(params, "contentChanges");
+		var first *JVal = 0 as *JVal;
+		if (cc as i64 != 0) { first = cc.item; }
+		var text *JVal = j_get(first, "text");
+		if (uri as i64 != 0 && text as i64 != 0) { lsp_doc(uri.s, text.s); }
+	} else if (str_eq(m, "textDocument/didClose")) {
+		lsp_uri = "";
+		lsp_path = "";
+		lsp_text = "";
+		idx_n = 0;
+	} else if (str_eq(m, "textDocument/hover")) {
+		lsp_respond(id, lsp_hover(params));
+	} else if (str_eq(m, "textDocument/definition")) {
+		lsp_respond(id, lsp_def(params));
+	} else {
+		if (id as i64 != 0) { lsp_respond(id, 0 as *JVal); }
+	}
+}
+
+fn lsp_run() int {
+	while (true) {
+		var req *JVal = lsp_frame();
+		if (req as i64 == 0) { return 0; }
+		lsp_handle(req);
+		if (lsp_shutdown) { return 0; }
+	}
+}
