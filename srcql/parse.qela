@@ -770,6 +770,7 @@ fn parse_function(t **Token) *Func {
 	enter_scope();
 	tok_expect(t, "(");
 	var nparams int = 0;
+	var rwords int = 0;
 	var saved_ntype_vars int = ntype_vars;
 	while (!tok_eq(*t, ")")) {
 		if (nparams > 0) { tok_expect(t, ","); }
@@ -780,6 +781,7 @@ fn parse_function(t **Token) *Func {
 			*t = (*t).next;
 			tok_expect(t, ":");
 			if (f.nct != nparams) { error_at(pp, "comptime parameters must come first"); }
+			if (f.nct == 6) { error_at(pp, "too many comptime parameters"); }
 			parse_type(t);
 			var tv *Type = type_new_var(pn);
 			type_vars[ntype_vars] = tv;
@@ -802,6 +804,13 @@ fn parse_function(t **Token) *Func {
 		var pp i64 = (*t).pos;
 		*t = (*t).next;
 		var pty *Type = parse_type(t);
+		if (is_aggregate(pty) && pty.size > 8 && pty.size <= 16) {
+			rwords = rwords + 2;
+		} else {
+			rwords = rwords + 1;
+		}
+		if (rwords > 6) { error_at(pp, "parameters do not fit in the argument registers"); }
+		if (nparams == 6) { error_at(pp, "at most 6 parameters are supported"); }
 		var v *Var = declare_var(pn, pty, pp);
 		v.by_ref = is_aggregate(pty) && pty.size > 16;
 		if (nparams == 0) { f.p0 = v; }
