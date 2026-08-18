@@ -7,13 +7,13 @@ Updated 2026-08-03. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **161 832 B** |
-| S2 under xz -9 (proxy for upx --lzma) | 38 676 B, ~3.7% of the 1 MiB budget |
+| **S2 — the shipped compiler, Qela compiled by itself** | **162 824 B** |
+| S2 under xz -9 (proxy for upx --lzma) | 38 964 B, ~3.7% of the 1 MiB budget |
 | stage1 sources | 6 653 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **226%**, or **193%** without bounds checks (M4 gate wants ≤150%) |
 
 Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the
-31-test corpus under S2, the embedded stdlib resolving outside the source tree,
+38-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, and `run`/`fmt`.
 
 ## Done
@@ -29,9 +29,12 @@ monomorphization, with the type argument inferred from the value arguments
 when it is not written out; `syscall`; `main(argc, argv)`; bounds checks.
 
 **Concurrency.** `spawn f(...)`, `coro_yield`, `coro_run_all` on separate
-stacks; `Chan(T)`, buffered channels of any element type. `ch <- v` and `<-ch`
-infer that type, block through the scheduler, and report a deadlock rather than
-spinning when nothing can run.
+stacks; `Chan(T)`, buffered channels of any element type, and rendezvous at
+`chan_init(&ch, 0)` where the sender hands the value across directly. `ch <- v`
+and `<-ch` infer that type. Waiting is polling over the scheduler, so a
+deadlock is detected by progress: a full round of the scheduler with no value
+moved anywhere is reported rather than spun on. The corpus now covers
+coroutines, channels, the collector and deadlock reporting under S2.
 
 **Memory.** Arena by default; `std/gc.qela` is a conservative mark-sweep
 collector rooted in the callee-saved registers, the stack and the data segment.
@@ -118,7 +121,6 @@ a settled shape rather than a moving target.
   sessions would have slipped past it**, including the two the register
   allocator would have been most likely to introduce. Still the cheapest way to
   buy confidence.
-- Unbuffered channels (true rendezvous).
 - Parameterized types take at most two parameters, and there is no way to
   constrain one. Both limits are in `srcql/generic.qela`.
 - `genblob.py --min` to strip comments and indentation from the embedded
