@@ -162,6 +162,8 @@ struct Var {
 	hi        i64,
 	uses      i64,
 	pos       i64,
+	arg_stack bool,
+	pnext     *Var,
 }
 
 struct Node {
@@ -188,6 +190,7 @@ struct Node {
 	typeval *Type,
 	name    str,
 	pos     i64,
+	stack_tmp *Var,
 }
 
 // Parameters are six separate slots: stage0 has no arrays inside structs.
@@ -212,6 +215,8 @@ struct Func {
 	p3         *Var,
 	p4         *Var,
 	p5         *Var,
+	pextra     *Var,
+	n_stack_args int,
 }
 
 // Source order drives the output bytes; see the determinism rules.

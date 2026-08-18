@@ -1,9 +1,10 @@
-// expect-compile-error
-// Six argument registers are the whole ABI: seven scalar parameters do not
-// fit, and the compiler says so instead of silently losing the seventh.
-fn seven(a int, b int, c int, d int, e int, f int, g int) int {
-	return a + b + c + d + e + f + g;
+// stage1-only
+// expect-exit: 45
+// More than 6 parameters: the 7th, 8th, 9th spill to the stack (rbp+16,
+// +24, +32) instead of being rejected.
+fn nine(a int, b int, c int, d int, e int, f int, g int, h int, i int) int {
+	return a + b + c + d + e + f + g + h + i;
 }
 fn main() int {
-	return seven(1, 2, 3, 4, 5, 6, 7);
+	return nine(1, 2, 3, 4, 5, 6, 7, 8, 9);
 }
