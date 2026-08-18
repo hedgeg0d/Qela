@@ -10,6 +10,11 @@ var files [64]FileInfo;
 var nfiles int = 0;
 var module_dir str;
 
+// In LSP mode the compiler is a forked child: error_at records one JSON
+// diagnostic into lsp_diag_path and dies, and the parent session survives.
+var lsp_mode bool = false;
+var lsp_diag_path str;
+
 fn set_module_dir(path str) {
 	module_dir = path;
 }
@@ -72,9 +77,54 @@ fn diag_col_for(file_id int, off i64) int {
 	return (off - start + 1) as int;
 }
 
+// A double-quoted, escaped JSON string.
+fn js_esc(b *Buf, s str) {
+	buf_u8(b, '"');
+	var i i64 = 0;
+	while (i < s.len) {
+		var c u8 = s.ptr[i];
+		if (c == '"' || c == '\\') {
+			buf_u8(b, '\\');
+			buf_u8(b, c);
+		} else if (c == '\n') {
+			buf_u8(b, '\\');
+			buf_u8(b, 'n');
+		} else if (c == '\t') {
+			buf_u8(b, '\\');
+			buf_u8(b, 't');
+		} else if (c == '\r') {
+			buf_u8(b, '\\');
+			buf_u8(b, 'r');
+		} else {
+			buf_u8(b, c);
+		}
+		i = i + 1;
+	}
+	buf_u8(b, '"');
+}
+
 fn error_at(pos i64, msg str) {
 	var id int = diag_file_of(pos);
 	var off i64 = diag_offset_of(pos);
+	if (lsp_mode) {
+		var b Buf;
+		fmt_str(&b, "{\"file\":");
+		js_esc(&b, files[id].path);
+		fmt_str(&b, ",\"line\":");
+		fmt_i64(&b, diag_line_for(id, off) as i64);
+		fmt_str(&b, ",\"col\":");
+		fmt_i64(&b, diag_col_for(id, off) as i64);
+		fmt_str(&b, ",\"msg\":");
+		js_esc(&b, msg);
+		buf_u8(&b, '}');
+		buf_u8(&b, '\n');
+		var fd i64 = sys_open_append(cstr(lsp_diag_path));
+		if (fd >= 0) {
+			sys_write(fd, b.p, b.n);
+			sys_close(fd);
+		}
+		sys_exit(1);
+	}
 	eprint(files[id].path);
 	eprint(":");
 	eprint_i64(diag_line_for(id, off) as i64);
