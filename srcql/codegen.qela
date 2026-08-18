@@ -631,7 +631,7 @@ fn gen_bt_walker() {
 }
 
 fn by_ref_ty(ty *Type) bool {
-	return is_aggregate(ty) && ty.size > 16;
+	return is_aggregate(ty) && abi_by_ref(ty.size);
 }
 
 fn copy_rsi_rdi(size int) {
@@ -1271,7 +1271,7 @@ fn gen_call(n *Node) {
 	var cf *Func = find_func(n.name);
 	var marshall bool = false;
 	if (cf as i64 != 0) { marshall = cf.extern; }
-	var ret_mem bool = is_aggregate(n.ty) && n.ty.size > 16;
+	var ret_mem bool = is_aggregate(n.ty) && abi_by_ref(n.ty.size);
 	var hidden i64 = -1;
 	if (ret_mem) { hidden = n.tmp.offset as i64; }
 	gen_args(n, false, false, hidden, marshall);
@@ -1308,7 +1308,7 @@ fn gen_call(n *Node) {
 // target can only live in a callee-saved register (an indirect call makes
 // the function non-leaf, so the free caller-saved pool is out).
 fn gen_indirect_call(n *Node) {
-	var ret_mem bool = is_aggregate(n.ty) && n.ty.size > 16;
+	var ret_mem bool = is_aggregate(n.ty) && abi_by_ref(n.ty.size);
 	var hidden i64 = -1;
 	if (ret_mem) { hidden = n.tmp.offset as i64; }
 	gen_args(n, false, false, hidden, false);
