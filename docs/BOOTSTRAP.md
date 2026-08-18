@@ -10,7 +10,7 @@ The compiler exists in three roles:
 | | What | Built by | Shipped? |
 |---|---|---|---|
 | **stage0** | `src/*.c`, 46 KiB | gcc | no, one-shot |
-| **stage1** | `srcql/*.qela` + `std/*.qela` | stage0, then itself | as **S2** |
+| **stage1** | `srcql/*.qela` + the `std/` modules it imports | stage0, then itself | as **S2** |
 | **S2** | stage1 compiled by itself | S1a | **yes** |
 
 Everything else follows from one rule:
@@ -19,9 +19,15 @@ Everything else follows from one rule:
 > stage0 (C) and in stage1 (Qela).**
 
 So the subset is narrow. It is orthogonal to what stage1 offers its users:
-stage1 implements the **whole** language — generics, comptime, defer, match —
-but does not **use** any of it in its own sources. A bug in comptime then
-cannot break the bootstrap.
+stage1 implements the **whole** language — generics, parameterized types,
+comptime, defer, match — but does not **use** any of it in its own sources. A
+bug in comptime then cannot break the bootstrap.
+
+The subset binds only what stage1 is *built from*: `srcql/` plus the `std/`
+modules those files import, directly or through another. The rest of `std/`
+— `chan.qela`, `gc.qela`, `coro.qela` — is compiled by stage1 and may use the
+whole language; `tools/check-subset.sh` works the set out from the imports
+rather than assuming it.
 
 stage0 is **frozen**. Changes to `src/*.c` are bug fixes backed by a test, never
 new language features.
@@ -113,11 +119,17 @@ std/fmt.qela       formatted output for diagnostics
 std/list.qela      growable pointer array
 std/map.qela       str -> pointer hash table, deterministic iteration
 
+  outside the bootstrap subset, compiled by stage1:
+std/coro.qela      coroutines on their own stacks
+std/chan.qela      Chan(T), buffered channels of any element type
+std/gc.qela        conservative mark-sweep collector
+
 srcql/comp.qela    types and the module contract, the only shared header
 srcql/diag.qela    files, positions, error_at with a caret
 srcql/lex.qela     tokenizer
 srcql/parse.qela   recursive descent to AST
 srcql/type.qela    name resolution, type checking, monomorphization
+srcql/generic.qela parameterized types: templates and instantiation
 srcql/ir.qela      SSA-lite IR (phase D, after the bootstrap)
 srcql/opt.qela     mem2reg, constant propagation, DCE (phase D)
 srcql/codegen.qela x86-64 emission
