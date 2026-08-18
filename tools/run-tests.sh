@@ -2,6 +2,7 @@
 # Each test declares its expectations in leading comments:
 #   // expect-exit: 42
 #   // expect-out: some text
+#   // expect-compile-error  the compiler must reject the file
 #   // stage1-only        a feature stage0 does not have; skipped under ./qela
 set -u
 
@@ -24,6 +25,17 @@ for src in tests/*.qela; do
 	want_exit=$(sed -n 's|^// expect-exit: ||p' "$src")
 	want_out=$(sed -n 's|^// expect-out: ||p' "$src")
 	[ -z "$want_exit" ] && want_exit=0
+
+	if grep -q '^// expect-compile-error' "$src"; then
+		if "$QELA" "$src" -o "$bin" >/dev/null 2>&1; then
+			printf 'FAIL %s: compiled, but was expected to be rejected\n' "$name"
+			fail=$((fail + 1))
+		else
+			printf 'ok   %-16s rejected\n' "$name"
+			pass=$((pass + 1))
+		fi
+		continue
+	fi
 
 	if ! "$QELA" "$src" -o "$bin" 2>"$OUT/$name.err"; then
 		printf 'FAIL %s: compile error\n' "$name"
