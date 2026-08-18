@@ -1,0 +1,8 @@
+// stage1-only
+// expect-exit: 134
+// expect-out: kaboom
+// panic(msg) is assert(false, msg): unconditional.
+fn main() int {
+	panic("kaboom");
+	return 0;
+}
