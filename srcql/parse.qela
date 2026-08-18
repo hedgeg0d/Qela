@@ -22,6 +22,89 @@ var global_vars *Var;
 // std/fmt.qela at the next top-level splice point.
 var need_fmt bool = false;
 
+// ── macros ──
+
+var macro_list *Macro;
+var macro_tail *Macro;
+
+fn macro_find(name str) *Macro {
+	var m *Macro = macro_list;
+	while (m as i64 != 0) {
+		if (str_eq(m.name, name)) { return m; }
+		m = m.next;
+	}
+	return 0 as *Macro;
+}
+
+fn macro_param(m *Macro, i int) *Var {
+	if (i == 0) { return m.p0; }
+	if (i == 1) { return m.p1; }
+	if (i == 2) { return m.p2; }
+	if (i == 3) { return m.p3; }
+	if (i == 4) { return m.p4; }
+	return m.p5;
+}
+
+// A parameter is a placeholder local: findable by name in the scope while
+// the body parses, but never a real local or global (a call replaces every
+// reference before typing).
+fn macro_decl_param(name str, pos i64) *Var {
+	var v *Var = arena_alloc(sizeof(Var), 8) as *Var;
+	v.name = name;
+	v.ty = 0 as *Type;
+	v.pos = pos;
+	var vsc *VarScope = arena_alloc(sizeof(VarScope), 8) as *VarScope;
+	vsc.next = scope_root.vars;
+	vsc.name = name;
+	vsc.varp = v;
+	scope_root.vars = vsc;
+	return v;
+}
+
+fn parse_macro(t **Token) {
+	var mp i64 = (*t).pos;
+	*t = (*t).next;
+	if ((*t).kind != TK_IDENT) { error_at((*t).pos, "macro needs a name"); }
+	var name str = (*t).text;
+	var p i64 = (*t).pos;
+	*t = (*t).next;
+	if (macro_find(name) as i64 != 0) { error_at(p, "macro redefinition"); }
+	enter_scope();
+	var m *Macro = arena_alloc(sizeof(Macro), 8) as *Macro;
+	m.name = name;
+	m.pos = p;
+	tok_expect(t, "(");
+	var np int = 0;
+	if (!tok_eq(*t, ")")) {
+		while (true) {
+			if (np >= 6) { error_at((*t).pos, "too many macro parameters"); }
+			if ((*t).kind != TK_IDENT) { error_at((*t).pos, "macro parameter must be an identifier"); }
+			var pn str = (*t).text;
+			var pp i64 = (*t).pos;
+			*t = (*t).next;
+			var pv *Var = macro_decl_param(pn, pp);
+			if (np == 0) { m.p0 = pv; }
+			else if (np == 1) { m.p1 = pv; }
+			else if (np == 2) { m.p2 = pv; }
+			else if (np == 3) { m.p3 = pv; }
+			else if (np == 4) { m.p4 = pv; }
+			else { m.p5 = pv; }
+			np = np + 1;
+			if (tok_consume(t, ",")) { continue; }
+			break;
+		}
+	}
+	tok_expect(t, ")");
+	tok_expect(t, "=");
+	m.body = parse_assign(t);
+	tok_expect(t, ";");
+	leave_scope();
+	m.nparams = np;
+	if (macro_tail as i64 == 0) { macro_list = m; }
+	else { macro_tail.next = m; }
+	macro_tail = m;
+}
+
 var type_vars [6]*Type;
 var ntype_vars int;
 
@@ -389,6 +472,8 @@ fn parse_primary(t **Token) *Node {
 
 		// function call
 		if (tok_eq(*t, "(")) {
+			var m *Macro = macro_find(name);
+			if (m as i64 != 0) { return macro_call(m, t, p); }
 			var kind int = ND_CALL;
 			if (str_eq(name, "syscall")) { kind = ND_SYSCALL; }
 			if (str_eq(name, "asm")) { kind = ND_ASM; }
@@ -640,6 +725,53 @@ fn parse_decl(t **Token) *Node {
 	}
 	tok_expect(t, ";");
 	return n;
+}
+
+// A call site parses the arguments, then clones the body with every
+// placeholder replaced by a fresh clone of its argument. The substitution
+// is trees, not text: no parentheses, no comma problems, and the expanded
+// tree gets the ordinary type check and bounds checks. The clone-per-use
+// means an argument evaluates as many times as the body names it.
+fn macro_call(m *Macro, t **Token, pos i64) *Node {
+	tok_expect(t, "(");
+	var args [6]*Node;
+	var nargs int = 0;
+	while (!tok_eq(*t, ")")) {
+		if (nargs > 0) { tok_expect(t, ","); }
+		if (nargs >= 6) { error_at((*t).pos, "too many macro arguments"); }
+		args[nargs] = parse_assign(t);
+		nargs = nargs + 1;
+	}
+	tok_expect(t, ")");
+	if (nargs != m.nparams) { error_at(pos, "macro takes a different number of arguments"); }
+	return macro_expand(m.body, m, &args[0], nargs, pos);
+}
+
+fn macro_expand(n *Node, m *Macro, args **Node, nargs int, pos i64) *Node {
+	if (n as i64 == 0) { return 0 as *Node; }
+	if (n.kind == ND_VAR) {
+		var i int = 0;
+		while (i < nargs) {
+			if ((n.varp as i64) == (macro_param(m, i) as i64)) {
+				return macro_expand(args[i], m, args, nargs, pos);
+			}
+			i = i + 1;
+		}
+	}
+	var c *Node = arena_alloc(sizeof(Node), 8) as *Node;
+	*c = *n;
+	c.pos = pos;
+	c.next = macro_expand(n.next, m, args, nargs, pos);
+	c.lhs = macro_expand(n.lhs, m, args, nargs, pos);
+	c.rhs = macro_expand(n.rhs, m, args, nargs, pos);
+	c.cond = macro_expand(n.cond, m, args, nargs, pos);
+	c.then = macro_expand(n.then, m, args, nargs, pos);
+	c.els = macro_expand(n.els, m, args, nargs, pos);
+	c.init = macro_expand(n.init, m, args, nargs, pos);
+	c.step = macro_expand(n.step, m, args, nargs, pos);
+	c.body = macro_expand(n.body, m, args, nargs, pos);
+	c.args = macro_expand(n.args, m, args, nargs, pos);
+	return c;
 }
 
 fn parse_stmt(t **Token) *Node {
@@ -1222,6 +1354,7 @@ fn parse(tok *Token) *Unit {
 			tok = splice_import(tok, "std/fmt.qela", tok.pos);
 		}
 		if (tok.kind == TK_EOF) { break; }
+		if (tok_eq(tok, "macro")) { parse_macro(&tok); continue; }
 		if (tok_eq(tok, "struct")) { parse_struct(&tok); continue; }
 		if (tok_eq(tok, "enum")) { parse_enum(&tok); continue; }
 		if (tok_eq(tok, "let") || tok_eq(tok, "var")) { parse_global(&tok); continue; }
