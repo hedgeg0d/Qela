@@ -302,6 +302,32 @@ fn ev_while(env *Env, c *ConsCell) Obj {
 	return Obj.Nil;
 }
 
+// and/or with short-circuiting: and returns the last value (nil stops),
+// or returns the first non-nil one.
+fn ev_and(env *Env, c *ConsCell) Obj {
+	var rest Obj = c.cdr;
+	var last Obj = Obj.Nil;
+	while (obj_is_pair(rest)) {
+		last = ev_eval(env, obj_car(rest));
+		if (g_err) { return Obj.Nil; }
+		if (obj_is_nil(last)) { return Obj.Nil; }
+		rest = obj_cdr(rest);
+	}
+	if (obj_is_nil(last)) { return sym_intern("t"); }
+	return last;
+}
+
+fn ev_or(env *Env, c *ConsCell) Obj {
+	var rest Obj = c.cdr;
+	while (obj_is_pair(rest)) {
+		var v Obj = ev_eval(env, obj_car(rest));
+		if (g_err) { return Obj.Nil; }
+		if (!obj_is_nil(v)) { return v; }
+		rest = obj_cdr(rest);
+	}
+	return Obj.Nil;
+}
+
 // A macro binds raw argument expressions, evaluates its body to an
 // expansion, and evaluates that in the caller's environment.
 fn ev_macro(call_env *Env, cl *Closure, raw Obj) Obj {
@@ -327,6 +353,8 @@ fn ev_apply_form(env *Env, c *ConsCell) Obj {
 			if (str_eq(s, "begin")) { return ev_begin(env, c); }
 			if (str_eq(s, "set!")) { return ev_set_bang(env, c); }
 			if (str_eq(s, "while")) { return ev_while(env, c); }
+			if (str_eq(s, "and")) { return ev_and(env, c); }
+			if (str_eq(s, "or")) { return ev_or(env, c); }
 		}
 		_ => { }
 	}

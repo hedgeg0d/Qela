@@ -291,6 +291,65 @@ fn bl_listp(args Obj) Obj {
 	return Obj.Nil;
 }
 
+fn bl_str_eq(args Obj) Obj {
+	if (!bl_expect(args, 2, "string=?")) { return Obj.Nil; }
+	match (obj_car(args)) {
+		Str(a) => {
+			match (bl_arg(args, 1)) {
+				Str(b) => {
+					if (str_eq(a, b)) { return bl_true(); }
+					return Obj.Nil;
+				}
+				_ => { return obj_err("string=?: expected a string"); }
+			}
+		}
+		_ => { return obj_err("string=?: expected a string"); }
+	}
+	return Obj.Nil;
+}
+
+// Deep structural equality: numbers by value, symbols by name, strings by
+// content, pairs recursively, nil equal to nil; procedures only to
+// themselves.
+fn bl_equal(args Obj) Obj {
+	if (!bl_expect(args, 2, "equal?")) { return Obj.Nil; }
+	var a Obj = obj_car(args);
+	var b Obj = bl_arg(args, 1);
+	if (obj_is_nil(a) && obj_is_nil(b)) { return bl_true(); }
+	match (a) {
+		Int(x) => {
+			match (b) {
+				Int(y) => { if (x == y) { return bl_true(); } return Obj.Nil; }
+				_ => { return Obj.Nil; }
+			}
+		}
+		Sym(x) => {
+			match (b) {
+				Sym(y) => { if (str_eq(x, y)) { return bl_true(); } return Obj.Nil; }
+				_ => { return Obj.Nil; }
+			}
+		}
+		Str(x) => {
+			match (b) {
+				Str(y) => { if (str_eq(x, y)) { return bl_true(); } return Obj.Nil; }
+				_ => { return Obj.Nil; }
+			}
+		}
+		Cons(x) => {
+			match (b) {
+				Cons(y) => {
+					var ca Obj = bl_equal(obj_cons(x.car, obj_cons(y.car, Obj.Nil)));
+					if (obj_is_nil(ca)) { return Obj.Nil; }
+					return bl_equal(obj_cons(x.cdr, obj_cons(y.cdr, Obj.Nil)));
+				}
+				_ => { return Obj.Nil; }
+			}
+		}
+		_ => { return Obj.Nil; }
+	}
+	return Obj.Nil;
+}
+
 // ── strings ──
 
 fn bl_str_append(args Obj) Obj {
@@ -456,6 +515,8 @@ fn bl_call(name str, args Obj) Obj {
 	if (str_eq(name, "null?")) { return bl_pred(args, "null?", 5); }
 	if (str_eq(name, "procedure?")) { return bl_pred(args, "procedure?", 6); }
 	if (str_eq(name, "list?")) { return bl_listp(args); }
+	if (str_eq(name, "string=?")) { return bl_str_eq(args); }
+	if (str_eq(name, "equal?")) { return bl_equal(args); }
 	if (str_eq(name, "string-append")) { return bl_str_append(args); }
 	if (str_eq(name, "string-length")) { return bl_str_length(args); }
 	if (str_eq(name, "string-ref")) { return bl_str_ref(args); }
@@ -501,6 +562,8 @@ fn bl_install(env *Env) {
 	env_define(env, "null?", Obj.Builtin("null?"));
 	env_define(env, "procedure?", Obj.Builtin("procedure?"));
 	env_define(env, "list?", Obj.Builtin("list?"));
+	env_define(env, "string=?", Obj.Builtin("string=?"));
+	env_define(env, "equal?", Obj.Builtin("equal?"));
 	env_define(env, "string-append", Obj.Builtin("string-append"));
 	env_define(env, "string-length", Obj.Builtin("string-length"));
 	env_define(env, "string-ref", Obj.Builtin("string-ref"));
