@@ -1,0 +1,88 @@
+// 02_token.qela — the lexer.
+//
+// A flat token list ending with TK_END. Parens, dots and quotes are single
+// tokens; atoms run to the next delimiter; string literals are decoded
+// (escapes resolved) into arena memory. `;` starts a comment to end of
+// line. A dot is always a delimiter, so symbols cannot contain dots.
+
+import "std/buf.qela";
+import "std/str.qela";
+
+let TK_LPAR  = 1;
+let TK_RPAR  = 2;
+let TK_DOT   = 3;
+let TK_QUOTE = 4;
+let TK_ATOM  = 5;
+let TK_STR   = 6;
+let TK_END   = 7;
+
+struct Tok {
+	kind int,
+	text str,
+	next *Tok,
+}
+
+fn is_atom_delim(c u8) bool {
+	return c == '(' || c == ')' || c == '.' || c == '\'' ||
+	       c == '"' || c == ';' || c == ' ' || c == '\t' ||
+	       c == '\n' || c == '\r';
+}
+
+fn lex_push(head **Tok, tail **Tok, kind int, text str) {
+	var t *Tok = arena_alloc(sizeof(Tok), 8) as *Tok;
+	t.kind = kind;
+	t.text = text;
+	t.next = 0 as *Tok;
+	if (*head as i64 == 0) { *head = t; }
+	else { (*tail).next = t; }
+	*tail = t;
+}
+
+fn lex(src str) *Tok {
+	var head *Tok = 0 as *Tok;
+	var tail *Tok = 0 as *Tok;
+	var i i64 = 0;
+	while (i < src.len) {
+		var c u8 = src.ptr[i];
+		if (c == ' ' || c == '\t' || c == '\n' || c == '\r') { i = i + 1; continue; }
+		if (c == ';') {
+			while (i < src.len && src.ptr[i] != '\n') { i = i + 1; }
+			continue;
+		}
+		if (c == '(') { lex_push(&head, &tail, TK_LPAR, str_slice(src, i, i + 1)); i = i + 1; continue; }
+		if (c == ')') { lex_push(&head, &tail, TK_RPAR, str_slice(src, i, i + 1)); i = i + 1; continue; }
+		if (c == '.') { lex_push(&head, &tail, TK_DOT, str_slice(src, i, i + 1)); i = i + 1; continue; }
+		if (c == '\'') { lex_push(&head, &tail, TK_QUOTE, str_slice(src, i, i + 1)); i = i + 1; continue; }
+		if (c == '"') {
+			var start i64 = i;
+			var sb Buf;
+			i = i + 1;
+			while (i < src.len && src.ptr[i] != '"') {
+				var ch u8 = src.ptr[i];
+				if (ch == '\\' && i + 1 < src.len) {
+					var e u8 = src.ptr[i + 1];
+					if (e == 'n') { ch = '\n'; }
+					else if (e == 't') { ch = '\t'; }
+					else if (e == '"') { ch = '"'; }
+					else if (e == '\\') { ch = '\\'; }
+					else { ch = e; }
+					i = i + 1;
+				}
+				buf_u8(&sb, ch);
+				i = i + 1;
+			}
+			if (i >= src.len) {
+				lex_push(&head, &tail, TK_END, str_slice(src, start, i));
+				return head;
+			}
+			i = i + 1;
+			lex_push(&head, &tail, TK_STR, buf_str(&sb));
+			continue;
+		}
+		var start i64 = i;
+		while (i < src.len && !is_atom_delim(src.ptr[i])) { i = i + 1; }
+		lex_push(&head, &tail, TK_ATOM, str_slice(src, start, i));
+	}
+	lex_push(&head, &tail, TK_END, str_slice(src, i, i));
+	return head;
+}
