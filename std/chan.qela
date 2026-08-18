@@ -16,6 +16,11 @@ struct Chan(T) {
 	head    i64,
 	closed  bool,
 	waiting bool,
+	// A spinlock guards every field above: a channel may now be shared
+	// between real OS threads, not just coroutines on one. It is never
+	// held across a chan_block -- that yields or spins, and a lock held
+	// across that would starve whichever side needs it to make progress.
+	lock    i64,
 }
 
 var chan_nblocked int = 0;
@@ -33,6 +38,15 @@ fn chan_init(comptime T: type, c *Chan(T), cap i64) {
 	c.head = 0;
 	c.closed = false;
 	c.waiting = false;
+	c.lock = 0;
+}
+
+fn chan_lock(comptime T: type, c *Chan(T)) {
+	while (!atomic_cas(&c.lock, 0, 1)) { }
+}
+
+fn chan_unlock(comptime T: type, c *Chan(T)) {
+	atomic_store(&c.lock, 0);
 }
 
 fn chan_len(comptime T: type, c *Chan(T)) i64 { return c.n; }
@@ -40,8 +54,10 @@ fn chan_len(comptime T: type, c *Chan(T)) i64 { return c.n; }
 fn chan_is_closed(comptime T: type, c *Chan(T)) bool { return c.closed; }
 
 fn chan_close(comptime T: type, c *Chan(T)) {
+	chan_lock(c);
 	c.closed = true;
-	chan_epoch = chan_epoch + 1;
+	chan_unlock(c);
+	atomic_add(&chan_epoch, 1);
 }
 
 fn chan_die(what str) {
@@ -51,7 +67,15 @@ fn chan_die(what str) {
 	sys_exit(1);
 }
 
+// coro_live()/coro_yield() only see this thread's own coroutines: on a
+// thread with no spawned coroutines at all (the common case for a bare OS
+// thread exchanging values over a channel), the stall/deadlock heuristic
+// below is meaningless -- there is nothing on this thread for it to have
+// caught anyway, so it is skipped rather than repurposed. Real cross-thread
+// deadlock detection needs the scheduler to know about other threads,
+// which it does not yet (that lands with the per-thread scheduler work).
 fn chan_block(what str) {
+	if (coro_live() == 0) { fence(); return; }
 	chan_nblocked = chan_nblocked + 1;
 	if (chan_nblocked >= coro_live()) {
 		if (chan_epoch == chan_stall_epoch) {
@@ -67,48 +91,71 @@ fn chan_block(what str) {
 }
 
 fn chan_send(comptime T: type, c *Chan(T), v T) {
-	if (c.closed) {
-		eprint("qela: send on a closed channel\n");
-		sys_exit(1);
-	}
-	if (c.cap == 0) {
-		while (c.waiting) { chan_block("send"); }
-		c.buf[0] = v;
-		c.waiting = true;
-		chan_epoch = chan_epoch + 1;
-		while (c.waiting) { chan_block("send"); }
+	while (true) {
+		chan_lock(c);
+		if (c.closed) {
+			chan_unlock(c);
+			eprint("qela: send on a closed channel\n");
+			sys_exit(1);
+		}
+		if (c.cap == 0) {
+			if (c.waiting) { chan_unlock(c); chan_block("send"); continue; }
+			c.buf[0] = v;
+			c.waiting = true;
+			chan_unlock(c);
+			atomic_add(&chan_epoch, 1);
+			break;
+		}
+		if (c.n == c.cap) { chan_unlock(c); chan_block("send"); continue; }
+		var slot i64 = c.head + c.n;
+		if (slot >= c.cap) { slot = slot - c.cap; }
+		c.buf[slot] = v;
+		c.n = c.n + 1;
+		chan_unlock(c);
+		atomic_add(&chan_epoch, 1);
 		return;
 	}
-	while (c.n == c.cap) { chan_block("send"); }
-	var slot i64 = c.head + c.n;
-	if (slot >= c.cap) { slot = slot - c.cap; }
-	c.buf[slot] = v;
-	c.n = c.n + 1;
-	chan_epoch = chan_epoch + 1;
+	// Rendezvous: the value is handed off, but send does not return until
+	// the receiver has actually taken it out of the slot.
+	while (true) {
+		chan_lock(c);
+		var w bool = c.waiting;
+		chan_unlock(c);
+		if (!w) { return; }
+		chan_block("send");
+	}
 }
 
 // Returns a zeroed element once a closed channel has drained; pair it with
 // chan_is_closed when the zero value is also a valid one.
 fn chan_recv(comptime T: type, c *Chan(T)) T {
 	var zero T;
-	if (c.cap == 0) {
-		while (!c.waiting) {
-			if (c.closed) { return zero; }
+	while (true) {
+		chan_lock(c);
+		if (c.cap == 0) {
+			if (c.waiting) {
+				var v T = c.buf[0];
+				c.waiting = false;
+				chan_unlock(c);
+				atomic_add(&chan_epoch, 1);
+				return v;
+			}
+			if (c.closed) { chan_unlock(c); return zero; }
+			chan_unlock(c);
 			chan_block("receive");
+			continue;
 		}
-		var v T = c.buf[0];
-		c.waiting = false;
-		chan_epoch = chan_epoch + 1;
-		return v;
-	}
-	while (c.n == 0) {
-		if (c.closed) { return zero; }
+		if (c.n != 0) {
+			var v T = c.buf[c.head];
+			c.head = c.head + 1;
+			if (c.head >= c.cap) { c.head = 0; }
+			c.n = c.n - 1;
+			chan_unlock(c);
+			atomic_add(&chan_epoch, 1);
+			return v;
+		}
+		if (c.closed) { chan_unlock(c); return zero; }
+		chan_unlock(c);
 		chan_block("receive");
 	}
-	var v T = c.buf[c.head];
-	c.head = c.head + 1;
-	if (c.head >= c.cap) { c.head = 0; }
-	c.n = c.n - 1;
-	chan_epoch = chan_epoch + 1;
-	return v;
 }
