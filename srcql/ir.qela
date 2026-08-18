@@ -21,6 +21,12 @@ let IR_LABEL = 6;  // dst.off is this label's id
 let IR_SETCC = 7;  // dst = (flags satisfy <aux: condition code>) ? 1 : 0
 let IR_CALL  = 8;  // aux selects a CallFixup-style target; args already classified into OP_VREG call-arg slots
 let IR_RET   = 9;
+let IR_UNARY = 10; // dst = <aux: unary op> src0
+
+// IrOp.aux for IR_UNARY.
+let UOP_NEG    = 0;
+let UOP_BITNOT = 1;
+let UOP_LNOT   = 2;
 
 // IrOperand.kind
 let OP_NONE      = 0;
