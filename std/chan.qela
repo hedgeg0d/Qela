@@ -6,6 +6,9 @@ import "sys.qela";
 // `ch <- v` and `<-ch` desugar to chan_send and chan_recv; the element type is
 // read off the channel, so neither is written out at the call site.
 //
+// chan_init with cap 0 is a rendezvous: the sender blocks until a receiver
+// takes the value, and buf[0] is the single handoff slot.
+//
 // A blocked operation yields until the buffer changes. Waiting is polling:
 // a blocked coroutine has to run again to notice the change, so the
 // scheduler keeps scheduling everyone. Deadlock is detected by progress: a
@@ -14,22 +17,26 @@ import "sys.qela";
 // spinning.
 
 struct Chan(T) {
-	buf    *T,
-	cap    i64,
-	n      i64,
-	head   i64,
-	closed bool,
+	buf     *T,
+	cap     i64,
+	n       i64,
+	head    i64,
+	closed  bool,
+	waiting bool,
 }
 
 var chan_idle i64 = 0;
 
 fn chan_init(comptime T: type, c *Chan(T), cap i64) {
-	if (cap < 1) { cap = 1; }
-	c.buf = arena_alloc(cap * sizeof(T), 8) as *T;
+	if (cap < 1) { cap = 0; }
+	var alloc i64 = cap;
+	if (alloc < 1) { alloc = 1; }
+	c.buf = arena_alloc(alloc * sizeof(T), 8) as *T;
 	c.cap = cap;
 	c.n = 0;
 	c.head = 0;
 	c.closed = false;
+	c.waiting = false;
 }
 
 fn chan_len(comptime T: type, c *Chan(T)) i64 { return c.n; }
@@ -59,6 +66,13 @@ fn chan_send(comptime T: type, c *Chan(T), v T) {
 		eprint("qela: send on a closed channel\n");
 		sys_exit(1);
 	}
+	if (c.cap == 0) {
+		while (c.waiting) { chan_block("send"); }
+		c.buf[0] = v;
+		c.waiting = true;
+		while (c.waiting) { chan_block("send"); }
+		return;
+	}
 	while (c.n == c.cap) { chan_block("send"); }
 	var slot i64 = c.head + c.n;
 	if (slot >= c.cap) { slot = slot - c.cap; }
@@ -71,6 +85,16 @@ fn chan_send(comptime T: type, c *Chan(T), v T) {
 // chan_is_closed when the zero value is also a valid one.
 fn chan_recv(comptime T: type, c *Chan(T)) T {
 	var zero T;
+	if (c.cap == 0) {
+		while (!c.waiting) {
+			if (c.closed) { return zero; }
+			chan_block("receive");
+		}
+		var v T = c.buf[0];
+		c.waiting = false;
+		chan_idle = 0;
+		return v;
+	}
 	while (c.n == 0) {
 		if (c.closed) { return zero; }
 		chan_block("receive");
