@@ -1,4 +1,6 @@
+// stage1-only
 // expect-exit: 134
+// expect-out: index out of bounds
 // The elision is narrow: the loop bound 5 does not match the [4] array, so
 // the check stays and the write to a[4] panics instead of corrupting
 // memory.

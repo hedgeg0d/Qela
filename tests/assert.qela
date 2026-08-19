@@ -1,0 +1,12 @@
+// stage1-only
+// expect-exit: 0
+// assert passes silently; panic never runs.
+fn check(x i64) bool {
+	return x * x == 81;
+}
+
+fn main() int {
+	assert(check(9), "nine squared is not 81");
+	assert(2 + 2 == 4, "math broke");
+	return 0;
+}

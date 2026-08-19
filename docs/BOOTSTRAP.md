@@ -94,6 +94,7 @@ is larger — see `STATUS.md`.
 | `defer` | nothing to unwind, all memory comes from the arena |
 | `syscall(...)` outside `std/` | system calls go through `std/sys.qela` |
 | `asm(...)` | a user-facing feature for now, not leaned on by the compiler's own sources |
+| `assert(...)`, `panic(...)` | stage0 does not know them; the corpus tests using them are `// stage1-only` |
 | global aggregates with an initializer | stage0 cannot emit them; fill tables at startup |
 | more than 6 parameters | pass a context struct by pointer |
 
