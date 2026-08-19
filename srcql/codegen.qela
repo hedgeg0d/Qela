@@ -1572,10 +1572,12 @@ fn alu_ext_for(kind int) int {
 	return 7;
 }
 
-fn shift_ext_for(n *Node) int {
-	if (n.kind == ND_SHL) { return 4; }
-	if (n.ty.is_unsigned) { return 5; }
-	return 7;
+fn alu_ir_for(kind int) int {
+	if (kind == ND_ADD) { return ALU_ADD; }
+	if (kind == ND_SUB) { return ALU_SUB; }
+	if (kind == ND_BITAND) { return ALU_AND; }
+	if (kind == ND_BITOR) { return ALU_OR; }
+	return ALU_XOR;
 }
 
 // Folds a constant right operand into the instruction, which removes the
@@ -1585,44 +1587,28 @@ fn gen_binop_imm(n *Node, v i64) bool {
 	if (k == ND_ADD || k == ND_SUB || k == ND_BITAND || k == ND_BITOR ||
 	    k == ND_BITXOR) {
 		gen_expr(n.lhs);
-		// Masking to a byte or a halfword is a zero-extending move.
-		if (k == ND_BITAND && v == 255) {
-			b1(0x0f); b1(0xb6); modrm(3, RAX, RAX);
-			return true;
-		}
-		if (k == ND_BITAND && v == 65535) {
-			b1(0x0f); b1(0xb7); modrm(3, RAX, RAX);
-			return true;
-		}
-		alu_rax_imm(alu_ext_for(k), v);
+		// Masking to a byte or a halfword is a zero-extending move; the
+		// lowering picks it for a 255/65535 AND (see IR_ALU, src1 OP_IMM).
+		ir_alu_acc_imm(alu_ir_for(k), n.ty, v, n.pos);
 		return true;
 	}
 	if (k == ND_EQ || k == ND_NE || k == ND_LT || k == ND_LE) {
 		gen_expr(n.lhs);
-		alu_rax_imm(7, v);
+		ir_cmp_acc_imm(v, n.pos);
 		ir_setcc_acc(cc_for_compare(n), n.pos);
 		return true;
 	}
 	if (k == ND_SHL || k == ND_SHR) {
 		if (v < 0 || v > 63) { return false; }
 		gen_expr(n.lhs);
-		b1(0x48); b1(0xc1);
-		modrm(3, shift_ext_for(n), RAX);
-		b1(v);
+		var aop int = ALU_SHL;
+		if (k == ND_SHR) { aop = ALU_SHR; }
+		ir_alu_acc_imm(aop, n.ty, v, n.pos);
 		return true;
 	}
 	if (k == ND_MUL) {
 		gen_expr(n.lhs);
-		b1(0x48);
-		if (v >= -128 && v <= 127) {
-			b1(0x6b);
-			modrm(3, RAX, RAX);
-			b1(v);
-		} else {
-			b1(0x69);
-			modrm(3, RAX, RAX);
-			b4(v);
-		}
+		ir_alu_acc_imm(ALU_MUL, n.ty, v, n.pos);
 		return true;
 	}
 	return false;
@@ -1655,6 +1641,34 @@ fn st_rm(n *Node, reg int) { rm_rex(reg, n); b1(0x89); rm_modrm(reg, n); }
 
 fn alu_rax_rm(op0 i64, op1 i64, n *Node) {
 	alu_reg_rm(op0, op1, RAX, n);
+}
+
+// The IR_ALU/IR_CMP r/m forms: rax op= a direct local, replaying
+// alu_reg_rm(.., RAX, ..) with the same rex/reg-rm roles so the REX.B/REX.R
+// bits come out as the node-driven path would have written them.
+fn x86_alu_acc_rm(op0 i64, op1 i64, src IrOperand) {
+	if (src.kind == OP_VREG) {
+		rex_w(RAX, src.reg);
+		if (op0 != 0) { b1(op0); }
+		b1(op1);
+		modrm(3, RAX, src.reg);
+		return;
+	}
+	if (src.kind == OP_STACKSLOT) {
+		rex_w(RAX, RBP);
+		if (op0 != 0) { b1(op0); }
+		b1(op1);
+		var disp i64 = -(src.off);
+		if (disp >= -128 && disp <= 127) {
+			modrm(1, RAX, RBP);
+			b1(disp);
+		} else {
+			modrm(2, RAX, RBP);
+			b4(disp);
+		}
+		return;
+	}
+	die("internal: x86_alu_acc_rm: unhandled operand");
 }
 
 fn alu_reg_rm(op0 i64, op1 i64, reg int, n *Node) {
@@ -1737,14 +1751,17 @@ fn alu_rm_imm(ext int, n *Node, v i64) {
 
 fn gen_binop_mem(n *Node, val *Node, rm *Node) bool {
 	var k int = n.kind;
+	var rop IrOperand;
+	if (rm.varp.has_reg) { rop = operand_vreg(rm.varp.reg, rm.ty); }
+	else { rop = operand_stackslot(rm.varp.offset as i64, rm.ty); }
 	gen_expr(val);
-	if (k == ND_ADD)    { alu_rax_rm(0, 0x03, rm); return true; }
-	if (k == ND_SUB)    { alu_rax_rm(0, 0x2b, rm); return true; }
-	if (k == ND_BITAND) { alu_rax_rm(0, 0x23, rm); return true; }
-	if (k == ND_BITOR)  { alu_rax_rm(0, 0x0b, rm); return true; }
-	if (k == ND_BITXOR) { alu_rax_rm(0, 0x33, rm); return true; }
-	if (k == ND_MUL)    { alu_rax_rm(0x0f, 0xaf, rm); return true; }
-	alu_rax_rm(0, 0x3b, rm);
+	if (k == ND_ADD)    { ir_alu_acc_rm(ALU_ADD, n.ty, rop, n.pos); return true; }
+	if (k == ND_SUB)    { ir_alu_acc_rm(ALU_SUB, n.ty, rop, n.pos); return true; }
+	if (k == ND_BITAND) { ir_alu_acc_rm(ALU_AND, n.ty, rop, n.pos); return true; }
+	if (k == ND_BITOR)  { ir_alu_acc_rm(ALU_OR, n.ty, rop, n.pos); return true; }
+	if (k == ND_BITXOR) { ir_alu_acc_rm(ALU_XOR, n.ty, rop, n.pos); return true; }
+	if (k == ND_MUL)    { ir_alu_acc_rm(ALU_MUL, n.ty, rop, n.pos); return true; }
+	ir_cmp_acc_rm(rop, n.pos);
 	ir_setcc_acc(cc_for_compare(n), n.pos);
 	return true;
 }
@@ -2163,6 +2180,22 @@ fn x86_lower_op(op *IrOp) {
 		if (op.aux == UOP_BITNOT) { b1(0x48); b1(0xf7); modrm(3, 2, RAX); return; }
 		if (op.aux == UOP_LNOT) { test_rax(); setcc(0x94); return; }
 	}
+	if (op.kind == IR_PUSH && op.src0.kind == OP_ACC) {
+		b1(0x50);
+		return;
+	}
+	if (op.kind == IR_POP && op.dst.kind == OP_ACC) {
+		b1(0x58);
+		return;
+	}
+	if (op.kind == IR_POP && op.dst.kind == OP_OP2) {
+		// pop <op2_reg>: the binop staging register. Emitted raw, not via
+		// pop_reg, so the staging depth stays the frontend's bookkeeping.
+		var r int = op2_reg(op.dst.reg);
+		if (r >= 8) { b1(0x41); }
+		b1(0x58 + ((r as i64) & 7));
+		return;
+	}
 	if (op.kind == IR_ALU && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC && op.src1.kind == OP_OP2) {
 		var uns bool = op.dst.ty.is_unsigned;
 		var op2 int = op2_reg(op.src1.reg);
@@ -2192,11 +2225,65 @@ fn x86_lower_op(op *IrOp) {
 			return;
 		}
 	}
+	if (op.kind == IR_ALU && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC && op.src1.kind == OP_IMM) {
+		var v i64 = op.src1.off;
+		if (op.aux == ALU_ADD) { alu_rax_imm(0, v); return; }
+		if (op.aux == ALU_SUB) { alu_rax_imm(5, v); return; }
+		if (op.aux == ALU_AND) {
+			// A mask to a byte or a halfword is a zero-extending move
+			// (gen_binop_imm's fast path, replayed with the same bytes).
+			if (v == 255) { b1(0x0f); b1(0xb6); modrm(3, RAX, RAX); return; }
+			if (v == 65535) { b1(0x0f); b1(0xb7); modrm(3, RAX, RAX); return; }
+			alu_rax_imm(4, v);
+			return;
+		}
+		if (op.aux == ALU_OR)  { alu_rax_imm(1, v); return; }
+		if (op.aux == ALU_XOR) { alu_rax_imm(6, v); return; }
+		if (op.aux == ALU_MUL) {
+			b1(0x48);
+			if (v >= -128 && v <= 127) {
+				b1(0x6b);
+				modrm(3, RAX, RAX);
+				b1(v);
+			} else {
+				b1(0x69);
+				modrm(3, RAX, RAX);
+				b4(v);
+			}
+			return;
+		}
+		if (op.aux == ALU_SHL || op.aux == ALU_SHR) {
+			b1(0x48); b1(0xc1);
+			var ext int = 7;
+			if (op.aux == ALU_SHL) { ext = 4; } else if (op.dst.ty.is_unsigned) { ext = 5; }
+			modrm(3, ext, RAX);
+			b1(v);
+			return;
+		}
+	}
+	if (op.kind == IR_ALU && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC &&
+	    (op.src1.kind == OP_VREG || op.src1.kind == OP_STACKSLOT)) {
+		if (op.aux == ALU_ADD) { x86_alu_acc_rm(0, 0x03, op.src1); return; }
+		if (op.aux == ALU_SUB) { x86_alu_acc_rm(0, 0x2b, op.src1); return; }
+		if (op.aux == ALU_AND) { x86_alu_acc_rm(0, 0x23, op.src1); return; }
+		if (op.aux == ALU_OR)  { x86_alu_acc_rm(0, 0x0b, op.src1); return; }
+		if (op.aux == ALU_XOR) { x86_alu_acc_rm(0, 0x33, op.src1); return; }
+		if (op.aux == ALU_MUL) { x86_alu_acc_rm(0x0f, 0xaf, op.src1); return; }
+	}
 	if (op.kind == IR_CMP && op.src0.kind == OP_ACC && op.src1.kind == OP_OP2) {
 		var op2 int = op2_reg(op.src1.reg);
 		rex_w(op2, RAX);
 		b1(0x39);
 		modrm(3, op2, RAX);
+		return;
+	}
+	if (op.kind == IR_CMP && op.src0.kind == OP_ACC && op.src1.kind == OP_IMM) {
+		alu_rax_imm(7, op.src1.off);
+		return;
+	}
+	if (op.kind == IR_CMP && op.src0.kind == OP_ACC &&
+	    (op.src1.kind == OP_VREG || op.src1.kind == OP_STACKSLOT)) {
+		x86_alu_acc_rm(0, 0x3b, op.src1);
 		return;
 	}
 	if (op.kind == IR_SETCC && op.dst.kind == OP_ACC) {
@@ -2507,6 +2594,63 @@ fn ir_store_vreg_acc(reg int, ty *Type, pos i64) {
 	x86_lower_all();
 }
 
+// The stack-machine staging: push the accumulator, pop into the OP2 register
+// (a binop's right side). depth tracks the 16-byte call alignment exactly as
+// push_reg/pop_reg did, so gen_call's odd-depth fixup is unaffected while the
+// frontend still emits bytes; once it does not, the backend derives the same
+// count by walking IR_PUSH/IR_POP itself.
+fn ir_push_acc(pos i64) {
+	var op *IrOp = ir_emit(IR_PUSH, pos);
+	op.src0 = operand_acc();
+	depth = depth + 1;
+	x86_lower_all();
+}
+
+fn ir_pop_op2(pos i64) {
+	var op *IrOp = ir_emit(IR_POP, pos);
+	op.dst = operand_op2(0);
+	depth = depth - 1;
+	x86_lower_all();
+}
+
+// The right operand is an immediate folded into the instruction (a constant
+// binop, gen_binop_imm's fast path).
+fn ir_alu_acc_imm(aop int, ty *Type, v i64, pos i64) {
+	var op *IrOp = ir_emit(IR_ALU, pos);
+	op.dst = operand_acc();
+	op.dst.ty = ty;
+	op.src0 = operand_acc();
+	op.src1 = operand_imm(v);
+	op.aux = aop as i64;
+	x86_lower_all();
+}
+
+// The right operand is a direct local (promoted register or frame slot),
+// read as one r/m operand -- gen_binop_mem's fast path.
+fn ir_alu_acc_rm(aop int, ty *Type, src IrOperand, pos i64) {
+	var op *IrOp = ir_emit(IR_ALU, pos);
+	op.dst = operand_acc();
+	op.dst.ty = ty;
+	op.src0 = operand_acc();
+	op.src1 = src;
+	op.aux = aop as i64;
+	x86_lower_all();
+}
+
+fn ir_cmp_acc_imm(v i64, pos i64) {
+	var op *IrOp = ir_emit(IR_CMP, pos);
+	op.src0 = operand_acc();
+	op.src1 = operand_imm(v);
+	x86_lower_all();
+}
+
+fn ir_cmp_acc_rm(src IrOperand, pos i64) {
+	var op *IrOp = ir_emit(IR_CMP, pos);
+	op.src0 = operand_acc();
+	op.src1 = src;
+	x86_lower_all();
+}
+
 fn gen_expr(n *Node) {
 	var k int = n.kind;
 
@@ -2721,9 +2865,9 @@ fn gen_expr(n *Node) {
 	if (!ptr_diff && lt.kind == TY_PTR && rt.kind != TY_PTR) {
 		scale_by(lt.base.size);
 	}
-	push_reg(RAX);
+	ir_push_acc(n.pos);
 	gen_expr(n.lhs);
-	pop_reg(RDI);
+	ir_pop_op2(n.pos);
 	gen_binop(n);
 
 	if (ptr_diff) {
