@@ -379,6 +379,19 @@ class Gen:
         self.agg = []           # struct/enum helper names usable in calls
 
     def leaf(self, vars_used: set, depth: int = 0) -> tuple:
+        # At the depth limit only a plain scalar: calls and indexing would
+        # recurse without bound.
+        if depth >= self.md:
+            k = self.rng.randint(0, 4)
+            if k == 0:
+                return ("int", "i64", self.rng.randint(-1000, 1000))
+            if k == 1:
+                return ("int", "i64", self.rng.choice([0,1,2,3,10,42,100,127,255,-1]))
+            if k == 2:
+                return ("true",) if self.rng.random() < 0.5 else ("false",)
+            if k == 3:
+                return ("chr", self.rng.choice("abcdefg0123\n\t"))
+            return ("var", self.rng.choice(["v0", "v1", "v2"]))
         k = self.rng.randint(0, 10)
         if k == 0:
             return ("int", "i64", self.rng.randint(-1000, 1000))
