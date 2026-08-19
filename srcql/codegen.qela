@@ -69,6 +69,10 @@ var rodata Buf;
 var gdata Buf;
 var bss_size i64;
 var depth int;
+// Total 8-byte slots gen_args pushed for the current call's stack-spilled
+// arguments, padding included -- gen_call reads this to clean up exactly
+// what went on the stack, without re-deriving the padding decision.
+var overflow_pushed i64;
 var cur_loop *Loop;
 var gen_fn *Func;
 var cur_defers *DeferScope;
@@ -404,7 +408,7 @@ fn copy_aggregate(size int) {
 fn direct_local(n *Node) bool {
 	if (n.kind != ND_VAR) { return false; }
 	var v *Var = n.varp;
-	if (v.is_global || v.by_ref) { return false; }
+	if (v.is_global || v.by_ref || v.arg_stack) { return false; }
 	if (is_aggregate(n.ty)) { return false; }
 	return n.ty.size == 8;
 }
@@ -435,6 +439,13 @@ fn gen_addr(n *Node) {
 	if (k == ND_VAR) {
 		if (n.varp.has_reg) { error_at(n.pos, "internal: address of a promoted local"); }
 		if (n.varp.is_global) { add_dataref(n.varp); }
+		else if (n.varp.arg_stack) {
+			// A stack-passed parameter's offset is a positive rbp
+			// displacement already, unlike every other local: rbp_mem is
+			// called directly, bypassing lea_local/ld_local's negation.
+			if (n.varp.by_ref) { rbp_mem(0x8b, RAX, n.varp.offset as i64); }
+			else { rbp_mem(0x8d, RAX, n.varp.offset as i64); }
+		}
 		else if (n.varp.by_ref) { ld_local(RAX, n.varp.offset as i64); }
 		else { lea_local(RAX, n.varp.offset as i64); }
 		return;
@@ -598,14 +609,19 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64) {
 
 	var av [14]i64;
 	var an int = 0;
+	var has_overflow bool = false;
 	var scan *Node = n.args;
 	while (scan as i64 != 0 && an < 14) {
 		av[an] = scan as i64;
+		if (scan.stack_tmp as i64 != 0) { has_overflow = true; }
 		an = an + 1;
 		scan = scan.next;
 	}
 	var direct_from int = an;
-	while (direct_from > 0 && arg_direct_ok(av[direct_from - 1] as *Node)) {
+	// The direct-argument fast path assumes every argument lands in a
+	// register; a call with stack-spilled arguments always takes the slow,
+	// evaluate-then-place path instead.
+	while (!has_overflow && direct_from > 0 && arg_direct_ok(av[direct_from - 1] as *Node)) {
 		direct_from = direct_from - 1;
 	}
 	var ai int = 0;
@@ -641,12 +657,26 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64) {
 			lea_local(RDI, a.tmp.offset as i64);
 			copy_rsi_rdi(a.ty.size);
 			lea_local(RAX, a.tmp.offset as i64);
+			if (a.stack_tmp as i64 != 0) {
+				st_local(a.stack_tmp.offset as i64, RAX);
+				a = a.next;
+				continue;
+			}
 			push_reg(RAX);
 			if (sys) { dest[nd] = sys_reg(ri); } else { dest[nd] = call_reg(ri); }
 			src[nd] = 0;
 			nd = nd + 1;
 			ri = ri + 1;
 		} else if (is_aggregate(a.ty)) {
+			// v1 never spills a >8-byte, <=16-byte (2-word) aggregate --
+			// parse.qela rejects that -- so a spilled aggregate here is
+			// always a single word.
+			if (a.stack_tmp as i64 != 0) {
+				ld_at_rax(RCX, 0);
+				st_local(a.stack_tmp.offset as i64, RCX);
+				a = a.next;
+				continue;
+			}
 			push_at_rax(0);
 			if (first_in_rax && nd == 0) {
 				dest[nd] = RAX;
@@ -664,6 +694,11 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64) {
 				ri = ri + 1;
 			}
 		} else {
+			if (a.stack_tmp as i64 != 0) {
+				st_local(a.stack_tmp.offset as i64, RAX);
+				a = a.next;
+				continue;
+			}
 			push_reg(RAX);
 			if (first_in_rax && nd == 0) {
 				dest[nd] = RAX;
@@ -688,6 +723,40 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64) {
 			}
 		}
 	}
+
+	// Stack-spilled arguments go on last, in reverse source order, so the
+	// first overflow argument ends up nearest rsp (rbp+16 in the callee)
+	// once the call's return address lands on top of them.
+	var m i64 = 0;
+	var ci int = 0;
+	while (ci < an) {
+		if ((av[ci] as *Node).stack_tmp as i64 != 0) { m = m + 1; }
+		ci = ci + 1;
+	}
+	// gen_call's own 16-byte alignment check runs after this, on whatever
+	// depth is left -- if padding would be needed, it must go *below* the
+	// spilled arguments (pushed first here), not between them and the
+	// return address, or every rbp+16/+24/... offset in the callee shifts
+	// by 8. Front-loading it here keeps depth even by the time gen_call
+	// looks, so its own check stays a no-op for this call.
+	var pad i64 = 0;
+	if (m > 0) {
+		if (((depth as i64 + m) & 1) != 0) {
+			alu_rax_imm_reg(5, RSP, 8);
+			depth = depth + 1;
+			pad = 1;
+		}
+		var oi int = an;
+		while (oi > 0) {
+			oi = oi - 1;
+			var oa *Node = av[oi] as *Node;
+			if (oa.stack_tmp as i64 != 0) {
+				ld_local(RAX, oa.stack_tmp.offset as i64);
+				push_reg(RAX);
+			}
+		}
+	}
+	overflow_pushed = m + pad;
 }
 
 fn gen_binop(n *Node) {
@@ -792,6 +861,10 @@ fn gen_call(n *Node) {
 	add_call(n.name, n.pos);
 	if (odd) {
 		b1(0x48); b1(0x83); modrm(3, 0, RSP); b1(8);
+	}
+	if (overflow_pushed > 0) {
+		alu_rax_imm_reg(0, RSP, 8 * overflow_pushed);
+		depth = depth - (overflow_pushed as int);
 	}
 	if (is_aggregate(n.ty) && !ret_mem) {
 		var off i64 = n.tmp.offset as i64;
@@ -1878,7 +1951,11 @@ fn gen_func(f *Func) {
 
 	// A leaf function with nothing in its frame needs no frame: every local it
 	// has is in a register and nothing below rsp is ever addressed.
-	gen_frameless = f.leaf && f.stack_size == 0;
+	// A stack-passed parameter's addressing depends on rbp actually being
+	// this frame's own base (rbp+8 = return address, rbp+16 = the first
+	// spilled param) -- never drop the frame just because the function
+	// otherwise looks callable frameless.
+	gen_frameless = f.leaf && f.stack_size == 0 && f.n_stack_args == 0;
 	if (!gen_frameless) {
 		push_reg(RBP);
 		depth = depth - 1;
@@ -1903,6 +1980,12 @@ fn gen_func(f *Func) {
 	var i int = 0;
 	while (i < f.nparams) {
 		var v *Var = func_param(f, i);
+		if (v.arg_stack) {
+			// Already sitting at the right rbp-relative offset from the
+			// caller's pushes -- nothing to move, and ri must not advance.
+			i = i + 1;
+			continue;
+		}
 		if (v.has_reg) { mov_reg_reg(v.reg, call_reg(ri)); }
 		else { st_local(v.offset as i64, call_reg(ri)); }
 		ri = ri + 1;
