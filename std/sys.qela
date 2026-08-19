@@ -13,6 +13,7 @@ let SYS_WAIT4  = 61;
 let SYS_UNLINK = 87;
 let SYS_GETPID = 39;
 let SYS_GETDENTS = 217;
+let SYS_DUP2 = 33;
 
 let STDOUT = 1;
 let STDERR = 2;
@@ -72,6 +73,10 @@ fn sys_stat(path *u8, buf *u8) i64 {
 
 fn sys_getdents(fd i64, buf *u8, n i64) i64 {
 	return syscall(SYS_GETDENTS, fd, buf as i64, n);
+}
+
+fn sys_dup2(old i64, new i64) i64 {
+	return syscall(SYS_DUP2, old, new, 0);
 }
 
 fn write_str(fd i64, s str) {
