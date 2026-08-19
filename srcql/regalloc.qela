@@ -268,6 +268,8 @@ fn reads_walk(n *Node) {
 		// No children to walk for a bare var ref.
 		return;
 	}
+	// A call through a function-typed variable reads the variable itself.
+	if (k == ND_CALL && n.varp as i64 != 0) { n.varp.reads = n.varp.reads + 1; }
 	if (k == ND_MATCH) {
 		reads_walk(n.cond);
 		var arm *Node = n.body;
