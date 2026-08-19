@@ -529,6 +529,16 @@ class Gen:
                 body_f.append(("ret", self.expr(0, set())))
             return [("if", self.cond(0), body_t, body_f)]
         if k == 8 and allow_flow and depth == 0:
+            if self.rng.random() < 0.5:
+                # The elidable pattern: the loop bound equals the array
+                # length, and the index is the induction variable itself.
+                body = self.stmts(True, depth + 1, self.rng.randint(1, 2))
+                body.append(("asgn", ("idx", ("var", "a"), ("var", "i")),
+                             self.expr(0, set())))
+                body.append(("asgn", ("var", "i"),
+                             ("+", ("var", "i"), ("int", "i64", 1))))
+                return [("asgn", ("var", "i"), ("int", "i64", 0)),
+                        ("while", ("<", ("var", "i"), ("int", "i64", 4)), body)]
             bound = self.rng.randint(1, 3)
             body = self.stmts(True, depth + 1, self.rng.randint(1, 3))
             body.append(("asgn", ("var", "i"),
