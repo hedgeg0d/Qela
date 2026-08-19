@@ -2078,6 +2078,11 @@ fn x86_lower_op(op *IrOp) {
 		mov_reg_imm(RAX, op.src0.off);
 		return;
 	}
+	if (op.kind == IR_UNARY && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC) {
+		if (op.aux == UOP_NEG) { b1(0x48); b1(0xf7); modrm(3, 3, RAX); return; }
+		if (op.aux == UOP_BITNOT) { b1(0x48); b1(0xf7); modrm(3, 2, RAX); return; }
+		if (op.aux == UOP_LNOT) { test_rax(); setcc(0x94); return; }
+	}
 	die("internal: x86_lower_op: unhandled IR shape");
 }
 
@@ -2094,6 +2099,14 @@ fn ir_mov_acc_imm(v i64, pos i64) {
 	var op *IrOp = ir_emit(IR_MOV, pos);
 	op.dst = operand_acc();
 	op.src0 = operand_imm(v);
+	x86_lower_all();
+}
+
+fn ir_unary_acc(uop int, pos i64) {
+	var op *IrOp = ir_emit(IR_UNARY, pos);
+	op.dst = operand_acc();
+	op.src0 = operand_acc();
+	op.aux = uop as i64;
 	x86_lower_all();
 }
 
@@ -2172,18 +2185,17 @@ fn gen_expr(n *Node) {
 	if (k == ND_NEG) {
 		gen_expr(n.lhs);
 		if (is_float(n.ty)) { gen_neg_float(n.ty.size); return; }
-		b1(0x48); b1(0xf7); modrm(3, 3, RAX);
+		ir_unary_acc(UOP_NEG, n.pos);
 		return;
 	}
 	if (k == ND_BITNOT) {
 		gen_expr(n.lhs);
-		b1(0x48); b1(0xf7); modrm(3, 2, RAX);
+		ir_unary_acc(UOP_BITNOT, n.pos);
 		return;
 	}
 	if (k == ND_NOT) {
 		gen_expr(n.lhs);
-		test_rax();
-		setcc(0x94);
+		ir_unary_acc(UOP_LNOT, n.pos);
 		return;
 	}
 	if (k == ND_SYSCALL) {
