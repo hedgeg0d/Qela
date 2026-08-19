@@ -1,0 +1,23 @@
+// stage1-only
+// expect-exit: 42
+// Top-level asm bytes are the image's first bytes — a multiboot header
+// fits in the first 8 KiB of the file. `entry start` makes the naked
+// function the ELF entry: it sets its own stack from `$stack_top` and
+// jumps into the rest of the program with `$rel`.
+asm { 0x1badb002, 0, 0xe4524ffe };
+
+var stack_top [256]u8;
+
+entry start;
+
+fn naked start() {
+	asm(0x48, 0xbc, $stack_top);       // mov rsp, stack_top
+	asm(0xe9, $rel kmain);             // jmp kmain
+}
+
+fn kmain() int {
+	asm(0x48c7c0, 60, 0, 0, 0);        // mov rax, 60
+	asm(0x48c7c7, 42, 0, 0, 0);        // mov rdi, 42
+	asm(0x0f, 0x05);                   // syscall
+	return 0;
+}
