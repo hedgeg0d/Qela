@@ -1430,7 +1430,7 @@ fn stmt_store_imm(n *Node) bool {
 	if (ty.size == 8 && !fits_imm32(n.rhs.val)) { return false; }
 	if (n.lhs.kind == ND_VAR && n.lhs.varp.has_reg) { return false; }
 	gen_addr(n.lhs);
-	store_imm(ty, n.rhs.val);
+	ir_store_acc_imm(ty, n.rhs.val, n.pos);
 	return true;
 }
 
@@ -2079,6 +2079,18 @@ fn x86_lower_op(op *IrOp) {
 		mov_reg_imm(RAX, op.src0.off);
 		return;
 	}
+	if (op.kind == IR_MOV && op.dst.kind == OP_VREG && op.src0.kind == OP_IMM) {
+		mov_reg_imm(op.dst.reg, op.src0.off);
+		return;
+	}
+	if (op.kind == IR_STORE && op.dst.kind == OP_ACC && op.src0.kind == OP_IMM) {
+		store_imm(op.dst.ty, op.src0.off);
+		return;
+	}
+	if (op.kind == IR_STORE && op.dst.kind == OP_STACKSLOT && op.src0.kind == OP_ACC) {
+		st_local(op.dst.off, RAX);
+		return;
+	}
 	if (op.kind == IR_UNARY && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC) {
 		if (op.aux == UOP_NEG) { b1(0x48); b1(0xf7); modrm(3, 3, RAX); return; }
 		if (op.aux == UOP_BITNOT) { b1(0x48); b1(0xf7); modrm(3, 2, RAX); return; }
@@ -2172,6 +2184,30 @@ fn ir_compare_acc(cc i64, pos i64) {
 	x86_lower_all();
 }
 
+fn ir_mov_vreg_imm(reg int, v i64, pos i64) {
+	var op *IrOp = ir_emit(IR_MOV, pos);
+	op.dst = operand_vreg(reg, 0 as *Type);
+	op.src0 = operand_imm(v);
+	x86_lower_all();
+}
+
+// The accumulator already holds the store's target address (gen_addr's
+// job), matching how store()/store_imm() already dereference RAX today.
+fn ir_store_acc_imm(ty *Type, v i64, pos i64) {
+	var op *IrOp = ir_emit(IR_STORE, pos);
+	op.dst = operand_acc();
+	op.dst.ty = ty;
+	op.src0 = operand_imm(v);
+	x86_lower_all();
+}
+
+fn ir_store_stackslot_acc(off i64, ty *Type, pos i64) {
+	var op *IrOp = ir_emit(IR_STORE, pos);
+	op.dst = operand_stackslot(off, ty);
+	op.src0 = operand_acc();
+	x86_lower_all();
+}
+
 fn gen_expr(n *Node) {
 	var k int = n.kind;
 
@@ -2229,12 +2265,12 @@ fn gen_expr(n *Node) {
 	if (k == ND_ENUMLIT) { gen_enumlit(n); return; }
 	if (k == ND_STRUCTLIT) { gen_structlit(n); return; }
 	if (k == ND_ZERO) {
-		if (n.varp.has_reg) { mov_reg_imm(n.varp.reg, 0); return; }
+		if (n.varp.has_reg) { ir_mov_vreg_imm(n.varp.reg, 0, n.pos); return; }
 		var off i64 = n.varp.offset as i64;
 		var size int = n.varp.ty.size;
 		if (size <= 8 && !is_aggregate(n.varp.ty)) {
-			mov_reg_imm(RAX, 0);
-			st_local(off, RAX);
+			ir_mov_acc_imm(0, n.pos);
+			ir_store_stackslot_acc(off, n.varp.ty, n.pos);
 		} else {
 			lea_local(RDI, off);
 			mov_reg_imm(RAX, 0);
