@@ -343,9 +343,19 @@ fn parse_primary(t **Token) *Node {
 			var kind int = ND_CALL;
 			if (str_eq(name, "syscall")) { kind = ND_SYSCALL; }
 			if (str_eq(name, "asm")) { kind = ND_ASM; }
+			if (str_eq(name, "assert") || str_eq(name, "panic")) { kind = ND_ASSERT; }
 			var n *Node = new_node(kind, p);
 			n.name = name;
 			call_args(t, n);
+			// panic(message) is assert(false, message): the condition is a
+			// constant zero prepended here, so the rest of the pipeline sees
+			// one shape only.
+			if (kind == ND_ASSERT && str_eq(name, "panic")) {
+				var z *Node = num_node(0, p);
+				z.next = n.args;
+				n.args = z;
+				n.nargs = n.nargs + 1;
+			}
 			return n;
 		}
 
