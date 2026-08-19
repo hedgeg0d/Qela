@@ -1,0 +1,9 @@
+// stage1-only
+// expect-exit: 7
+// A local declared before an asm block, read after it: proves ra_deny_all
+// keeps it correct regardless of what the asm block does to registers.
+fn main() int {
+	var x int = 7;
+	var r i64 = asm(0x48, 0x31, 0xc0); // xor rax, rax
+	return x;
+}

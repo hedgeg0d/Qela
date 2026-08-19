@@ -1,0 +1,8 @@
+// stage1-only
+// expect-compile-error
+// asm operands must be bare byte literals 0-255, not variables or out-of-range values.
+fn main() int {
+	var x i64 = 5;
+	var r i64 = asm(x, 300);
+	return r as int;
+}
