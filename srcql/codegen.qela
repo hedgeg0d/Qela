@@ -2,6 +2,7 @@ import "comp.qela";
 import "diag.qela";
 import "type.qela";
 import "regalloc.qela";
+import "ir.qela";
 
 let RAX = 0;
 let RCX = 1;
