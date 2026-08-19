@@ -1096,6 +1096,7 @@ fn gen_structlit(n *Node) {
 }
 
 fn gen_call(n *Node) {
+	if (n.varp as i64 != 0) { gen_indirect_call(n); return; }
 	var ret_mem bool = is_aggregate(n.ty) && n.ty.size > 16;
 	var hidden i64 = -1;
 	if (ret_mem) { hidden = n.tmp.offset as i64; }
@@ -1106,6 +1107,47 @@ fn gen_call(n *Node) {
 		b1(0x48); b1(0x83); modrm(3, 5, RSP); b1(8);
 	}
 	add_call(n.name, n.pos);
+	if (odd) {
+		b1(0x48); b1(0x83); modrm(3, 0, RSP); b1(8);
+	}
+	if (overflow_pushed > 0) {
+		alu_rax_imm_reg(0, RSP, 8 * overflow_pushed);
+		depth = depth - (overflow_pushed as int);
+	}
+	if (is_aggregate(n.ty) && !ret_mem) {
+		var off i64 = n.tmp.offset as i64;
+		st_local(off, RAX);
+		if (n.ty.size > 8) { st_local(off - 8, RDX); }
+		lea_local(RAX, off);
+	}
+}
+
+// A call through a function-typed variable. The signature check already ran
+// in type_indirect_call, so here it is only the mechanics. The address goes
+// in R10 (never an argument register) and is loaded after the arguments are
+// set up: a call inside the argument list would clobber R10, and a promoted
+// target can only live in a callee-saved register (an indirect call makes
+// the function non-leaf, so the free caller-saved pool is out).
+fn gen_indirect_call(n *Node) {
+	var ret_mem bool = is_aggregate(n.ty) && n.ty.size > 16;
+	var hidden i64 = -1;
+	if (ret_mem) { hidden = n.tmp.offset as i64; }
+	gen_args(n, false, false, hidden);
+
+	var odd bool = (depth & 1) != 0;
+	if (odd) {
+		b1(0x48); b1(0x83); modrm(3, 5, RSP); b1(8);
+	}
+	if (n.varp.has_reg) {
+		mov_reg_reg(R10, n.varp.reg);
+	} else if (n.varp.is_global) {
+		rex_w(0, R10);
+		b1(0xba);
+		add_dataref(n.varp);
+	} else {
+		ld_rm(R10, n);
+	}
+	b1(0x41); b1(0xff); b1(0xd2);
 	if (odd) {
 		b1(0x48); b1(0x83); modrm(3, 0, RSP); b1(8);
 	}

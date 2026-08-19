@@ -1,0 +1,25 @@
+import "sort.qela";
+
+// Hoare quicksort over []i64 with a caller-supplied comparator function
+// value. Unlike sort_i64 (which the bootstrap subset must be able to
+// compile) this takes a first-class fn parameter, so it is stage1-only:
+// a comparator is `fn (i64, i64) bool` — pass the smaller first.
+fn sort_cmp(s []i64, lo i64, hi i64, cmp fn(i64, i64) bool) {
+	if (lo >= hi) { return; }
+	var pivot i64 = s[(lo + hi) / 2];
+	var i i64 = lo;
+	var j i64 = hi;
+	while (i <= j) {
+		while (cmp(s[i], pivot)) { i = i + 1; }
+		while (cmp(pivot, s[j])) { j = j - 1; }
+		if (i <= j) {
+			var t i64 = s[i];
+			s[i] = s[j];
+			s[j] = t;
+			i = i + 1;
+			j = j - 1;
+		}
+	}
+	sort_cmp(s, lo, j, cmp);
+	sort_cmp(s, i, hi, cmp);
+}
