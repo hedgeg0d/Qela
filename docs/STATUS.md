@@ -7,9 +7,9 @@ Updated 2026-08-03. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **225 608 B** |
+| **S2 — the shipped compiler, Qela compiled by itself** | **227 656 B** |
 | S2 under `upx --lzma` (measured 2026-08-03) | 51 388 B, ~4.9% of the 1 MiB budget |
-| S2 under xz -9 (proxy for upx) | 54 596 B |
+| S2 under xz -9 (proxy for upx) | 55 180 B |
 | stage1 sources | 9 100 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **193%** without bounds checks (M4 gate wants ≤150%) |
 
@@ -96,6 +96,21 @@ resolve). A kernel entry is then just source:
 — tested end to end in `tests/topasm.qela` (`$stack_top` for the stack,
 `$rel kmain` for the jump). The base address stays 0x400000; low-half
 multiboot kernels load there as-is.
+
+**`std/vec.qela`.** A generic growable vector on the arena:
+`Vec(T)`, `vec_init`, `vec_push`, `vec_get` (out-of-range reads return a
+zeroed element), `vec_pop`, `vec_clear`, and `vec_view` — the slice view
+that bridges to the language's checked iteration: `for x in vec_view(&v)`.
+Elements are copied on push; the backing array doubles and never frees.
+
+**Two bugs the vector exposed, both fixed in the compiler:** a generic
+call typed by a `var` initializer crashed the compiler — the parse loop
+rebuilt its function list from a local chain, orphaning the instantiation
+and dereferencing a null tail — appending now goes through `funcs_tail`,
+so mid-parse instantiations stay linked; and `gen_for` emitted only the
+first statement of an init chain, which the for-in desugar (hoisting a
+non-variable collection into a hidden variable) needs — it walks the chain
+now.
 
 **Expression macros.** `macro sq(x) = x * x;` — the body is parsed once
 with the parameters as placeholder locals, and every call clones it with
