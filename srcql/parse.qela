@@ -773,6 +773,7 @@ fn parse_function(t **Token) *Func {
 	tok_expect(t, "(");
 	var nparams int = 0;
 	var rwords int = 0;
+	var stack_slot int = 0;
 	var saved_ntype_vars int = ntype_vars;
 	while (!tok_eq(*t, ")")) {
 		if (nparams > 0) { tok_expect(t, ","); }
@@ -792,12 +793,7 @@ fn parse_function(t **Token) *Func {
 			// reads it back from here to know what to substitute.
 			var v *Var = declare_var(pn, tv, pp);
 			f.nct = f.nct + 1;
-			if (nparams == 0) { f.p0 = v; }
-			else if (nparams == 1) { f.p1 = v; }
-			else if (nparams == 2) { f.p2 = v; }
-			else if (nparams == 3) { f.p3 = v; }
-			else if (nparams == 4) { f.p4 = v; }
-			else if (nparams == 5) { f.p5 = v; }
+			set_func_param(f, nparams, v);
 			nparams = nparams + 1;
 			continue;
 		}
@@ -806,21 +802,25 @@ fn parse_function(t **Token) *Func {
 		var pp i64 = (*t).pos;
 		*t = (*t).next;
 		var pty *Type = parse_type(t);
-		if (is_aggregate(pty) && pty.size > 8 && pty.size <= 16) {
-			rwords = rwords + 2;
-		} else {
-			rwords = rwords + 1;
-		}
-		if (rwords > 6) { error_at(pp, "parameters do not fit in the argument registers"); }
-		if (nparams == 6) { error_at(pp, "at most 6 parameters are supported"); }
+		var is2word bool = is_aggregate(pty) && pty.size > 8 && pty.size <= 16;
+		if (is2word) { rwords = rwords + 2; } else { rwords = rwords + 1; }
 		var v *Var = declare_var(pn, pty, pp);
 		v.by_ref = is_aggregate(pty) && pty.size > 16;
-		if (nparams == 0) { f.p0 = v; }
-		else if (nparams == 1) { f.p1 = v; }
-		else if (nparams == 2) { f.p2 = v; }
-		else if (nparams == 3) { f.p3 = v; }
-		else if (nparams == 4) { f.p4 = v; }
-		else if (nparams == 5) { f.p5 = v; }
+		// Comptime parameters occupy p0..p5 by position too, so a run of
+		// six of them (f.nct == 6, allowed) leaves no register slot for
+		// any regular parameter that follows even if its own word cost is
+		// small -- treat that the same as a register-word overflow.
+		if (rwords > 6 || nparams >= 6) {
+			if (is2word) {
+				error_at(pp, "a str or struct parameter here would not fit in the argument registers (pass it earlier, or by pointer)");
+			}
+			v.arg_stack = true;
+			v.no_reg = true;
+			v.offset = (16 + 8 * stack_slot) as int;
+			stack_slot = stack_slot + 1;
+			f.n_stack_args = f.n_stack_args + 1;
+		}
+		set_func_param(f, nparams, v);
 		nparams = nparams + 1;
 	}
 	f.nparams = nparams;
@@ -1115,7 +1115,7 @@ fn parse(tok *Token) *Unit {
 			var off i64 = (f.nsaved as i64) * 8;
 			var v *Var = f.locals;
 			while (v as i64 != 0) {
-				if (!v.has_reg) {
+				if (!v.has_reg && !v.arg_stack) {
 					var size i64 = v.ty.size as i64;
 					var al i64 = v.ty.align as i64;
 					if (v.by_ref) { size = 8; al = 8; }
