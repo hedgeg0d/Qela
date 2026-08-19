@@ -1120,6 +1120,16 @@ fn float_cc_for(n *Node) i64 {
 	return 0x96;
 }
 
+// The neutral form of float_cc_for: what a branch or setcc should carry
+// after ucomisd. The x86 lowering folds it back into the exact byte table
+// above, so callers that branch on a float comparison stay byte-identical.
+fn float_cc_neutral(n *Node) i64 {
+	if (n.kind == ND_EQ) { return CC_EQ; }
+	if (n.kind == ND_NE) { return CC_NE; }
+	if (n.kind == ND_LT) { return CC_ULT; }
+	return CC_ULE;
+}
+
 fn gen_binop_float(n *Node) {
 	var sz int = n.lhs.ty.size;
 	var dprefix i64 = 0xf2;
@@ -1337,18 +1347,22 @@ fn gen_indirect_call(n *Node) {
 fn gen_logical(n *Node) {
 	gen_expr(n.lhs);
 	test_rax();
-	var cc i64 = 0x85;
-	if (n.kind == ND_AND) { cc = 0x84; }
-	var skip i64 = jump(cc);
+	// Skip the whole materialised value when one side decides the result:
+	// an OR is 1 as soon as either side is true, an AND is 0 as soon as
+	// either side is false.
+	var skip_cc i64 = CC_NE;
+	if (n.kind == ND_AND) { skip_cc = CC_EQ; }
+	var mid i64 = ir_new_label();
+	ir_branch(skip_cc, mid, n.pos);
 	gen_expr(n.rhs);
 	test_rax();
-	var skip2 i64 = jump(cc);
+	ir_branch(skip_cc, mid, n.pos);
 	if (n.kind == ND_AND) { ir_mov_acc_imm(1, n.pos); } else { ir_mov_acc_imm(0, n.pos); }
-	var end i64 = jump(0);
-	patch_here(skip);
-	patch_here(skip2);
+	var end i64 = ir_new_label();
+	ir_branch(CC_ALWAYS, end, n.pos);
+	ir_label(mid, n.pos);
 	if (n.kind == ND_AND) { ir_mov_acc_imm(0, n.pos); } else { ir_mov_acc_imm(1, n.pos); }
-	patch_here(end);
+	ir_label(end, n.pos);
 }
 
 fn gen_opassign(n *Node) {
@@ -1814,7 +1828,7 @@ fn gen_compare(n *Node) i64 {
 		var cprefix i64 = 0x66;
 		if (sz == 4) { cprefix = 0; }
 		sse2(cprefix, 0x2e, XMM0, XMM1);
-		return float_cc_for(n);
+		return float_cc_neutral(n);
 	}
 	// Equality survives a widening cast, so the load under it can be compared
 	// at its own width. Ordering cannot: the widened type decides the
@@ -1828,22 +1842,22 @@ fn gen_compare(n *Node) i64 {
 	    fits_width(n.rhs.val, mem.ty) && addressable_load(mem)) {
 		gen_addr(mem);
 		cmp_at_rax_imm(mem.ty, n.rhs.val);
-		return cmp_cc_for(n);
+		return cc_for_compare(n);
 	}
 	if (n.rhs.kind == ND_NUM && fits_imm32(n.rhs.val) &&
 	    (lt.kind != TY_PTR || n.rhs.val == 0)) {
 		if (direct_local(n.lhs)) {
 			alu_rm_imm(7, n.lhs, n.rhs.val);
-			return cmp_cc_for(n);
+			return cc_for_compare(n);
 		}
 		gen_expr(n.lhs);
 		alu_rax_imm(7, n.rhs.val);
-		return cmp_cc_for(n);
+		return cc_for_compare(n);
 	}
 	if (lt.kind != TY_PTR && direct_local(n.rhs)) {
 		gen_expr(n.lhs);
 		alu_rax_rm(0, 0x3b, n.rhs);
-		return cmp_cc_for(n);
+		return cc_for_compare(n);
 	}
 	gen_expr(n.rhs);
 	push_reg(RAX);
@@ -1852,7 +1866,7 @@ fn gen_compare(n *Node) i64 {
 	rex_w(RDI, RAX);
 	b1(0x39);
 	modrm(3, RDI, RAX);
-	return cmp_cc_for(n);
+	return cc_for_compare(n);
 }
 
 fn patch_all(l *I64List) {
@@ -1861,56 +1875,56 @@ fn patch_all(l *I64List) {
 }
 
 // Short-circuit conditions become branches instead of a materialised 0/1.
-// setcc and jcc share their low nibble, and flipping bit 0 inverts the
-// condition, so a setcc opcode converts to its jcc by (cc ^ 1) - 0x10.
-fn branch_false(n *Node, out *I64List) {
+// The label is the code point that is jumped to when the condition is false;
+// the frontend emits its IR_LABEL (ir_label) where that point actually is.
+fn branch_false(n *Node, label i64) {
 	var k int = n.kind;
 	if (k == ND_AND) {
-		branch_false(n.lhs, out);
-		branch_false(n.rhs, out);
+		branch_false(n.lhs, label);
+		branch_false(n.rhs, label);
 		return;
 	}
 	if (k == ND_OR) {
-		var taken I64List;
-		branch_true(n.lhs, &taken);
-		branch_false(n.rhs, out);
-		patch_all(&taken);
+		var taken i64 = ir_new_label();
+		branch_true(n.lhs, taken);
+		branch_false(n.rhs, label);
+		ir_label(taken, n.pos);
 		return;
 	}
-	if (k == ND_NOT) { branch_true(n.lhs, out); return; }
+	if (k == ND_NOT) { branch_true(n.lhs, label); return; }
 	if (is_compare(n)) {
 		var cc i64 = gen_compare(n);
-		ilist_push(out, jump((cc ^ 1) - 0x10));
+		ir_branch(cc_invert(cc), label, n.pos);
 		return;
 	}
 	gen_expr(n);
 	test_rax();
-	ilist_push(out, jump(0x84));
+	ir_branch(CC_EQ, label, n.pos);
 }
 
-fn branch_true(n *Node, out *I64List) {
+fn branch_true(n *Node, label i64) {
 	var k int = n.kind;
 	if (k == ND_OR) {
-		branch_true(n.lhs, out);
-		branch_true(n.rhs, out);
+		branch_true(n.lhs, label);
+		branch_true(n.rhs, label);
 		return;
 	}
 	if (k == ND_AND) {
-		var missed I64List;
-		branch_false(n.lhs, &missed);
-		branch_true(n.rhs, out);
-		patch_all(&missed);
+		var missed i64 = ir_new_label();
+		branch_false(n.lhs, missed);
+		branch_true(n.rhs, label);
+		ir_label(missed, n.pos);
 		return;
 	}
-	if (k == ND_NOT) { branch_false(n.lhs, out); return; }
+	if (k == ND_NOT) { branch_false(n.lhs, label); return; }
 	if (is_compare(n)) {
 		var cc i64 = gen_compare(n);
-		ilist_push(out, jump(cc - 0x10));
+		ir_branch(cc, label, n.pos);
 		return;
 	}
 	gen_expr(n);
 	test_rax();
-	ilist_push(out, jump(0x85));
+	ir_branch(CC_NE, label, n.pos);
 }
 
 var coro_switch_at i64 = -1;
@@ -2057,6 +2071,27 @@ fn gen_tls_init_stub() {
 	mov_reg_imm(RAX, 158);
 	b1(0x0f); b1(0x05);
 	b1(0xc3);                      // ret
+}
+
+// Control flow: an IR_BR carries a label id and is patched the same way
+// jump()/patch_here() patch a forward branch today, just one indirection
+// later. Label ids are a per-function counter; a backend lowers one op at a
+// time (x86_lower_all below), so the pending branches of each label have to
+// live in lists keyed by label id rather than in the byte stream.
+var ir_label_n i64;       // per-function label id counter
+var ir_label_br I64List;  // [label] -> head of its pending-branch chain, or -1
+var ir_br_next I64List;   // [branch id] -> next branch in its label's chain, or -1
+var ir_label_pos I64List; // [label] -> code.n once its IR_LABEL is lowered, or -1
+
+// A fresh label id. Every slot a label can ever own is pre-initialized to
+// -1 here, so a label that no branch references can never be mistaken for
+// one holding a real (non-negative) pending branch.
+fn ir_new_label() i64 {
+	var id i64 = ir_label_n;
+	ilist_set(&ir_label_br, id, -1);
+	ilist_set(&ir_label_pos, id, -1);
+	ir_label_n = ir_label_n + 1;
+	return id;
 }
 
 // Turns one IrOp into x86 bytes. Temporary home: once codegen.qela stops
@@ -2215,6 +2250,33 @@ fn x86_lower_op(op *IrOp) {
 			return;
 		}
 	}
+	if (op.kind == IR_BR) {
+		var label i64 = op.dst.off;
+		if (ir_label_pos.p[label] >= 0) {
+			// Backward branch: the label is already lowered, so both ends
+			// are known and the short-vs-near choice is made in one pass,
+			// exactly as jump_back did for a loop's back edge.
+			jump_back(ir_label_pos.p[label]);
+			return;
+		}
+		// Forward branch: emit a placeholder and hang it on the label's
+		// pending chain; its IR_LABEL patches every id in the chain.
+		var jcc i64 = 0;
+		if (op.aux != CC_ALWAYS) { jcc = x86_setcc_byte(op.aux) - 0x10; }
+		var id i64 = jump(jcc);
+		ilist_set(&ir_br_next, id, ir_label_br.p[label]);
+		ilist_set(&ir_label_br, label, id);
+		return;
+	}
+	if (op.kind == IR_LABEL) {
+		ilist_set(&ir_label_pos, op.dst.off, code.n);
+		var id i64 = ir_label_br.p[op.dst.off];
+		while (id >= 0) {
+			patch_here(id);
+			id = ir_br_next.p[id];
+		}
+		return;
+	}
 	die("internal: x86_lower_op: unhandled IR shape");
 }
 
@@ -2225,6 +2287,19 @@ fn x86_lower_all() {
 		op = op.next;
 	}
 	ir_reset();
+}
+
+fn ir_branch(cc i64, label i64, pos i64) {
+	var op *IrOp = ir_emit(IR_BR, pos);
+	op.dst = operand_imm(label);
+	op.aux = cc;
+	x86_lower_all();
+}
+
+fn ir_label(label i64, pos i64) {
+	var op *IrOp = ir_emit(IR_LABEL, pos);
+	op.dst = operand_imm(label);
+	x86_lower_all();
 }
 
 fn ir_mov_acc_imm(v i64, pos i64) {
@@ -2600,7 +2675,7 @@ fn gen_match(n *Node) {
 	gen_addr(n.cond);
 	st_local(soff, RAX);
 
-	var ends I64List;
+	var end i64 = ir_new_label();
 	var arm *Node = n.body;
 	while (arm as i64 != 0) {
 		var miss i64 = -1;
@@ -2609,7 +2684,8 @@ fn gen_match(n *Node) {
 			b1(0x48); b1(0x83);
 			modrm(0, 7, RAX);
 			b1(arm.variant.tag as i64);
-			miss = jump(0x85);
+			miss = ir_new_label();
+			ir_branch(CC_NE, miss, arm.pos);
 		}
 
 		var f *Member = 0 as *Member;
@@ -2631,12 +2707,11 @@ fn gen_match(n *Node) {
 		}
 
 		gen_stmt(arm.body);
-		if (arm.next as i64 != 0) { ilist_push(&ends, jump(0)); }
-		if (miss >= 0) { patch_here(miss); }
+		if (arm.next as i64 != 0) { ir_branch(CC_ALWAYS, end, arm.pos); }
+		if (miss >= 0) { ir_label(miss, arm.pos); }
 		arm = arm.next;
 	}
-	var i i64 = 0;
-	while (i < ends.n) { patch_here(ends.p[i]); i = i + 1; }
+	ir_label(end, n.pos);
 }
 
 fn gen_block(n *Node) {
@@ -2698,19 +2773,28 @@ fn gen_for(n *Node) {
 	lp.depth = defer_depth;
 	cur_loop = &lp;
 
-	var top i64 = code.n;
+	// The back edge is a backward branch: ir_label(top) records the loop
+	// head's address, and the IR_BR to it at the bottom lowers straight to
+	// jump_back. The cond-exit is a forward branch to `brk`, patched when
+	// ir_label(brk) lands below the loop.
+	var top i64 = ir_new_label();
+	ir_label(top, n.pos);
+	var brk i64 = ir_new_label();
 	if (n.cond as i64 != 0) {
-		branch_false(n.cond, &lp.brk);
+		branch_false(n.cond, brk);
 	}
 	gen_stmt(n.body);
 
+	// A `continue` lands here (before the step), a `break` below the loop;
+	// both are still native jump() placeholders patched at those points.
 	var i i64 = 0;
 	while (i < lp.cont.n) { patch_here(lp.cont.p[i]); i = i + 1; }
 	if (n.step as i64 != 0) { gen_expr(n.step); }
-	jump_back(top);
+	ir_branch(CC_ALWAYS, top, n.pos);
 
 	i = 0;
 	while (i < lp.brk.n) { patch_here(lp.brk.p[i]); i = i + 1; }
+	ir_label(brk, n.pos);
 	cur_loop = lp.prev;
 }
 
@@ -2761,16 +2845,17 @@ fn gen_stmt(n *Node) {
 	}
 	if (k == ND_RET) { gen_ret(n); return; }
 	if (k == ND_IF) {
-		var els I64List;
-		branch_false(n.cond, &els);
+		var els i64 = ir_new_label();
+		branch_false(n.cond, els);
 		gen_stmt(n.then);
 		if (n.els as i64 != 0) {
-			var end i64 = jump(0);
-			patch_all(&els);
+			var end i64 = ir_new_label();
+			ir_branch(CC_ALWAYS, end, n.pos);
+			ir_label(els, n.pos);
 			gen_stmt(n.els);
-			patch_here(end);
+			ir_label(end, n.pos);
 		} else {
-			patch_all(&els);
+			ir_label(els, n.pos);
 		}
 		return;
 	}
@@ -2940,6 +3025,12 @@ fn gen_func(f *Func) {
 	cur_loop = 0 as *Loop;
 	cur_defers = 0 as *DeferScope;
 	defer_depth = 0;
+	// Label ids restart for every function so an IR_BR from one function can
+	// never reference another's IR_LABEL; the chain lists re-grow from empty.
+	ir_label_n = 0;
+	ir_label_br.n = 0;
+	ir_br_next.n = 0;
+	ir_label_pos.n = 0;
 
 	// A leaf function with nothing in its frame needs no frame: every local it
 	// has is in a register and nothing below rsp is ever addressed.
