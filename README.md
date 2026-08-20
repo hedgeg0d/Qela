@@ -75,7 +75,10 @@ place and pointers as hex, with the expression evaluated at runtime — a
 string literal is compiled into a chain of formatting calls, so the feature
 is stdlib, not magic. `for x in a` iterates an array, slice or string by
 value, and on a fixed array the compiler proves the bounds away: the most
-natural loop is also the smallest.
+natural loop is also the smallest. `macro sq(x) = x * x;` are parse-time
+expression macros whose expansion is a tree, not text: `sq(2 + 1)` needs
+no parentheses, and the expansion is type-checked and bounds-checked like
+any other code.
 
 DWARF line info behind `-g`, so gdb steps through `.qela` source and names
 frames. `qela run` compiles and executes in one step. `qela fmt` formats over
