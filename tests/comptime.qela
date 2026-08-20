@@ -4,6 +4,8 @@ fn fib_ct(n int) int {
 	return fib_ct(n - 1) + fib_ct(n - 2);
 }
 
+fn helper() int { return 41; }
+
 fn main() int {
 	// basic arithmetic at compile time
 	let a = comptime { return 5 * 2; }; // 10
@@ -30,6 +32,31 @@ fn main() int {
 		}
 	};
 
-	// 10 + 21 + 10 + 1 = 42
-	return a + b + c + d;
+	// a callee's return must not leak into the caller: the statements
+	// after the call still run, and the block returns its own value
+	let e = comptime {
+		var x int = helper(); // 41
+		return x + 1; // 42, not helper()'s 41
+	};
+
+	// same, with an intervening statement
+	let f = comptime {
+		var x int = helper();
+		var y int = x * 2; // 82
+		return y - 40; // 42
+	};
+
+	// a break inside a comptime loop is consumed by the loop itself,
+	// so the rest of the block still runs
+	let g = comptime {
+		var i int = 0;
+		while (true) {
+			i = i + 1;
+			if (i == 4) { break; }
+		}
+		return i + 38; // 42
+	};
+
+	// 10 + 21 + 10 + 1 = 42, and e, f, g must each be 42 as well
+	return a + b + c + d + (e - 42) + (f - 42) + (g - 42);
 }
