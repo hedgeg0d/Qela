@@ -7,15 +7,15 @@ Updated 2026-08-03. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **187 520 B** |
-| S2 under xz -9 (proxy for upx --lzma) | 44 936 B, ~4.3% of the 1 MiB budget |
-| stage1 sources | 7 873 lines of Qela |
-| Emitted code vs `gcc -Os` on `bench/` | **218%**, or **193%** without bounds checks (M4 gate wants ≤150%) |
+| **S2 — the shipped compiler, Qela compiled by itself** | **193 008 B** |
+| S2 under xz -9 (proxy for upx --lzma) | ~44 KB, ~4.3% of the 1 MiB budget |
+| stage1 sources | 8 042 lines of Qela |
+| Emitted code vs `gcc -Os` on `bench/` | **260%**, or **193%** without bounds checks (M4 gate wants ≤150%) |
 
 Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the
-49-test corpus under S2, the embedded stdlib resolving outside the source tree,
-coroutines, channels, the collector, `run`/`fmt`, and a scripted language
-server conversation.
+54-test corpus under S2, the embedded stdlib resolving outside the source tree,
+coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
+backtrace, and a scripted language server conversation.
 
 ## Done
 
@@ -29,10 +29,13 @@ declaration; modules via `import`; `comptime` blocks; generics by
 monomorphization, with the type argument inferred from the value arguments
 when it is not written out; `syscall`; `asm(byte, byte, ...)` for raw machine
 code with the result convention that whatever's left in `RAX` is the
-expression's value, same as `syscall`; more than 6 function parameters, the
-7th and later spilled to the stack per SysV (one-word parameters only --
-a `str`/8-16-byte struct that would overflow the register budget is still
-rejected); `main(argc, argv)`; bounds checks.
+expression's value, same as `syscall`; `assert(cond, "msg")` and
+`panic("msg")`, stage1-only builtins whose message must be a string literal
+(one panic stub per distinct message, deduplicated); more than 6 function
+parameters, the 7th and later spilled to the stack per SysV (one-word
+parameters only -- a `str`/8-16-byte struct that would overflow the register
+budget is still rejected); `main(argc, argv)`; bounds checks that now write a
+real `index out of bounds` message instead of bytes from the start of rodata.
 
 **Concurrency.** `spawn f(...)`, `coro_yield`, `coro_run_all` on separate
 stacks; `Chan(T)`, buffered channels of any element type, and rendezvous at
@@ -50,8 +53,16 @@ collector rooted in the callee-saved registers, the stack and the data segment.
 
 **Tooling.** Diagnostics with a caret; own ELF writer; DWARF line info and a
 symbol table behind `-g` (gdb steps through `.qela` and names frames);
-`qela run`; `qela fmt`, which formats over the token stream so comments
-survive and which is idempotent; `--dump-std` for the embedded library;
+`qela run`, which also compiles a program from stdin as `qela run -` and gives
+every panic a **backtrace**: a per-function table in rodata and a raw-bytes
+walker at the end of the image print `in <name>` for the panicking function
+and every caller (the trampoline that reaches the panic stub is a call, so its
+return address names the frame; the walk stops at main because the startup
+header zeroes rbp). Plain compiles take `--backtrace` too, but default to the
+deterministic, flag-free output the bootstrap gate compares; `qela fmt`, which
+formats over the token stream so comments survive and which is idempotent;
+`--dump-std` for the embedded library; a shebang first line (`#!...`) is
+skipped by the lexer, so scripts run as `#!/usr/bin/env qela run`;
 `tools/torture.py` for randomized differential testing. **`qela --lsp`** is a
 language server in the same binary: JSON-RPC over framed stdio, hand-written
 JSON, full-document sync, diagnostics, hover with types and signatures, and
@@ -72,8 +83,12 @@ started.
 
 ### 1. Emitted code size (M4)
 
-218% of `gcc -Os`, down from 355%; 193% with bounds checks off, which is the
-number comparable to what gcc emits. `fib` is already at 153%.
+260% of `gcc -Os`, 193% with bounds checks off, which is the number comparable
+to what gcc emits. The 218% from the previous state went up because every
+binary now carries the 21-byte `index out of bounds` message in rodata and a
+3-byte `xor rbp, rbp` in its startup header — a fixed cost that is noise on
+real programs but a big ratio swing on the tiny `bench/` files. `fib` sits at
+186%.
 
 Done, in `srcql/regalloc.qela`, `srcql/codegen.qela` and `srcql/bounds.qela`:
 
@@ -122,7 +137,7 @@ Both closed off, measured rather than assumed (see above):
   optimization, not a size one.
 
 x86 codegen has stopped moving on the remaining levers. Next size lever is
-ARM64 (below), or accept 218% and spend budget on wow/byte elsewhere.
+ARM64 (below), or accept the ratio and spend budget on wow/byte elsewhere.
 
 ### 2. ARM64 backend
 

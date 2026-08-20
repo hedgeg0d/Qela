@@ -1,4 +1,6 @@
+// stage1-only
 // expect-exit: 134
+// expect-out: index out of bounds
 // An access after the increment sees i == N, so only accesses before it
 // are elidable; this second access must keep its check and panic at
 // a[8].

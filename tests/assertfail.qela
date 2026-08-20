@@ -1,0 +1,9 @@
+// stage1-only
+// expect-exit: 134
+// expect-out: one is not two
+// A failing assert writes its message to stderr and exits like a bounds
+// panic.
+fn main() int {
+	assert(1 == 2, "one is not two");
+	return 0;
+}
