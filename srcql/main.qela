@@ -79,6 +79,7 @@ fn reset_compile() {
 	// relaxation passes of a single compile.
 	br_short.n = 0;
 	lex_keep_comments = false;
+	need_fmt = false;
 	depth = 0;
 	overflow_pushed = 0;
 	cur_loop = 0 as *Loop;
@@ -483,8 +484,63 @@ fn cmd_test(argc int, argv **u8) int {
 	return fails;
 }
 
+// ── qela repl: expressions in, values out ──
+//
+// Each line is compiled as `write_str(STDOUT, "${line}")` in a forked
+// child — the interpolation picks decimal or string rendering from the
+// type — then the child exits, so the arena leak of a compile never
+// accumulates and a compile error costs the repl only the child. A repl
+// session is stateless: every line is a fresh program.
+fn cmd_repl(argc int, argv **u8) int {
+	var tty bool = sys_isatty() == 0;
+	if (tty) { write_str(STDOUT, "qela repl: expressions in, values out; Ctrl-D to quit\n"); }
+	while (true) {
+		if (tty) { write_str(STDOUT, "qela> "); }
+		var line str = read_line();
+		if (line.len == 0) { return 0; }
+		if (line.ptr[line.len - 1] == '\n') { line.len = line.len - 1; }
+		if (line.len == 0) { continue; }
+
+		var tb Buf;
+		fmt_str(&tb, "/tmp/qela-repl-");
+		fmt_i64(&tb, sys_getpid());
+		var tmp str = buf_str(&tb);
+		var tmpc *u8 = cstr(tmp);
+		var src Buf;
+		fmt_str(&src, "import \"std/io.qela\";\nfn main() int {\n\twrite_str(STDOUT, \"");
+		buf_u8(&src, '$');
+		buf_u8(&src, '{');
+		fmt_str(&src, line);
+		buf_u8(&src, '}');
+		fmt_str(&src, "\");\n\treturn 0;\n}\n");
+
+		var status [1]i64;
+		var pid i64 = sys_fork();
+		if (pid == 0) {
+			compile_src("<repl>", buf_str(&src), tmp);
+			sys_exit(0);
+		}
+		sys_wait4(pid, &status[0] as *u8);
+		var code i64 = (status[0] >> 8) & 255;
+		if (code != 0) { continue; }
+
+		var cargv *i64 = arena_alloc(16, 8) as *i64;
+		cargv[0] = tmpc as i64;
+		cargv[1] = 0;
+		var envp *i64 = arena_alloc(8, 8) as *i64;
+		envp[0] = 0;
+		var pid2 i64 = sys_fork();
+		if (pid2 == 0) {
+			sys_execve(tmpc, cargv as *u8, envp as *u8);
+			sys_exit(127);
+		}
+		sys_wait4(pid2, &status[0] as *u8);
+		sys_unlink(tmpc);
+	}
+}
+
 fn cmd_help() int {
-	write_str(STDOUT, "usage: qela <file.qela> [-o output] [options]\n       qela . [dir]   build a project from a directory\n       qela run <file.qela> [args]\n       qela test <file.qela|dir> [files...] [-- args]\n       qela fmt <file.qela>\n       qela --lsp\n       qela --dump-std <module>\n\ncompile a Qela program to a static binary; '-' reads the source\nfrom stdin. A directory merges every .qela file in it into one\nprogram (entry: main.qela, or the sole file) -- no imports needed\nbetween project files. 'run' compiles to a temp file and executes\nit, and panics print a backtrace there. 'test' runs the program and\nchecks its leading comments: // expect-exit: N, // expect-out: text\n(one line each, compared in order) and // expect-compile-error;\nseveral files can be tested in one run -- '--' separates the\nprogram arguments, e.g. qela test a.qela b.qela -- 5 6.\n\noptions:\n  -o <file>        output path (default: input name without .qela)\n  -g               DWARF line info and symbols for gdb\n  --backtrace      print function frames on panic\n  --no-bounds-checks   disable index checks\n  -h, --help       this text\n");
+	write_str(STDOUT, "usage: qela <file.qela> [-o output] [options]\n       qela . [dir]   build a project from a directory\n       qela run <file.qela> [args]\n       qela test <file.qela|dir> [files...] [-- args]\n       qela fmt <file.qela>\n       qela repl\n       qela --lsp\n       qela --dump-std <module>\n\ncompile a Qela program to a static binary; '-' reads the source\nfrom stdin. A directory merges every .qela file in it into one\nprogram (entry: main.qela, or the sole file) -- no imports needed\nbetween project files. 'run' compiles to a temp file and executes\nit, and panics print a backtrace there. 'test' runs the program and\nchecks its leading comments: // expect-exit: N, // expect-out: text\n(one line each, compared in order) and // expect-compile-error;\nseveral files can be tested in one run -- '--' separates the\nprogram arguments, e.g. qela test a.qela b.qela -- 5 6. 'repl'\ncompiles each line as an expression and prints its value.\n\nstrings interpolate, so n = ${40 + 2} prints 42 and pointers\nrender as hex; the expression is evaluated at runtime.\n\noptions:\n  -o <file>        output path (default: input name without .qela)\n  -g               DWARF line info and symbols for gdb\n  --backtrace      print function frames on panic\n  --no-bounds-checks   disable index checks\n  -h, --help       this text\n");
 	return 0;
 }
 
@@ -503,6 +559,9 @@ fn main(argc int, argv **u8) int {
 	}
 	if (argc >= 2 && str_eq(str_from_cstr(argv[1]), "fmt")) {
 		return cmd_fmt(argc, argv);
+	}
+	if (argc >= 2 && str_eq(str_from_cstr(argv[1]), "repl")) {
+		return cmd_repl(argc, argv);
 	}
 	if (argc >= 2 && str_eq(str_from_cstr(argv[1]), "--lsp")) {
 		return lsp_run();
