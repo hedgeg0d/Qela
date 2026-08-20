@@ -29,7 +29,19 @@ src/start.o: src/start.S
 check: $(BIN)
 	@tools/check-size.sh $(BIN)
 
+# The real compiler: stage1 compiled by itself, verified by the bootstrap
+# gate. build/bootstrap/s2 is the shipped binary; ./qela never ships.
+build: $(BIN)
+	@tools/bootstrap.sh
+
+PREFIX ?= /usr/local
+DESTDIR ?=
+
+install: build
+	mkdir -p $(DESTDIR)$(PREFIX)/bin
+	install -m 0755 build/bootstrap/s2 $(DESTDIR)$(PREFIX)/bin/qela
+
 clean:
 	rm -f $(OBJ) $(BIN)
 
-.PHONY: all check clean
+.PHONY: all check build install clean
