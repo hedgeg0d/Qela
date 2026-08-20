@@ -36,6 +36,19 @@ let OP_STACKSLOT = 3;  // off is a frame offset (from Var.offset)
 let OP_IMM       = 4;  // off is the immediate value
 let OP_GLOBAL    = 5;  // off is the *Var, reinterpreted as an address
 let OP_STR       = 6;  // off is a string-literal id
+let OP_REG       = 7;  // reg is a fixed convention register (a call/ALU slot), not tied to any Var
+
+// IrOp.aux for IR_ALU.
+let ALU_ADD = 0;
+let ALU_SUB = 1;
+let ALU_MUL = 2;
+let ALU_DIV = 3;
+let ALU_MOD = 4;
+let ALU_AND = 5;
+let ALU_OR  = 6;
+let ALU_XOR = 7;
+let ALU_SHL = 8;
+let ALU_SHR = 9;
 
 // Condition codes, neutral: each backend maps these to its own flags/field
 // encoding (x86's Jcc/SETcc table, ARM64's 4-bit condition field).
@@ -99,6 +112,13 @@ fn operand_imm(v i64) IrOperand {
 	var o IrOperand;
 	o.kind = OP_IMM;
 	o.off = v;
+	return o;
+}
+
+fn operand_reg(reg int) IrOperand {
+	var o IrOperand;
+	o.kind = OP_REG;
+	o.reg = reg;
 	return o;
 }
 
