@@ -33,6 +33,15 @@ fn sys_reg(i int) int {
 	return call_reg(i);
 }
 
+// The frontend stages a binop's right operand into one fixed register per
+// target (gen_expr's two-operand preamble). The IR carries the rank, not the
+// register; this is the rank->register map, the mirror of call_reg. x86 uses
+// rdi (rank 0); ARM64 will use x1 so it never collides with the accumulator.
+fn op2_reg(rank int) int {
+	if (opt_target == TARGET_ARM64) { return 1; }
+	return RDI;
+}
+
 struct I64List { p *i64, n i64, cap i64, }
 
 fn ilist_push(l *I64List, v i64) {
@@ -2103,27 +2112,28 @@ fn x86_lower_op(op *IrOp) {
 		if (op.aux == UOP_BITNOT) { b1(0x48); b1(0xf7); modrm(3, 2, RAX); return; }
 		if (op.aux == UOP_LNOT) { test_rax(); setcc(0x94); return; }
 	}
-	if (op.kind == IR_ALU && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC && op.src1.kind == OP_REG) {
+	if (op.kind == IR_ALU && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC && op.src1.kind == OP_OP2) {
 		var uns bool = op.dst.ty.is_unsigned;
-		if (op.aux == ALU_ADD) { rex_w(RDI, RAX); b1(0x01); modrm(3, RDI, RAX); return; }
-		if (op.aux == ALU_SUB) { rex_w(RDI, RAX); b1(0x29); modrm(3, RDI, RAX); return; }
-		if (op.aux == ALU_MUL) { b1(0x48); b1(0x0f); b1(0xaf); modrm(3, RAX, RDI); return; }
+		var op2 int = op2_reg(op.src1.reg);
+		if (op.aux == ALU_ADD) { rex_w(op2, RAX); b1(0x01); modrm(3, op2, RAX); return; }
+		if (op.aux == ALU_SUB) { rex_w(op2, RAX); b1(0x29); modrm(3, op2, RAX); return; }
+		if (op.aux == ALU_MUL) { b1(0x48); b1(0x0f); b1(0xaf); modrm(3, RAX, op2); return; }
 		if (op.aux == ALU_DIV || op.aux == ALU_MOD) {
 			if (uns) {
 				b1(0x31); modrm(3, RDX, RDX);
-				b1(0x48); b1(0xf7); modrm(3, 6, RDI);
+				b1(0x48); b1(0xf7); modrm(3, 6, op2);
 			} else {
 				b1(0x48); b1(0x99);
-				b1(0x48); b1(0xf7); modrm(3, 7, RDI);
+				b1(0x48); b1(0xf7); modrm(3, 7, op2);
 			}
 			if (op.aux == ALU_MOD) { mov_reg_reg(RAX, RDX); }
 			return;
 		}
-		if (op.aux == ALU_AND) { rex_w(RDI, RAX); b1(0x21); modrm(3, RDI, RAX); return; }
-		if (op.aux == ALU_OR)  { rex_w(RDI, RAX); b1(0x09); modrm(3, RDI, RAX); return; }
-		if (op.aux == ALU_XOR) { rex_w(RDI, RAX); b1(0x31); modrm(3, RDI, RAX); return; }
+		if (op.aux == ALU_AND) { rex_w(op2, RAX); b1(0x21); modrm(3, op2, RAX); return; }
+		if (op.aux == ALU_OR)  { rex_w(op2, RAX); b1(0x09); modrm(3, op2, RAX); return; }
+		if (op.aux == ALU_XOR) { rex_w(op2, RAX); b1(0x31); modrm(3, op2, RAX); return; }
 		if (op.aux == ALU_SHL || op.aux == ALU_SHR) {
-			mov_reg_reg(RCX, RDI);
+			mov_reg_reg(RCX, op2);
 			b1(0x48); b1(0xd3);
 			var ext int = 7;
 			if (op.aux == ALU_SHL) { ext = 4; } else if (uns) { ext = 5; }
@@ -2131,10 +2141,11 @@ fn x86_lower_op(op *IrOp) {
 			return;
 		}
 	}
-	if (op.kind == IR_CMP && op.src0.kind == OP_ACC && op.src1.kind == OP_REG) {
-		rex_w(RDI, RAX);
+	if (op.kind == IR_CMP && op.src0.kind == OP_ACC && op.src1.kind == OP_OP2) {
+		var op2 int = op2_reg(op.src1.reg);
+		rex_w(op2, RAX);
 		b1(0x39);
-		modrm(3, RDI, RAX);
+		modrm(3, op2, RAX);
 		return;
 	}
 	if (op.kind == IR_SETCC && op.dst.kind == OP_ACC) {
@@ -2168,15 +2179,16 @@ fn ir_unary_acc(uop int, pos i64) {
 	x86_lower_all();
 }
 
-// The left operand is already in the accumulator and the right in RDI, per
-// gen_expr's binop preamble (spine emission / gen_binop_mem's operand
-// setup) -- this just records that shape as IR and lowers it immediately.
+// The left operand is already in the accumulator and the right in the
+// target's OP2 staging register (x86: rdi), per gen_expr's binop preamble
+// (spine emission / gen_binop_mem's operand setup) -- this just records that
+// shape as IR and lowers it immediately.
 fn ir_alu_acc(aop int, ty *Type, pos i64) {
 	var op *IrOp = ir_emit(IR_ALU, pos);
 	op.dst = operand_acc();
 	op.dst.ty = ty;
 	op.src0 = operand_acc();
-	op.src1 = operand_reg(RDI);
+	op.src1 = operand_op2(0);
 	op.aux = aop as i64;
 	x86_lower_all();
 }
@@ -2184,7 +2196,7 @@ fn ir_alu_acc(aop int, ty *Type, pos i64) {
 fn ir_compare_acc(cc i64, pos i64) {
 	var c *IrOp = ir_emit(IR_CMP, pos);
 	c.src0 = operand_acc();
-	c.src1 = operand_reg(RDI);
+	c.src1 = operand_op2(0);
 	var s *IrOp = ir_emit(IR_SETCC, pos);
 	s.dst = operand_acc();
 	s.aux = cc;
