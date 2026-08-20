@@ -7,9 +7,9 @@ Updated 2026-08-03. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **221 960 B** |
+| **S2 — the shipped compiler, Qela compiled by itself** | **222 288 B** |
 | S2 under `upx --lzma` (measured 2026-08-03) | 51 388 B, ~4.9% of the 1 MiB budget |
-| S2 under xz -9 (proxy for upx) | 53 844 B |
+| S2 under xz -9 (proxy for upx) | 53 924 B |
 | stage1 sources | 9 100 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **193%** without bounds checks (M4 gate wants ≤150%) |
 
@@ -75,6 +75,9 @@ cast; codegen always emits the access, never folds it.
 ret: the body is bare bytes, so ISR entries and syscall stubs end in their
 own `iretq`/`ret` from `asm`. The contract is enforced at parse time — no
 parameters, locals, returns, defers or calls (only `asm` and `syscall`).
+An `asm` operand may be any comptime constant — `let OPCODE = 0x48;
+asm(OPCODE, ...)` or `asm(0x48 | 0x80)` — folded at type time, so opcodes
+have names without a single new keyword.
 
 **Expression macros.** `macro sq(x) = x * x;` — the body is parsed once
 with the parameters as placeholder locals, and every call clones it with
