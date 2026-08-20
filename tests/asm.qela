@@ -1,0 +1,7 @@
+// stage1-only
+// expect-exit: 42
+// Raw bytes execute and the RAX-result convention works: mov rax, 42.
+fn main() int {
+	var r i64 = asm(0x48, 0xc7, 0xc0, 0x2a, 0, 0, 0);
+	return r as int;
+}
