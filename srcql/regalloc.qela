@@ -316,6 +316,9 @@ fn reads_list(n *Node) {
 // stays quiet.
 fn warn_unused(f *Func) {
 	if (f as i64 == 0) { return; }
+	// An extern declaration has no body, so its parameters can never be
+	// read; the symbol is a promise to the linker, not code.
+	if (f.body as i64 == 0) { return; }
 	var nl_unused int = 0;
 	var np_unused int = 0;
 	var v *Var = f.locals;
