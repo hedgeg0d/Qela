@@ -1282,7 +1282,7 @@ fn gen_call(n *Node) {
 	if (odd) {
 		b1(0x48); b1(0x83); modrm(3, 5, RSP); b1(8);
 	}
-	add_call(n.name, n.pos);
+	ir_call(cf, n.pos);
 	if (odd) {
 		b1(0x48); b1(0x83); modrm(3, 0, RSP); b1(8);
 	}
@@ -1319,16 +1319,15 @@ fn gen_indirect_call(n *Node) {
 	if (odd) {
 		b1(0x48); b1(0x83); modrm(3, 5, RSP); b1(8);
 	}
+	var target IrOperand;
 	if (n.varp.has_reg) {
-		mov_reg_reg(R10, n.varp.reg);
+		target = operand_vreg(n.varp.reg, n.varp.ty);
 	} else if (n.varp.is_global) {
-		rex_w(0, R10);
-		b1(0xba);
-		add_dataref(n.varp);
+		target = operand_global(n.varp);
 	} else {
-		ld_rm(R10, n);
+		target = operand_stackslot(n.varp.offset as i64, n.varp.ty);
 	}
-	b1(0x41); b1(0xff); b1(0xd2);
+	ir_call_ind(target, n.pos);
 	if (odd) {
 		b1(0x48); b1(0x83); modrm(3, 0, RSP); b1(8);
 	}
@@ -2277,6 +2276,32 @@ fn x86_lower_op(op *IrOp) {
 		}
 		return;
 	}
+	if (op.kind == IR_CALL) {
+		if (op.src0.kind == OP_FUNC) {
+			add_call((op.src0.off as *Func).name, op.pos);
+			return;
+		}
+		// An indirect target goes in r10 (never an argument register) and
+		// is loaded after the arguments are set up, exactly as
+		// gen_indirect_call staged it by hand.
+		if (op.src0.kind == OP_VREG) {
+			mov_reg_reg(R10, op.src0.reg);
+		} else if (op.src0.kind == OP_GLOBAL) {
+			rex_w(0, R10);
+			b1(0xba);
+			add_dataref(op.src0.off as *Var);
+		} else if (op.src0.kind == OP_STACKSLOT) {
+			rbp_mem(0x8b, R10, -(op.src0.off));
+		} else {
+			die("internal: x86_lower_op: IR_CALL: unhandled target");
+		}
+		b1(0x41); b1(0xff); b1(0xd2);
+		return;
+	}
+	if (op.kind == IR_FUNCADDR && op.dst.kind == OP_ACC && op.src0.kind == OP_FUNC) {
+		add_funcaddr((op.src0.off as *Func).name, op.pos);
+		return;
+	}
 	die("internal: x86_lower_op: unhandled IR shape");
 }
 
@@ -2299,6 +2324,30 @@ fn ir_branch(cc i64, label i64, pos i64) {
 fn ir_label(label i64, pos i64) {
 	var op *IrOp = ir_emit(IR_LABEL, pos);
 	op.dst = operand_imm(label);
+	x86_lower_all();
+}
+
+// The language-level call. Argument staging stays in the frontend (gen_args
+// classifies into the ABI's register slots); the IR_CALL carries only the
+// target -- OP_FUNC for a direct call, an OP_VREG/OP_GLOBAL/OP_STACKSLOT
+// holding the address for an indirect one -- and the backend emits the call
+// instruction plus whatever target load its own convention requires.
+fn ir_call(f *Func, pos i64) {
+	var op *IrOp = ir_emit(IR_CALL, pos);
+	op.src0 = operand_func(f);
+	x86_lower_all();
+}
+
+fn ir_call_ind(target IrOperand, pos i64) {
+	var op *IrOp = ir_emit(IR_CALL, pos);
+	op.src0 = target;
+	x86_lower_all();
+}
+
+fn ir_funcaddr(f *Func, pos i64) {
+	var op *IrOp = ir_emit(IR_FUNCADDR, pos);
+	op.dst = operand_acc();
+	op.src0 = operand_func(f);
 	x86_lower_all();
 }
 
@@ -2528,7 +2577,15 @@ fn gen_expr(n *Node) {
 		return;
 	}
 	if (k == ND_ASSERT) { gen_assert(n); return; }
-	if (k == ND_FUNCADDR) { add_funcaddr(n.name, n.pos); return; }
+	if (k == ND_FUNCADDR) {
+		// add_type resolved the name to a real function (or errored), so
+		// this is a straight address; the fallback keeps an odd case from
+		// crashing where the type checker let something through.
+		var ff *Func = find_func(n.name);
+		if (ff as i64 != 0) { ir_funcaddr(ff, n.pos); }
+		else { add_funcaddr(n.name, n.pos); }
+		return;
+	}
 	if (k == ND_CALL) {
 		if (str_eq(n.name, "coro_switch")) { gen_coro_switch(n); return; }
 		if (str_eq(n.name, "gc_data_base") || str_eq(n.name, "gc_data_end")) {
