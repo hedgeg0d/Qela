@@ -1733,7 +1733,7 @@ fn blob_find(name str) int {
 	return -1;
 }
 
-fn parse_global(t **Token) {
+fn parse_global(t **Token, is_extern bool) {
 	var kw str = (*t).text;
 	var typed bool = str_eq(kw, "var");
 	*t = (*t).next;
@@ -1743,13 +1743,21 @@ fn parse_global(t **Token) {
 	var ty *Type = 0 as *Type;
 	if (typed && !tok_eq(*t, "=")) { ty = parse_type(t); }
 	var init i64 = 0;
+	var has_init bool = false;
 	if (tok_consume(t, "=")) {
+		has_init = true;
 		var rhs *Node = parse_assign(t);
 		add_type(rhs);
 		if (ty as i64 == 0) { ty = rhs.ty; }
 		init = eval_const(rhs);
 	}
-	declare_var(name, ty, p).init = init;
+	if (is_extern && ty as i64 == 0) {
+		error_at(p, "extern var needs a type");
+	}
+	var gv *Var = declare_var(name, ty, p);
+	gv.extern = is_extern;
+	gv.has_init = has_init;
+	gv.init = init;
 	tok_expect(t, ";");
 }
 
@@ -1841,7 +1849,15 @@ fn parse(tok *Token) *Unit {
 		if (tok_eq(tok, "macro")) { parse_macro(&tok); continue; }
 		if (tok_eq(tok, "struct")) { parse_struct(&tok); continue; }
 		if (tok_eq(tok, "enum")) { parse_enum(&tok); continue; }
-		if (tok_eq(tok, "let") || tok_eq(tok, "var")) { parse_global(&tok); continue; }
+		if (tok_eq(tok, "let") || tok_eq(tok, "var")) { parse_global(&tok, false); continue; }
+		if (tok_eq(tok, "extern") && tok.next.kind == TK_KW && str_eq(tok.next.text, "var")) {
+			// `extern var x i64;` imports the C symbol, `extern var x i64 = K;`
+			// exports a Qela global. Same split as extern fn, keyed on the
+			// initializer.
+			tok = tok.next;
+			parse_global(&tok, true);
+			continue;
+		}
 		if (tok_eq(tok, "import")) {
 			var ipos i64 = tok.pos;
 			tok = tok.next;
@@ -1867,7 +1883,7 @@ fn parse(tok *Token) *Unit {
 		var is_ext bool = false;
 		if (tok_eq(tok, "extern")) {
 			if (tok.next.kind != TK_KW || !str_eq(tok.next.text, "fn")) {
-				error_at(tok.pos, "expected 'fn' after 'extern'");
+				error_at(tok.pos, "expected 'fn' or 'var' after 'extern'");
 			}
 			is_ext = true;
 			tok = tok.next;
