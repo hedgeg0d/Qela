@@ -310,16 +310,43 @@ fn usual_conv(n *Node) {
 	n.rhs = cast_to(n.rhs, t);
 }
 
+// Stack-spilled parameters are always a suffix of the parameter list (the
+// register-word budget only ever runs out, never recovers), so the p0..p5
+// / pextra split point is `nparams - n_stack_args`, not a fixed index 6:
+// a str earlier in the list can push the split below 6.
 fn func_param(f *Func, i int) *Var {
-	if (i == 0) { return f.p0; }
-	if (i == 1) { return f.p1; }
-	if (i == 2) { return f.p2; }
-	if (i == 3) { return f.p3; }
-	if (i == 4) { return f.p4; }
-	return f.p5;
+	var split int = f.nparams - f.n_stack_args;
+	if (i < split) {
+		if (i == 0) { return f.p0; }
+		if (i == 1) { return f.p1; }
+		if (i == 2) { return f.p2; }
+		if (i == 3) { return f.p3; }
+		if (i == 4) { return f.p4; }
+		return f.p5;
+	}
+	var v *Var = f.pextra;
+	var k int = i - split;
+	while (k > 0) { v = v.pnext; k = k - 1; }
+	return v;
 }
 
+// Whether a param lands in a register slot or on the stack is decided by
+// the caller (Var.arg_stack), not by the positional index i: a str/struct
+// parameter earlier in the list can push the register-word budget past 6
+// well before the 6th positional parameter.
+//
+// pextra is threaded through Var.pnext, not Var.next: next already links
+// the function's locals list (declare_var inserts every parameter there
+// too), so reusing it here would splice the pextra chain into the locals
+// list and corrupt both.
 fn set_func_param(f *Func, i int, v *Var) {
+	if (v.arg_stack) {
+		if (f.pextra as i64 == 0) { f.pextra = v; return; }
+		var t *Var = f.pextra;
+		while (t.pnext as i64 != 0) { t = t.pnext; }
+		t.pnext = v;
+		return;
+	}
 	if (i == 0) { f.p0 = v; return; }
 	if (i == 1) { f.p1 = v; return; }
 	if (i == 2) { f.p2 = v; return; }
@@ -892,7 +919,8 @@ fn type_call(n *Node) {
 	while (a as i64 != 0) {
 		var nxt *Node = a.next;
 		a.next = 0 as *Node;
-		var want *Type = func_param(f, i).ty;
+		var pv *Var = func_param(f, i);
+		var want *Type = pv.ty;
 		i = i + 1;
 		a = coerce(a, want);
 		if (is_aggregate(want)) {
@@ -914,6 +942,11 @@ fn type_call(n *Node) {
 			}
 			tail.next = cast_to(a, want);
 		}
+		// A stack-passed argument's final one-word value (a scalar, or the
+		// address of a by-ref/small-aggregate copy) is staged in its own
+		// temp, then pushed in reverse order after every register argument
+		// is placed -- see gen_args.
+		if (pv.arg_stack) { tail.next.stack_tmp = alloc_temp(ty_i64); }
 		tail = tail.next;
 		a = nxt;
 	}

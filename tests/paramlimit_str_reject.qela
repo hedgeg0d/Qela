@@ -1,0 +1,10 @@
+// stage1-only
+// expect-compile-error
+// A str parameter that would overflow the register budget is rejected: v1
+// only spills one-word parameters, never a two-word str/struct.
+fn f(a int, b int, c int, d int, e int, f int, g str) int {
+	return a + b + c + d + e + f + g.len;
+}
+fn main() int {
+	return f(1, 2, 3, 4, 5, 6, "x");
+}
