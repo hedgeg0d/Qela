@@ -7,9 +7,9 @@ Updated 2026-08-03. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **222 392 B** |
+| **S2 — the shipped compiler, Qela compiled by itself** | **225 608 B** |
 | S2 under `upx --lzma` (measured 2026-08-03) | 51 388 B, ~4.9% of the 1 MiB budget |
-| S2 under xz -9 (proxy for upx) | 54 036 B |
+| S2 under xz -9 (proxy for upx) | 54 596 B |
 | stage1 sources | 9 100 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **193%** without bounds checks (M4 gate wants ≤150%) |
 
@@ -83,6 +83,19 @@ reference: the common encodings as one-`let` rows (mov/add/sub/cmp/jmp/
 syscall/iretq/lgdt...), each verified on real hardware in `tests/asmref.qela`.
 This is the whole "assembler": bytes with names, no mnemonics, no encoder
 in the compiler.
+
+**Entry control, with no OS-specific surface.** Three generic pieces:
+top-level `asm { ... }` blocks emit as the image's first bytes (a multiboot
+header fits in the file's first 8 KiB); `entry name;` generalizes "main is
+the entry" — the ELF entry becomes that function and the default
+call-main stub is suppressed; `$name` and `$rel name` inside asm operands
+embed a symbol's absolute address or a rel32 slot, patched at finalize by
+the same machinery that patches call targets (functions and globals both
+resolve). A kernel entry is then just source:
+`asm { 0x1badb002, 0, 0xe4524ffe }; entry start; fn naked start() { ... }`
+— tested end to end in `tests/topasm.qela` (`$stack_top` for the stack,
+`$rel kmain` for the jump). The base address stays 0x400000; low-half
+multiboot kernels load there as-is.
 
 **Expression macros.** `macro sq(x) = x * x;` — the body is parsed once
 with the parameters as placeholder locals, and every call clones it with
