@@ -7,14 +7,15 @@ Updated 2026-08-03. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **162 824 B** |
-| S2 under xz -9 (proxy for upx --lzma) | 38 964 B, ~3.7% of the 1 MiB budget |
+| **S2 — the shipped compiler, Qela compiled by itself** | **179 832 B** |
+| S2 under xz -9 (proxy for upx --lzma) | 43 248 B, ~4.1% of the 1 MiB budget |
 | stage1 sources | 6 653 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **226%**, or **193%** without bounds checks (M4 gate wants ≤150%) |
 
 Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the
 38-test corpus under S2, the embedded stdlib resolving outside the source tree,
-coroutines, channels, the collector, and `run`/`fmt`.
+coroutines, channels, the collector, `run`/`fmt`, and a scripted language
+server conversation.
 
 ## Done
 
@@ -43,7 +44,13 @@ collector rooted in the callee-saved registers, the stack and the data segment.
 symbol table behind `-g` (gdb steps through `.qela` and names frames);
 `qela run`; `qela fmt`, which formats over the token stream so comments
 survive and which is idempotent; `--dump-std` for the embedded library;
-`tools/torture.py` for randomized differential testing.
+`tools/torture.py` for randomized differential testing. **`qela --lsp`** is a
+language server in the same binary: JSON-RPC over framed stdio, hand-written
+JSON, full-document sync, diagnostics, hover with types and signatures, and
+go-to-definition for locals, globals, functions and fields. A compile runs in
+a forked child, so the compiler dying on its first error takes the session
+with it — the child, not the server. `tools/lsp-test.py` scripts a full
+conversation against it.
 
 **Self-hosting.** stage0 is frozen and never ships. The whole compiler lives in
 `srcql/` and `std/`, written in Qela, and the standard library is carried
@@ -52,8 +59,8 @@ directory with nothing but the compiler present.
 
 ## Not done
 
-Item 1 is mostly done and kept here for what remains of it; 2 and 3 have not
-been started.
+Item 1 is mostly done and kept here for what remains of it; 2 has not been
+started.
 
 ### 1. Emitted code size (M4)
 
@@ -101,20 +108,13 @@ What is left, in order of what it would buy:
   smallest encoding; replacing it with registers costs bytes, so it is a speed
   optimization, not a size one.
 
-### 2. LSP in the same binary
-
-Needs a JSON reader and writer from scratch, framed stdio, a compiler that
-survives errors instead of calling `error_at` and exiting, and a position
-index for hover and go-to-definition. `Node.pos` and `Node.ty` already carry
-what is needed. Its own session.
-
-### 3. ARM64 backend
+### 2. ARM64 backend
 
 The most expensive item, and the only one that would push the budget. Worth
 doing only once the x86 backend has stopped moving, so the second one inherits
 a settled shape rather than a moving target.
 
-### 4. Smaller
+### 3. Smaller
 
 - `tools/torture.py` still generates only straight-line scalar expressions —
   no calls, branches, structs or enums. **Every bug found in the last several
