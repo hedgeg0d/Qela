@@ -190,6 +190,17 @@ static Node *expr(Token **t);
 static Node *assign(Token **t);
 static Node *block(Token **t);
 
+/* The parser recurses on nested parentheses, unary prefixes, assignments
+   and blocks; each recursion is counted here and capped, so a hostile
+   input overflows the C stack instead of the compiler's heap. */
+static int parse_depth;
+
+static void parse_enter(Token **t) {
+	if (++parse_depth > 1024) error_at((*t)->pos, "code is nested too deeply");
+}
+
+static void parse_leave(void) { parse_depth--; }
+
 static Node *call_args(Token **t, Node *n) {
 	*t = expect(*t, "(");
 	Node head = {0};
@@ -357,7 +368,9 @@ static Node *postfix(Token **t) {
 	}
 }
 
-static Node *unary(Token **t) {
+static Node *unary(Token **t);
+
+static Node *unary_inner(Token **t) {
 	Token *tok = *t;
 	if (consume(t, "-")) {
 		Node *n = node(ND_NEG, tok->pos);
@@ -386,6 +399,13 @@ static Node *unary(Token **t) {
 	}
 	if (consume(t, "+")) return unary(t);
 	return postfix(t);
+}
+
+static Node *unary(Token **t) {
+	parse_enter(t);
+	Node *n = unary_inner(t);
+	parse_leave();
+	return n;
 }
 
 static Node *cast(Token **t) {
@@ -478,7 +498,7 @@ static void check_lvalue(Node *n, isize pos) {
 		error_at(pos, "cannot assign to this expression");
 }
 
-static Node *assign(Token **t) {
+static Node *assign_inner(Token **t) {
 	Node *n = logor(t);
 	isize pos = (*t)->pos;
 
@@ -497,10 +517,24 @@ static Node *assign(Token **t) {
 	return n;
 }
 
-static Node *expr(Token **t) {
+static Node *assign(Token **t) {
+	parse_enter(t);
+	Node *n = assign_inner(t);
+	parse_leave();
+	return n;
+}
+
+static Node *expr_inner(Token **t) {
 	Node *n = assign(t);
 	isize pos = (*t)->pos;
 	if (consume(t, ",")) return binary(ND_COMMA, n, expr(t), pos);
+	return n;
+}
+
+static Node *expr(Token **t) {
+	parse_enter(t);
+	Node *n = expr_inner(t);
+	parse_leave();
 	return n;
 }
 
@@ -557,7 +591,7 @@ static Node *declaration(Token **t) {
 	return n;
 }
 
-static Node *stmt(Token **t) {
+static Node *stmt_inner(Token **t) {
 	Token *tok = *t;
 
 	if (eq(tok, "{")) return block(t);
@@ -716,6 +750,13 @@ static Node *stmt(Token **t) {
 	Node *n = node(ND_EXPRSTMT, tok->pos);
 	n->lhs = expr(t);
 	*t = expect(*t, ";");
+	return n;
+}
+
+static Node *stmt(Token **t) {
+	parse_enter(t);
+	Node *n = stmt_inner(t);
+	parse_leave();
 	return n;
 }
 
@@ -993,11 +1034,17 @@ Unit parse(Token *tok) {
 			tok = expect(tok, ";");
 
 			/* Resolve relative to the importing file, which is the file the
-			   `import` keyword came from — not whatever follows the `;`. */
+			   `import` keyword came from — not whatever follows the `;`.
+			   A leading "std/" stays bare (stage1's is_std_path rule):
+			   it resolves against the working directory and, under S2,
+			   falls back to the embedded library. */
 			char buf[4096];
 			int cur_file = (int)(ipos >> FILE_SHIFT);
-			int dir_len = diag_file_dir(cur_file, buf, sizeof(buf) - 256);
-			char *p = buf + dir_len;
+			char *p = buf;
+			if (!(raw.n >= 4 && memcmp(raw.p, "std/", 4) == 0)) {
+				int dir_len = diag_file_dir(cur_file, buf, sizeof(buf) - 256);
+				p = buf + dir_len;
+			}
 			memcpy(p, raw.p, (usize)raw.n);
 			p[raw.n] = 0;
 
