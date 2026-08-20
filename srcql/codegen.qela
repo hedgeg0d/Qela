@@ -1530,7 +1530,7 @@ fn emit_spine(e *Node, dst *Node) {
 	if (e.kind == ND_VAR) { return; }
 	emit_spine(e.lhs, dst);
 	gen_expr(e.rhs);
-	alu_rm_reg(alu_op_for(e.kind), dst, RAX);
+	ir_alu_vreg_acc(alu_ir_for(e.kind), dst.varp.reg, e.pos);
 }
 
 fn gen_exprstmt(n *Node) {
@@ -1780,11 +1780,15 @@ fn alu_rm_imm(ext int, n *Node, v i64) {
 	}
 }
 
+// A direct local's r/m operand: its promoted register or frame slot.
+fn direct_operand(n *Node) IrOperand {
+	if (n.varp.has_reg) { return operand_vreg(n.varp.reg, n.ty); }
+	return operand_stackslot(n.varp.offset as i64, n.ty);
+}
+
 fn gen_binop_mem(n *Node, val *Node, rm *Node) bool {
 	var k int = n.kind;
-	var rop IrOperand;
-	if (rm.varp.has_reg) { rop = operand_vreg(rm.varp.reg, rm.ty); }
-	else { rop = operand_stackslot(rm.varp.offset as i64, rm.ty); }
+	var rop IrOperand = direct_operand(rm);
 	gen_expr(val);
 	if (k == ND_ADD)    { ir_alu_acc_rm(ALU_ADD, n.ty, rop, n.pos); return true; }
 	if (k == ND_SUB)    { ir_alu_acc_rm(ALU_SUB, n.ty, rop, n.pos); return true; }
@@ -1873,31 +1877,29 @@ fn gen_compare(n *Node) i64 {
 	if (n.rhs.kind == ND_NUM && (mem.ty.kind != TY_PTR || n.rhs.val == 0) &&
 	    fits_width(n.rhs.val, mem.ty) && addressable_load(mem)) {
 		gen_addr(mem);
-		cmp_at_rax_imm(mem.ty, n.rhs.val);
+		ir_cmp_at_acc_imm(mem.ty, n.rhs.val, n.pos);
 		return cc_for_compare(n);
 	}
 	if (n.rhs.kind == ND_NUM && fits_imm32(n.rhs.val) &&
 	    (lt.kind != TY_PTR || n.rhs.val == 0)) {
 		if (direct_local(n.lhs)) {
-			alu_rm_imm(7, n.lhs, n.rhs.val);
+			ir_cmp_rm_imm(n.lhs, n.rhs.val, n.pos);
 			return cc_for_compare(n);
 		}
 		gen_expr(n.lhs);
-		alu_rax_imm(7, n.rhs.val);
+		ir_cmp_acc_imm(n.rhs.val, n.pos);
 		return cc_for_compare(n);
 	}
 	if (lt.kind != TY_PTR && direct_local(n.rhs)) {
 		gen_expr(n.lhs);
-		alu_rax_rm(0, 0x3b, n.rhs);
+		ir_cmp_acc_rm(direct_operand(n.rhs), n.pos);
 		return cc_for_compare(n);
 	}
 	gen_expr(n.rhs);
-	push_reg(RAX);
+	ir_push_acc(n.pos);
 	gen_expr(n.lhs);
-	pop_reg(RDI);
-	rex_w(RDI, RAX);
-	b1(0x39);
-	modrm(3, RDI, RAX);
+	ir_pop_op2(n.pos);
+	ir_cmp_op2_acc(n.pos);
 	return cc_for_compare(n);
 }
 
@@ -2445,6 +2447,35 @@ fn x86_lower_op(op *IrOp) {
 		x86_alu_acc_rm(0, 0x3b, op.src1);
 		return;
 	}
+	if (op.kind == IR_CMP && (op.src0.kind == OP_VREG || op.src0.kind == OP_STACKSLOT) &&
+	    op.src1.kind == OP_IMM) {
+		// cmp <direct local>, imm -- gen_compare's direct-local fast path,
+		// alu_rm_imm with /digit 7 replayed on the operand.
+		var v i64 = op.src1.off;
+		if (op.src0.kind == OP_VREG) {
+			rex_w(0, op.src0.reg);
+			if (v >= -128 && v <= 127) {
+				b1(0x83); modrm(3, 7, op.src0.reg); b1(v);
+			} else {
+				b1(0x81); modrm(3, 7, op.src0.reg); b4(v);
+			}
+			return;
+		}
+		rex_w(0, RBP);
+		var disp i64 = -(op.src0.off);
+		if (v >= -128 && v <= 127) {
+			b1(0x83); slot_modrm(7, disp); b1(v);
+		} else {
+			b1(0x81); slot_modrm(7, disp); b4(v);
+		}
+		return;
+	}
+	if (op.kind == IR_CMP && op.src0.kind == OP_MEM && op.src1.kind == OP_IMM) {
+		// cmp <width> [rax], imm -- gen_compare's addressable_load path;
+		// gen_addr put the address in the accumulator.
+		cmp_at_rax_imm(op.src0.ty, op.src1.off);
+		return;
+	}
 	if (op.kind == IR_SETCC && op.dst.kind == OP_ACC) {
 		setcc(x86_setcc_byte(op.aux));
 		return;
@@ -2944,6 +2975,32 @@ fn ir_cmp_acc_rm(src IrOperand, pos i64) {
 	var op *IrOp = ir_emit(IR_CMP, pos);
 	op.src0 = operand_acc();
 	op.src1 = src;
+	x86_lower_all();
+}
+
+// cmp <direct local>, imm -- gen_compare's direct-local fast path.
+fn ir_cmp_rm_imm(n *Node, v i64, pos i64) {
+	var op *IrOp = ir_emit(IR_CMP, pos);
+	op.src0 = direct_operand(n);
+	op.src1 = operand_imm(v);
+	x86_lower_all();
+}
+
+// cmp <width> [rax], imm -- gen_compare's addressable_load path; gen_addr put
+// the address in the accumulator.
+fn ir_cmp_at_acc_imm(ty *Type, v i64, pos i64) {
+	var op *IrOp = ir_emit(IR_CMP, pos);
+	op.src0 = operand_mem(0, ty);
+	op.src1 = operand_imm(v);
+	x86_lower_all();
+}
+
+// cmp <op2_reg>, rax -- gen_compare's generic staging: rhs pushed, then popped
+// into op2 after lhs landed in the accumulator.
+fn ir_cmp_op2_acc(pos i64) {
+	var op *IrOp = ir_emit(IR_CMP, pos);
+	op.src0 = operand_acc();
+	op.src1 = operand_op2(0);
 	x86_lower_all();
 }
 
