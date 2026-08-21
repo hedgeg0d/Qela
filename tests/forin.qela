@@ -1,0 +1,18 @@
+// expect-exit: 115
+// for x in a iterates by value; the hidden index lets the bounds elision
+// drop the check on a fixed array (same shape the range-for already
+// proves), and slices and strings iterate with their dynamic length
+// keeping the check.
+import "std/io.qela";
+
+fn main() int {
+	var arr [4]i64;
+	arr[0] = 10; arr[1] = 20; arr[2] = 30; arr[3] = 40;
+	var t i64 = 0;
+	for x in arr { t = t + x; }
+	var sl []i64 = arr[0..2];
+	for x in sl { t = t + x; }
+	var s str = "xy";
+	for c in s { t = t + c; }
+	return t as int;
+}

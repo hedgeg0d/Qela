@@ -143,6 +143,8 @@ let ND_ZERO      = 49;
 let ND_FUNCADDR  = 50;
 let ND_ASM       = 51;
 let ND_ASSERT    = 52;
+let ND_INTERP    = 53;
+let ND_STRPART   = 54;
 
 struct Var;
 struct Node;
@@ -282,6 +284,9 @@ let CV_VOID = 3;
 // std/fmt.qela
 //   fmt_i64(b *Buf, v i64)                fmt_hex(b *Buf, v i64)
 //   fmt_str(b *Buf, s str)
+//   fmt_begin() Buf                       fmt_put_str(b Buf, s str) Buf
+//   fmt_put_i64(b Buf, v i64) Buf         fmt_put_hex(b Buf, v i64) Buf
+//   fmt_result(b Buf) str
 //
 // srcql/diag.qela
 //   set_module_dir(path str)
@@ -294,6 +299,7 @@ let CV_VOID = 3;
 //
 // srcql/parse.qela
 //   parse(tok *Token) *Unit               find_func(name str) *Func
+//   splice_import(tok *Token, path str, pos i64) *Token
 //
 // srcql/type.qela
 //   type_unit(u *Unit)                    add_type(n *Node)
