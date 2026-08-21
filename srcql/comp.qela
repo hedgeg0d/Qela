@@ -231,6 +231,24 @@ struct StrLit {
 	off  i64,
 }
 
+// A parse-time expression macro: the body is parsed once with the
+// parameters as placeholder locals, and every call clones it, substituting
+// the argument trees. Parameters are six separate slots like Func's.
+struct Macro;
+struct Macro {
+	next    *Macro,
+	name    str,
+	nparams int,
+	body    *Node,
+	pos     i64,
+	p0      *Var,
+	p1      *Var,
+	p2      *Var,
+	p3      *Var,
+	p4      *Var,
+	p5      *Var,
+}
+
 struct Unit {
 	funcs   *Func,
 	globals *Var,
