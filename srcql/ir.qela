@@ -35,6 +35,7 @@ let IR_TLSADDR = 20; // dst = address of the TLS slot in src0 (OP_TLSVAR)
 let IR_FENCE = 21; // memory fence; <aux: ordering>
 let IR_PUSH  = 22; // push src0 onto the staging stack
 let IR_POP   = 23; // pop the staging stack into dst
+let IR_MEMSET = 24; // zero <aux> bytes at the address in dst (OP_STACKSLOT)
 
 // IrOp.aux for IR_UNARY.
 let UOP_NEG    = 0;
@@ -89,6 +90,8 @@ let ALU_OR  = 6;
 let ALU_XOR = 7;
 let ALU_SHL = 8;
 let ALU_SHR = 9;
+let ALU_SCALE = 10; // acc = acc * <src1 OP_IMM element size>; the backend may
+                    // pick any multiply sequence (x86: scale_by's imul via rcx)
 
 // Condition codes, neutral: each backend maps these to its own flags/field
 // encoding (x86's Jcc/SETcc table, ARM64's 4-bit condition field).
