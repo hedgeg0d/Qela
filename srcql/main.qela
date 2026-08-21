@@ -301,28 +301,15 @@ fn test_fail(name str, msg str) {
 	write_str(STDOUT, "\n");
 }
 
-fn cmd_test(argc int, argv **u8) int {
-	if (argc < 3) {
-		eprint("usage: qela test <file.qela|dir> [args]\n");
-		return 2;
-	}
-	var input str = str_from_cstr(argv[2]);
-	var entry str = input;
-	var src str;
-	if (is_dir(input)) {
-		entry = dir_entry_path(input);
-		if (entry.len == 0) { return 1; }
-		src = read_file(entry);
-	} else {
-		src = read_file(input);
-	}
-
+// One test: compile `input` (already read into src), run it with the
+// program arguments prog_argv[0..nprog), compare against the expectations
+// in src's comments. Returns the failure count (0 or 1).
+fn test_one(input str, src str, prog_argv **u8, nprog int) int {
 	// The compile itself may be the test.
 	if (expect_has(src, "expect-compile-error")) {
 		var pid i64 = sys_fork();
 		if (pid == 0) {
-			if (is_dir(input)) { cmd_build_dir(input, "/tmp/qela-test-reject"); }
-			else { compile_file(input, "/tmp/qela-test-reject"); }
+			compile_file(input, "/tmp/qela-test-reject");
 			sys_exit(0);
 		}
 		var status [1]i64;
@@ -346,18 +333,17 @@ fn cmd_test(argc int, argv **u8) int {
 	fmt_str(&ob, ".out");
 	var outc *u8 = cstr(buf_str(&ob));
 
-	if (is_dir(input)) { cmd_build_dir(input, tmp); }
-	else { compile_file(input, tmp); }
+	compile_file(input, tmp);
 
 	var out_fd i64 = sys_open_exec(outc);
 	if (out_fd < 0) { die("error: cannot create the test output file"); }
 
-	var nargs int = argc - 2;
+	var nargs int = nprog + 1;
 	var cargv *i64 = arena_alloc((nargs as i64 + 1) * 8, 8) as *i64;
 	cargv[0] = tmpc as i64;
 	var i int = 1;
 	while (i < nargs) {
-		cargv[i] = argv[i + 2] as i64;
+		cargv[i] = prog_argv[i - 1] as i64;
 		i = i + 1;
 	}
 	cargv[nargs] = 0;
@@ -413,8 +399,54 @@ fn cmd_test(argc int, argv **u8) int {
 	return fail_count;
 }
 
+// qela test <file|dir> [args] — with several files, `--` separates the
+// program arguments: qela test a.qela b.qela -- 5 6. A directory input
+// merges like `qela .` and takes its expectations from the entry file.
+fn cmd_test(argc int, argv **u8) int {
+	if (argc < 3) {
+		eprint("usage: qela test <file.qela|dir> [files...] [-- args]\n");
+		return 2;
+	}
+	var first str = str_from_cstr(argv[2]);
+	if (is_dir(first)) {
+		var entry str = dir_entry_path(first);
+		if (entry.len == 0) { return 1; }
+		return test_one(first, read_file(entry), argv + 3, argc - 3);
+	}
+
+	var inputs [64]str;
+	var n_in int = 0;
+	var prog_start int = argc;
+	var i int = 2;
+	while (i < argc) {
+		var a str = str_from_cstr(argv[i]);
+		if (str_eq(a, "--")) { prog_start = i + 1; break; }
+		if (n_in >= 64) { die("error: too many test files"); }
+		inputs[n_in] = a;
+		n_in = n_in + 1;
+		i = i + 1;
+	}
+	var fails int = 0;
+	var k int = 0;
+	while (k < n_in) {
+		// One compilation per process: the compiler carries state that is
+		// only guaranteed clean for a single compile, so each test runs in
+		// its own forked child.
+		var pid i64 = sys_fork();
+		if (pid == 0) {
+			sys_exit(test_one(inputs[k], read_file(inputs[k]),
+			    argv + prog_start, argc - prog_start));
+		}
+		var status [1]i64;
+		sys_wait4(pid, &status[0] as *u8);
+		fails = fails + (((status[0] >> 8) & 255) as int);
+		k = k + 1;
+	}
+	return fails;
+}
+
 fn cmd_help() int {
-	write_str(STDOUT, "usage: qela <file.qela> [-o output] [options]\n       qela . [dir]   build a project from a directory\n       qela run <file.qela> [args]\n       qela test <file.qela|dir> [args]\n       qela fmt <file.qela>\n       qela --lsp\n       qela --dump-std <module>\n\ncompile a Qela program to a static binary; '-' reads the source\nfrom stdin. A directory merges every .qela file in it into one\nprogram (entry: main.qela, or the sole file) -- no imports needed\nbetween project files. 'run' compiles to a temp file and executes\nit, and panics print a backtrace there. 'test' runs the program and\nchecks its leading comments: // expect-exit: N, // expect-out: text\n(one line each, compared in order) and // expect-compile-error.\n\noptions:\n  -o <file>        output path (default: input name without .qela)\n  -g               DWARF line info and symbols for gdb\n  --backtrace      print function frames on panic\n  --no-bounds-checks   disable index checks\n  -h, --help       this text\n");
+	write_str(STDOUT, "usage: qela <file.qela> [-o output] [options]\n       qela . [dir]   build a project from a directory\n       qela run <file.qela> [args]\n       qela test <file.qela|dir> [files...] [-- args]\n       qela fmt <file.qela>\n       qela --lsp\n       qela --dump-std <module>\n\ncompile a Qela program to a static binary; '-' reads the source\nfrom stdin. A directory merges every .qela file in it into one\nprogram (entry: main.qela, or the sole file) -- no imports needed\nbetween project files. 'run' compiles to a temp file and executes\nit, and panics print a backtrace there. 'test' runs the program and\nchecks its leading comments: // expect-exit: N, // expect-out: text\n(one line each, compared in order) and // expect-compile-error;\nseveral files can be tested in one run -- '--' separates the\nprogram arguments, e.g. qela test a.qela b.qela -- 5 6.\n\noptions:\n  -o <file>        output path (default: input name without .qela)\n  -g               DWARF line info and symbols for gdb\n  --backtrace      print function frames on panic\n  --no-bounds-checks   disable index checks\n  -h, --help       this text\n");
 	return 0;
 }
 
