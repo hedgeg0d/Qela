@@ -1,0 +1,32 @@
+// expect-exit: 42
+// Forward declarations of recursive structs: a struct may reference itself
+// (directly or through a pointer) before its fields are defined.
+struct Node;
+struct Node {
+	val  int,
+	next *Node,
+}
+struct Pair;
+struct Pair {
+	a int,
+	b int,
+}
+var g Pair;
+
+fn pair_sum(p *Pair) int {
+	return p.a + p.b;
+}
+
+fn main() int {
+	var n Node;
+	n.val = 21;
+	var m Node;
+	m.val = 20;
+	m.next = &n;
+	if (m.next.val != 21) { return 1; }
+	g.a = 1;
+	g.b = 2;
+	if (pair_sum(&g) != 3) { return 2; }
+	// 20 + 21 + 3 - 2 = 42
+	return m.val + n.val + pair_sum(&g) - 2;
+}

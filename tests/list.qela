@@ -1,0 +1,34 @@
+// stage1-only
+// expect-exit: 42
+// std/list.qela: the growable pointer array. Never compiled by anything
+// before this test -- a module is done when it runs, not when it is written.
+import "std/list.qela";
+
+fn main() int {
+	var l List;
+	list_push(&l, 10 as *u8);
+	list_push(&l, 20 as *u8);
+	list_push(&l, 12 as *u8);
+	if (list_len(&l) != 3) { return 1; }
+	if (list_get(&l, 0) as i64 != 10) { return 2; }
+	if (list_get(&l, 2) as i64 != 12) { return 3; }
+	if (list_get(&l, 5) as i64 != 0) { return 4; }
+
+	// grow past the initial 16-slot block
+	var k int = 0;
+	while (k < 20) {
+		list_push(&l, (k as i64 + 100) as *u8);
+		k = k + 1;
+	}
+	if (list_get(&l, 22) as i64 != 119) { return 5; }
+	if (list_get(&l, 0) as i64 != 10) { return 6; }
+
+	var i i64 = 0;
+	var sum int = 0;
+	while (i < 4) {
+		sum = sum + (list_get(&l, i) as i64) as int;
+		i = i + 1;
+	}
+	// 10 + 20 + 12 + 100 = 142
+	return sum - 100;
+}

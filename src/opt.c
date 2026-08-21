@@ -54,6 +54,13 @@ static void const_fold(Node *n) {
 	case ND_AND:
 	case ND_OR:
 		const_fold(n->lhs);
+		/* Short-circuit: once the left side decides an && or ||, the right
+		   side never runs at runtime, so folding it would both be wrong and
+		   (with a constant division by zero in it) reject valid programs. */
+		if (n->kind == ND_AND && n->lhs->kind == ND_NUM && !n->lhs->val)
+			{ n->val = 0; n->kind = ND_NUM; return; }
+		if (n->kind == ND_OR && n->lhs->kind == ND_NUM && n->lhs->val)
+			{ n->val = 1; n->kind = ND_NUM; return; }
 		const_fold(n->rhs);
 		if (n->lhs->kind == ND_NUM && n->rhs->kind == ND_NUM) {
 			i64 a = n->lhs->val, b = n->rhs->val;
@@ -61,8 +68,12 @@ static void const_fold(Node *n) {
 			case ND_ADD:    n->val = a + b; break;
 			case ND_SUB:    n->val = a - b; break;
 			case ND_MUL:    n->val = a * b; break;
-			case ND_DIV:    n->val = b ? a / b : 0; break;
-			case ND_MOD:    n->val = b ? a % b : 0; break;
+			case ND_DIV:
+				if (!b) error_at(n->pos, "division by zero in a constant expression");
+				n->val = a / b; break;
+			case ND_MOD:
+				if (!b) error_at(n->pos, "division by zero in a constant expression");
+				n->val = a % b; break;
 			case ND_BITAND: n->val = a & b; break;
 			case ND_BITOR:  n->val = a | b; break;
 			case ND_BITXOR: n->val = a ^ b; break;
@@ -78,13 +89,9 @@ static void const_fold(Node *n) {
 			}
 			n->kind = ND_NUM;
 		}
-		/* AND/OR with constant 0/1 */
-		if (n->kind == ND_AND && n->lhs->kind == ND_NUM && !n->lhs->val)
-			{ n->val = 0; n->kind = ND_NUM; }
+		/* AND/OR with a constant right side */
 		if (n->kind == ND_AND && n->rhs->kind == ND_NUM && !n->rhs->val)
 			{ n->val = 0; n->kind = ND_NUM; }
-		if (n->kind == ND_OR && n->lhs->kind == ND_NUM && n->lhs->val)
-			{ n->val = 1; n->kind = ND_NUM; }
 		if (n->kind == ND_OR && n->rhs->kind == ND_NUM && n->rhs->val)
 			{ n->val = 1; n->kind = ND_NUM; }
 		return;
@@ -97,6 +104,10 @@ static void const_fold(Node *n) {
 static void fold_body(Node *n) {
 	if (!n) return;
 	const_fold(n);
+	/* A folded node is a literal now: its children were consumed (or, for
+	   a short-circuited && / ||, never evaluated) and must not be
+	   visited. */
+	if (n->kind == ND_NUM) return;
 	fold_body(n->lhs);
 	fold_body(n->rhs);
 	fold_body(n->cond);

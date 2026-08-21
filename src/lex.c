@@ -113,6 +113,7 @@ Token *lex(Str src, isize base) {
 			i64 val;
 			if (src.p[i] == '\\') {
 				i++;
+				if (i >= src.n) error_at(lex_base + start, "unterminated character literal");
 				val = read_escape(src, &i);
 			} else if (src.p[i] == '\n') {
 				error_at(lex_base + start, "unterminated character literal");

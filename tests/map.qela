@@ -1,0 +1,37 @@
+// stage1-only
+// expect-exit: 42
+// std/map.qela: str -> *u8 with insertion-order iteration. Never compiled
+// by anything before this test.
+import "std/map.qela";
+
+fn main() int {
+	var m Map;
+	map_put(&m, "a", 1 as *u8);
+	map_put(&m, "b", 2 as *u8);
+	map_put(&m, "c", 3 as *u8);
+	if (map_get(&m, "b") as i64 != 2) { return 1; }
+	if (map_get(&m, "z") as i64 != 0) { return 2; }
+	if (map_len(&m) != 3) { return 3; }
+
+	// update keeps the key, does not add a new entry
+	map_put(&m, "b", 40 as *u8);
+	if (map_get(&m, "b") as i64 != 40) { return 4; }
+	if (map_len(&m) != 3) { return 5; }
+
+	// insertion-order iteration
+	if (!str_eq(map_key(&m, 0), "a")) { return 6; }
+	if (map_val(&m, 1) as i64 != 40) { return 7; }
+	var c str = map_key(&m, 2);
+	if (c.len != 1 || c.ptr[0] != 'c') { return 8; }
+
+	// grow past the initial 16 entries
+	var i i64 = 0;
+	while (i < 30) {
+		map_put(&m, "k", (i + 10) as *u8);
+		i = i + 1;
+	}
+	if (map_get(&m, "k") as i64 != 39) { return 9; }
+	if (map_len(&m) != 4) { return 10; }
+
+	return (map_get(&m, "k") as i64 + 3) as int;
+}
