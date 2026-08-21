@@ -2236,7 +2236,7 @@ fn emit_code(u *Unit, main_fn *Func, panic_id int, hdr i64) {
 
 	if (bounds_checks.n != 0) {
 		var panic_addr i64 = code.n;
-		gen_panic_stub(panic_id, 21);
+		gen_panic_stub(panic_id, 20);
 		var i i64 = 0;
 		while (i < bounds_checks.n) {
 			buf_patch32(&code, bounds_checks.p[i], panic_addr - (bounds_checks.p[i] + 4));
@@ -2400,7 +2400,7 @@ fn codegen(u *Unit, img *Image) {
 	// only when a bounds check actually exists: a program without arrays
 	// carries no panic machinery at all. It has to stay inside the aligned
 	// rodata, or the data segment (and every GC word read in it) would be
-	// misaligned. The stub's length must match: 21.
+	// misaligned. The stub's length must match: 20.
 	if (bounds_checks.n != 0) {
 		var pmsg str = "index out of bounds\n";
 		bytes_off[panic_id] = rodata.n;

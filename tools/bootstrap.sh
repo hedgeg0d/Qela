@@ -252,8 +252,29 @@ printf '    ok\n'
 
 step "qela . lisp example"
 ( cd "$root/examples/lisp" && "$root/$OUT/s2" . -o "$tmp2/lisp" &&
-  "$tmp2/lisp" --test 2>&1 | grep -q '50 passed, 0 failed' ) ||
-	fail "the lisp example fails its self-test"
+  "$tmp2/lisp" tests.lisp | grep -q '^ok   procedure?' ) ||
+	fail "the lisp example fails its own test script"
+printf '    ok\n'
+
+step "qela test"
+cat > "$tmp2/tt.qela" <<'EOF'
+import "std/sys.qela";
+// expect-exit: 7
+// expect-out: one line
+// expect-out: two lines
+fn main() int {
+	write_str(1, "one line\n");
+	write_str(1, "two lines\n");
+	return 7;
+}
+EOF
+cat > "$tmp2/tc.qela" <<'EOF'
+// expect-compile-error
+fn main() int { var x i64 = "no"; return 0; }
+EOF
+( "$root/$OUT/s2" test "$tmp2/tt.qela" &&
+  "$root/$OUT/s2" test "$tmp2/tc.qela" ) ||
+	fail "qela test does not check expect-exit/expect-out/expect-compile-error"
 printf '    ok\n'
 
 step "language server"
