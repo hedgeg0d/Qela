@@ -2302,6 +2302,10 @@ fn x86_lower_op(op *IrOp) {
 		add_funcaddr((op.src0.off as *Func).name, op.pos);
 		return;
 	}
+	if (op.kind == IR_RET) {
+		b1(0xc3);
+		return;
+	}
 	die("internal: x86_lower_op: unhandled IR shape");
 }
 
@@ -2348,6 +2352,11 @@ fn ir_funcaddr(f *Func, pos i64) {
 	var op *IrOp = ir_emit(IR_FUNCADDR, pos);
 	op.dst = operand_acc();
 	op.src0 = operand_func(f);
+	x86_lower_all();
+}
+
+fn ir_ret(pos i64) {
+	var op *IrOp = ir_emit(IR_RET, pos);
 	x86_lower_all();
 }
 
@@ -2814,7 +2823,7 @@ fn gen_ret(n *Node) {
 		if (wide) { pop_reg(RDX); }
 		pop_reg(RAX);
 	}
-	gen_epilogue();
+	gen_epilogue(n.pos);
 }
 
 fn gen_for(n *Node) {
@@ -2997,7 +3006,7 @@ fn gen_asm_operands(a *Node) {
 	}
 }
 
-fn gen_epilogue() {
+fn gen_epilogue(pos i64) {
 	gen_restore();
 	// An exported extern function returns a float in xmm0 (SysV), where the
 	// body left it in rax.
@@ -3005,7 +3014,7 @@ fn gen_epilogue() {
 		gpr_to_xmm(0, RAX, gen_fn.ret.size);
 	}
 	if (!gen_frameless) { b1(0xc9); }
-	b1(0xc3);
+	ir_ret(pos);
 }
 
 fn gen_restore() {
@@ -3146,7 +3155,7 @@ fn gen_func(f *Func) {
 
 	if (!f.naked && !always_returns(f.body)) {
 		mov_reg_imm(RAX, 0);
-		gen_epilogue();
+		gen_epilogue(f.pos);
 	}
 	gen_bounds_trampoline();
 }
