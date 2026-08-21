@@ -7,14 +7,14 @@ Updated 2026-08-03. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **205 952 B** |
-| S2 under `upx --lzma` (measured 2026-08-03) | 48 124 B, ~4.6% of the 1 MiB budget |
-| S2 under xz -9 (proxy for upx) | 49 956 B |
-| stage1 sources | 8 600 lines of Qela |
+| **S2 — the shipped compiler, Qela compiled by itself** | **216 088 B** |
+| S2 under `upx --lzma` (measured 2026-08-03) | 50 428 B, ~4.8% of the 1 MiB budget |
+| S2 under xz -9 (proxy for upx) | 52 540 B |
+| stage1 sources | 9 100 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **193%** without bounds checks (M4 gate wants ≤150%) |
 
 Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the
-54-test corpus under S2, the embedded stdlib resolving outside the source tree,
+56-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
 backtrace, and a scripted language server conversation.
 
@@ -28,6 +28,37 @@ instantiated on use and cached so identical arguments name the same type;
 `as`, `sizeof`, character literals, `true`/`false`; locals zeroed at their
 declaration; modules via `import`; `comptime` blocks; generics by
 monomorphization, with the type argument inferred from the value arguments
+
+**String interpolation** (`"n = ${n}"`). The lexer splits the string into
+literal parts and `$` `{` expr `}` runs (strings, chars and comments inside
+the expression are brace-counted correctly, nested interpolation included);
+the parser collects an `ND_INTERP` and `type.qela` rewrites it into a chain
+of by-value `fmt_*` calls on a fresh `Buf`, chosen per part type: strings as
+themselves, integers as decimal, pointers as hex. The chain allocates its
+own buffer, so two interpolated strings alive at once never alias. The
+helpers live in `std/fmt.qela` and are auto-imported at the next top-level
+splice point, so no `import` is needed; `tools/genblob.py` now rejects a
+`$`+`{` in std sources, which would break the blob literal itself. Global
+initializers and assert messages stay literal-only. Formatter round-trips
+the split string verbatim from the token texts, idempotently.
+
+**`for x in a`**. Iterates an array, slice or string by value. The desugar
+in `parse.qela` builds the exact `for (i = 0; i < a.len; i += 1)` shape with
+a hidden index (named with a `$`, which no identifier can contain); on a
+fixed array `a.len` folds to a literal during typing, so the bounds elision
+drops the check — the most natural loop is also the smallest. The
+collection is evaluated per iteration, like the range form's bound.
+
+**`qela repl`**. Each line is compiled in a forked child as
+`write_str(STDOUT, "${line}")`, so integer, string and pointer expressions
+all render through the interpolation machinery; the child exits after one
+line, so a compile's arena leak never accumulates and a compile error costs
+only the child. Stateless: every line is a fresh program. `read_line` in
+`std/io.qela`, `sys_isatty` in `std/sys.qela` (prompts only on a terminal).
+
+**Import path normalization.** `dir/../std/x.qela` normalizes to
+`std/x.qela`, so the auto-import of `std/fmt.qela` dedups against the
+compiler's own `../std/...` imports in the file table.
 when it is not written out; `syscall`; `asm(byte, byte, ...)` for raw machine
 code with the result convention that whatever's left in `RAX` is the
 expression's value, same as `syscall`; `assert(cond, "msg")` and

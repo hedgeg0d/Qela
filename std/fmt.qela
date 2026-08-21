@@ -36,6 +36,39 @@ fn fmt_str(b *Buf, s str) {
 	buf_bytes(b, s.ptr, s.len);
 }
 
+// The by-value chain behind "..." string interpolation: the compiler
+// rewrites an interpolated string into fmt_result(fmt_put_*(...,
+// fmt_begin())). Each chain allocates its own buffer, so two interpolated
+// strings alive at once never alias. Note for maintainers: this module's
+// text is embedded in the compiler as a string literal, so the two
+// characters that start an interpolation must never appear here.
+fn fmt_begin() Buf {
+	var b Buf;
+	return b;
+}
+
+fn fmt_put_str(b Buf, s str) Buf {
+	buf_bytes(&b, s.ptr, s.len);
+	return b;
+}
+
+fn fmt_put_i64(b Buf, v i64) Buf {
+	fmt_i64(&b, v);
+	return b;
+}
+
+fn fmt_put_hex(b Buf, v i64) Buf {
+	fmt_hex(&b, v);
+	return b;
+}
+
+fn fmt_result(b Buf) str {
+	var s str;
+	s.ptr = b.p;
+	s.len = b.n;
+	return s;
+}
+
 fn eprint_i64(v i64) {
 	var b Buf;
 	fmt_i64(&b, v);

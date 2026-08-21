@@ -22,8 +22,8 @@ $ ldd hello
 ```
 
 The design goal is the most language per byte. The compiler is currently
-205 952 B — 48 KB packed with `upx --lzma`, about 4.6% of its own 1 MiB
-budget.
+216 088 B — 50 428 B packed with `upx --lzma`, about 4.8% of its own
+1 MiB budget.
 
 ## What it has
 
@@ -68,12 +68,20 @@ whole corpus at once — compiles, runs and checks the `// expect-exit:`,
 `// expect-out:` and `// expect-compile-error` comments at the top of each
 file.
 
+Strings interpolate: `"n = ${n}"` renders integers as decimal, strings in
+place and pointers as hex, with the expression evaluated at runtime — a
+string literal is compiled into a chain of formatting calls, so the feature
+is stdlib, not magic. `for x in a` iterates an array, slice or string by
+value, and on a fixed array the compiler proves the bounds away: the most
+natural loop is also the smallest.
+
 DWARF line info behind `-g`, so gdb steps through `.qela` source and names
 frames. `qela run` compiles and executes in one step. `qela fmt` formats over
 the token stream, so comments survive and the output is idempotent. A
 shebang first line is skipped, so scripts run as `#!/usr/bin/env qela run`;
-`qela -` reads the source from stdin. `qela --lsp` is a language server in
-the same binary: diagnostics, hover and go-to-definition over JSON-RPC.
+`qela -` reads the source from stdin. `qela repl` compiles each line as an
+expression and prints its value. `qela --lsp` is a language server in the
+same binary: diagnostics, hover and go-to-definition over JSON-RPC.
 
 `examples/lisp/` is a Lisp interpreter written in Qela — lexer, reader,
 evaluator with closures and macros, REPL — that self-tests through

@@ -54,6 +54,14 @@ def main() -> int:
     for idx, name in enumerate(names):
         with open(os.path.join(SRC_DIR, name), encoding="utf-8") as f:
             body = f.read()
+        if "${" in body:
+            print(
+                f"error: std/{name} contains '$' + '{{', which the compiler's "
+                "lexer would read as the start of a string interpolation "
+                "inside the blob literal; rephrase the source",
+                file=sys.stderr,
+            )
+            return 1
         total += len(body)
         lines.append(f'\tif (i == {idx}) {{ return "{escape(body)}"; }}')
     lines += ['\treturn "";', "}", ""]
