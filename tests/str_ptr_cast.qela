@@ -1,0 +1,9 @@
+// expect-compile-error
+// The str/array/slice-to-pointer sharp edge: the cast silently takes the
+// low 8 bytes, which for a string literal is the rodata header's address,
+// not the data pointer. The compiler must reject it and point at .ptr.
+fn main() int {
+	var s str = "hi";
+	var p *u8 = s as *u8;
+	return 0;
+}
