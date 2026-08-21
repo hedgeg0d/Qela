@@ -137,6 +137,10 @@ std/map.qela       str -> pointer hash table, deterministic iteration
 std/coro.qela      coroutines on their own stacks
 std/chan.qela      Chan(T), buffered channels of any element type
 std/gc.qela        conservative mark-sweep collector
+std/math.qela      abs, min, max
+std/rand.qela      deterministic xorshift64*
+std/sort.qela      Hoare quicksort over []i64
+std/vec.qela       generic growable vector
 
 srcql/comp.qela    types and the module contract, the only shared header
 srcql/diag.qela    files, positions, error_at with a caret
