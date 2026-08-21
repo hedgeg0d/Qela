@@ -1360,12 +1360,14 @@ fn gen_logical(n *Node) {
 
 fn gen_opassign(n *Node) {
 	if (n.lhs.kind == ND_VAR && n.lhs.varp.has_reg) {
-		ld_rm(RAX, n.lhs);
-		push_reg(RAX);
+		ir_load_var(n.lhs.varp, n.lhs.ty, n.pos);
+		ir_push_acc(n.pos);
 		gen_expr(n.rhs);
-		if (n.lhs.ty.kind == TY_PTR) { scale_by(n.lhs.ty.base.size); }
-		mov_reg_reg(RDI, RAX);
-		pop_reg(RAX);
+		if (n.lhs.ty.kind == TY_PTR) {
+			if (n.lhs.ty.base.size != 1) { ir_alu_acc_imm(ALU_SCALE, n.lhs.ty, n.lhs.ty.base.size as i64, n.pos); }
+		}
+		ir_mov_acc_op2(n.pos);
+		ir_pop_acc(n.pos);
 
 		var rop Node;
 		rop.kind = n.val as int;
@@ -1379,13 +1381,15 @@ fn gen_opassign(n *Node) {
 		return;
 	}
 	gen_addr(n.lhs);
-	push_reg(RAX);
-	load(n.lhs.ty);
-	push_reg(RAX);
+	ir_push_acc(n.pos);
+	ir_load_acc(n.lhs.ty, n.pos);
+	ir_push_acc(n.pos);
 	gen_expr(n.rhs);
-	if (n.lhs.ty.kind == TY_PTR) { scale_by(n.lhs.ty.base.size); }
-	mov_reg_reg(RDI, RAX);
-	pop_reg(RAX);
+	if (n.lhs.ty.kind == TY_PTR) {
+		if (n.lhs.ty.base.size != 1) { ir_alu_acc_imm(ALU_SCALE, n.lhs.ty, n.lhs.ty.base.size as i64, n.pos); }
+	}
+	ir_mov_acc_op2(n.pos);
+	ir_pop_acc(n.pos);
 
 	var op Node;
 	op.kind = n.val as int;
@@ -1395,7 +1399,8 @@ fn gen_opassign(n *Node) {
 	gen_binop(&op);
 
 	ir_cast_acc(CAST_TRUNC, n.lhs.ty, n.pos);
-	store(n.lhs.ty);
+	ir_pop_op2(n.pos);
+	ir_store_op2_acc(n.lhs.ty, n.pos);
 }
 
 // An assignment written as a statement discards its result, so it can write
@@ -2134,6 +2139,10 @@ fn x86_lower_op(op *IrOp) {
 		mov_reg_imm(op.dst.reg, op.src0.off);
 		return;
 	}
+	if (op.kind == IR_MOV && op.dst.kind == OP_OP2 && op.src0.kind == OP_ACC) {
+		mov_reg_reg(op2_reg(op.dst.reg), RAX);
+		return;
+	}
 	if (op.kind == IR_LOAD && op.dst.kind == OP_ACC && op.src0.kind == OP_STACKSLOT) {
 		// Same bytes as ld_rm's frame-slot path: an unconditional 8-byte
 		// mov from the local's home (direct_local guarantees machine width).
@@ -2173,6 +2182,17 @@ fn x86_lower_op(op *IrOp) {
 		rex_w(RAX, op.dst.reg);
 		b1(0x89);
 		modrm(3, RAX, op.dst.reg);
+		return;
+	}
+	if (op.kind == IR_STORE && op.dst.kind == OP_OP2 && op.src0.kind == OP_ACC) {
+		// store [op2_reg], rax at width -- store()'s memory path, the
+		// address in the staging register instead of freshly popped.
+		var op2 int = op2_reg(op.dst.reg);
+		var sz int = op.dst.ty.size;
+		if (sz == 1) { b1(0x88); modrm(0, RAX, op2); return; }
+		if (sz == 2) { b1(0x66); b1(0x89); modrm(0, RAX, op2); return; }
+		if (sz == 4) { b1(0x89); modrm(0, RAX, op2); return; }
+		b1(0x48); b1(0x89); modrm(0, RAX, op2);
 		return;
 	}
 	if (op.kind == IR_UNARY && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC) {
@@ -2649,6 +2669,21 @@ fn ir_pop_op2(pos i64) {
 	x86_lower_all();
 }
 
+fn ir_pop_acc(pos i64) {
+	var op *IrOp = ir_emit(IR_POP, pos);
+	op.dst = operand_acc();
+	depth = depth - 1;
+	x86_lower_all();
+}
+
+// mov <op2_reg>, rax -- the frontend's "evaluate into the staging register".
+fn ir_mov_acc_op2(pos i64) {
+	var op *IrOp = ir_emit(IR_MOV, pos);
+	op.dst = operand_op2(0);
+	op.src0 = operand_acc();
+	x86_lower_all();
+}
+
 // The right operand is an immediate folded into the instruction (a constant
 // binop, gen_binop_imm's fast path).
 fn ir_alu_acc_imm(aop int, ty *Type, v i64, pos i64) {
@@ -2684,6 +2719,15 @@ fn ir_cmp_acc_rm(src IrOperand, pos i64) {
 	var op *IrOp = ir_emit(IR_CMP, pos);
 	op.src0 = operand_acc();
 	op.src1 = src;
+	x86_lower_all();
+}
+
+// store [op2_reg], rax at ty's width (the value is in the accumulator).
+fn ir_store_op2_acc(ty *Type, pos i64) {
+	var op *IrOp = ir_emit(IR_STORE, pos);
+	op.dst = operand_op2(0);
+	op.dst.ty = ty;
+	op.src0 = operand_acc();
 	x86_lower_all();
 }
 
