@@ -99,6 +99,50 @@ fn read_escape(src str, i *i64) i64 {
 	return c as i64;
 }
 
+// Scans from just past "${" to the matching "}". Strings, char literals
+// and comments inside the expression are skipped so their braces do not
+// count. Returns the offset of the closing brace and leaves *i past it.
+fn interp_end(src str, i *i64, start i64) i64 {
+	var depth i64 = 1;
+	while (*i < src.len) {
+		var c u8 = src.ptr[*i];
+		if (c == '\\' && *i + 1 < src.len) { *i = *i + 2; continue; }
+		if (c == '"' || c == '\'') {
+			*i = *i + 1;
+			while (*i < src.len && src.ptr[*i] != c) {
+				if (src.ptr[*i] == '\\') { *i = *i + 2; }
+				else { *i = *i + 1; }
+			}
+			if (*i >= src.len) { error_at(lex_base + start, "unterminated string in interpolation"); }
+			*i = *i + 1;
+			continue;
+		}
+		if (c == '/' && *i + 1 < src.len && src.ptr[*i + 1] == '/') {
+			while (*i < src.len && src.ptr[*i] != '\n') { *i = *i + 1; }
+			continue;
+		}
+		if (c == '/' && *i + 1 < src.len && src.ptr[*i + 1] == '*') {
+			*i = *i + 2;
+			while (*i + 1 < src.len && !(src.ptr[*i] == '*' && src.ptr[*i + 1] == '/')) { *i = *i + 1; }
+			if (*i + 1 >= src.len) { error_at(lex_base + start, "unterminated comment in interpolation"); }
+			*i = *i + 2;
+			continue;
+		}
+		if (c == '{') { depth = depth + 1; }
+		if (c == '}') {
+			depth = depth - 1;
+			if (depth == 0) {
+				var end i64 = *i;
+				*i = *i + 1;
+				return end;
+			}
+		}
+		*i = *i + 1;
+	}
+	error_at(lex_base + start, "unterminated interpolation");
+	return 0;
+}
+
 fn punct_len(src str, i i64) i64 {
 	var len i64 = src.len;
 	if (i + 3 <= len) {
@@ -263,35 +307,92 @@ fn lex(src str, base i64) *Token {
 			continue;
 		}
 
-		// string literal
+		// string literal, possibly interpolated: "a=${x}b" lexes as the
+		// parts TK_STR("a") "$" "{" <expr tokens> "}" TK_STR("b"), so the
+		// parser sees one node shape and the formatter can round-trip the
+		// source from the token texts. An escaped `\$` stays a literal
+		// dollar; the `$` of an interpolation can never be written that way.
 		if (src.ptr[i] == '"') {
 			var start i64 = i;
 			i = i + 1;
+			var part_start i64 = start;
 			var buf *u8 = arena_alloc(src.len - i + 2, 1);
 			var n i64 = 0;
-			while (i < src.len && src.ptr[i] != '"') {
-				if (src.ptr[i] == '\n') { error_at(lex_base + start, "unterminated string literal"); }
+			while (true) {
+				if (i >= src.len || src.ptr[i] == '\n') {
+					error_at(lex_base + start, "unterminated string literal");
+				}
+				if (src.ptr[i] == '"') {
+					buf[n] = 0;
+					var t *Token = push_token(TK_STR, part_start);
+					var sv str;
+					sv.ptr = buf;
+					sv.len = n;
+					t.sval = sv;
+					var raw str;
+					raw.ptr = src.ptr + part_start;
+					raw.len = i - part_start + 1;
+					t.text = raw;
+					i = i + 1;
+					break;
+				}
 				if (src.ptr[i] == '\\') {
 					i = i + 1;
 					buf[n] = read_escape(src, &i) as u8;
-				} else {
-					buf[n] = src.ptr[i];
-					i = i + 1;
+					n = n + 1;
+					continue;
 				}
+				if (src.ptr[i] == '$' && i + 1 < src.len && src.ptr[i + 1] == '{') {
+					var t *Token = push_token(TK_STR, part_start);
+					var sv str;
+					sv.ptr = buf;
+					sv.len = n;
+					t.sval = sv;
+					var raw str;
+					raw.ptr = src.ptr + part_start;
+					raw.len = i - part_start;
+					t.text = raw;
+					var d *Token = push_token(TK_PUNCT, i);
+					var ds str;
+					ds.ptr = src.ptr + i;
+					ds.len = 1;
+					d.text = ds;
+					var ob *Token = push_token(TK_PUNCT, i + 1);
+					var os str;
+					os.ptr = src.ptr + i + 1;
+					os.len = 1;
+					ob.text = os;
+					i = i + 2;
+					var open i64 = i;
+					var end i64 = interp_end(src, &i, start);
+					var inner str;
+					inner.ptr = src.ptr + open;
+					inner.len = end - open;
+					// The expression inside lexes with its own head and is
+					// spliced after the opening braces; the globals are the
+					// outer list's state and must survive the recursion.
+					var saved_base i64 = lex_base;
+					var saved_tail *Token = lex_tail;
+					var ih *Token = lex(inner, lex_base + open);
+					var it *Token = ih;
+					while (it.next.kind != TK_EOF) { it = it.next; }
+					saved_tail.next = ih;
+					lex_tail = it;
+					lex_base = saved_base;
+					var cb *Token = push_token(TK_PUNCT, i - 1);
+					var cs str;
+					cs.ptr = src.ptr + i - 1;
+					cs.len = 1;
+					cb.text = cs;
+					buf = arena_alloc(src.len - i + 2, 1);
+					part_start = i;
+					n = 0;
+					continue;
+				}
+				buf[n] = src.ptr[i];
 				n = n + 1;
+				i = i + 1;
 			}
-			if (i >= src.len) { error_at(lex_base + start, "unterminated string literal"); }
-			i = i + 1;
-			buf[n] = 0;
-			var t *Token = push_token(TK_STR, start);
-			var sv str;
-			sv.ptr = buf;
-			sv.len = n;
-			t.sval = sv;
-			var raw str;
-			raw.ptr = src.ptr + start;
-			raw.len = i - start;
-			t.text = raw;
 			continue;
 		}
 
