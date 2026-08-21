@@ -50,6 +50,13 @@ fn type_ptr(base *Type) *Type {
 	return t;
 }
 
+fn type_ptr_volatile(base *Type) *Type {
+	type_init();
+	var t *Type = type_alloc();
+	*t = Type{kind: TY_PTR, size: 8, align: 8, is_unsigned: true, base: base, is_volatile: true};
+	return t;
+}
+
 fn type_new_var(name str) *Type {
 	var t *Type = type_alloc();
 	*t = Type{kind: TY_TYPEVAR, size: 8, align: 8, name: name};
@@ -233,7 +240,10 @@ fn layout_enum(ty *Type) {
 fn same_type(a *Type, b *Type) bool {
 	if (a as i64 == b as i64) { return true; }
 	if (a.kind != b.kind) { return false; }
-	if (a.kind == TY_PTR || a.kind == TY_SLICE) { return same_type(a.base, b.base); }
+	if (a.kind == TY_PTR) {
+		return a.is_volatile == b.is_volatile && same_type(a.base, b.base);
+	}
+	if (a.kind == TY_SLICE) { return same_type(a.base, b.base); }
 	if (a.kind == TY_ARRAY) {
 		return a.len == b.len && same_type(a.base, b.base);
 	}

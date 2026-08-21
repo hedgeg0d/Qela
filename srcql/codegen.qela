@@ -2075,7 +2075,9 @@ fn gen_func(f *Func) {
 	// this frame's own base (rbp+8 = return address, rbp+16 = the first
 	// spilled param) -- never drop the frame just because the function
 	// otherwise looks callable frameless.
-	gen_frameless = f.leaf && f.stack_size == 0 && f.n_stack_args == 0;
+	// A naked function has no frame by definition, and its body ends with
+	// its own ret or iretq: nothing may be emitted before or after it.
+	gen_frameless = f.naked || (f.leaf && f.stack_size == 0 && f.n_stack_args == 0);
 	if (!gen_frameless) {
 		push_reg(RBP);
 		depth = depth - 1;
@@ -2085,41 +2087,43 @@ fn gen_func(f *Func) {
 		}
 	}
 
-	var si int = 0;
-	while (si < RA_NSAVED) {
-		var sr int = ra_saved(si);
-		if (reg_used(f, sr)) { st_local(saved_slot(f, sr), sr); }
-		si = si + 1;
-	}
-
-	var ri int = 0;
-	if (f.ret_slot as i64 != 0) {
-		st_local(f.ret_slot.offset as i64, call_reg(ri));
-		ri = ri + 1;
-	}
-	var i int = 0;
-	while (i < f.nparams) {
-		var v *Var = func_param(f, i);
-		if (v.arg_stack) {
-			// Already sitting at the right rbp-relative offset from the
-			// caller's pushes -- nothing to move, and ri must not advance.
-			i = i + 1;
-			continue;
+	if (!f.naked) {
+		var si int = 0;
+		while (si < RA_NSAVED) {
+			var sr int = ra_saved(si);
+			if (reg_used(f, sr)) { st_local(saved_slot(f, sr), sr); }
+			si = si + 1;
 		}
-		if (v.has_reg) { mov_reg_reg(v.reg, call_reg(ri)); }
-		else { st_local(v.offset as i64, call_reg(ri)); }
-		ri = ri + 1;
-		if (is_aggregate(v.ty) && !v.by_ref && v.ty.size > 8) {
-			st_local((v.offset as i64) - 8, call_reg(ri));
+
+		var ri int = 0;
+		if (f.ret_slot as i64 != 0) {
+			st_local(f.ret_slot.offset as i64, call_reg(ri));
 			ri = ri + 1;
 		}
-		i = i + 1;
+		var i int = 0;
+		while (i < f.nparams) {
+			var v *Var = func_param(f, i);
+			if (v.arg_stack) {
+				// Already sitting at the right rbp-relative offset from the
+				// caller's pushes -- nothing to move, and ri must not advance.
+				i = i + 1;
+				continue;
+			}
+			if (v.has_reg) { mov_reg_reg(v.reg, call_reg(ri)); }
+			else { st_local(v.offset as i64, call_reg(ri)); }
+			ri = ri + 1;
+			if (is_aggregate(v.ty) && !v.by_ref && v.ty.size > 8) {
+				st_local((v.offset as i64) - 8, call_reg(ri));
+				ri = ri + 1;
+			}
+			i = i + 1;
+		}
 	}
 
 	fn_bounds.n = 0;
 	gen_stmt(f.body);
 
-	if (!always_returns(f.body)) {
+	if (!f.naked && !always_returns(f.body)) {
 		mov_reg_imm(RAX, 0);
 		gen_epilogue();
 	}

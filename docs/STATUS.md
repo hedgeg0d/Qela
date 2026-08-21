@@ -7,9 +7,9 @@ Updated 2026-08-03. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **220 296 B** |
+| **S2 — the shipped compiler, Qela compiled by itself** | **221 960 B** |
 | S2 under `upx --lzma` (measured 2026-08-03) | 51 388 B, ~4.9% of the 1 MiB budget |
-| S2 under xz -9 (proxy for upx) | 53 636 B |
+| S2 under xz -9 (proxy for upx) | 53 844 B |
 | stage1 sources | 9 100 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **193%** without bounds checks (M4 gate wants ≤150%) |
 
@@ -65,6 +65,16 @@ compiler's own `../std/...` imports in the file table.
 unseeded program is reproducible; the top bit is masked so `%` in
 `rand_range` never sees a negative operand. The repl imports it, so
 `rand_range(1, 7)` is a one-liner there.
+
+**`*volatile T`.** A pointer whose loads and stores may not be elided or
+reordered — MMIO registers, DMA buffers. The qualifier is part of the
+type (`same_type` distinguishes it), so dropping it requires an explicit
+cast; codegen always emits the access, never folds it.
+
+**`fn naked`.** A function with no prologue, no epilogue and no implicit
+ret: the body is bare bytes, so ISR entries and syscall stubs end in their
+own `iretq`/`ret` from `asm`. The contract is enforced at parse time — no
+parameters, locals, returns, defers or calls (only `asm` and `syscall`).
 
 **Expression macros.** `macro sq(x) = x * x;` — the body is parsed once
 with the parameters as placeholder locals, and every call clones it with
