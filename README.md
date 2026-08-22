@@ -22,15 +22,22 @@ $ ldd hello
 ```
 
 The design goal is the most language per byte. The compiler is currently
-231 368 B — 53 620 B packed with `upx --lzma`, about 5.1% of its own
+261 032 B — 60 196 B packed with `upx --lzma`, about 5.8% of its own
 1 MiB budget.
 
 ## What it has
 
-Fixed-width integers, pointers, arrays, slices and `str`, structs with
-literals, enums with payloads and exhaustive `match`, `defer`, and `comptime`
-blocks evaluated during type checking. `assert(cond, "msg")` and
-`panic("msg")` for the crash paths, and a panic backtrace under `qela run`.
+Fixed-width integers, `f32`/`f64` floating point (aliases `float` and
+`double`), pointers, arrays, slices and `str`, structs with literals, enums
+with payloads and exhaustive `match`, `defer`, and `comptime` blocks
+evaluated during type checking. `assert(cond, "msg")` and `panic("msg")`
+for the crash paths, and a panic backtrace under `qela run`.
+
+A float is raw IEEE-754 bits in an ordinary general-purpose register; SSE
+registers appear only for the instant of an operation, so the calling
+convention and register allocation are untouched. Floats parse, print and
+interpolate through pure integer arithmetic, because stage0 has no float —
+the bootstrap subset stays float-free.
 
 Generics by monomorphization, over functions and over types, with the type
 argument inferred from the call:
