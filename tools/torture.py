@@ -79,6 +79,12 @@ HELPERS = {
                lambda a, b, c, d: wrap(a - b - c - d)),
     "twice":  ("fn twice(n int) int { return n + n; }", 1,
                lambda n: wrap(n + n)),
+    "zero":   ("fn zero() int { return 3; }", 0,
+               lambda: 3),
+    "mix5":   ("fn mix5(a int, b int, c int, d int, e int) int { return a + b - c + d - e; }", 5,
+               lambda a, b, c, d, e: wrap(a + b - c + d - e)),
+    "mix6":   ("fn mix6(a int, b int, c int, d int, e int, f int) int { return a - b + c - d + e - f; }", 6,
+               lambda a, b, c, d, e, f: wrap(a - b + c - d + e - f)),
     "fact":   ("fn fact(n int) int { if (n <= 1) { return 1; } return n * fact(n - 1); }", 1,
                _fact),
     "gcd2":   ("fn gcd2(a int, b int) int { while (b != 0) { var t int = a % b; a = b; b = t; } return a; }", 2,
@@ -547,7 +553,7 @@ def generate(seed: int, stmts: int = 8, max_depth: int = 4) -> Program:
     gen = Gen(rng, max_depth)
 
     all_scalar = ["add2","sub2","mul2","max2","min2","sum3","diff4","twice",
-                  "fact","gcd2"]
+                  "zero","mix5","mix6","fact","gcd2"]
     gen.help = rng.sample(all_scalar, rng.randint(2, 4))
     struct_help = rng.sample(["pair_sum", "pair_swap"], rng.randint(1, 2))
     big_help = rng.sample(["wide_sum", "wide_make", "wide_swap", "bag_sum"],
