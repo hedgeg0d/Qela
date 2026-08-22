@@ -1,0 +1,11 @@
+// stage1-only
+// expect-exit: 42
+// `entry name;` picks the ELF entry point and suppresses the call-main
+// stub; the naked entry does its own exit syscall.
+entry start;
+
+fn naked start() {
+	asm(0x48c7c0, 60, 0, 0, 0);    // mov rax, 60
+	asm(0x48c7c7, 42, 0, 0, 0);    // mov rdi, 42
+	asm(0x0f, 0x05);               // syscall
+}
