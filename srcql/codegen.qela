@@ -1705,7 +1705,21 @@ fn gen_expr(n *Node) {
 	}
 	if (k == ND_ASM) {
 		var a *Node = n.args;
-		while (a as i64 != 0) { b1(a.val); a = a.next; }
+		while (a as i64 != 0) {
+			// A value wider than a byte is a byte string written in hex:
+			// asm(0x48c7c0) emits 48 c7 c0, most significant byte first,
+			// the order a disassembler prints.
+			var v i64 = a.val;
+			var n i64 = 1;
+			var t i64 = v;
+			while (t > 255) { n = n + 1; t = t >> 8; }
+			var s i64 = (n - 1) * 8;
+			while (s >= 0) {
+				b1(((v >> s) & 255) as u8);
+				s = s - 8;
+			}
+			a = a.next;
+		}
 		return;
 	}
 	if (k == ND_ASSERT) { gen_assert(n); return; }
