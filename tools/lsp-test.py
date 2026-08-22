@@ -159,7 +159,14 @@ def main():
     finally:
         srv.stdin.close()
         srv.stdout.close()
-        srv.wait(timeout=10)
+        try:
+            srv.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            # A wedged server must not outlive the test: it would spin on
+            # the leftover machine and starve the next bootstrap run.
+            srv.kill()
+            srv.wait(timeout=5)
+            raise SystemExit("server did not exit after shutdown")
     if srv.returncode != 0:
         raise SystemExit(f"server exited {srv.returncode}")
     print("LSP test passed")
