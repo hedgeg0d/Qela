@@ -115,6 +115,64 @@ var global_vars *Var;
 var lambda_scope *Scope;
 var lambda_seq int;
 
+// Typed block expressions (`T { ...; super v; }`) desugar to an
+// immediately-called hidden function like a lambda, but unlike a lambda
+// they may read outer locals: each one becomes a hidden by-value parameter
+// the first time it is referenced, so the block only ever sees a copy
+// (readonly by construction, no separate enforcement needed). `capturing`
+// gates this behavior onto typed blocks only -- a plain lambda nested
+// inside one still rejects captures, same as today.
+struct Capture;
+struct Capture {
+	next   *Capture,
+	outer  *Var,
+	hidden *Var,
+}
+var capturing bool;
+var cap_head *Capture;
+var cap_tail *Capture;
+var cap_n int;
+var cap_rwords int;
+var cap_stack_slot int;
+
+// Finds or creates the hidden parameter that carries `v`'s value into the
+// typed block currently being parsed (`cur_func` is that block's hidden
+// Func). Mirrors the register-word/stack-spill bookkeeping in parse_func's
+// parameter loop -- captures are just parameters discovered incrementally
+// instead of all upfront.
+fn capture_get_or_add(v *Var, p i64) *Var {
+	var c *Capture = cap_head;
+	while (c as i64 != 0) {
+		if (c.outer as i64 == v as i64) { return c.hidden; }
+		c = c.next;
+	}
+	var b Buf;
+	fmt_str(&b, "_$cap");
+	fmt_i64(&b, cap_n as i64);
+	var hname str = buf_str(&b);
+	var hv *Var = declare_var(hname, v.ty, p);
+	var is2word bool = is_aggregate(v.ty) && v.ty.size > 8 && v.ty.size <= 16;
+	if (is2word) { cap_rwords = cap_rwords + 2; } else { cap_rwords = cap_rwords + 1; }
+	hv.by_ref = is_aggregate(v.ty) && v.ty.size > 16;
+	if (cap_rwords > 6 || cap_n >= 6) {
+		if (is2word) { error_at(p, "a captured str or struct here would not fit in the argument registers"); }
+		hv.arg_stack = true;
+		hv.no_reg = true;
+		hv.offset = (16 + 8 * cap_stack_slot) as int;
+		cap_stack_slot = cap_stack_slot + 1;
+		cur_func.n_stack_args = cur_func.n_stack_args + 1;
+	}
+	set_func_param(cur_func, cap_n, hv);
+	var nc *Capture = arena_alloc(sizeof(Capture), 8) as *Capture;
+	nc.outer = v;
+	nc.hidden = hv;
+	if (cap_head as i64 == 0) { cap_head = nc; } else { cap_tail.next = nc; }
+	cap_tail = nc;
+	cap_n = cap_n + 1;
+	if (cap_n > 14) { error_at(p, "too many captured variables (at most 14)"); }
+	return hv;
+}
+
 // Set while parsing the body of a `defer`: return, break and continue are
 // rejected there, because codegen runs defer bodies while unwinding and
 // another return would re-enter the same defer forever.
@@ -740,6 +798,13 @@ fn parse_primary(t **Token) *Node {
 			n.args = fhead.next;
 			return n;
 		}
+		// typed block expression: `T { ...; super v; }`, an inline
+		// value-producing block desugared to an immediately-called hidden
+		// function. Excludes TY_STRUCT: `Name{` is already struct-literal
+		// syntax and the two cannot be told apart without deeper lookahead.
+		if (named as i64 != 0 && named.kind != TY_STRUCT && tok_eq(*t, "{")) {
+			return parse_typed_block(t, p, named);
+		}
 		// also search type vars for comptime param references
 		if (named as i64 == 0) {
 			var i int = 0;
@@ -816,11 +881,15 @@ fn parse_primary(t **Token) *Node {
 				s = s.next;
 			}
 			if (!found) {
-				var mb Buf;
-				fmt_str(&mb, "a lambda cannot capture '");
-				fmt_str(&mb, name);
-				fmt_str(&mb, "' (no closures)");
-				error_at(p, buf_str(&mb));
+				if (capturing) {
+					v = capture_get_or_add(v, p);
+				} else {
+					var mb Buf;
+					fmt_str(&mb, "a lambda cannot capture '");
+					fmt_str(&mb, name);
+					fmt_str(&mb, "' (no closures)");
+					error_at(p, buf_str(&mb));
+				}
 			}
 		}
 		var n *Node = new_node(ND_VAR, p);
@@ -1229,6 +1298,18 @@ fn parse_stmt_inner(t **Token) *Node {
 		return n;
 	}
 
+	// `super v;` is the value of the nearest enclosing typed block -- it is
+	// `return` inside that block's hidden function, spelled differently so
+	// it reads as "the block's value" rather than "exit the function".
+	if (tok_consume(t, "super")) {
+		if (!capturing) { error_at(p, "'super' is only valid inside a typed block"); }
+		if (in_defer_body) { error_at(p, "cannot return from inside a defer body"); }
+		var n *Node = new_node(ND_RET, p);
+		if (!tok_eq(*t, ";")) { n.lhs = parse_expr(t); }
+		tok_expect(t, ";");
+		return n;
+	}
+
 	if (tok_consume(t, "if")) {
 		tok_expect(t, "(");
 		var n *Node = new_node(ND_IF, p);
@@ -1542,6 +1623,10 @@ fn parse_lambda(t **Token, p i64) *Node {
 	enter_scope();
 	var saved_lscope *Scope = lambda_scope;
 	lambda_scope = scope_root;
+	// A typed block may be in progress in an enclosing scope; a plain
+	// lambda nested inside one still has no environment of its own.
+	var saved_capturing bool = capturing;
+	capturing = false;
 	tok_expect(t, "(");
 	var nparams int = 0;
 	var rwords int = 0;
@@ -1568,6 +1653,7 @@ fn parse_lambda(t **Token, p i64) *Node {
 	f.body = parse_block(t);
 	leave_scope();
 	lambda_scope = saved_lscope;
+	capturing = saved_capturing;
 	cur_func = saved_func;
 	type_set_fn(saved_func);
 
@@ -1576,6 +1662,82 @@ fn parse_lambda(t **Token, p i64) *Node {
 	var n *Node = new_node(ND_FUNCADDR, p);
 	n.name = name;
 	return n;
+}
+
+// `T { stmts...; super v; }` as an expression: an inline value-producing
+// block. Compiles to a hidden function called immediately in place, like a
+// lambda, but reads of outer locals are captures instead of errors --
+// `capture_get_or_add` (via the flip in parse_primary's "no closures"
+// check) turns each one into a hidden by-value parameter the first time it
+// is seen, and the call below passes the outer variables as the matching
+// arguments. `super` is `return` inside this hidden function.
+fn parse_typed_block(t **Token, p i64, ty *Type) *Node {
+	if (cur_func as i64 != 0 && cur_func.naked) {
+		error_at(p, "naked functions cannot use a typed block");
+	}
+	var b Buf;
+	fmt_str(&b, "_$tblock");
+	fmt_i64(&b, lambda_seq as i64);
+	lambda_seq = lambda_seq + 1;
+	var name str = buf_str(&b);
+
+	var f *Func = arena_alloc(sizeof(Func), 8) as *Func;
+	f.name = name;
+	f.ret = ty;
+	f.pos = p;
+	var saved_func *Func = cur_func;
+	cur_func = f;
+	type_set_fn(f);
+
+	enter_scope();
+	var saved_lscope *Scope = lambda_scope;
+	lambda_scope = scope_root;
+	var saved_capturing bool = capturing;
+	capturing = true;
+	var saved_cap_head *Capture = cap_head;
+	var saved_cap_tail *Capture = cap_tail;
+	var saved_cap_n int = cap_n;
+	var saved_cap_rwords int = cap_rwords;
+	var saved_cap_stack_slot int = cap_stack_slot;
+	cap_head = 0 as *Capture;
+	cap_tail = 0 as *Capture;
+	cap_n = 0;
+	cap_rwords = 0;
+	cap_stack_slot = 0;
+
+	f.body = parse_block(t);
+	f.nparams = cap_n;
+	var call_cap *Capture = cap_head;
+	var nargs int = cap_n;
+
+	leave_scope();
+	lambda_scope = saved_lscope;
+	capturing = saved_capturing;
+	cap_head = saved_cap_head;
+	cap_tail = saved_cap_tail;
+	cap_n = saved_cap_n;
+	cap_rwords = saved_cap_rwords;
+	cap_stack_slot = saved_cap_stack_slot;
+	cur_func = saved_func;
+	type_set_fn(saved_func);
+
+	add_func(f);
+
+	var call *Node = new_node(ND_CALL, p);
+	call.name = name;
+	var ahead Node;
+	var atail *Node = &ahead;
+	var c *Capture = call_cap;
+	while (c as i64 != 0) {
+		var an *Node = new_node(ND_VAR, p);
+		an.varp = c.outer;
+		atail.next = an;
+		atail = an;
+		c = c.next;
+	}
+	call.args = ahead.next;
+	call.nargs = nargs;
+	return call;
 }
 
 fn parse_struct(t **Token) {
