@@ -1,0 +1,8 @@
+// expect-compile-error
+// i64 and u64 operands cannot mix implicitly: the common type would force
+// one of them across the signedness line.
+fn main() int {
+	var u u64 = 1;
+	var i i64 = 2;
+	return (u + i) as int;
+}

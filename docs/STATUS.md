@@ -7,19 +7,40 @@ Updated 2026-08-04. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **261 032 B** |
-| S2 under `upx --lzma` (measured 2026-08-04) | 60 196 B, ~5.8% of the 1 MiB budget |
-| S2 under xz -9 (proxy for upx) | 63 332 B |
+| **S2 — the shipped compiler, Qela compiled by itself** | **261 936 B** |
+| S2 under `upx --lzma` (measured 2026-08-04) | 60 380 B, ~5.8% of the 1 MiB budget |
+| S2 under xz -9 (proxy for upx) | 63 532 B |
 | stage1 sources | 10 569 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
 
-Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 88-test corpus under S2, the embedded stdlib resolving outside the source tree,
+Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 92-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
 backtrace, interpolation and the repl, the compiler flags (`-g`,
 `--backtrace`, `--no-bounds-checks`, `--dump-std`), and a scripted language
 server conversation.
 
 ## Done
+
+**Implicit integer conversions only widen (2026-08-04).** An implicit cast
+between integer types is allowed only when the value cannot change:
+widening, and among widening casts only the safe direction — `u8`/`u16`/`u32`
+→ `i64` is fine (every value fits), `i32` → `u64` is not (a negative value
+sign-extends into a huge positive). Signedness changes at equal width
+(`i64` ↔ `u64`), any narrowing, and `u64` mixed into an `i64` expression are
+compile errors demanding an explicit `as`. The relief is a constant that
+fits: `var c u8 = 'a'`, `arr[i] = 3`, `var b bool = true` stay implicit,
+because fitting is provable at compile time (a constant that does not fit is
+an error, not a silent wrap). Float literals narrow into `f32` implicitly for
+the same reason; int↔float stays fully explicit. The rule lives in `cast_to`
+in `srcql/type.qela` and is mirrored byte-for-byte in `src/type.c` (the
+bootstrap subset has no float, so stage0 carries only the integer half);
+`usual_conv`'s integer promotion to `i64` is unaffected because it widens.
+Pinned by `tests/castimplicit.qela` and the reject pair
+`tests/castreject_narrow.qela`, `tests/castreject_s2u.qela`,
+`tests/castreject_mix.qela`; `boundsloop.qela` and `volatile.qela` gained
+explicit casts where a byte read-modify-write used to narrow silently, and
+`srcql/opt.qela`'s `trunc_val` now stays in `i64` instead of crossing to
+`u64` and back.
 
 **Floats (2026-08-04).** `f32`/`f64` (aliases `float`/`double`): literals
 (`1.5`, `2.0`, `1e3`, `1.5e2`; a digit is required on both sides of the dot),
@@ -109,7 +130,9 @@ quicksort over `[]i64`, both written in the bootstrap subset.
 `tests/sort.qela` runs under S2.
 
 **Language.** i8–u64, bool, int/uint/usize, `f32`/`f64` (`float`/`double`);
-pointers, arrays, slices, `str`;
+pointers, arrays, slices, `str`; implicit integer casts widen only, and only
+in the value-preserving direction (signedness crosses and narrowing need an
+explicit `as`, fitting constants stay implicit);
 structs with literals and forward declarations; enums with payloads and
 exhaustive `match`; parameterized types `struct Pair(T)` and `enum Opt(T)`,
 instantiated on use and cached so identical arguments name the same type;

@@ -1,0 +1,8 @@
+// expect-compile-error
+// signed -> unsigned at the same width would reinterpret a negative value;
+// only a fitting constant may cross.
+fn main() int {
+	var i i64 = -5;
+	var u u64 = i;
+	return 0;
+}

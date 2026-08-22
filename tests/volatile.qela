@@ -9,7 +9,7 @@ import "std/io.qela";
 fn main() int {
 	var v u8 = 41;
 	var p *volatile u8 = &v as *volatile u8;
-	*p = *p + 1;
+	*p = (*p + 1) as u8;
 	write_str(STDOUT, "${*p}\n");
 	return *p as int;
 }
