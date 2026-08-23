@@ -22,7 +22,7 @@ $ ldd hello
 ```
 
 The design goal is the most language per byte. The compiler is currently
-216 088 B — 50 428 B packed with `upx --lzma`, about 4.8% of its own
+227 656 B — 52 764 B packed with `upx --lzma`, about 5.0% of its own
 1 MiB budget.
 
 ## What it has
@@ -85,6 +85,14 @@ expression macros whose expansion is a tree, not text: `sq(2 + 1)` needs
 no parentheses, and the expansion is type-checked and bounds-checked like
 any other code.
 
+The image itself is controllable from source: top-level `asm { ... }`
+blocks emit as the binary's first bytes, `entry name;` picks the ELF entry
+and suppresses the call-main stub, and `$name` / `$rel name` inside asm
+operands embed a symbol's absolute address or a rel32 slot — so a multiboot
+header and a naked kernel entry are plain source, no linker script. `docs/ASM.md`
+is the reference: common encodings as one-`let` rows, each verified on real
+hardware.
+
 DWARF line info behind `-g`, so gdb steps through `.qela` source and names
 frames. `qela run` compiles and executes in one step. `qela fmt` formats over
 the token stream, so comments survive and the output is idempotent. A
@@ -109,7 +117,7 @@ make install          # installs build/bootstrap/s2 to /usr/local/bin/qela
 twice and requires the last two to be byte-identical, then runs the test
 corpus and end-to-end checks for the standard library, coroutines, channels,
 the collector, `run` and `fmt`, stdin and shebang, the panic backtrace,
-`qela test` and the lisp example.
+interpolation and the repl, `qela test` and the lisp example.
 
 The compiler you use is `build/bootstrap/s2`. `./qela` is a throwaway
 bootstrap that exists only to compile the first stage.
@@ -130,3 +138,4 @@ docs/       BOOTSTRAP.md, STATUS.md
 
 - `docs/BOOTSTRAP.md` — the subset the compiler's own sources may use, and why
 - `docs/STATUS.md` — what works, what is left, with measurements
+- `docs/ASM.md` — the x86 encodings Qela's `asm` covers, as one-`let` rows
