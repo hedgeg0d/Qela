@@ -98,6 +98,10 @@ let ALU_SHL = 8;
 let ALU_SHR = 9;
 let ALU_SCALE = 10; // acc = acc * <src1 OP_IMM element size>; the backend may
                     // pick any multiply sequence (x86: scale_by's imul via rcx)
+let ALU_FADD = 11; // acc = acc + op2, float (bits ride GPRs; a backend's
+let ALU_FSUB = 12; //   float path applies the op in its own register file)
+let ALU_FMUL = 13;
+let ALU_FDIV = 14;
 
 // Condition codes, neutral: each backend maps these to its own flags/field
 // encoding (x86's Jcc/SETcc table, ARM64's 4-bit condition field).
