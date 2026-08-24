@@ -54,7 +54,10 @@ Types:
 - `[N]T` where N is a literal, `[]T`, `str` = `[]u8`, fields `.ptr` and `.len`
 - `struct` (nesting allowed), `enum` with payload
 - no function pointers — dispatch with `if` chains
-- no floating point anywhere in the language
+- no floating point in the subset — stage1 has `f32`/`f64` for its users, but
+  its own sources do not use them (stage0 has none; float literals are
+  converted by integer big-decimal arithmetic in `srcql/lex.qela`, so a float
+  is never a stage1-source value)
 
 Expressions:
 
