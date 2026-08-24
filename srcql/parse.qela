@@ -2092,7 +2092,17 @@ fn parse_typed_block(t **Token, p i64, ty *Type) *Node {
 	var c *Capture = call_cap;
 	while (c as i64 != 0) {
 		var an *Node = new_node(ND_VAR, p);
-		an.varp = c.outer;
+		if (c.outer.is_global || !capturing) {
+			an.varp = c.outer;
+		} else {
+			// The call site sits inside an enclosing typed block whose
+			// captures are live again (cap_head and cur_func were restored
+			// above). The argument must be that block's own copy of the
+			// outer variable -- the only one its frame holds -- not the
+			// original. A block that never referenced the variable itself
+			// picks it up here, exactly as a body reference would.
+			an.varp = capture_get_or_add(c.outer, p);
+		}
 		atail.next = an;
 		atail = an;
 		c = c.next;
