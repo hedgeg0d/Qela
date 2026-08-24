@@ -706,17 +706,14 @@ fn gen_addr(n *Node) {
 	var k int = n.kind;
 	if (k == ND_VAR) {
 		if (n.varp.has_reg) { error_at(n.pos, "internal: address of a promoted local"); }
-		if (n.varp.is_tls) {
-			ld_fs_self(RAX);
-			add_rax_imm(n.varp.tls_off);
-		}
+		if (n.varp.is_tls) { ir_tlsaddr(n.varp, n.pos); }
 		else if (n.varp.is_global) { ir_mov_acc_global(n.varp, n.pos); }
 		else if (n.varp.arg_stack) {
 			// A stack-passed parameter's offset is a positive rbp
-			// displacement already, unlike every other local: rbp_mem is
-			// called directly, bypassing lea_local/ld_local's negation.
-			if (n.varp.by_ref) { rbp_mem(0x8b, RAX, n.varp.offset as i64); }
-			else { rbp_mem(0x8d, RAX, n.varp.offset as i64); }
+			// displacement already, unlike every other local: the wrappers
+			// negate it back to the frame convention the lowering expects.
+			if (n.varp.by_ref) { ir_load_arg_acc(n.varp.offset as i64, n.pos); }
+			else { ir_lea_arg_acc(n.varp.offset as i64, n.pos); }
 		}
 		else if (n.varp.by_ref) { ir_load_var(n.varp, type_ptr(ty_i64), n.pos); }
 		else { ir_lea_slot_acc(n.varp.offset as i64, n.pos); }
@@ -2137,6 +2134,13 @@ fn x86_lower_op(op *IrOp) {
 		mov_reg_reg(RAX, op2_reg(op.src0.reg));
 		return;
 	}
+	if (op.kind == IR_TLSADDR) {
+		// ld_fs_self's mov, then the tvar's offset within the block; LEA
+		// cannot read the fs segment base, so the address always starts here.
+		ld_fs_self(RAX);
+		add_rax_imm((op.src0.off as *Var).tls_off);
+		return;
+	}
 	if (op.kind == IR_LOAD && op.dst.kind == OP_ACC && op.src0.kind == OP_STACKSLOT) {
 		// Same bytes as ld_rm's frame-slot path: an unconditional 8-byte
 		// mov from the local's home (direct_local guarantees machine width).
@@ -2968,6 +2972,33 @@ fn ir_lea_slot_acc(off i64, pos i64) {
 	op.src0 = operand_stackslot(off, 0 as *Type);
 	op.src1 = operand_none();
 	op.aux = 1;
+	x86_lower_all();
+}
+
+fn ir_tlsaddr(v *Var, pos i64) {
+	var op *IrOp = ir_emit(IR_TLSADDR, pos);
+	op.dst = operand_acc();
+	op.src0 = operand_tlsvar(v);
+	x86_lower_all();
+}
+
+// A stack-passed parameter's slot: off is a positive rbp displacement, stored
+// negated so the STACKSLOT lowering reproduces it as written.
+fn ir_lea_arg_acc(off i64, pos i64) {
+	var op *IrOp = ir_emit(IR_LEA, pos);
+	op.dst = operand_acc();
+	op.src0 = operand_stackslot(-off, 0 as *Type);
+	op.src1 = operand_none();
+	op.aux = 0;
+	x86_lower_all();
+}
+
+// A by-ref stack-passed parameter: load the pointer value from its slot.
+fn ir_load_arg_acc(off i64, pos i64) {
+	var op *IrOp = ir_emit(IR_LOAD, pos);
+	op.dst = operand_acc();
+	op.dst.ty = type_ptr(ty_i64);
+	op.src0 = operand_stackslot(-off, 0 as *Type);
 	x86_lower_all();
 }
 
