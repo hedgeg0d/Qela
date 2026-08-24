@@ -7,17 +7,108 @@ Updated 2026-08-05. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **298 712 B** |
-| stage1 sources | 12 237 lines of Qela |
+| **S2 — the shipped compiler, Qela compiled by itself** | **324 400 B** |
+| stage1 sources | 12 785 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
 
-Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 112-test corpus under S2, the embedded stdlib resolving outside the source tree,
+Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 124-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
 backtrace, interpolation and the repl, the compiler flags (`-g`,
 `--backtrace`, `--no-bounds-checks`, `--dump-std`), and a scripted language
 server conversation.
 
 ## Done
+
+**Real parallelism: OS threads, `tvar`, `go`, work-stealing (2026-08-05).**
+Coroutines used to be concurrency without parallelism -- one process, one
+cooperative scheduler, no multi-core speedup. Now a fixed pool of real
+`clone()`-backed OS threads each run their own coroutine scheduler, with
+`go f(...)` (sugar identical to `spawn`, both desugar through
+`parse_spawn_like` in `srcql/parse.qela`) round-robining work across them
+and channels doing the cross-thread handoff. Six pieces, in build order:
+
+- **Atomics.** `atomic_cas`/`atomic_add`/`atomic_load`/`atomic_store`/
+  `fence` are codegen intrinsics with no Qela definition (`lock cmpxchg`/
+  `xadd`, plain `mov`, `mfence`), following the same "magic function name"
+  pattern as `gc_save_regs`/`coro_switch` -- no lexer or parser changes.
+- **`thread_clone`.** A raw `clone()` syscall wrapped as another such
+  intrinsic (`srcql/codegen.qela`, `gen_thread_clone`), because the child
+  resumes on a brand-new stack holding none of the caller's frames -- an
+  ordinary compiled `ret` would pop garbage off it. `fn`/`arg` cross the
+  syscall in `r12`/`r13` (the syscall only clobbers `rcx`/`r11`); the
+  child branch calls `fn` directly and exits without ever executing a
+  compiled `ret`. Found and fixed a real bug here: the compiler's own
+  process-exit path used plain `exit` (60), which races a still-running
+  worker thread over which one's exit status the kernel reports for the
+  whole process -- switched to `exit_group` (231), the only way `main`'s
+  own status is ever authoritative.
+- **`tvar`.** Thread-local storage with no ELF `PT_TLS` -- there is no
+  dynamic linker here to need the real ABI, so it's a compiler-private
+  flat `%fs:offset` block instead: a self-pointer at offset 0 (LEA cannot
+  read a segment base, so materializing a `tvar`'s address always starts
+  with `mov reg, fs:[0]`), tvars packed after it. `tls_init()` builds a
+  fresh block for whichever thread calls it; the entry stub calls it
+  automatically before `main()`, but only when the program actually
+  declares a `tvar` -- a program with none pays nothing, not even the
+  second ELF `LOAD` segment a placeholder byte would have forced (a real
+  regression, caught by `tools/bench-size.sh` going from 231% to 303% on
+  benchmarks that don't use threading at all, fixed same day).
+- **Thread-safe channels.** `Chan(T)` gained a spinlock guarding every
+  field, built from `atomic_cas`, never held across a block (send/recv
+  became lock-check-unlock retry loops instead). The single-scheduler
+  deadlock heuristic (`chan_nblocked`/`chan_epoch`/`chan_stall`) is
+  fundamentally unsound once several OS threads share a channel -- a
+  sibling thread being slow to get scheduled looks identical to real
+  deadlock from a scheduler that only knows about its own coroutines --
+  so `thread_pool_init` turns it off outright rather than let it produce
+  false crashes; the counters moved to `tvar` so they at least stay
+  correct per-thread while it's still on for single-scheduler programs.
+- **GC stop-the-world.** No signals -- a thread registry plus
+  `gc_safepoint` (checked at `gc_alloc`'s own entry, the one call an
+  allocating thread makes often enough to park promptly) is the
+  rendezvous. `gc_collect` requests a stop, waits for every other
+  registered thread to park *or deregister* (a thread that calls
+  `gc_thread_exit` without ever hitting another safepoint is a valid way
+  out of the wait too -- missing that was a real deadlock, caught by a
+  worker thread that finished its trivial workload before the collector
+  ever asked it to park), then walks their saved stacks/registers
+  alongside the usual data segment and current stack.
+- **`thread_pool_init(n)` / `go`.** Each pool thread runs its own
+  `coro_run_all`-shaped loop over a `tvar`-scoped `coros[]` -- two OS
+  threads must never see each other's coroutines, so `coro.qela`'s
+  scheduler state (`coros`/`ncoros`/`cur_coro`) is `tvar` now too, and
+  `coro_spawn`'s stack allocation gained its own lock around the
+  `arena_alloc` call site specifically: `arena.qela` itself is bootstrap
+  subset (stage0 compiles it, and stage0 has never heard of `atomic_cas`),
+  so the fix had to live in `coro.qela`, which is stage1-only. Idle
+  threads steal *unstarted* spawn requests from a neighbor's queue before
+  spinning (`pool_steal` in `std/thread.qela`) -- not a running
+  coroutine's stack/registers, which stays pinned to its thread for good;
+  migrating a *live* coroutine mid-flight is real extra work nothing has
+  needed yet. `pool_drain` pops one queue entry per lock acquisition
+  rather than the whole backlog at once, a real bug found the same way:
+  holding the lock (or even re-acquiring it back to back) across a whole
+  burst starved every steal attempt for as long as the burst lasted,
+  which defeated stealing exactly when it would have mattered.
+
+Every piece landed with its own corpus test and was run 15-50 times back
+to back looking for the flakiness a threading bug tends to hide behind a
+single green run: `tests/atomics.qela`, `tests/atomics_cas_loop.qela`,
+`tests/thread_clone.qela`, `tests/tvar_basic.qela`,
+`tests/tvar_threads.qela`, `tests/chan_threads.qela`,
+`tests/gc_threads.qela`, `tests/thread_pool.qela`,
+`tests/thread_steal.qela`. `tests/gc_coro.qela` also pins a pre-existing,
+unrelated bug found on the way in: `gc_collect` only ever scanned the
+*current* coroutine's stack, not every live one's -- fixed first, in
+isolation, before any of the above.
+
+Known limits, stated rather than hidden behind a heuristic that half-works:
+the pool scheduler is round-robin plus queue-level stealing, not Go's
+work-stealing across live goroutines -- a coroutine already handed to a
+thread stays there. A thread that never allocates and isn't in the pool
+loop can't be paused by the collector; nothing here tries to preempt it.
+Cross-thread deadlock detection does not exist (not a buggy version of
+it -- it is off). Costs +25.7 KB in S2.
 
 **Default and named arguments (2026-08-05).** `fn sum(a=0 i64, b=0 i64) i64`
 declares defaults; `sum(1,2)` still takes the unchanged positional path.
@@ -563,16 +654,20 @@ parameters only -- a `str`/8-16-byte struct that would overflow the register
 budget is still rejected); `main(argc, argv)`; bounds checks that now write a
 real `index out of bounds` message instead of bytes from the start of rodata.
 
-**Concurrency.** `spawn f(...)`, `coro_yield`, `coro_run_all` on separate
-stacks; `Chan(T)`, buffered channels of any element type, and rendezvous at
-`chan_init(&ch, 0)` where the sender hands the value across directly. `ch <- v`
-and `<-ch` infer that type. Waiting is polling over the scheduler. A deadlock
-is when every coroutine that could run is parked inside a wait and no channel
-has changed since — `chan_nblocked` counts the parked, `chan_epoch` advances on
-every channel state change including rendezvous handoffs, and both staying
-still long enough for everyone to have had a turn is reported rather than spun
-on. The corpus now covers coroutines, channels, the collector, deadlock
-reporting and a busy-consumer regression under S2.
+**Concurrency.** `spawn f(...)`/`go f(...)`, `coro_yield`, `coro_run_all` on
+separate stacks; `Chan(T)`, buffered channels of any element type, and
+rendezvous at `chan_init(&ch, 0)` where the sender hands the value across
+directly. `ch <- v` and `<-ch` infer that type. Waiting is polling over the
+scheduler. A single-scheduler deadlock is when every coroutine that could run
+on it is parked inside a wait and no channel has changed since —
+`chan_nblocked` counts the parked, `chan_epoch` advances on every channel
+state change including rendezvous handoffs, and both staying still long
+enough for everyone to have had a turn is reported rather than spun on; see
+"Real parallelism" above for real OS threads (`thread_pool_init`/`go` over a
+pool, `atomic_*`, `tvar`, GC stop-the-world), where this heuristic turns
+itself off because it no longer means anything. The corpus covers
+coroutines, channels, the collector, deadlock reporting, a busy-consumer
+regression, and the whole threading stack, all under S2.
 
 **Memory.** Arena by default; `std/gc.qela` is a conservative mark-sweep
 collector rooted in the callee-saved registers, the stack and the data
@@ -592,7 +687,10 @@ regions (never shares memory with `std/arena.qela` — the two allocators are
 independent). `heap_alloc`/`heap_free`/`heap_realloc`. Unlike the arena,
 individual blocks come back and get reused; unlike `std/gc.qela`, nothing
 is scanned or reclaimed automatically — a leaked block stays leaked. Not
-thread-safe (no OS threads yet). Costs +2776 B in S2.
+thread-safe: unlike `std/arena.qela` (locked at its one call site inside
+`coro_spawn`) and `std/gc.qela` (its own lock), nothing here guards concurrent
+`heap_alloc`/`heap_free` from two OS threads yet — `~` (dynamic typing, the
+only current user) is not meant for cross-thread values. Costs +2776 B in S2.
 `tests/heap.qela` (stage1-only) covers alloc, free-and-coalesce, and
 realloc preserving contents.
 
