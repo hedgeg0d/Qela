@@ -2591,14 +2591,16 @@ fn emit_code(u *Unit, main_fn *Func, panic_id int, hdr i64) {
 	// suppresses the default stub too, so the entry function (usually
 	// naked) does its own setup and its own exit.
 	if (top_asm_head as i64 == 0 && entry_name.len == 0 && opt_target == TARGET_ARM64) {
-		// Minimal ARM64 entry stub (M9): no backtrace sentinel, no TLS init,
-		// no argc/argv -- those need their own ARM64 native glue, not built
-		// yet. main's return value is already in X0, which is also
-		// exit_group's first argument on AAPCS64, so unlike x86 no move is
-		// needed before the syscall.
+		// Minimal ARM64 entry stub (M9): no backtrace sentinel, no TLS init.
+		// main's return value is already in X0, which is also exit_group's
+		// first argument on AAPCS64, so unlike x86 no move is needed before
+		// the syscall.
 		if (opt_backtrace) { die("error: -target arm64 does not support --backtrace yet"); }
 		if (tls_block_size > 8) { die("error: -target arm64 does not support tvar yet"); }
-		if (main_fn as i64 != 0 && main_fn.nparams == 2) { die("error: -target arm64 does not support main(argc, argv) yet"); }
+		if (main_fn as i64 != 0 && main_fn.nparams == 2) {
+			arm64_ld_at(X0, SP, 0);
+			arm64_add_imm(X1, SP, 8);
+		}
 		arm64_add_call("main", 0);
 		arm64_mov_imm64(X8, SYS_ARM64_EXIT_GROUP);
 		arm64_svc();
