@@ -159,7 +159,7 @@ Token *lex(Str src, isize base) {
 			}
 		}
 		if (!plen) {
-			static const char *singles = "+-*/%()[]{};,=<>!&|^~.:";
+			static const char *singles = "+-*/%()[]{};,=<>!&|^~.:$";
 			bool ok = false;
 			for (const char *s = singles; *s; s++)
 				if (*s == src.p[i]) ok = true;
