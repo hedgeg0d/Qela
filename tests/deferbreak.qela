@@ -1,0 +1,9 @@
+// expect-compile-error
+// break inside a defer body is rejected, even in a loop of its own: the
+// unwinder running the defer must not see control-flow escapes.
+fn main() int {
+	defer {
+		while (true) { break; }
+	}
+	return 0;
+}

@@ -24,6 +24,10 @@ fn get_module_dir() str {
 }
 
 fn diag_add_file(path str, src str) int {
+	if (nfiles == 64) {
+		eprint("error: too many imported files\n");
+		sys_exit(1);
+	}
 	var id int = nfiles;
 	files[id].path = path;
 	files[id].src = src;

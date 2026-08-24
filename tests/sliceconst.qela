@@ -1,0 +1,11 @@
+// stage1-only
+// expect-exit: 134
+// expect-out: index out of bounds
+// A constant index into a slice must be bounds-checked just like a dynamic
+// one: the fold that skips the check is only valid for fixed arrays.
+fn main() int {
+	var a [3]i64;
+	var s = a[0..2];
+	var x i64 = s[7];
+	return x as int;
+}

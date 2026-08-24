@@ -7,19 +7,83 @@ Updated 2026-08-04. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **227 656 B** |
+| **S2 — the shipped compiler, Qela compiled by itself** | **230 624 B** |
 | S2 under `upx --lzma` (measured 2026-08-04) | 52 764 B, ~5.0% of the 1 MiB budget |
 | S2 under xz -9 (proxy for upx) | 55 180 B |
 | stage1 sources | 10 463 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **193%** without bounds checks (M4 gate wants ≤150%) |
 
 Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the
-66-test corpus under S2, the embedded stdlib resolving outside the source tree,
+79-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
-backtrace, interpolation and the repl, and a scripted language server
-conversation.
+backtrace, interpolation and the repl, the compiler flags (`-g`,
+`--backtrace`, `--no-bounds-checks`, `--dump-std`), and a scripted language
+server conversation.
 
 ## Done
+
+**Hardening pass (2026-08-04).** Every fix below is mirrored in stage0 where
+the feature exists there, and pinned by a corpus test; the gate stayed green
+throughout. Most were found by reading the source, then verified by running
+before and after:
+
+- **Comptime calls leaked control-flow state.** `ct_call` never restored
+  `ct_returning`/`ct_broke`/`ct_continued`/`ct_ret_val`, so a callee's
+  `return` stopped the caller's block at the first statement after the call
+  and made the caller return the *callee's* value; a `break` inside a
+  comptime loop leaked the same way and killed the rest of the block. A call
+  is a boundary now: the flags are saved and restored around it, and a loop
+  consumes its own `break` on exit. `tests/comptime.qela` covers all three
+  shapes.
+- **A call with more than 14 arguments miscompiled.** `gen_args`' placement
+  arrays are 14 slots and its overflow scan stopped there, so the 15th+ spill
+  never got pushed and the callee read garbage. The 15th parameter is now a
+  compile error; 14 are proven to work (`tests/paramlimit15.qela`,
+  `tests/paramlimit.qela`).
+- **`return`/`break`/`continue` inside a `defer` body recursed forever**:
+  codegen runs defer bodies while unwinding, so another return re-entered
+  the same defer. Rejected at parse time (the same place the naked-function
+  contract lives): `tests/deferreject.qela`, `tests/deferbreak.qela`,
+  `tests/defercont.qela`.
+- **A comptime block producing a string emitted a garbage pointer** (the
+  constant had no slot to carry a string in). Now a clean error:
+  `tests/comptimestr.qela`.
+- **Constant division by zero folded into garbage** in `opt.qela`'s folder
+  and in comptime op-assigns. Both reject it now — and the folder respects
+  `&&`/`||` short-circuiting, so `2 > 1 || 1 / 0 == 0` still compiles (the
+  right side never runs): `tests/divzero.qela`, `tests/divzeromod.qela`,
+  `tests/comptimedivzero.qela`, and `tests/logic.qela` pins the fold order.
+- **Fixed-size tables written unchecked**: 64 source files, 64 enum variants
+  (stage1 only enforced the cap the C bootstrap already had), 256 mapped
+  locals in a monomorphization, 6 type variables, 64 address-taken locals in
+  the bounds pass, array lengths that overflowed the size computation. Each
+  is a `error_at`/`die` now; array length must be positive and fit in
+  `i32`.
+- **The lexer read past EOF** for a lone `'` or `'\` at the end of the input,
+  and `read_escape` silently accepted unknown escapes (the C bootstrap
+  rejects them — the two now agree).
+- **The LSP's hand-written JSON parser could spin forever** on a truncated
+  string or object; `lsp_publish` dereferenced missing `line`/`col` fields.
+  All three are guarded.
+- The emitted-size sanity check the agents found (a constant index into a
+  *slice* skipping the bounds check) turned out to be a false alarm — slices
+  always take the checked path; `tests/sliceconst.qela` pins it.
+
+**Test and tooling growth (same pass).** The corpus grew 66 -> 79 tests:
+forward struct declarations, `*=`/`/=`/`%=` op-assigns, and first-ever tests
+for `std/list.qela` and `std/map.qela` (previously compiled by nothing — a
+module is done when it runs). `tools/bootstrap.sh` gained a compiler-flags
+step (`-g` produces a working larger binary, `--backtrace` names frames on a
+plain compile, `--no-bounds-checks` lets the out-of-bounds read through,
+`--dump-std` prints the embedded source). `tools/torture.py` now generates
+division and remainder (with nonzero constant divisors), compound
+assignments, a global variable, nested loops, and — via the new
+`tests/out/std` link so stage0's file-relative imports resolve — programs
+that print to stdout, which the runner compares along with the exit code.
+
+**`std/math.qela` and `std/sort.qela`.** `abs`/`min`/`max` and a Hoare
+quicksort over `[]i64`, both written in the bootstrap subset.
+`tests/sort.qela` runs under S2.
 
 **Language.** i8–u64, bool, int/uint/usize; pointers, arrays, slices, `str`;
 structs with literals and forward declarations; enums with payloads and

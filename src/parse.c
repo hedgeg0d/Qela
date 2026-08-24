@@ -19,6 +19,11 @@ static Str   *strs;
 static int    nstrs;
 static int    strs_cap;
 
+/* Set while parsing the body of a `defer`: return, break and continue are
+   rejected there, because codegen runs defer bodies while unwinding and
+   another return would re-enter the same defer forever. */
+static bool in_defer_body;
+
 static Type *type_vars[6];
 static int   ntype_vars;
 
@@ -159,9 +164,12 @@ static Type *parse_type(Token **t) {
 		if ((*t)->kind != TK_NUM) error_at((*t)->pos, "expected an array length");
 		i64 len = (*t)->val;
 		if (len <= 0) error_at((*t)->pos, "an array length must be positive");
+		Token *lp = *t;
 		*t = expect((*t)->next, "]");
 		Type *base = parse_type(t);
 		if (base->size == 0) error_at((*t)->pos, "cannot make an array of that type");
+		if (base->size && len > (i64)0x7fffffff / base->size)
+			error_at(lp->pos, "array is too large");
 		return type_array(base, len);
 	}
 	if ((*t)->kind != TK_IDENT) error_at((*t)->pos, "expected a type name");
@@ -555,6 +563,7 @@ static Node *stmt(Token **t) {
 	if (eq(tok, "{")) return block(t);
 
 	if (eq(tok, "return")) {
+		if (in_defer_body) error_at(tok->pos, "cannot return from inside a defer body");
 		*t = tok->next;
 		Node *n = node(ND_RET, tok->pos);
 		if (!eq(*t, ";")) n->lhs = expr(t);
@@ -582,6 +591,9 @@ static Node *stmt(Token **t) {
 	}
 
 	if (eq(tok, "break") || eq(tok, "continue")) {
+		if (in_defer_body)
+			error_at(tok->pos, "cannot %s from inside a defer body",
+			         eq(tok, "break") ? "break" : "continue");
 		Node *n = node(eq(tok, "break") ? ND_BREAK : ND_CONT, tok->pos);
 		*t = expect(tok->next, ";");
 		return n;
@@ -644,7 +656,9 @@ static Node *stmt(Token **t) {
 	if (eq(tok, "defer")) {
 		*t = tok->next;
 		Node *n = node(ND_DEFER, tok->pos);
+		in_defer_body = true;
 		n->lhs = stmt(t);
+		in_defer_body = false;
 		return n;
 	}
 

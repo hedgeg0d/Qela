@@ -32,6 +32,7 @@ fn addr_add(taken **Var, ntaken int, v *Var) int {
 		if ((taken[i] as i64) == (v as i64)) { return ntaken; }
 		i = i + 1;
 	}
+	if (ntaken == 64) { error_at(v.pos, "too many address-taken locals in a function"); }
 	taken[ntaken] = v;
 	return ntaken + 1;
 }

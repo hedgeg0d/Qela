@@ -11,7 +11,10 @@ fn main() int {
 	if (sink(x |= 8) != 15) { return 4; }
 	if (sink(x &= 12) != 12) { return 5; }
 	if (sink(x ^= 5) != 9) { return 6; }
-	if (x != 9) { return 7; }
+	if (sink(x *= 2) != 18) { return 7; }
+	if (sink(x /= 3) != 6) { return 8; }
+	if (sink(x %= 4) != 2) { return 9; }
+	if (x != 2) { return 10; }
 
 	// the same shapes as statements, where the fast paths do fire
 	var w i64 = 0;
