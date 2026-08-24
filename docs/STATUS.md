@@ -802,9 +802,16 @@ ARM64 (below), or accept the ratio and spend budget on wow/byte elsewhere.
 
 ### 2. ARM64 backend
 
-The most expensive item, and the only one that would push the budget. Worth
-doing only once the x86 backend has stopped moving, so the second one inherits
-a settled shape rather than a moving target.
+Self-hosting works for the scalar-core subset (2026-08-06): the compiler,
+cross-compiled to ARM64 by itself, compiles itself again under
+`qemu-aarch64` and produces a byte-identical ARM64 binary
+(`S2_arm64 == S3_arm64`, 639744 B), and 50/51 applicable corpus tests match
+the native x86 compiler exactly. See `docs/TASKS.md` for the two frame-
+layout bugs this found and fixed in `srcql/arm64_emit.qela`. Not yet
+ported: floats, `extern`, threading/coro/gc, `asm`/`atomic`/`tvar`,
+promoted-register locals (`regalloc.qela`'s `ra_nreg` returns 0 for this
+target, so every ARM64 local sits in a frame slot), more than ~4 call
+arguments. RISC-V is not started.
 
 ### 3. Smaller
 
