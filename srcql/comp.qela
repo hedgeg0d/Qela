@@ -317,10 +317,12 @@ struct Image {
 struct Reloc;
 struct Reloc { next *Reloc, at i64, name str, kind int, id i64, }
 
-let R_64   = 1;
-let R_PC32 = 2;
-let R_PLT32 = 4;
-let R_32S  = 11;
+// Purpose, not encoding: what codegen needs the linker to do at this slot.
+// elf.qela alone knows these map to R_X86_64_* type numbers.
+let REL_ABS64        = 0;
+let REL_PCREL32      = 1;
+let REL_PCREL32_PLT  = 2;
+let REL_ABS32S       = 3;
 
 struct ComptimeVal {
 	kind int,
