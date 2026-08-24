@@ -167,6 +167,7 @@ struct Node {
 	kind    int,
 	ty      *Type,
 	typed   bool,
+	nobounds bool,
 	next    *Node,
 	lhs     *Node,
 	rhs     *Node,

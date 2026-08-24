@@ -1,0 +1,24 @@
+// expect-exit: 97
+// The loop condition already proves these accesses in bounds, so the
+// duplicate check is dropped: the while shape with the init right before
+// it, the for-in desugar and the C-style for. The sieve still counts 97
+// primes below 512, and the non-elided inner loop (increment by a
+// variable) keeps its check and still works.
+var flags [512]u8;
+fn main() int {
+	var i int = 0;
+	while (i < 512) { flags[i] = 1; i = i + 1; }
+	var count int = 0;
+	for j in 0..512 { if (flags[j] != 0) { count = count + 1; } }
+	for (var k int = 0; k < 512; k = k + 1) { flags[k] = flags[k] + 0; }
+	i = 2;
+	while (i < 512) {
+		if (flags[i] != 0) {
+			count = count + 1;
+			var j int = i + i;
+			while (j < 512) { flags[j] = 0; j = j + i; }
+		}
+		i = i + 1;
+	}
+	return count & 255;
+}
