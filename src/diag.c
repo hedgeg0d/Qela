@@ -8,8 +8,6 @@ static int         nfiles;
 
 int diag_add_file(const char *path, Str src) {
 	if (nfiles == MAX_FILES) die("error: too many imported files\n");
-	/* Callers resolve paths into a stack buffer, so the table needs its own
-	   copy: it outlives them and feeds both diagnostics and import lookup. */
 	Str   p = str_from_cstr(path);
 	char *copy = anew_n(char, p.n + 1);
 	memcpy(copy, p.p, (usize)p.n);
@@ -45,6 +43,19 @@ int diag_line_for(int file_id, isize off) {
 		if (src.p[i] == '\n') line++;
 	return (int)line;
 }
+
+// stage0 keeps the original error_at: same path/line/col/caret output, exits.
+// Warnings, secondary spans, and macro backtrace live only in stage1 (the Qela
+// compiler itself), where they are real user-facing features. Mirroring the
+// new APIs as no-op keeps the header honest without costing stage0 size.
+void warn_at (isize pos, const char *fmt, ...) { (void)pos; (void)fmt; }
+void note_at (isize pos, const char *fmt, ...) { (void)pos; (void)fmt; }
+void hint_at (isize pos, const char *fmt, ...) { (void)pos; (void)fmt; }
+void diag_secondary(isize pos, const char *msg) { (void)pos; (void)msg; }
+void diag_macro_push(const char *name, isize pos) { (void)name; (void)pos; }
+void diag_macro_pop(void) {}
+void diag_setup(void) {}
+void diag_reset(void) {}
 
 _Noreturn void error_at(isize pos, const char *fmt, ...) {
 	int   file = (int)(pos >> FILE_SHIFT);
