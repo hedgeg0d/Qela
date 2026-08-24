@@ -253,6 +253,41 @@ else
 fi
 printf '    ok\n'
 
+step "compiler flags"
+# --backtrace on a plain compile, not just under qela run.
+if out=$(cd "$tmp2" && "$root/$OUT/s2" btcrash.qela --backtrace -o btflag.bin 2>&1); then
+	: # compiled
+else
+	fail "--backtrace compile failed"
+fi
+if out=$(cd "$tmp2" && ./btflag.bin 2>&1); then
+	fail "a failing assert must panic"
+elif printf '%s' "$out" | grep -q 'deep' && printf '%s' "$out" | grep -q 'main'; then
+	: # the frame names are on stderr
+else
+	fail "--backtrace did not emit frame names"
+fi
+# --no-bounds-checks drops the check: the out-of-bounds read no longer panics.
+cat > "$tmp2/nob.qela" <<'EOF'
+fn main() int {
+	var a [3]i64;
+	var x i64 = a[7];
+	return 0;
+}
+EOF
+( cd "$tmp2" && "$root/$OUT/s2" nob.qela --no-bounds-checks -o nob.bin &&
+  ./nob.bin; [ $? -eq 0 ] ) ||
+	fail "--no-bounds-checks still panics on an out-of-bounds read"
+# -g adds DWARF: the binary still runs and is larger than the plain one.
+( cd "$tmp2" && "$root/$OUT/s2" nob.qela --no-bounds-checks -g -o nobg.bin &&
+  ./nobg.bin; [ $? -eq 0 ] &&
+  [ "$(stat -c %s nobg.bin)" -gt "$(stat -c %s nob.bin)" ] ) ||
+	fail "-g did not produce a working, larger binary"
+# --dump-std prints the embedded module source.
+"$root/$OUT/s2" --dump-std fmt | grep -q 'fmt_str' ||
+	fail "--dump-std did not print the embedded fmt module"
+printf '    ok\n'
+
 step "qela . project build"
 mkdir -p "$tmp2/proj"
 cat > "$tmp2/proj/plus.qela" <<'EOF'

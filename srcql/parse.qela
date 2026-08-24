@@ -18,6 +18,11 @@ var scope_root *Scope;
 var cur_func *Func;
 var global_vars *Var;
 
+// Set while parsing the body of a `defer`: return, break and continue are
+// rejected there, because codegen runs defer bodies while unwinding and
+// another return would re-enter the same defer forever.
+var in_defer_body bool = false;
+
 // Set when an interpolated string is desugared; parse() imports
 // std/fmt.qela at the next top-level splice point.
 var need_fmt bool = false;
@@ -295,10 +300,15 @@ fn parse_type(t **Token) *Type {
 			return type_slice(base);
 		}
 		if ((*t).kind != TK_NUM) { error_at((*t).pos, "expected array length"); }
+		var lp i64 = (*t).pos;
 		var len i64 = (*t).val;
 		*t = (*t).next;
 		tok_expect(t, "]");
 		var base *Type = parse_type(t);
+		if (len <= 0) { error_at(lp, "an array length must be positive"); }
+		if (base.size != 0 && len > (0x7fffffff as i64) / (base.size as i64)) {
+			error_at(lp, "array is too large");
+		}
 		return type_array(base, len);
 	}
 	if ((*t).kind != TK_IDENT) { error_at((*t).pos, "expected type name"); }
@@ -343,6 +353,7 @@ fn parse_tmpl_params(t **Token, name str, p i64) *Tmpl {
 		if (tm.nparams == 2) { error_at((*t).pos, "at most two type parameters"); }
 		var pn str = (*t).text;
 		*t = (*t).next;
+		if (ntype_vars == 6) { error_at((*t).pos, "too many type variables in scope"); }
 		var tv *Type = type_new_var(pn);
 		type_vars[ntype_vars] = tv;
 		ntype_vars = ntype_vars + 1;
@@ -901,6 +912,7 @@ fn parse_stmt(t **Token) *Node {
 	}
 
 	if (tok_consume(t, "return")) {
+		if (in_defer_body) { error_at(p, "cannot return from inside a defer body"); }
 		var n *Node = new_node(ND_RET, p);
 		if (!tok_eq(*t, ";")) { n.lhs = parse_expr(t); }
 		tok_expect(t, ";");
@@ -926,8 +938,16 @@ fn parse_stmt(t **Token) *Node {
 		return n;
 	}
 
-	if (tok_consume(t, "break")) { tok_expect(t, ";"); return new_node(ND_BREAK, p); }
-	if (tok_consume(t, "continue")) { tok_expect(t, ";"); return new_node(ND_CONT, p); }
+	if (tok_consume(t, "break")) {
+		if (in_defer_body) { error_at(p, "cannot break from inside a defer body"); }
+		tok_expect(t, ";");
+		return new_node(ND_BREAK, p);
+	}
+	if (tok_consume(t, "continue")) {
+		if (in_defer_body) { error_at(p, "cannot continue from inside a defer body"); }
+		tok_expect(t, ";");
+		return new_node(ND_CONT, p);
+	}
 
 	if (tok_consume(t, "for")) {
 		var n *Node = new_node(ND_FOR, p);
@@ -1032,7 +1052,9 @@ fn parse_stmt(t **Token) *Node {
 
 	if (tok_consume(t, "defer")) {
 		var n *Node = new_node(ND_DEFER, p);
+		in_defer_body = true;
 		n.lhs = parse_stmt(t);
+		in_defer_body = false;
 		return n;
 	}
 
@@ -1159,6 +1181,10 @@ fn parse_function(t **Token) *Func {
 		}
 		set_func_param(f, nparams, v);
 		nparams = nparams + 1;
+		// gen_args carries at most 14 arguments through its placement
+		// arrays; beyond that the overflow scan misses the tail and the
+		// spill pushes never happen, so the callee reads garbage.
+		if (nparams > 14) { error_at(pp, "too many parameters (at most 14)"); }
 	}
 	f.nparams = nparams;
 	tok_expect(t, ")");
@@ -1257,6 +1283,9 @@ fn parse_enum(t **Token) {
 		var vnm str = (*t).text;
 		var vp i64 = (*t).pos;
 		*t = (*t).next;
+		// match's arm_seen is a fixed 64-entry table, so an enum cannot
+		// have more variants than that.
+		if (tag == 64) { error_at(vp, "at most 64 variants are supported"); }
 		var v *Variant = arena_alloc(sizeof(Variant), 8) as *Variant;
 		v.name = vnm; v.tag = tag; v.pos = vp; tag = tag + 1;
 

@@ -413,6 +413,7 @@ var nvar_map int = 0;
 
 fn clone_var(v *Var) *Var {
 	if (v as i64 == 0) { return v; }
+	if (nvar_map == 256) { error_at(v.pos, "too many locals in a monomorphized function"); }
 	var c *Var = arena_alloc(sizeof(Var), 8) as *Var;
 	*c = *v;
 	c.ty = tsubst(v.ty);
@@ -1057,7 +1058,11 @@ fn add_type(n *Node) {
 			n.ty = ty_i64;
 			return;
 		}
-		if (cv.kind == CV_STR) { n.ty = type_str(); return; }
+		if (cv.kind == CV_STR) {
+			// A string is not a scalar: there is no constant slot to carry
+			// it in, so a comptime block cannot hand one to the runtime.
+			error_at(n.pos, "comptime cannot produce a string value");
+		}
 		n.ty = ty_void;
 		return;
 	}

@@ -247,6 +247,7 @@ static int    nvar_map;
 
 static Var *clone_var(Var *v, int nct, Type **vars, Type **concretes) {
 	if (!v) return NULL;
+	if (nvar_map == 256) die("error: too many locals in a monomorphized function\n");
 	Var *c = anew(Var);
 	*c = *v;
 	c->ty = tsubst(v->ty, nct, vars, concretes);
@@ -471,7 +472,9 @@ void add_type(Node *n) {
 			return;
 		}
 		if (v.kind == CV_STR) {
-			n->ty = type_str();
+			/* A string is not a scalar: there is no constant slot to carry
+			   it in, so a comptime block cannot hand one to the runtime. */
+			error_at(n->pos, "comptime cannot produce a string value");
 			return;
 		}
 		n->ty = ty_void;
