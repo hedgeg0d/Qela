@@ -32,6 +32,14 @@ int  diag_line_for(int file_id, isize off);
 
 int diag_add_file(const char *path, Str src);
 _Noreturn void error_at(isize pos, const char *fmt, ...);
+void warn_at(isize pos, const char *fmt, ...);
+void note_at(isize pos, const char *fmt, ...);
+void hint_at(isize pos, const char *fmt, ...);
+void diag_secondary(isize pos, const char *msg);
+void diag_macro_push(const char *name, isize pos);
+void diag_macro_pop(void);
+void diag_setup(void);
+void diag_reset(void);
 
 Token *lex(Str src, isize base);
 
