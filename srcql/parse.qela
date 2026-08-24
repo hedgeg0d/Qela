@@ -23,6 +23,22 @@ var global_vars *Var;
 // another return would re-enter the same defer forever.
 var in_defer_body bool = false;
 
+// The parser recurses on nested parentheses, unary prefixes, assignments
+// and blocks; each recursion is counted here and capped, so a hostile
+// input overflows the C stack instead of the compiler's heap.
+var parse_depth int = 0;
+
+fn parse_enter(t **Token) {
+	parse_depth = parse_depth + 1;
+	if (parse_depth > 1024) {
+		error_at((*t).pos, "code is nested too deeply");
+	}
+}
+
+fn parse_leave() {
+	parse_depth = parse_depth - 1;
+}
+
 // Set when an interpolated string is desugared; parse() imports
 // std/fmt.qela at the next top-level splice point.
 var need_fmt bool = false;
@@ -635,6 +651,13 @@ fn chan_call(name str, arg *Node, pos i64) *Node {
 }
 
 fn parse_unary(t **Token) *Node {
+	parse_enter(t);
+	var n *Node = parse_unary_inner(t);
+	parse_leave();
+	return n;
+}
+
+fn parse_unary_inner(t **Token) *Node {
 	if (tok_eq(*t, "<-")) {
 		var p i64 = (*t).pos;
 		*t = (*t).next;
@@ -736,6 +759,13 @@ fn opassign_node(lhs *Node, rhs *Node, op int, pos i64) *Node {
 }
 
 fn parse_assign(t **Token) *Node {
+	parse_enter(t);
+	var n *Node = parse_assign_inner(t);
+	parse_leave();
+	return n;
+}
+
+fn parse_assign_inner(t **Token) *Node {
 	var n *Node = parse_logor(t);
 	var p i64 = (*t).pos;
 	if (tok_consume(t, "=")) {
@@ -766,6 +796,13 @@ fn parse_assign(t **Token) *Node {
 }
 
 fn parse_expr(t **Token) *Node {
+	parse_enter(t);
+	var n *Node = parse_expr_inner(t);
+	parse_leave();
+	return n;
+}
+
+fn parse_expr_inner(t **Token) *Node {
 	var n *Node = parse_assign(t);
 	if (tok_consume(t, ",")) { return bin_node(ND_COMMA, n, parse_expr(t), (*t).pos); }
 	return n;
@@ -863,6 +900,13 @@ fn macro_expand(n *Node, m *Macro, args **Node, nargs int, pos i64) *Node {
 }
 
 fn parse_stmt(t **Token) *Node {
+	parse_enter(t);
+	var n *Node = parse_stmt_inner(t);
+	parse_leave();
+	return n;
+}
+
+fn parse_stmt_inner(t **Token) *Node {
 	var p i64 = (*t).pos;
 
 	if (cur_func as i64 != 0 && cur_func.naked) {
@@ -1283,6 +1327,13 @@ fn parse_enum(t **Token) {
 		var vnm str = (*t).text;
 		var vp i64 = (*t).pos;
 		*t = (*t).next;
+		var dv *Variant = vhead.next;
+		while (dv as i64 != 0) {
+			if (str_eq(dv.name, vnm)) {
+				emsg("duplicate variant '"); emsg(vnm); emsg("'"); efail(vp);
+			}
+			dv = dv.next;
+		}
 		// match's arm_seen is a fixed 64-entry table, so an enum cannot
 		// have more variants than that.
 		if (tag == 64) { error_at(vp, "at most 64 variants are supported"); }
