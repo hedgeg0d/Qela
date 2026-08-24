@@ -1563,6 +1563,16 @@ fn alu_op_code(aop int) i64 {
 	return 0x31;
 }
 
+// The single-byte opcode of the "reg op= r/m" form (gen_into's register-rm
+// arm, rm_op_for's family), for an ALU_* enum.
+fn alu_rm_op_code(aop int) i64 {
+	if (aop == ALU_ADD) { return 0x03; }
+	if (aop == ALU_SUB) { return 0x2b; }
+	if (aop == ALU_AND) { return 0x23; }
+	if (aop == ALU_OR)  { return 0x0b; }
+	return 0x33;
+}
+
 // modrm for [rbp-disp], the frame-slot r/m path of rm_modrm.
 fn slot_modrm(reg int, disp i64) {
 	if (disp >= -128 && disp <= 127) { modrm(1, reg, RBP); b1(disp); }
@@ -1701,9 +1711,9 @@ fn in_reg(n *Node, reg int) bool {
 // operands qualify, and the right side must not live in dst, since the left
 // side lands there first.
 fn gen_into(n *Node, dst int) bool {
-	if (n.kind == ND_NUM && fits_imm32(n.val)) { mov_reg_imm(dst, n.val); return true; }
+	if (n.kind == ND_NUM && fits_imm32(n.val)) { ir_mov_vreg_imm(dst, n.val, n.pos); return true; }
 	if (direct_local(n)) {
-		if (!in_reg(n, dst)) { ld_rm(dst, n); }
+		if (!in_reg(n, dst)) { ir_load_vreg_var(dst, n.varp, n.ty, n.pos); }
 		return true;
 	}
 	var k int = n.kind;
@@ -1718,10 +1728,10 @@ fn gen_into(n *Node, dst int) bool {
 	if (in_reg(n.rhs, dst)) { return false; }
 	if (!gen_into(n.lhs, dst)) { return false; }
 	if (n.rhs.kind == ND_NUM) {
-		alu_reg_imm(alu_ext_for(k), dst, n.rhs.val);
+		ir_alu_vreg_imm(alu_ir_for(k), dst, n.rhs.val, n.pos);
 		return true;
 	}
-	alu_reg_rm(0, rm_op_for(k), dst, n.rhs);
+	ir_alu_vreg_rm(alu_ir_for(k), dst, n.rhs, n.pos);
 	return true;
 }
 
@@ -2181,6 +2191,18 @@ fn x86_lower_op(op *IrOp) {
 		modrm(3, op2_reg(op.dst.reg), op.src0.reg);
 		return;
 	}
+	if (op.kind == IR_LOAD && op.dst.kind == OP_VREG && op.src0.kind == OP_VREG) {
+		// mov <dst>, <vreg> -- ld_rm's register path, gen_into's load.
+		rex_w(op.dst.reg, op.src0.reg);
+		b1(0x8b);
+		modrm(3, op.dst.reg, op.src0.reg);
+		return;
+	}
+	if (op.kind == IR_LOAD && op.dst.kind == OP_VREG && op.src0.kind == OP_STACKSLOT) {
+		// mov <dst>, [rbp - off] -- ld_rm's frame-slot path, gen_into's load.
+		rbp_mem(0x8b, op.dst.reg, -(op.src0.off));
+		return;
+	}
 	if (op.kind == IR_CAST && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC) {
 		if (op.aux == CAST_BOOL) { test_rax(); setcc(0x95); return; }
 		if (op.aux == CAST_TRUNC) { truncate_to(op.dst.ty); return; }
@@ -2456,11 +2478,31 @@ fn x86_lower_op(op *IrOp) {
 		}
 		return;
 	}
+	if (op.kind == IR_ALU && op.dst.kind == OP_VREG && op.src0.kind == OP_VREG && op.src1.kind == OP_VREG && op.dst.ty as i64 == 0) {
+		// gen_into's register-rm arm on a promoted right side: the "r, r/m"
+		// form (0x03 family), reg=dst in modrm. stmt_update's promoted case
+		// below carries dst.ty (the local's type) and takes the "r/m, r"
+		// form instead; dst.ty distinguishes the two.
+		var opc i64 = alu_rm_op_code(op.aux as int);
+		rex_w(op.dst.reg, op.src1.reg);
+		b1(opc);
+		modrm(3, op.dst.reg, op.src1.reg);
+		return;
+	}
 	if (op.kind == IR_ALU && op.dst.kind == OP_VREG && op.src0.kind == OP_VREG && op.src1.kind == OP_VREG) {
 		var opc i64 = alu_op_code(op.aux as int);
 		rex_w(op.src1.reg, op.dst.reg);
 		b1(opc);
 		modrm(3, op.src1.reg, op.dst.reg);
+		return;
+	}
+	if (op.kind == IR_ALU && op.dst.kind == OP_VREG && op.src0.kind == OP_VREG && op.src1.kind == OP_STACKSLOT) {
+		// reg op= [rbp - off] -- alu_reg_rm's frame-slot path, gen_into's
+		// register-rm arm. The "r, r/m" form keeps the slot a pure operand.
+		var opc i64 = alu_rm_op_code(op.aux as int);
+		rex_w(op.dst.reg, RBP);
+		b1(opc);
+		slot_modrm(op.dst.reg, -(op.src1.off));
 		return;
 	}
 	if (op.kind == IR_ALU && op.dst.kind == OP_STACKSLOT && op.src0.kind == OP_STACKSLOT && op.src1.kind == OP_VREG) {
@@ -2894,6 +2936,37 @@ fn ir_mov_vreg_imm(reg int, v i64, pos i64) {
 	var op *IrOp = ir_emit(IR_MOV, pos);
 	op.dst = operand_vreg(reg, 0 as *Type);
 	op.src0 = operand_imm(v);
+	x86_lower_all();
+}
+
+// Load a direct local into a fixed register instead of through the
+// accumulator -- gen_into's register-targeted evaluation, ld_rm's bytes.
+fn ir_load_vreg_var(dst int, v *Var, ty *Type, pos i64) {
+	var op *IrOp = ir_emit(IR_LOAD, pos);
+	op.dst = operand_vreg(dst, ty);
+	if (v.has_reg) { op.src0 = operand_vreg(v.reg, ty); }
+	else { op.src0 = operand_stackslot(v.offset as i64, ty); }
+	x86_lower_all();
+}
+
+// reg op= imm, gen_into's immediate arm.
+fn ir_alu_vreg_imm(aop int, reg int, v i64, pos i64) {
+	var op *IrOp = ir_emit(IR_ALU, pos);
+	op.dst = operand_vreg(reg, 0 as *Type);
+	op.src0 = operand_vreg(reg, 0 as *Type);
+	op.src1 = operand_imm(v);
+	op.aux = aop;
+	x86_lower_all();
+}
+
+// reg op= <rhs as r/m>, gen_into's register-rm arm; rhs is a direct local.
+fn ir_alu_vreg_rm(aop int, reg int, n *Node, pos i64) {
+	var op *IrOp = ir_emit(IR_ALU, pos);
+	op.dst = operand_vreg(reg, 0 as *Type);
+	op.src0 = operand_vreg(reg, 0 as *Type);
+	if (n.varp.has_reg) { op.src1 = operand_vreg(n.varp.reg, n.ty); }
+	else { op.src1 = operand_stackslot(n.varp.offset as i64, n.ty); }
+	op.aux = aop;
 	x86_lower_all();
 }
 
