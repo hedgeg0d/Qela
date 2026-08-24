@@ -984,13 +984,25 @@ fn type_syscall(n *Node) {
 	n.ty = ty_i64;
 }
 
-// Every operand has to be a known byte value at compile time -- there is no
+// The operand must be a known byte value at compile time -- there is no
 // runtime operand-evaluation step, codegen just splats each value straight
-// into the code buffer.
+// into the code buffer. Constants count: a global with a constant init
+// (`let OPCODE = 0x48`) or any constant expression folds here.
 fn type_asm(n *Node) {
 	var a *Node = n.args;
 	while (a as i64 != 0) {
-		if (a.kind != ND_NUM || a.val < 0 || a.val > 255) {
+		if (a.kind != ND_NUM) {
+			if (a.kind == ND_VAR && !a.varp.is_global) {
+				error_at(a.pos, "asm operand must be a byte constant");
+			}
+			var cv ComptimeVal = comptime_eval(a);
+			if (cv.kind != CV_INT) {
+				error_at(a.pos, "asm operand must be a byte constant");
+			}
+			a.kind = ND_NUM;
+			a.val = cv.num;
+		}
+		if (a.val < 0 || a.val > 255) {
 			error_at(a.pos, "asm operand must be a byte literal 0-255");
 		}
 		a = a.next;
