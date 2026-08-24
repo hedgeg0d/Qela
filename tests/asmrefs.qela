@@ -1,0 +1,17 @@
+// stage1-only
+// expect-exit: 1
+// `$name` in asm operands embeds a symbol's absolute address and
+// `$rel name` a rel32 slot — the same patches the compiler applies to
+// call targets, open to the source.
+var g i64 = 7;
+
+fn target() i64 {
+	return 0;
+}
+
+fn main() int {
+	var p i64 = asm(0x48, 0xb8, $g);        // movabs rax, &g
+	var q i64 = &g as i64;
+	asm(0xe8, $rel target);                 // call target
+	return (p == q) as int;
+}
