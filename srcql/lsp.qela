@@ -596,10 +596,13 @@ fn lsp_publish(diag_path str) {
 		var line *JVal = j_get(d, "line");
 		var col *JVal = j_get(d, "col");
 		var msg *JVal = j_get(d, "msg");
+		var sev *JVal = j_get(d, "sev");
+		var sev_n i64 = 1;
+		if (sev as i64 != 0) { sev_n = sev.n; }
 		if (msg as i64 != 0 && line as i64 != 0 && col as i64 != 0) {
 			var one *JVal = j_new(J_OBJ);
 			j_push(one, "range", j_pos_obj((line.n - 1) as int, (col.n - 1) as int));
-			j_push(one, "severity", j_numv(1));
+			j_push(one, "severity", j_numv(sev_n));
 			j_push(one, "message", j_strv(msg.s));
 			j_push(ds, "", one);
 		}
