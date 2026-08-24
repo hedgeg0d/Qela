@@ -543,13 +543,7 @@ fn gen_bounds_trampoline() {
 // and nothing here needs branch relaxation.
 fn gen_assert(n *Node) {
 	gen_expr(n.cond);
-	test_rax();
-	var id i64 = jump(0x85);
-	b1(0xe8);
-	ilist_push(&assert_sites, code.n);
-	ilist_push(&assert_msgs, n.args.val);
-	b4(0);
-	patch_here(id);
+	ir_assert(n.args.val, n.pos);
 }
 
 // ── the backtrace walker ──
@@ -738,17 +732,15 @@ fn gen_addr(n *Node) {
 		var lt *Type = n.lhs.ty;
 		if (lt.kind == TY_SLICE) {
 			gen_addr(n.lhs);
-			push_at_rax(0);
-			push_at_rax(8);
+			ir_push_at_acc(0, n.pos);
+			ir_push_at_acc(8, n.pos);
 			gen_expr(n.rhs);
-			pop_reg(RDI);
+			ir_pop_op2(n.pos);
 			if (!opt_no_bounds) {
-				rex_w(RDI, RAX);
-				b1(0x39);
-				modrm(3, RDI, RAX);
-				jump_bounds(0x83);
+				ir_cmp_op2_acc(n.pos);
+				ir_bounds(CC_UGE, n.pos);
 			}
-			pop_reg(RDI);
+			ir_pop_op2(n.pos);
 			ir_lea_acc(operand_op2(0), operand_acc(), lt.base.size, 0, n.pos);
 			return;
 		}
@@ -762,33 +754,34 @@ fn gen_addr(n *Node) {
 			           n.rhs.val * (lt.base.size as i64), n.pos);
 			return;
 		}
-		var idx int = RDI;
 		if (direct_local(n.rhs)) {
 			// A promoted index needs no copy: it can be the lea index directly.
 			if (n.rhs.varp.has_reg && lea_scale_ok(lt.base.size)) {
-				idx = n.rhs.varp.reg;
-			} else {
-				ld_rm(RDI, n.rhs);
+				if (lt.kind == TY_ARRAY && !opt_no_bounds && !n.nobounds) {
+					ir_cmp_rm_imm32(n.rhs, lt.len, n.pos);
+					ir_bounds(CC_UGE, n.pos);
+				}
+				ir_lea_acc(operand_acc(), operand_index(n.rhs.varp.reg),
+				           lt.base.size, 0, n.pos);
+				return;
 			}
+			ir_load_op2_var(n.rhs.varp, n.ty, n.pos);
 			if (lt.kind == TY_ARRAY && !opt_no_bounds && !n.nobounds) {
-				rex_w(0, idx);
-				b1(0x81);
-				modrm(3, 7, idx);
-				b4(lt.len);
-				jump_bounds(0x83);
+				ir_cmp_op2_imm32(lt.len, n.pos);
+				ir_bounds(CC_UGE, n.pos);
 			}
-		} else {
-			push_reg(RAX);
-			gen_expr(n.rhs);
-			if (lt.kind == TY_ARRAY && !opt_no_bounds && !n.nobounds) {
-				b1(0x48); b1(0x3d);
-				b4(lt.len);
-				jump_bounds(0x83);
-			}
-			mov_reg_reg(RDI, RAX);
-			pop_reg(RAX);
+			ir_lea_acc(operand_acc(), operand_op2(0), lt.base.size, 0, n.pos);
+			return;
 		}
-		ir_lea_acc(operand_acc(), operand_index(idx), lt.base.size, 0, n.pos);
+		ir_push_acc(n.pos);
+		gen_expr(n.rhs);
+		if (lt.kind == TY_ARRAY && !opt_no_bounds && !n.nobounds) {
+			ir_cmp_acc_imm32(lt.len, n.pos);
+			ir_bounds(CC_UGE, n.pos);
+		}
+		ir_mov_acc_op2(n.pos);
+		ir_pop_acc(n.pos);
+		ir_lea_acc(operand_acc(), operand_op2(0), lt.base.size, 0, n.pos);
 		return;
 	}
 	if (k == ND_SLICE) {
@@ -798,42 +791,38 @@ fn gen_addr(n *Node) {
 
 		gen_addr(n.lhs);
 		if (lt.kind == TY_SLICE) {
-			ld_at_rax(RDI, 0);
-			st_local(off, RDI);
-			ld_at_rax(RDI, 8);
-			st_local(off - 8, RDI);
+			ir_load_at_acc_op2(0, n.pos);
+			ir_store_op2_slot(off, n.pos);
+			ir_load_at_acc_op2(8, n.pos);
+			ir_store_op2_slot(off - 8, n.pos);
 		} else {
-			st_local(off, RAX);
-			mov_reg_imm(RDI, lt.len);
-			st_local(off - 8, RDI);
+			ir_store_stackslot_acc(off, n.ty, n.pos);
+			ir_mov_op2_imm(lt.len, n.pos);
+			ir_store_op2_slot(off - 8, n.pos);
 		}
 
 		if (n.rhs as i64 != 0) { gen_expr(n.rhs); } else { ir_mov_acc_imm(0, n.pos); }
-		push_reg(RAX);
+		ir_push_acc(n.pos);
 
-		if (n.then as i64 != 0) { gen_expr(n.then); } else { ld_local(RAX, off - 8); }
-		pop_reg(RDI);
+		if (n.then as i64 != 0) { gen_expr(n.then); } else { ir_load_slot_acc(off - 8, type_ptr(ty_i64), n.pos); }
+		ir_pop_op2(n.pos);
 
 		if (!opt_no_bounds) {
-			rbp_mem(0x3b, RAX, -(off - 8));
-			jump_bounds(0x87);
-			rex_w(RAX, RDI);
-			b1(0x39);
-			modrm(3, RAX, RDI);
-			jump_bounds(0x87);
+			ir_cmp_acc_rm(operand_stackslot(off - 8, 0 as *Type), n.pos);
+			ir_bounds(CC_UGT, n.pos);
+			ir_cmp_op2_acc_rev(n.pos);
+			ir_bounds(CC_UGT, n.pos);
 		}
 
-		rex_w(RDI, RAX);
-		b1(0x29);
-		modrm(3, RDI, RAX);
-		st_local(off - 8, RAX);
+		ir_alu_acc(ALU_SUB, n.ty, n.pos);
+		ir_store_stackslot_acc(off - 8, n.ty, n.pos);
 
-		mov_reg_reg(RAX, RDI);
-		scale_by(elem);
-		rbp_mem(0x03, RAX, -off);
-		st_local(off, RAX);
+		ir_mov_op2_acc(n.pos);
+		ir_alu_acc_imm(ALU_SCALE, type_ptr(ty_i64), elem as i64, n.pos);
+		ir_alu_acc_rm(ALU_ADD, n.ty, operand_stackslot(off, 0 as *Type), n.pos);
+		ir_store_stackslot_acc(off, n.ty, n.pos);
 
-		lea_local(RAX, off);
+		ir_lea_slot_acc(off, n.pos);
 		return;
 	}
 	if (is_aggregate(n.ty)) { gen_expr(n); return; }
@@ -2148,6 +2137,12 @@ fn x86_lower_op(op *IrOp) {
 		mov_reg_imm(op2_reg(op.dst.reg), op.src0.off);
 		return;
 	}
+	if (op.kind == IR_MOV && op.dst.kind == OP_ACC && op.src0.kind == OP_OP2) {
+		// mov rax, <op2> -- ND_SLICE restores the start index to the
+		// accumulator before scaling.
+		mov_reg_reg(RAX, op2_reg(op.src0.reg));
+		return;
+	}
 	if (op.kind == IR_LOAD && op.dst.kind == OP_ACC && op.src0.kind == OP_STACKSLOT) {
 		// Same bytes as ld_rm's frame-slot path: an unconditional 8-byte
 		// mov from the local's home (direct_local guarantees machine width).
@@ -2167,6 +2162,25 @@ fn x86_lower_op(op *IrOp) {
 		// The address is already in the accumulator (gen_addr's job);
 		// load() dereferences it in place, widening by dst.ty.
 		load(op.dst.ty);
+		return;
+	}
+	if (op.kind == IR_LOAD && op.dst.kind == OP_OP2 && op.src0.kind == OP_ACC) {
+		// mov <op2>, [rax + off] -- ND_SLICE's slice-field copy, ld_at_rax
+		// replayed on the staging register.
+		ld_at_rax(op2_reg(op.dst.reg), op.src0.off);
+		return;
+	}
+	if (op.kind == IR_LOAD && op.dst.kind == OP_OP2 && op.src0.kind == OP_STACKSLOT) {
+		// mov <op2>, [rbp - off] -- ND_INDEX's staged index, ld_rm's
+		// frame-slot path replayed on the staging register.
+		rbp_mem(0x8b, op2_reg(op.dst.reg), -(op.src0.off));
+		return;
+	}
+	if (op.kind == IR_LOAD && op.dst.kind == OP_OP2 && op.src0.kind == OP_VREG) {
+		// mov <op2>, <vreg> -- ld_rm's register path on a promoted index.
+		rex_w(op2_reg(op.dst.reg), op.src0.reg);
+		b1(0x8b);
+		modrm(3, op2_reg(op.dst.reg), op.src0.reg);
 		return;
 	}
 	if (op.kind == IR_CAST && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC) {
@@ -2204,6 +2218,12 @@ fn x86_lower_op(op *IrOp) {
 	}
 	if (op.kind == IR_STORE && op.dst.kind == OP_STACKSLOT && op.src0.kind == OP_ACC) {
 		st_local(op.dst.off, RAX);
+		return;
+	}
+	if (op.kind == IR_STORE && op.dst.kind == OP_STACKSLOT && op.src0.kind == OP_OP2) {
+		// mov [rbp - off], <op2> -- ND_SLICE's slice-field store, st_local
+		// on the staging register.
+		st_local(op.dst.off, op2_reg(op.src0.reg));
 		return;
 	}
 	if (op.kind == IR_STORE && op.dst.kind == OP_VREG && op.src0.kind == OP_ACC) {
@@ -2487,7 +2507,33 @@ fn x86_lower_op(op *IrOp) {
 		modrm(3, op2, RAX);
 		return;
 	}
+	if (op.kind == IR_CMP && op.src0.kind == OP_OP2 && op.src1.kind == OP_ACC) {
+		// cmp <op2>, rax -- ND_SLICE's start-vs-end check, 0x39 with the
+		// operand roles reversed from the acc-vs-op2 form above.
+		rex_w(RAX, op2_reg(op.src0.reg));
+		b1(0x39);
+		modrm(3, RAX, op2_reg(op.src0.reg));
+		return;
+	}
+	if (op.kind == IR_CMP && op.src0.kind == OP_OP2 && op.src1.kind == OP_IMM) {
+		// cmp <op2>, imm -- a staged index's bounds check. aux=1 forces the
+		// 32-bit form, which the bounds code emits unconditionally.
+		var r int = op2_reg(op.src0.reg);
+		var v i64 = op.src1.off;
+		rex_w(0, r);
+		if (op.aux == 0 && v >= -128 && v <= 127) {
+			b1(0x83); modrm(3, 7, r); b1(v);
+		} else {
+			b1(0x81); modrm(3, 7, r); b4(v);
+		}
+		return;
+	}
 	if (op.kind == IR_CMP && op.src0.kind == OP_ACC && op.src1.kind == OP_IMM) {
+		if (op.aux != 0) {
+			// A bounds check's forced 32-bit form: cmp rax, imm32 as 48 3d.
+			b1(0x48); b1(0x3d); b4(op.src1.off);
+			return;
+		}
 		alu_rax_imm(7, op.src1.off);
 		return;
 	}
@@ -2503,7 +2549,7 @@ fn x86_lower_op(op *IrOp) {
 		var v i64 = op.src1.off;
 		if (op.src0.kind == OP_VREG) {
 			rex_w(0, op.src0.reg);
-			if (v >= -128 && v <= 127) {
+			if (op.aux == 0 && v >= -128 && v <= 127) {
 				b1(0x83); modrm(3, 7, op.src0.reg); b1(v);
 			} else {
 				b1(0x81); modrm(3, 7, op.src0.reg); b4(v);
@@ -2512,7 +2558,7 @@ fn x86_lower_op(op *IrOp) {
 		}
 		rex_w(0, RBP);
 		var disp i64 = -(op.src0.off);
-		if (v >= -128 && v <= 127) {
+		if (op.aux == 0 && v >= -128 && v <= 127) {
 			b1(0x83); slot_modrm(7, disp); b1(v);
 		} else {
 			b1(0x81); slot_modrm(7, disp); b4(v);
@@ -2638,6 +2684,26 @@ fn x86_lower_op(op *IrOp) {
 		// The number and arguments were already staged by gen_args into the
 		// backend's syscall registers; only the trapping instruction is IR.
 		b1(0x0f); b1(0x05);
+		return;
+	}
+	if (op.kind == IR_BOUNDS) {
+		// The trip jump: patched to the function-end trampoline by
+		// gen_bounds_trampoline through the fn_bounds list, exactly as
+		// jump_bounds did before the frontend went IR-only.
+		ilist_push(&fn_bounds, jump(x86_setcc_byte(op.aux) - 0x10));
+		return;
+	}
+	if (op.kind == IR_ASSERT) {
+		// test; jnz over a direct call to the message's stub. The call is a
+		// fixed five bytes, so the jnz is always in short range and nothing
+		// here needs branch relaxation.
+		test_rax();
+		var id i64 = jump(0x85);
+		b1(0xe8);
+		ilist_push(&assert_sites, code.n);
+		ilist_push(&assert_msgs, op.aux);
+		b4(0);
+		patch_here(id);
 		return;
 	}
 	die("internal: x86_lower_op: unhandled IR shape");
@@ -3099,6 +3165,101 @@ fn ir_cast_float(ck int, st *Type, dt *Type, pos i64) {
 	op.src0 = operand_acc();
 	op.src0.ty = st;
 	op.aux = ck as i64;
+	x86_lower_all();
+}
+
+// A bounds-check trip: the condition code that jumps to the function-end
+// bounds trampoline.
+fn ir_bounds(cc i64, pos i64) {
+	var op *IrOp = ir_emit(IR_BOUNDS, pos);
+	op.aux = cc;
+	x86_lower_all();
+}
+
+// assert's site: the message string-literal id rides in aux.
+fn ir_assert(msg i64, pos i64) {
+	var op *IrOp = ir_emit(IR_ASSERT, pos);
+	op.aux = msg;
+	x86_lower_all();
+}
+
+// mov <op2>, [rax + off] -- a slice field, copied to the staging register.
+fn ir_load_at_acc_op2(off i64, pos i64) {
+	var op *IrOp = ir_emit(IR_LOAD, pos);
+	op.dst = operand_op2(0);
+	op.src0 = operand_acc();
+	op.src0.off = off;
+	x86_lower_all();
+}
+
+// mov <op2>, <direct local> -- ND_INDEX's staged index.
+fn ir_load_op2_var(v *Var, ty *Type, pos i64) {
+	var op *IrOp = ir_emit(IR_LOAD, pos);
+	op.dst = operand_op2(0);
+	if (v.has_reg) { op.src0 = operand_vreg(v.reg, ty); }
+	else { op.src0 = operand_stackslot(v.offset as i64, ty); }
+	x86_lower_all();
+}
+
+// mov [rbp - off], <op2> -- a slice's field landed in the staging register.
+fn ir_store_op2_slot(off i64, pos i64) {
+	var op *IrOp = ir_emit(IR_STORE, pos);
+	op.dst = operand_stackslot(off, 0 as *Type);
+	op.src0 = operand_op2(0);
+	x86_lower_all();
+}
+
+// cmp <op2_reg>, rax -- ND_SLICE's start-vs-end bounds check, the reverse
+// of the acc-vs-op2 staging form above.
+fn ir_cmp_op2_acc_rev(pos i64) {
+	var op *IrOp = ir_emit(IR_CMP, pos);
+	op.src0 = operand_op2(0);
+	op.src1 = operand_acc();
+	x86_lower_all();
+}
+
+// mov rax, <op2> -- ND_SLICE restores the start index before scaling.
+fn ir_mov_op2_acc(pos i64) {
+	var op *IrOp = ir_emit(IR_MOV, pos);
+	op.dst = operand_acc();
+	op.src0 = operand_op2(0);
+	x86_lower_all();
+}
+
+// A direct local into the accumulator from its frame slot.
+fn ir_load_slot_acc(off i64, ty *Type, pos i64) {
+	var op *IrOp = ir_emit(IR_LOAD, pos);
+	op.dst = operand_acc();
+	op.dst.ty = ty;
+	op.src0 = operand_stackslot(off, ty);
+	x86_lower_all();
+}
+
+// cmp rax, imm32 with the accumulator's forced 32-bit form (48 3d) -- the
+// bounds checks emit it unconditionally, unlike the imm8-choosing fast path.
+fn ir_cmp_acc_imm32(v i64, pos i64) {
+	var op *IrOp = ir_emit(IR_CMP, pos);
+	op.src0 = operand_acc();
+	op.src1 = operand_imm(v);
+	op.aux = 1;
+	x86_lower_all();
+}
+
+// cmp <op2>, imm32 -- a staged index's bounds check.
+fn ir_cmp_op2_imm32(v i64, pos i64) {
+	var op *IrOp = ir_emit(IR_CMP, pos);
+	op.src0 = operand_op2(0);
+	op.src1 = operand_imm(v);
+	op.aux = 1;
+	x86_lower_all();
+}
+
+// cmp <direct local>, imm32 -- a promoted index's bounds check.
+fn ir_cmp_rm_imm32(n *Node, v i64, pos i64) {
+	var op *IrOp = ir_emit(IR_CMP, pos);
+	op.src0 = direct_operand(n);
+	op.src1 = operand_imm(v);
+	op.aux = 1;
 	x86_lower_all();
 }
 
