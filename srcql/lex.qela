@@ -98,7 +98,7 @@ fn read_escape(src str, i *i64) i64 {
 	if (c == '\\') { return '\\'; }
 	if (c == '"') { return '"'; }
 	if (c == '\'') { return '\''; }
-	// unknown escape — caller handles error
+	error_at(lex_base + *i - 1, "unknown escape sequence");
 	return c as i64;
 }
 
@@ -290,9 +290,11 @@ fn lex(src str, base i64) *Token {
 		if (src.ptr[i] == '\'') {
 			var start i64 = i;
 			i = i + 1;
+			if (i >= src.len) { error_at(lex_base + start, "unterminated character literal"); }
 			var val i64 = 0;
 			if (src.ptr[i] == '\\') {
 				i = i + 1;
+				if (i >= src.len) { error_at(lex_base + start, "unterminated character literal"); }
 				val = read_escape(src, &i);
 			} else {
 				val = src.ptr[i] as i64;

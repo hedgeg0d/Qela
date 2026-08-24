@@ -1,0 +1,16 @@
+// Scalar helpers, bootstrap-subset-safe.
+
+fn abs(v i64) i64 {
+	if (v < 0) { return -v; }
+	return v;
+}
+
+fn min(a i64, b i64) i64 {
+	if (a < b) { return a; }
+	return b;
+}
+
+fn max(a i64, b i64) i64 {
+	if (a > b) { return a; }
+	return b;
+}
