@@ -37,6 +37,77 @@ let SP  = 31;   // register field value 31 means SP or XZR depending on the inst
 let SYS_ARM64_EXIT_GROUP = 94;
 let SYS_ARM64_WRITE = 64;
 
+// Floats ride as raw bits in GPRs between operations, same as x86_emit.qela
+// -- D0/D1 are only ever live for the instant of one FP instruction, so the
+// calling convention and every stack slot stay untouched by float support.
+let D0 = 0;
+let D1 = 1;
+
+// FMOV (general), scalar<->GPR move at width sz (4 = single/W, 8 = double/X).
+// Confirmed against a real `as`/`objdump` round trip, not derived from the
+// manual by hand: FMOV Wd,Sn=0x1e260000, Sd,Wn=0x1e270000, Xd,Dn=0x9e660000,
+// Dd,Xn=0x9e670000 (Rn/Rd in the usual 9-5/4-0 fields).
+fn arm64_fmov_to_gpr(rd int, fs int, sz i64) {
+	if (sz == 4) { b4(0x1e260000 | (fs << 5) | rd); return; }
+	b4(0x9e660000 | (fs << 5) | rd);
+}
+
+fn arm64_fmov_from_gpr(fd int, rn int, sz i64) {
+	if (sz == 4) { b4(0x1e270000 | (rn << 5) | fd); return; }
+	b4(0x9e670000 | (rn << 5) | fd);
+}
+
+// FADD/FSUB/FMUL/FDIV (scalar), opcode 2/3/0/1 in bits[15:12] of the
+// "floating-point (2 source)" encoding; ftype (bits[23:22]) picks single vs
+// double. Base words (Rn=Rm=Rd=0) verified the same way as the FMOVs above.
+fn arm64_fpu_binop(aop int, fd int, fn_ int, fm int, sz i64) {
+	var base i64 = 0x1e602800;
+	if (sz == 4) { base = 0x1e202800; }
+	if (aop == ALU_FSUB) { base = base + 0x1000; }
+	if (aop == ALU_FMUL) { base = base - 0x2000; }
+	if (aop == ALU_FDIV) { base = base - 0x1000; }
+	b4(base | (fm << 16) | (fn_ << 5) | fd);
+}
+
+fn arm64_fneg(fd int, fn_ int, sz i64) {
+	var base i64 = 0x1e614000;
+	if (sz == 4) { base = 0x1e214000; }
+	b4(base | (fn_ << 5) | fd);
+}
+
+// FCMP (scalar): sets NZCV the same way SUBS does for an unsigned compare
+// (NaN unordered results aside -- not handled, same limit x86_emit.qela's
+// ucomisd path has), so arm64_cc's existing CC_U* mapping reads out fine.
+fn arm64_fcmp(fn_ int, fm int, sz i64) {
+	var base i64 = 0x1e602000;
+	if (sz == 4) { base = 0x1e202000; }
+	b4(base | (fm << 16) | (fn_ << 5));
+}
+
+// FCVTZS (float -> signed int, round toward zero) and SCVTF (int -> float).
+// dsz/ssz are 4 (W/single) or 8 (X/double); the four width combinations are
+// four distinct opcodes, not one opcode with a width bit, so each is its own
+// base word.
+fn arm64_fcvtzs(rd int, fs int, dsz i64, ssz i64) {
+	if (dsz == 8 && ssz == 8) { b4(0x9e780000 | (fs << 5) | rd); return; }
+	if (dsz == 8 && ssz == 4) { b4(0x9e380000 | (fs << 5) | rd); return; }
+	if (dsz == 4 && ssz == 8) { b4(0x1e780000 | (fs << 5) | rd); return; }
+	b4(0x1e380000 | (fs << 5) | rd);
+}
+
+fn arm64_scvtf(fd int, rn int, dsz i64, ssz i64) {
+	if (dsz == 8 && ssz == 8) { b4(0x9e620000 | (rn << 5) | fd); return; }
+	if (dsz == 8 && ssz == 4) { b4(0x1e620000 | (rn << 5) | fd); return; }
+	if (dsz == 4 && ssz == 8) { b4(0x9e220000 | (rn << 5) | fd); return; }
+	b4(0x1e220000 | (rn << 5) | fd);
+}
+
+// FCVT (change float precision): Sd,Dn (narrow) and Dd,Sn (widen).
+fn arm64_fcvt(fd int, fs int, dsz i64) {
+	if (dsz == 4) { b4(0x1e624000 | (fs << 5) | fd); return; }
+	b4(0x1e22c000 | (fs << 5) | fd);
+}
+
 // A64 condition codes (the 4-bit field in B.cond/CSET), mapped from
 // srcql/ir.qela's neutral CC_* -- SUBS sets flags the same way for a signed
 // or unsigned compare, only the condition read out differs.
@@ -701,7 +772,31 @@ fn arm64_lower_op(op *IrOp) {
 			return;
 		}
 		if (op.aux == CAST_TRUNC) { arm64_truncate_to(op.dst.ty); return; }
-		die("internal: arm64_lower_op: IR_CAST: float casts not wired yet");
+		if (op.aux == CAST_FTRUNC || op.aux == CAST_FEXT) {
+			// f32<->f64, mirrors x86_emit.qela's gen_cast_float first branch:
+			// the source size picks the FCVT direction, the destination size
+			// the move back out.
+			var stsz i64 = op.src0.ty.size;
+			arm64_fmov_from_gpr(D0, X0, stsz);
+			arm64_fcvt(D0, D0, op.dst.ty.size);
+			arm64_fmov_to_gpr(X0, D0, op.dst.ty.size);
+			return;
+		}
+		if (op.aux == CAST_ITOF) {
+			// SCVTF reads straight from the GPR (it is a real integer, not a
+			// float bit pattern to reinterpret) -- ints always ride a full
+			// 64-bit register here, so the source width is always 8.
+			arm64_scvtf(D0, X0, op.dst.ty.size, 8);
+			arm64_fmov_to_gpr(X0, D0, op.dst.ty.size);
+			return;
+		}
+		if (op.aux == CAST_FTOI) {
+			arm64_fmov_from_gpr(D0, X0, op.src0.ty.size);
+			arm64_fcvtzs(X0, D0, 8, op.src0.ty.size);
+			if (op.dst.ty.size < 8) { arm64_truncate_to(op.dst.ty); }
+			return;
+		}
+		die("internal: arm64_lower_op: IR_CAST: unhandled float cast");
 	}
 	if (op.kind == IR_MEMSET && op.dst.kind == OP_STACKSLOT) {
 		arm64_memset_local(op.dst.off, op.aux);
@@ -739,6 +834,17 @@ fn arm64_lower_op(op *IrOp) {
 	}
 	if (op.kind == IR_ALU && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC && op.src1.kind == OP_OP2) {
 		var op2 int = op2_reg(op.src1.reg);
+		if (op.aux == ALU_FADD || op.aux == ALU_FSUB || op.aux == ALU_FMUL || op.aux == ALU_FDIV) {
+			// gen_binop_float's round trip: bits ride X0/X1, the op happens in
+			// D0/D1, the result lands back in X0 -- mirrors x86_emit.qela's
+			// SSE round trip exactly.
+			var sz i64 = op.dst.ty.size;
+			arm64_fmov_from_gpr(D0, X0, sz);
+			arm64_fmov_from_gpr(D1, op2, sz);
+			arm64_fpu_binop(op.aux, D0, D0, D1, sz);
+			arm64_fmov_to_gpr(X0, D0, sz);
+			return;
+		}
 		var uns bool = op.dst.ty.is_unsigned;
 		if (op.aux == ALU_DIV) { arm64_div(X0, X0, op2, uns); return; }
 		if (op.aux == ALU_MOD) { arm64_mod(X0, X0, op2, uns); return; }
@@ -768,6 +874,14 @@ fn arm64_lower_op(op *IrOp) {
 		return;
 	}
 	if (op.kind == IR_CMP && op.src0.kind == OP_ACC && op.src1.kind == OP_OP2) {
+		if (op.src0.ty as i64 != 0 && is_float(op.src0.ty)) {
+			var sz i64 = op.src0.ty.size;
+			var op2f int = op2_reg(op.src1.reg);
+			arm64_fmov_from_gpr(D0, X0, sz);
+			arm64_fmov_from_gpr(D1, op2f, sz);
+			arm64_fcmp(D0, D1, sz);
+			return;
+		}
 		arm64_cmp_reg(X0, op2_reg(op.src1.reg));
 		return;
 	}
