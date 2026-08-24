@@ -1,0 +1,17 @@
+// expect-exit: 42
+// A naked function is bare bytes: no prologue, no epilogue, no implicit
+// ret. It cannot take parameters or have locals, return, defer or call —
+// the body is asm plus bare stores, and it must end with its own ret (or
+// iretq). The ISR-style entry below is compiled but never run.
+fn naked weird_entry() int {
+	asm(0x48, 0xc7, 0xc0, 42, 0, 0, 0);
+	asm(0xc3);
+}
+
+fn naked iretq_entry() int {
+	asm(0x48, 0xcf);
+}
+
+fn main() int {
+	return weird_entry();
+}

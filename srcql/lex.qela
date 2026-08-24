@@ -66,6 +66,7 @@ fn is_keyword(src str, start i64, end i64) bool {
 		if (src.ptr[start] == 'w' && src.ptr[start+1] == 'h' && src.ptr[start+2] == 'i' && src.ptr[start+3] == 'l' && src.ptr[start+4] == 'e') { return true; }
 		if (src.ptr[start] == 'b' && src.ptr[start+1] == 'r' && src.ptr[start+2] == 'e' && src.ptr[start+3] == 'a' && src.ptr[start+4] == 'k') { return true; }
 		if (src.ptr[start] == 'm' && src.ptr[start+1] == 'a' && src.ptr[start+2] == 'c' && src.ptr[start+3] == 'r' && src.ptr[start+4] == 'o') { return true; }
+		if (src.ptr[start] == 'n' && src.ptr[start+1] == 'a' && src.ptr[start+2] == 'k' && src.ptr[start+3] == 'e' && src.ptr[start+4] == 'd') { return true; }
 		if (src.ptr[start] == 'm' && src.ptr[start+1] == 'a' && src.ptr[start+2] == 't' && src.ptr[start+3] == 'c' && src.ptr[start+4] == 'h') { return true; }
 		if (src.ptr[start] == 'd' && src.ptr[start+1] == 'e' && src.ptr[start+2] == 'f' && src.ptr[start+3] == 'e' && src.ptr[start+4] == 'r') { return true; }
 		if (src.ptr[start] == 'f' && src.ptr[start+1] == 'a' && src.ptr[start+2] == 'l' && src.ptr[start+3] == 's' && src.ptr[start+4] == 'e') { return true; }
@@ -80,6 +81,7 @@ fn is_keyword(src str, start i64, end i64) bool {
 	}
 	if (end - start == 8) {
 		if (src.ptr[start] == 'c' && src.ptr[start+1] == 'o' && src.ptr[start+2] == 'n' && src.ptr[start+3] == 't' && src.ptr[start+4] == 'i' && src.ptr[start+5] == 'n' && src.ptr[start+6] == 'u' && src.ptr[start+7] == 'e') { return true; }
+		if (src.ptr[start] == 'v' && src.ptr[start+1] == 'o' && src.ptr[start+2] == 'l' && src.ptr[start+3] == 'a' && src.ptr[start+4] == 't' && src.ptr[start+5] == 'i' && src.ptr[start+6] == 'l' && src.ptr[start+7] == 'e') { return true; }
 		if (src.ptr[start] == 'c' && src.ptr[start+1] == 'o' && src.ptr[start+2] == 'm' && src.ptr[start+3] == 'p' && src.ptr[start+4] == 't' && src.ptr[start+5] == 'i' && src.ptr[start+6] == 'm' && src.ptr[start+7] == 'e') { return true; }
 		return false;
 	}

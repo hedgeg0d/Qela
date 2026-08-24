@@ -1,0 +1,14 @@
+// expect-exit: 42
+// expect-out: 42
+// *volatile T: every load and store through the pointer happens, and the
+// type is distinct from *T, so dropping the qualifier needs a cast. The
+// read-modify-write below goes through the pointer both ways.
+import "std/io.qela";
+
+fn main() int {
+	var v u8 = 41;
+	var p *volatile u8 = &v as *volatile u8;
+	*p = *p + 1;
+	write_str(STDOUT, "${*p}\n");
+	return *p as int;
+}

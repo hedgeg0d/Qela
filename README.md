@@ -75,7 +75,10 @@ place and pointers as hex, with the expression evaluated at runtime — a
 string literal is compiled into a chain of formatting calls, so the feature
 is stdlib, not magic. `for x in a` iterates an array, slice or string by
 value, and on a fixed array the compiler proves the bounds away: the most
-natural loop is also the smallest. `macro sq(x) = x * x;` are parse-time
+natural loop is also the smallest. `*volatile T` pointers keep MMIO reads
+and writes honest, and `fn naked` emits a function with no prologue or
+epilogue — the body is bare bytes ending in its own `ret` or `iretq`, for
+interrupt handlers. `macro sq(x) = x * x;` are parse-time
 expression macros whose expansion is a tree, not text: `sq(2 + 1)` needs
 no parentheses, and the expansion is type-checked and bounds-checked like
 any other code.
