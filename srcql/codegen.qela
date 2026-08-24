@@ -81,6 +81,8 @@ var defer_depth int;
 
 var calls_head *CallFixup;
 var calls_tail *CallFixup;
+var asmrefs_head *CallFixup;
+var asmrefs_tail *CallFixup;
 var strrefs_head *StrFixup;
 var strrefs_tail *StrFixup;
 var datarefs_head *DataFixup;
@@ -320,6 +322,29 @@ fn add_call(name str, pos i64) {
 	if (calls_tail as i64 == 0) { calls_head = f; } else { calls_tail.next = f; }
 	calls_tail = f;
 	b4(0);
+}
+
+// `$rel name` in asm operands: a rel32 slot patched like a call target.
+fn add_callref(name str, pos i64) {
+	b4(0);
+	var f *CallFixup = arena_alloc(sizeof(CallFixup), 8) as *CallFixup;
+	f.at = code.n - 4;
+	f.name = name;
+	f.pos = pos;
+	if (calls_tail as i64 == 0) { calls_head = f; } else { calls_tail.next = f; }
+	calls_tail = f;
+}
+
+// `$name` in asm operands: an 8-byte absolute address slot.
+fn add_absref(name str, pos i64) {
+	var k i64 = 0;
+	while (k < 8) { b1(0); k = k + 1; }
+	var f *CallFixup = arena_alloc(sizeof(CallFixup), 8) as *CallFixup;
+	f.at = code.n - 8;
+	f.name = name;
+	f.pos = pos;
+	if (asmrefs_tail as i64 == 0) { asmrefs_head = f; } else { asmrefs_tail.next = f; }
+	asmrefs_tail = f;
 }
 
 fn add_strref(reg int, id int) {
@@ -1704,22 +1729,7 @@ fn gen_expr(n *Node) {
 		return;
 	}
 	if (k == ND_ASM) {
-		var a *Node = n.args;
-		while (a as i64 != 0) {
-			// A value wider than a byte is a byte string written in hex:
-			// asm(0x48c7c0) emits 48 c7 c0, most significant byte first,
-			// the order a disassembler prints.
-			var v i64 = a.val;
-			var n i64 = 1;
-			var t i64 = v;
-			while (t > 255) { n = n + 1; t = t >> 8; }
-			var s i64 = (n - 1) * 8;
-			while (s >= 0) {
-				b1(((v >> s) & 255) as u8);
-				s = s - 8;
-			}
-			a = a.next;
-		}
+		gen_asm_operands(n.args);
 		return;
 	}
 	if (k == ND_ASSERT) { gen_assert(n); return; }
@@ -2059,6 +2069,29 @@ fn saved_slot(f *Func, reg int) i64 {
 
 var gen_frameless bool;
 
+// Emits one asm operand chain: bytes (a value wider than a byte is a byte
+// string in hex, most significant byte first -- the order a disassembler
+// prints) or a symbol slot: `$name` absolute, `$rel name` relative.
+fn gen_asm_operands(a *Node) {
+	while (a as i64 != 0) {
+		if (a.kind == ND_ASMREF) {
+			if (a.val != 0) { add_callref(a.name, a.pos); }
+			else { add_absref(a.name, a.pos); }
+		} else {
+			var v i64 = a.val;
+			var n i64 = 1;
+			var t i64 = v;
+			while (t > 255) { n = n + 1; t = t >> 8; }
+			var s i64 = (n - 1) * 8;
+			while (s >= 0) {
+				b1(((v >> s) & 255) as u8);
+				s = s - 8;
+			}
+		}
+		a = a.next;
+	}
+}
+
 fn gen_epilogue() {
 	gen_restore();
 	if (!gen_frameless) { b1(0xc9); }
@@ -2219,6 +2252,8 @@ fn reset_code() {
 	gc_end_refs.n = 0;
 	calls_head = 0 as *CallFixup;
 	calls_tail = 0 as *CallFixup;
+	asmrefs_head = 0 as *CallFixup;
+	asmrefs_tail = 0 as *CallFixup;
 	strrefs_head = 0 as *StrFixup;
 	strrefs_tail = 0 as *StrFixup;
 	datarefs_head = 0 as *DataFixup;
@@ -2230,21 +2265,28 @@ fn reset_code() {
 }
 
 fn emit_code(u *Unit, main_fn *Func, panic_id int, hdr i64) {
-	// rbp is not guaranteed zero at process entry; the backtrace walker
-	// needs a sentinel main returns into.
-	if (opt_backtrace) {
-		b1(0x48); b1(0x31); b1(0xed);         // xor rbp, rbp
-	}
-	if (main_fn.nparams == 2) {
-		b1(0x48); b1(0x8b); b1(0x3c); b1(0x24);
-		b1(0x48); b1(0x8d); b1(0x74); b1(0x24); b1(8);
-	}
+	// Top-level asm blocks are the image's first bytes; `entry name;`
+	// suppresses the default stub too, so the entry function (usually
+	// naked) does its own setup and its own exit.
+	if (top_asm_head as i64 == 0 && entry_name.len == 0) {
+		// rbp is not guaranteed zero at process entry; the backtrace
+		// walker needs a sentinel main returns into.
+		if (opt_backtrace) {
+			b1(0x48); b1(0x31); b1(0xed);     // xor rbp, rbp
+		}
+		if (main_fn as i64 != 0 && main_fn.nparams == 2) {
+			b1(0x48); b1(0x8b); b1(0x3c); b1(0x24);
+			b1(0x48); b1(0x8d); b1(0x74); b1(0x24); b1(8);
+		}
 
-	add_call("main", 0);
-	b1(0x89);
-	modrm(3, RAX, RDI);
-	mov_reg_imm(RAX, 60);
-	b1(0x0f); b1(0x05);
+		add_call("main", 0);
+		b1(0x89);
+		modrm(3, RAX, RDI);
+		mov_reg_imm(RAX, 60);
+		b1(0x0f); b1(0x05);
+	} else if (top_asm_head as i64 != 0) {
+		gen_asm_operands(top_asm_head);
+	}
 
 	var f *Func = u.funcs;
 	while (f as i64 != 0) {
@@ -2363,8 +2405,10 @@ fn codegen(u *Unit, img *Image) {
 	var hdr i64 = EHDR_SZ + PHDR_SZ * (nph as i64);
 
 	var main_fn *Func = find_func("main");
-	if (main_fn as i64 == 0) { die("error: no 'main' function"); }
-	if (main_fn.nparams != 0 && main_fn.nparams != 2) {
+	if (main_fn as i64 == 0 && top_asm_head as i64 == 0 && entry_name.len == 0) {
+		die("error: no 'main' function");
+	}
+	if (main_fn as i64 != 0 && main_fn.nparams != 0 && main_fn.nparams != 2) {
 		die("error: 'main' takes no parameters or (argc, argv)");
 	}
 	var pass int = 0;
@@ -2455,6 +2499,27 @@ fn codegen(u *Unit, img *Image) {
 		cf = cf.next;
 	}
 
+	var ar *CallFixup = asmrefs_head;
+	while (ar as i64 != 0) {
+		var afn *Func = find_func(ar.name);
+		var aval i64 = 0;
+		if (afn as i64 != 0) {
+			aval = ELF_BASE + hdr + afn.addr;
+		} else {
+			var gv *Var = find_global(ar.name);
+			if (gv as i64 == 0) {
+				emsg("undefined symbol '"); emsg(ar.name); emsg("'"); efail(ar.pos);
+			}
+			aval = dbase + gv.data_off;
+		}
+		var j5 i64 = 0;
+		while (j5 < 8) {
+			code.p[ar.at + j5] = ((aval >> (j5 * 8)) & 255) as u8;
+			j5 = j5 + 1;
+		}
+		ar = ar.next;
+	}
+
 	var sf *StrFixup = strrefs_head;
 	while (sf as i64 != 0) {
 		buf_patch32(&code, sf.at, ELF_BASE + hdr + code.n + str_off[sf.id]);
@@ -2495,6 +2560,14 @@ fn codegen(u *Unit, img *Image) {
 	img.rodata = rodata;
 	img.data = gdata;
 	img.bss_size = bss_size;
-	img.entry = 0;
+	if (entry_name.len != 0) {
+		var ef *Func = find_func(entry_name);
+		if (ef as i64 == 0) {
+			emsg("unknown entry function '"); emsg(entry_name); emsg("'"); efail(0);
+		}
+		img.entry = ef.addr;
+	} else {
+		img.entry = 0;
+	}
 	img.nph = nph;
 }
