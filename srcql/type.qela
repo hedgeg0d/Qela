@@ -570,13 +570,13 @@ fn monomorphize_call(n *Node, f *Func) {
 	} else {
 		// No type arguments written out: read them off the value arguments.
 		var arg *Node = n.args;
-		i = nct;
+			i = nct;
 		while (i < f.nparams && arg as i64 != 0) {
 			unify(func_param(f, i).ty, arg.ty);
 			arg = arg.next;
 			i = i + 1;
 		}
-		i = 0;
+			i = 0;
 		while (i < nct) {
 			if (subst_concretes[i] as i64 == 0) {
 				emsg("cannot tell what '"); emsg(func_param(f, i).ty.name);

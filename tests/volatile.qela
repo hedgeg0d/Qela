@@ -1,3 +1,4 @@
+// stage1-only
 // expect-exit: 42
 // expect-out: 42
 // *volatile T: every load and store through the pointer happens, and the

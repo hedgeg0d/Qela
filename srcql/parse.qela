@@ -940,24 +940,37 @@ fn parse_stmt(t **Token) *Node {
 			var lo *Node = parse_assign(t);
 			if (!tok_consume(t, "..")) {
 				// for x in a: iterate by value over an array, a slice or a
-				// string. The index is a hidden local; the collection is
-				// evaluated per iteration, like the bound of the range
-				// form. The body is `var x = coll[i]` prepended, which is
-				// exactly the shape the bounds elision already knows.
+				// string. The index is a hidden local; a collection that is
+				// not a plain variable is evaluated once into a hidden
+				// variable, because the node would otherwise be typed and
+				// emitted twice. The body is `var x = coll[i]` prepended,
+				// which is exactly the shape the bounds elision knows.
+				var coll *Node = lo;
+				var coll_init *Node = 0 as *Node;
+				if (coll.kind != ND_VAR) {
+					var cv *Var = declare_var("_$c", 0 as *Type, np);
+					add_type(coll);
+					cv.ty = coll.ty;
+					var clhs *Node = new_node(ND_VAR, np);
+					clhs.varp = cv;
+					coll_init = new_node(ND_EXPRSTMT, np);
+					coll_init.lhs = bin_node(ND_ASSIGN, clhs, coll, np);
+					var cr *Node = new_node(ND_VAR, np);
+					cr.varp = cv;
+					coll = cr;
+				}
 				var v *Var = declare_var(name, 0 as *Type, np);
-				// The hidden index can never collide: `$` cannot appear in
-				// an identifier, only inside a string (where interpolation
-				// needs a `{` right after it anyway).
 				var hv *Var = declare_var("_$i", type_lookup("int"), np);
 				var iv *Node = new_node(ND_VAR, np);
 				iv.varp = hv;
 				var init *Node = new_node(ND_EXPRSTMT, np);
 				init.lhs = bin_node(ND_ASSIGN, iv, num_node(0, np), np);
-				n.init = init;
+				if (coll_init as i64 != 0) { coll_init.next = init; n.init = coll_init; }
+				else { n.init = init; }
 				var iv2 *Node = new_node(ND_VAR, np);
 				iv2.varp = hv;
 				var ml *Node = new_node(ND_MEMBER, np);
-				ml.lhs = lo;
+				ml.lhs = coll;
 				ml.name = "len";
 				n.cond = bin_node(ND_LT, iv2, ml, np);
 				var iv3 *Node = new_node(ND_VAR, np);
@@ -967,7 +980,7 @@ fn parse_stmt(t **Token) *Node {
 				n.step = step;
 				var iv4 *Node = new_node(ND_VAR, np);
 				iv4.varp = hv;
-				var rhs *Node = bin_node(ND_INDEX, lo, iv4, np);
+				var rhs *Node = bin_node(ND_INDEX, coll, iv4, np);
 				add_type(rhs);
 				v.ty = rhs.ty;
 				var d *Node = new_node(ND_EXPRSTMT, np);
@@ -1431,7 +1444,6 @@ fn splice_import(tok *Token, path str, pos i64) *Token {
 fn parse(tok *Token) *Unit {
 	enter_scope();
 	var head Func;
-	var tail *Func = &head;
 	while (true) {
 		// An interpolated string was desugared somewhere in the previous
 		// top-level item; the formatting helpers are std/fmt.qela. It is
@@ -1471,13 +1483,17 @@ fn parse(tok *Token) *Unit {
 			tok = splice_import(tok, path, ipos);
 			continue;
 		}
-		tail.next = parse_function(&tok);
-		tail = tail.next;
+		var nf *Func = parse_function(&tok);
+		// Appending through funcs_tail keeps mid-parse instantiations
+		// (a generic call typed by a var initializer) in the list: the
+		// local chain alone would orphan them on the next append.
+		if (funcs_tail as i64 == 0) { head.next = nf; }
+		else { funcs_tail.next = nf; }
+		funcs_tail = nf;
 		all_funcs = head.next;
 	}
 	leave_scope();
 	all_funcs = head.next;
-	funcs_tail = tail;
 
 	var f *Func = head.next;
 	while (f as i64 != 0) {
