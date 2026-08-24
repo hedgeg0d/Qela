@@ -7,14 +7,13 @@ Updated 2026-08-04. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **230 624 B** |
-| S2 under `upx --lzma` (measured 2026-08-04) | 52 764 B, ~5.0% of the 1 MiB budget |
+| **S2 — the shipped compiler, Qela compiled by itself** | **231 368 B** |
+| S2 under `upx --lzma` (measured 2026-08-04) | 53 620 B, ~5.1% of the 1 MiB budget |
 | S2 under xz -9 (proxy for upx) | 55 180 B |
-| stage1 sources | 10 463 lines of Qela |
+| stage1 sources | 9 503 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **193%** without bounds checks (M4 gate wants ≤150%) |
 
-Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the
-79-test corpus under S2, the embedded stdlib resolving outside the source tree,
+Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 82-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
 backtrace, interpolation and the repl, the compiler flags (`-g`,
 `--backtrace`, `--no-bounds-checks`, `--dump-std`), and a scripted language
@@ -53,8 +52,8 @@ before and after:
   `&&`/`||` short-circuiting, so `2 > 1 || 1 / 0 == 0` still compiles (the
   right side never runs): `tests/divzero.qela`, `tests/divzeromod.qela`,
   `tests/comptimedivzero.qela`, and `tests/logic.qela` pins the fold order.
-- **Fixed-size tables written unchecked**: 64 source files, 64 enum variants
-  (stage1 only enforced the cap the C bootstrap already had), 256 mapped
+- **Fixed-size tables written unchecked**: 64 enum variants
+   (stage1 only enforced the cap the C bootstrap already had), 256 mapped
   locals in a monomorphization, 6 type variables, 64 address-taken locals in
   the bounds pass, array lengths that overflowed the size computation. Each
   is a `error_at`/`die` now; array length must be positive and fit in
