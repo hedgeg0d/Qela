@@ -291,7 +291,11 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) {
 	while (a as i64 != 0) {
 		if (ai >= direct_from) {
 			if (first_in_rax && nd == 0) {
-				dest[nd] = RAX;
+				// A syscall's number is x86's rax, but ARM64's SVC reads it
+				// from x8 -- unlike x86, ARM64's accumulator (x0) is also
+				// the first real argument register, so the number can't
+				// share it the way rax does.
+				if (opt_target == TARGET_ARM64) { dest[nd] = X8; } else { dest[nd] = RAX; }
 			} else {
 				if (sys) { dest[nd] = sys_reg(ri); } else { dest[nd] = call_reg(ri); }
 				ri = ri + 1;
@@ -329,7 +333,7 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) {
 			}
 			ir_push_at_acc(0, a.pos);
 			if (first_in_rax && nd == 0) {
-				dest[nd] = RAX;
+				if (opt_target == TARGET_ARM64) { dest[nd] = X8; } else { dest[nd] = RAX; }
 			} else {
 				if (sys) { dest[nd] = sys_reg(ri); } else { dest[nd] = call_reg(ri); }
 				ri = ri + 1;
@@ -356,7 +360,7 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) {
 				xi = xi + 1;
 				dest[nd] = RAX;
 			} else if (first_in_rax && nd == 0) {
-				dest[nd] = RAX;
+				if (opt_target == TARGET_ARM64) { dest[nd] = X8; } else { dest[nd] = RAX; }
 			} else {
 				if (sys) { dest[nd] = sys_reg(ri); } else { dest[nd] = call_reg(ri); }
 				ri = ri + 1;
