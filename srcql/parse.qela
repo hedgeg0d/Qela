@@ -9,6 +9,96 @@ import "bounds.qela";
 import "../std/io.qela";
 import "std_blob.qela";
 
+// ── "did you mean?" suggestions ──
+//
+// When the user types an unknown identifier that's close to a keyword
+// (Levenshtein distance ≤ 2), suggest the keyword as a hint. The list
+// mirrors `keywords[]` in src/lex.c; both must agree. The function
+// returns the keyword text, or "" if nothing is close enough.
+
+var keywords [22]str;
+var keywords_inited bool = false;
+
+fn keywords_setup() {
+	if (keywords_inited) { return; }
+	keywords_inited = true;
+	keywords[0]  = "fn";
+	keywords[1]  = "let";
+	keywords[2]  = "var";
+	keywords[3]  = "if";
+	keywords[4]  = "else";
+	keywords[5]  = "while";
+	keywords[6]  = "for";
+	keywords[7]  = "in";
+	keywords[8]  = "break";
+	keywords[9]  = "continue";
+	keywords[10] = "return";
+	keywords[11] = "as";
+	keywords[12] = "struct";
+	keywords[13] = "enum";
+	keywords[14] = "match";
+	keywords[15] = "defer";
+	keywords[16] = "import";
+	keywords[17] = "comptime";
+	keywords[18] = "sizeof";
+	keywords[19] = "true";
+	keywords[20] = "false";
+	keywords[21] = "asm";
+}
+
+fn lev_dist(a str, b str) i64 {
+	if (a.len == 0) { return b.len; }
+	if (b.len == 0) { return a.len; }
+	// Two-row DP. Cost: (a.len+1) * (b.len+1) cells; with short keywords
+	// (~10 chars max) this is ~144 ops per candidate, 22 candidates → 3 KiB
+	// worth of stack per call. We use a flat int array on the arena.
+	var n i64 = a.len + 1;
+	var m i64 = b.len + 1;
+	var prev *i64 = arena_alloc(m * 8, 8) as *i64;
+	var cur  *i64 = arena_alloc(m * 8, 8) as *i64;
+	var j i64 = 0;
+	while (j < m) { prev[j] = j; j = j + 1; }
+	var i i64 = 1;
+	while (i <= a.len) {
+		cur[0] = i;
+		var k i64 = 1;
+		while (k <= b.len) {
+			var cost i64 = 1;
+			if (a.ptr[i - 1] == b.ptr[k - 1]) { cost = 0; }
+			var del i64 = prev[k] + 1;
+			var ins i64 = cur[k - 1] + 1;
+			var sub i64 = prev[k - 1] + cost;
+			var v i64 = del;
+			if (ins < v) { v = ins; }
+			if (sub < v) { v = sub; }
+			cur[k] = v;
+			k = k + 1;
+		}
+		// swap prev and cur
+		var tmp *i64 = prev;
+		prev = cur;
+		cur = tmp;
+		i = i + 1;
+	}
+	return prev[b.len];
+}
+
+fn did_you_mean(name str) str {
+	keywords_setup();
+	var best str;
+	var best_d i64 = 3;   // threshold: only suggest ≤ 2 edits
+	var k i64 = 0;
+	while (k < 22) {
+		var d i64 = lev_dist(name, keywords[k]);
+		if (d > 0 && d <= 2 && d < best_d) {
+			best = keywords[k];
+			best_d = d;
+		}
+		k = k + 1;
+	}
+	return best;
+}
+
 struct Scope;
 struct VarScope;
 
@@ -130,6 +220,7 @@ fn macro_decl_param(name str, pos i64) *Var {
 	vsc.next = scope_root.vars;
 	vsc.name = name;
 	vsc.varp = v;
+	vsc.pos = pos;
 	scope_root.vars = vsc;
 	return v;
 }
@@ -185,6 +276,7 @@ struct VarScope {
 	next *VarScope,
 	name str,
 	varp *Var,
+	pos  i64,
 }
 
 struct Scope {
@@ -216,8 +308,46 @@ fn find_var(name str) *Var {
 fn declare_var(name str, ty *Type, pos i64) *Var {
 	var vs *VarScope = scope_root.vars;
 	while (vs as i64 != 0) {
-		if (str_eq(vs.name, name)) { error_at(pos, "redeclaration"); }
+		if (str_eq(vs.name, name)) {
+			// Attach the previous declaration's position so the
+			// error points at both spots, like Rust/Clang.
+			diag_secondary(vs.pos, "previous declaration here");
+			var b Buf;
+			fmt_str(&b, "redeclaration of '");
+			fmt_str(&b, name);
+			fmt_str(&b, "'");
+			error_at(pos, buf_str(&b));
+		}
 		vs = vs.next;
+	}
+	// Shadow check: same name in an outer scope. We only warn when the
+	// outer scope is strictly outside the current one — params and locals
+	// can reuse the same name, but a local that hides a param is worth
+	// pointing out. Globals are exempted: a local that happens to share
+	// a global's name is the user's choice, and warning would be noise.
+	if (cur_func as i64 != 0) {
+		var s *Scope = scope_root.next;
+		var shadowed_pos i64 = -1;
+		while (s as i64 != 0) {
+			var ovs *VarScope = s.vars;
+			while (ovs as i64 != 0) {
+				if (str_eq(ovs.name, name) && !ovs.varp.is_global) {
+					shadowed_pos = ovs.pos;
+					break;
+				}
+				ovs = ovs.next;
+			}
+			if (shadowed_pos != -1) { break; }
+			s = s.next;
+		}
+		if (shadowed_pos != -1) {
+			diag_secondary(shadowed_pos, "previous declaration was here");
+			var sb Buf;
+			fmt_str(&sb, "variable '");
+			fmt_str(&sb, name);
+			fmt_str(&sb, "' shadows an outer one");
+			warn_at(pos, buf_str(&sb));
+		}
 	}
 	var v *Var = arena_alloc(sizeof(Var), 8) as *Var;
 	v.name = name;
@@ -235,6 +365,7 @@ fn declare_var(name str, ty *Type, pos i64) *Var {
 	vsc.next = scope_root.vars;
 	vsc.name = name;
 	vsc.varp = v;
+	vsc.pos = pos;
 	scope_root.vars = vsc;
 	return v;
 }
@@ -599,7 +730,19 @@ fn parse_primary(t **Token) *Node {
 
 		// variable reference
 		var v *Var = find_var(name);
-		if (v as i64 == 0) { error_at(p, "undefined variable"); }
+		if (v as i64 == 0) {
+			// Suggest the nearest keyword if the typo is within reach.
+			// The hint prints on stderr, then the error follows — the
+			// caret/line of the error is the one the user fixes, the
+			// hint is just a nudge.
+			var sug str = did_you_mean(name);
+			if (sug.len > 0) {
+				eprint("hint: did you mean '");
+				eprint(sug);
+				eprint("'?\n");
+			}
+			error_at(p, "undefined variable");
+		}
 		var n *Node = new_node(ND_VAR, p);
 		n.varp = v;
 		return n;
@@ -1585,6 +1728,8 @@ fn parse(tok *Token) *Unit {
 			opt_func(f);
 			elide_bounds(f);
 			regalloc(f);
+			count_reads(f);
+			warn_unused(f);
 
 			var off i64 = (f.nsaved as i64) * 8;
 			var v *Var = f.locals;
