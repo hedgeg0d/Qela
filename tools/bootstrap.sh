@@ -199,6 +199,38 @@ EOF
 	fail "fmt is not idempotent, or run does not forward the exit status"
 printf '    ok\n'
 
+step "stdin compile and shebang"
+cat > "$tmp2/btcrash.qela" <<'EOF'
+fn deep(n i64) i64 {
+	if (n == 0) { assert(n > 0, "recursion went wrong"); }
+	return n;
+}
+fn main() int {
+	return deep(0) as int;
+}
+EOF
+( printf 'fn main() int { return 5; }\n' |
+    "$root/$OUT/s2" run -; [ $? -eq 5 ] ) ||
+	fail "qela run - does not compile and run stdin"
+( cd "$tmp2" &&
+  printf '#!%s run\nfn main() int { return 6; }\n' "$root/$OUT/s2" > sheb.qela &&
+  chmod +x sheb.qela &&
+  ./sheb.qela; [ $? -eq 6 ] ) ||
+	fail "a shebang file does not run through qela"
+printf '    ok\n'
+
+step "panic backtrace"
+if out=$(cd "$tmp2" && "$root/$OUT/s2" run btcrash.qela 2>&1); then
+	fail "a failing assert must panic"
+elif printf '%s' "$out" | grep -q 'recursion went wrong' &&
+     printf '%s' "$out" | grep -q 'deep' &&
+     printf '%s' "$out" | grep -q 'main'; then
+	: # the assert message and both frame names are on stderr
+else
+	fail "panic backtrace is missing the message or a frame name"
+fi
+printf '    ok\n'
+
 step "language server"
 QELA="$OUT/s2" python3 tools/lsp-test.py ||
 	fail "the language server fails the scripted conversation"

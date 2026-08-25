@@ -64,6 +64,9 @@ for f in srcql/*.qela std/*.qela; do
 		if strip "$f" | grep -qE '(^|[^_[:alnum:]])asm *\('; then
 			report "$f:" "asm(...) is not allowed in stage1's own sources"
 		fi
+		if strip "$f" | grep -qE '(^|[^_[:alnum:]])assert *\(|(^|[^_[:alnum:]])panic *\('; then
+			report "$f:" "assert/panic is not allowed in stage1's own sources"
+		fi
 		;;
 	esac
 

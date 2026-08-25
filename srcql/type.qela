@@ -988,6 +988,21 @@ fn type_asm(n *Node) {
 	n.ty = ty_i64;
 }
 
+// The condition may be any scalar expression; the message has to be a string
+// literal, because the panic stub is jumped to rather than called with
+// arguments.
+fn type_assert(n *Node) {
+	if (n.nargs != 2) { error_at(n.pos, "assert takes a condition and a message"); }
+	var msg *Node = n.args.next;
+	if (msg.kind != ND_STRLIT) { error_at(msg.pos, "assert message must be a string literal"); }
+	n.cond = to_value(n.args);
+	if (!is_numeric(n.cond.ty)) {
+		error_at(n.cond.pos, "assert condition must be numeric");
+	}
+	n.args = msg;
+	n.ty = ty_void;
+}
+
 fn add_type(n *Node) {
 	if (n as i64 == 0) { return; }
 	if (n.typed) { return; }
@@ -1167,6 +1182,7 @@ fn add_type(n *Node) {
 	if (k == ND_CALL) { type_call(n); return; }
 	if (k == ND_SYSCALL) { type_syscall(n); return; }
 	if (k == ND_ASM) { type_asm(n); return; }
+	if (k == ND_ASSERT) { type_assert(n); return; }
 
 	if (n.ty as i64 == 0) { n.ty = ty_void; }
 }

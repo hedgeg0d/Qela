@@ -142,6 +142,7 @@ let ND_SIZEOF    = 48;
 let ND_ZERO      = 49;
 let ND_FUNCADDR  = 50;
 let ND_ASM       = 51;
+let ND_ASSERT    = 52;
 
 struct Var;
 struct Node;

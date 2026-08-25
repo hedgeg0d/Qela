@@ -144,6 +144,21 @@ fn lex(src str, base i64) *Token {
 	lex_tail = &head;
 	var i i64 = 0;
 
+	// A shebang line ("#!...") only makes sense at offset zero; `#` anywhere
+	// else stays an error. In fmt mode it is kept as a comment token so the
+	// formatter does not silently drop a script's first line.
+	if (src.len >= 2 && src.ptr[0] == '#' && src.ptr[1] == '!') {
+		var cstart i64 = i;
+		while (i < src.len && src.ptr[i] != '\n') { i = i + 1; }
+		if (lex_keep_comments) {
+			var ct *Token = push_token(TK_COMMENT, cstart);
+			var cs str;
+			cs.ptr = src.ptr + cstart;
+			cs.len = i - cstart;
+			ct.text = cs;
+		}
+	}
+
 	while (i < src.len) {
 		if (is_space(src.ptr[i])) { i = i + 1; continue; }
 
