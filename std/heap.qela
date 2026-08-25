@@ -14,7 +14,12 @@ fn heap_morecore(nu i64) *Header {
 	var n i64 = nu;
 	if (n < 4096) { n = 4096; }
 	var bytes i64 = n * sizeof(Header);
-	var r i64 = syscall(9, 0, bytes, 3, 34, -1, 0);
+	var r i64 = 0;
+	$if (TARGET == "arm64") {
+		r = syscall(222, 0, bytes, 3, 34, -1, 0);
+	} $else {
+		r = syscall(9, 0, bytes, 3, 34, -1, 0);
+	}
 	if (r < 0 && r > -4096) { return 0 as *Header; }
 	var p *Header = r as *Header;
 	p.size = n;
