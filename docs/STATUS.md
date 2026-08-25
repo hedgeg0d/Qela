@@ -7,13 +7,13 @@ Updated 2026-08-04. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **264 480 B** |
-| S2 under `upx --lzma` (measured 2026-08-04) | 60 940 B, ~5.8% of the 1 MiB budget |
-| S2 under xz -9 (proxy for upx) | 64 088 B |
-| stage1 sources | 10 644 lines of Qela |
+| **S2 — the shipped compiler, Qela compiled by itself** | **270 560 B** |
+| S2 under `upx --lzma` (measured 2026-08-04) | 61 996 B, ~6% of the 1 MiB budget |
+| S2 under xz -9 (proxy for upx) | 65 376 B |
+| stage1 sources | 10 869 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
 
-Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 94-test corpus under S2, the embedded stdlib resolving outside the source tree,
+Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 96-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
 backtrace, interpolation and the repl, the compiler flags (`-g`,
 `--backtrace`, `--no-bounds-checks`, `--dump-std`), and a scripted language
@@ -130,6 +130,29 @@ that print to stdout, which the runner compares along with the exit code.
 **`std/math.qela` and `std/sort.qela`.** `abs`/`min`/`max` and a Hoare
 quicksort over `[]i64`, both written in the bootstrap subset.
 `tests/sort.qela` runs under S2.
+
+**First-class functions (2026-08-04).** A function name used as a value is
+its address; a variable or parameter may carry it, be assigned and be called
+through it: `var cb fn(i64, i64) i64 = add; cb(1, 2)`. The signature is a
+type — `fn(t1, t2) ret` — stored as the return type in `base` and the
+parameters as a `Member` list, 8 bytes / align 8 like any pointer, compared
+structurally in `same_type` and substituted through in `tsubst`, so generic
+arguments can be function types. A call through a value resolves the
+signature off the variable's type instead of the function table, so it is a
+single path, and the address goes in R10 (never an argument register)
+*after* the arguments are set up: a call inside the argument list would
+clobber R10, and a promoted target can only live in a callee-saved register
+(an indirect call makes the function non-leaf, so the caller-saved pool is
+out). Functions that use a function value are rejected: the generic — the
+table has no monomorphized entry to take an address of — and any parameter
+wider than one word (the indirect path is register-only). A function type
+takes at most six parameters and cannot return an aggregate wider than 16
+bytes. Pinned by `tests/fnptr.qela` (values, reassignment, passing and
+returning, six parameters) and `tests/fnptr_sort.qela`, and demonstrated in
+`std/sortcmp.qela` — the same quicksort with a caller-supplied comparator.
+No closures: only the address is carried, so a `cmp` must be a real
+function, not a capture. Stage1-only, like every feature new since the C
+bootstrap froze; costs +6 KB in S2.
 
 **Language.** i8–u64, bool, int/uint/usize, `f32`/`f64` (`float`/`double`);
 pointers, arrays, slices, `str`; implicit integer casts widen only, and only
