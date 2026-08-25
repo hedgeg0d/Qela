@@ -1,0 +1,11 @@
+// stage1-only
+// expect-exit: 0
+// expect-warn: variable 'x' shadows an outer one
+fn main() int {
+	var x int = 1;
+	{
+		var x int = 2;
+		x = x + 1;
+	}
+	return 0;
+}

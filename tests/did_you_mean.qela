@@ -1,0 +1,6 @@
+// stage1-only
+// expect-compile-error
+// expect-warn: did you mean 'return'
+fn main() int {
+	retrun 0;
+}
