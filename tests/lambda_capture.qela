@@ -1,0 +1,9 @@
+// expect-compile-error
+// stage1-only
+// Anonymous functions have no closures: a lambda cannot read a local of the
+// enclosing function. Globals and the lambda's own parameters are fine.
+fn main() int {
+	var x i64 = 5;
+	var f = fn () i64 { return x; };
+	return f();
+}

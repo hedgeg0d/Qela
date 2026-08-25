@@ -108,6 +108,13 @@ var scope_root *Scope;
 var cur_func *Func;
 var global_vars *Var;
 
+// The innermost lambda's own scope and a counter for its hidden name. Both
+// are nonzero/active only while a lambda body is being parsed: a variable
+// resolved outside that scope chain but inside the enclosing function is a
+// capture, which lambdas do not support.
+var lambda_scope *Scope;
+var lambda_seq int;
+
 // Set while parsing the body of a `defer`: return, break and continue are
 // rejected there, because codegen runs defer bodies while unwinding and
 // another return would re-enter the same defer forever.
@@ -671,6 +678,12 @@ fn parse_primary(t **Token) *Node {
 		n.typeval = ty;
 		return n;
 	}
+	// `fn (params) { body }` as an expression: an anonymous function.
+	if (tok_consume(t, "fn")) {
+		var p i64 = (*t).pos;
+		if (!tok_eq(*t, "(")) { error_at((*t).pos, "expected '(' after 'fn'"); }
+		return parse_lambda(t, p);
+	}
 	if ((*t).kind == TK_IDENT) {
 		var name str = (*t).text;
 		var p i64 = (*t).pos;
@@ -781,6 +794,30 @@ fn parse_primary(t **Token) *Node {
 			var fa *Node = new_node(ND_FUNCADDR, p);
 			fa.name = name;
 			return fa;
+		}
+		// Lambdas carry no environment: a variable from the enclosing
+		// function is a capture and must be an error, so resolve it against
+		// the lambda's own scope chain (globals and the lambda's own
+		// parameters and locals are fine).
+		if (lambda_scope as i64 != 0 && !v.is_global) {
+			var found bool = false;
+			var s *Scope = scope_root;
+			while (s as i64 != 0) {
+				var vs *VarScope = s.vars;
+				while (vs as i64 != 0) {
+					if (vs.varp as i64 == v as i64) { found = true; }
+					vs = vs.next;
+				}
+				if (s as i64 == lambda_scope as i64) { break; }
+				s = s.next;
+			}
+			if (!found) {
+				var mb Buf;
+				fmt_str(&mb, "a lambda cannot capture '");
+				fmt_str(&mb, name);
+				fmt_str(&mb, "' (no closures)");
+				error_at(p, buf_str(&mb));
+			}
 		}
 		var n *Node = new_node(ND_VAR, p);
 		n.varp = v;
@@ -1432,6 +1469,66 @@ fn parse_function(t **Token) *Func {
 	return f;
 }
 
+// `fn (params) { body }` in an expression: an anonymous function. It is
+// compiled to a hidden function of its own and this node is the address of
+// that function, so the value is an ordinary fn value. No captures: a
+// variable from an enclosing function is rejected (there is no environment
+// to carry), which also means the return type can be inferred from the
+// body's returns by type.qela.
+fn parse_lambda(t **Token, p i64) *Node {
+	var b Buf;
+	fmt_str(&b, "_$lambda");
+	fmt_i64(&b, lambda_seq as i64);
+	lambda_seq = lambda_seq + 1;
+	var name str = buf_str(&b);
+
+	var f *Func = arena_alloc(sizeof(Func), 8) as *Func;
+	f.name = name;
+	f.ret = 0 as *Type;
+	f.pos = p;
+	var saved_func *Func = cur_func;
+	cur_func = f;
+	type_set_fn(f);
+
+	enter_scope();
+	var saved_lscope *Scope = lambda_scope;
+	lambda_scope = scope_root;
+	tok_expect(t, "(");
+	var nparams int = 0;
+	var rwords int = 0;
+	while (!tok_eq(*t, ")")) {
+		if (nparams > 0) { tok_expect(t, ","); }
+		var pn str = (*t).text;
+		var pp i64 = (*t).pos;
+		*t = (*t).next;
+		var pty *Type = parse_type(t);
+		var is2word bool = is_aggregate(pty) && pty.size > 8 && pty.size <= 16;
+		if (is2word) { rwords = rwords + 2; } else { rwords = rwords + 1; }
+		var v *Var = declare_var(pn, pty, pp);
+		v.by_ref = is_aggregate(pty) && pty.size > 16;
+		if (rwords > 6 || nparams >= 6) {
+			error_at(pp, "a lambda takes at most six one-word parameters");
+		}
+		set_func_param(f, nparams, v);
+		nparams = nparams + 1;
+	}
+	f.nparams = nparams;
+	tok_expect(t, ")");
+
+	if (!tok_eq(*t, "{")) { f.ret = parse_type(t); }
+	f.body = parse_block(t);
+	leave_scope();
+	lambda_scope = saved_lscope;
+	cur_func = saved_func;
+	type_set_fn(saved_func);
+
+	add_func(f);
+
+	var n *Node = new_node(ND_FUNCADDR, p);
+	n.name = name;
+	return n;
+}
+
 fn parse_struct(t **Token) {
 	tok_expect(t, "struct");
 	var name str = (*t).text;
@@ -1755,11 +1852,14 @@ fn parse(tok *Token) *Unit {
 		}
 		var nf *Func = parse_function(&tok);
 		// Appending through funcs_tail keeps mid-parse instantiations
-		// (a generic call typed by a var initializer) in the list: the
-		// local chain alone would orphan them on the next append.
+		// (a generic call typed by a var initializer) and lambdas in the
+		// list: the local chain alone would orphan them on the next append.
 		if (funcs_tail as i64 == 0) { head.next = nf; }
 		else { funcs_tail.next = nf; }
 		funcs_tail = nf;
+		// A lambda parsed inside this function may have seeded the list
+		// before head.next was set; anchor the chain on the first entry.
+		if (head.next as i64 == 0) { head.next = all_funcs; }
 		all_funcs = head.next;
 	}
 	leave_scope();

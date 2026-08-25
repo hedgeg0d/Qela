@@ -7,13 +7,13 @@ Updated 2026-08-04. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **270 560 B** |
+| **S2 — the shipped compiler, Qela compiled by itself** | **273 224 B** |
 | S2 under `upx --lzma` (measured 2026-08-04) | 61 996 B, ~6% of the 1 MiB budget |
 | S2 under xz -9 (proxy for upx) | 65 376 B |
 | stage1 sources | 10 869 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
 
-Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 96-test corpus under S2, the embedded stdlib resolving outside the source tree,
+Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 98-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
 backtrace, interpolation and the repl, the compiler flags (`-g`,
 `--backtrace`, `--no-bounds-checks`, `--dump-std`), and a scripted language
@@ -153,6 +153,24 @@ returning, six parameters) and `tests/fnptr_sort.qela`, and demonstrated in
 No closures: only the address is carried, so a `cmp` must be a real
 function, not a capture. Stage1-only, like every feature new since the C
 bootstrap froze; costs +6 KB in S2.
+
+**Lambdas (2026-08-04).** `fn (x i64) i64 { return x * x; }` is an anonymous
+function literal: the parser hoists it to a hidden top-level function named
+`_$lambda<N>` (`parse_lambda` in `srcql/parse.qela`, added through
+`add_func` so a lambda inside the very first function cannot orphan the
+function chain — the main parse loop re-anchors `head.next` on the first
+entry now), and the expression's value is the function's address, so a
+lambda is just a function value: assign it, pass it inline, return it. Its
+return type is inferred — a body pass (`infer_lambda_ret` in
+`srcql/type.qela`) collects the `ND_RET`s and checks them against each
+other, and `func_type_of`/`type_func` call it before `type_ret`, which
+needs a concrete return type. No closures: reading a local of the enclosing
+function is a compile-time error, and globals and the lambda's own
+parameters are the only names it can reach. `count_reads` now counts a call
+through a function-typed variable as a read, so the unused-variable warning
+stays honest. Pinned by `tests/lambda.qela` (values, zero/multi-parameter,
+returned, inline) and `tests/lambda_capture.qela` (reject). Costs +2.7 KB
+in S2.
 
 **Language.** i8–u64, bool, int/uint/usize, `f32`/`f64` (`float`/`double`);
 pointers, arrays, slices, `str`; implicit integer casts widen only, and only
