@@ -69,7 +69,7 @@ var gc_stw_requested i64 = 0;
 var gc_threads [64]GcThread;
 tvar gc_my_slot i64 = -1;
 
-fn gc_lock() { while (!atomic_cas(&gc_alloc_lock, 0, 1)) { } }
+fn gc_lock() { while (!atomic_cas(&gc_alloc_lock, 0, 1)) { sys_sched_yield(); } }
 fn gc_unlock() { atomic_store(&gc_alloc_lock, 0); }
 
 fn gc_init() {
@@ -86,7 +86,7 @@ fn gc_init() {
 // thread that happens to trigger it first.
 fn gc_thread_enter() {
 	gc_init();
-	while (!atomic_cas(&gc_reg_lock, 0, 1)) { }
+	while (!atomic_cas(&gc_reg_lock, 0, 1)) { sys_sched_yield(); }
 	var i int = 0;
 	while (i < GC_MAX_THREADS) {
 		if (gc_threads[i].active == 0) {
@@ -105,7 +105,7 @@ fn gc_thread_enter() {
 
 fn gc_thread_exit() {
 	if (gc_my_slot < 0) { return; }
-	while (!atomic_cas(&gc_reg_lock, 0, 1)) { }
+	while (!atomic_cas(&gc_reg_lock, 0, 1)) { sys_sched_yield(); }
 	gc_threads[gc_my_slot as int].active = 0;
 	atomic_store(&gc_reg_lock, 0);
 	gc_my_slot = -1;
