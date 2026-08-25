@@ -585,9 +585,13 @@ has no function values.
 An `extern` function declares a body that lives elsewhere — in a C file the
 system linker will pull in. `extern fn f(a i64) i64;` (no body) stays an
 undefined symbol for the linker to resolve; `extern fn f(a i64) i64 { ... }`
-(with a body) exports `f` for other objects to call. `str` crosses the ABI
+(with a body) exports `f` for other objects to call. Data crosses too:
+`extern var x i64;` imports a C global, `extern var x i64 = K;` exports one
+(the type is mandatory, `extern let` is an error, and other globals are local
+to the object). `str` crosses the ABI
 as a `{ptr, len}` pair — a two-word C struct; aggregates over 16 bytes pass
-by pointer as always. See `qela -c` in §20.
+by pointer as always, and struct layout is natural order, so a Qela `struct`
+and the matching C `struct` alias each other. See `qela -c` in §20.
 
 ## 10. Pointers and memory
 
@@ -1311,14 +1315,24 @@ runnable binary. The system linker joins it to C, either way:
 
 ```sh
 qela -c lib.qela -o lib.o
-gcc -no-pie -o app app.c lib.o        # C main calling Qela
+gcc -o app app.c lib.o                 # C main calling Qela
 qela -c app.qela -o app.o
-gcc -no-pie -o app app.o impl.c       # Qela main calling C
+gcc -o app app.o impl.c                # Qela main calling C
 ```
 
+(The `.o` is PIE-safe, so plain `gcc` works; `-no-pie` still links too.)
 No startup stub is emitted and no `main` is required, so a Qela file of
 `extern fn` bodies compiles to a plain library. A call to a bodyless extern
 is a compile error in ordinary mode — externs exist only for `-c`.
+
+The ABI is SysV, no marshalling: `i64` is `long long`, `bool` is `_Bool`,
+`f64` is `double`, and `str` is a `{ptr, len}` two-word C struct. A Qela
+`struct`'s layout is natural field order — the same as C's — so structs
+alias across the boundary; aggregates over 16 bytes pass by pointer.
+`extern var` imports (`extern var x i64;`) and exports (`extern var x i64
+= K;`) globals; imports and exports link statically (extern data is resolved
+with PC-relative relocations, no GOT, so it does not link against shared
+libraries). Bounds checks and `assert` work in object mode too.
 
 ## 21. Raw machine code
 
