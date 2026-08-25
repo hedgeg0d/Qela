@@ -1,4 +1,5 @@
 // stage1-only
+// x86-only
 // expect-exit: 225
 // expect-out: 481
 // The encodings in docs/ASM.md, exercised end to end: mov imm32/reg,
