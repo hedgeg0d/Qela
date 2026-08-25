@@ -54,6 +54,10 @@ fn ra_saved(i int) int {
 }
 
 fn ra_nreg(f *Func) int {
+	// The free/saved pools below are x86 encodings (RBX/R8-R15). ARM64 needs
+	// its own callee-saved pool (AAPCS64's x19-x28) before promotion is safe
+	// for that target; until then every local goes to a frame slot.
+	if (opt_target == TARGET_ARM64) { return 0; }
 	return RA_NSAVED + ra_nfree(f);
 }
 
