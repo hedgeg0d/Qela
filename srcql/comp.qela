@@ -358,6 +358,12 @@ let R13 = 13;
 let R14 = 14;
 let R15 = 15;
 
+// AAPCS64's IP0/IP1, the ARM64 counterparts of the caller-saved leaf pool:
+// dead between calls, so a leaf function may promote a local into them.
+let X16 = 16;
+let X17 = 17;
+let X19 = 19;   // bottom of the ARM64 callee-saved block (x19-x28)
+
 // Forward: Image below carries the object-mode relocation lists.
 struct Reloc;
 

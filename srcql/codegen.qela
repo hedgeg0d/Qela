@@ -2254,7 +2254,7 @@ fn reg_used(f *Func, reg int) bool {
 fn saved_slot(f *Func, reg int) i64 {
 	var k i64 = 0;
 	var i int = 0;
-	while (i < RA_NSAVED) {
+	while (i < ra_nsaved()) {
 		var r int = ra_saved(i);
 		if (reg_used(f, r)) {
 			k = k + 1;
@@ -2449,9 +2449,12 @@ fn gen_epilogue(pos i64) {
 
 fn gen_restore() {
 	var i int = 0;
-	while (i < RA_NSAVED) {
+	while (i < ra_nsaved()) {
 		var r int = ra_saved(i);
-		if (reg_used(gen_fn, r)) { ld_local(r, saved_slot(gen_fn, r)); }
+		if (reg_used(gen_fn, r)) {
+			if (opt_target == TARGET_ARM64) { arm64_ld_local(r, saved_slot(gen_fn, r)); }
+			else { ld_local(r, saved_slot(gen_fn, r)); }
+		}
 		i = i + 1;
 	}
 }
@@ -2588,9 +2591,12 @@ fn gen_func(f *Func) {
 
 	if (!f.naked) {
 		var si int = 0;
-		while (si < RA_NSAVED) {
+		while (si < ra_nsaved()) {
 			var sr int = ra_saved(si);
-			if (reg_used(f, sr)) { st_local(saved_slot(f, sr), sr); }
+			if (reg_used(f, sr)) {
+				if (opt_target == TARGET_ARM64) { arm64_st_local(saved_slot(f, sr), sr); }
+				else { st_local(saved_slot(f, sr), sr); }
+			}
 			si = si + 1;
 		}
 
@@ -2613,7 +2619,10 @@ fn gen_func(f *Func) {
 					i = i + 1;
 					continue;
 				}
-				if (v.has_reg) { mov_reg_reg(v.reg, call_reg(ri)); }
+				if (v.has_reg) {
+					if (opt_target == TARGET_ARM64) { arm64_mov_reg(v.reg, call_reg(ri)); }
+					else { mov_reg_reg(v.reg, call_reg(ri)); }
+				}
 				else if (opt_target == TARGET_ARM64) { arm64_st_local(v.offset as i64, call_reg(ri)); }
 				else { st_local(v.offset as i64, call_reg(ri)); }
 				ri = ri + 1;
