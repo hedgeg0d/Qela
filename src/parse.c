@@ -5,6 +5,7 @@ struct VarScope {
 	VarScope *next;
 	Str       name;
 	Var      *var;
+	isize     pos;
 };
 
 typedef struct Scope Scope;
@@ -80,7 +81,10 @@ static Var *globals;
 
 static Var *declare(Str name, Type *ty, isize pos) {
 	for (VarScope *v = scope->vars; v; v = v->next)
-		if (str_eq(v->name, name)) error_at(pos, "redeclaration of '%s'", name);
+		if (str_eq(v->name, name)) {
+			diag_secondary(v->pos, "previous declaration here");
+			error_at(pos, "redeclaration of '%s'", name);
+		}
 
 	Var *var = anew(Var);
 	*var = (Var){.name = name, .ty = ty};
@@ -94,7 +98,7 @@ static Var *declare(Str name, Type *ty, isize pos) {
 	}
 
 	VarScope *vs = anew(VarScope);
-	*vs = (VarScope){.next = scope->vars, .name = name, .var = var};
+	*vs = (VarScope){.next = scope->vars, .name = name, .var = var, .pos = pos};
 	scope->vars = vs;
 	return var;
 }
