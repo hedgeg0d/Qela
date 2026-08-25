@@ -716,6 +716,11 @@ fn stmt_assign(n *Node) bool {
 	    r.lhs.varp as i64 == n.lhs.varp as i64 && r.rhs as i64 != 0) {
 		if (stmt_update(n.lhs, r.kind, r.rhs)) { return true; }
 	}
+	// Below this point every path is a native x86 instruction issued straight
+	// from the frontend, not through IR (mov_reg_imm/rbp_mem+b4) -- ARM64
+	// falls through to the general codegen path instead, which does go
+	// through IR_MOV/IR_STORE.
+	if (opt_target == TARGET_ARM64) { return false; }
 	if (n.rhs.kind != ND_NUM || !fits_imm32(n.rhs.val)) { return false; }
 	if (n.rhs.val == 0 && !n.lhs.varp.has_reg) { return false; }
 	if (n.lhs.varp.has_reg) {
@@ -2192,7 +2197,8 @@ fn gen_epilogue(pos i64) {
 	if (gen_fn.extern && gen_fn.ret as i64 != 0 && is_float(gen_fn.ret)) {
 		gpr_to_xmm(0, RAX, gen_fn.ret.size);
 	}
-	if (!gen_frameless) { b1(0xc9); }
+	if (!gen_frameless && opt_target == TARGET_ARM64) { arm64_leave_frame(); }
+	else if (!gen_frameless) { b1(0xc9); }
 	ir_ret(pos);
 }
 
@@ -2286,7 +2292,9 @@ fn gen_func(f *Func) {
 	// A naked function has no frame by definition, and its body ends with
 	// its own ret or iretq: nothing may be emitted before or after it.
 	gen_frameless = f.naked || (f.leaf && f.stack_size == 0 && f.n_stack_args == 0);
-	if (!gen_frameless) {
+	if (!gen_frameless && opt_target == TARGET_ARM64) {
+		arm64_enter_frame(f.stack_size as i64);
+	} else if (!gen_frameless) {
 		push_reg(RBP);
 		depth = depth - 1;
 		mov_reg_reg(RBP, RSP);
@@ -2305,10 +2313,12 @@ fn gen_func(f *Func) {
 
 		var ri int = 0;
 		if (f.extern) {
+			if (opt_target == TARGET_ARM64) { die("error: -target arm64 does not support extern functions yet"); }
 			gen_extern_params(f);
 		} else {
 			if (f.ret_slot as i64 != 0) {
-				st_local(f.ret_slot.offset as i64, call_reg(ri));
+				if (opt_target == TARGET_ARM64) { arm64_st_local(f.ret_slot.offset as i64, call_reg(ri)); }
+				else { st_local(f.ret_slot.offset as i64, call_reg(ri)); }
 				ri = ri + 1;
 			}
 			var i int = 0;
@@ -2321,10 +2331,12 @@ fn gen_func(f *Func) {
 					continue;
 				}
 				if (v.has_reg) { mov_reg_reg(v.reg, call_reg(ri)); }
+				else if (opt_target == TARGET_ARM64) { arm64_st_local(v.offset as i64, call_reg(ri)); }
 				else { st_local(v.offset as i64, call_reg(ri)); }
 				ri = ri + 1;
 				if (is_aggregate(v.ty) && !v.by_ref && v.ty.size > 8) {
-					st_local((v.offset as i64) - 8, call_reg(ri));
+					if (opt_target == TARGET_ARM64) { arm64_st_local((v.offset as i64) - 8, call_reg(ri)); }
+					else { st_local((v.offset as i64) - 8, call_reg(ri)); }
 					ri = ri + 1;
 				}
 				i = i + 1;
@@ -2499,6 +2511,8 @@ fn reset_code() {
 	br_n = 0;
 	br_at.n = 0;
 	br_grew = false;
+	arm64_br_n = 0;
+	arm64_br_at.n = 0;
 	bounds_checks.n = 0;
 	assert_sites.n = 0;
 	assert_msgs.n = 0;
