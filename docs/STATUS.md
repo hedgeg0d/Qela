@@ -198,6 +198,23 @@ keeps consuming `.`. Costs +392 B in S2. Pinned by `tests/dotcall.qela`
 (chained calls, field/method name sharing). Stage1-only: the rewrite lives
 only in `srcql/parse.qela`, not the frozen `src/parse.c`.
 
+**Pointer-receiver dot-calls (2026-08-07).** The dot-call flag (`Node.dotcall`)
+lets `type_call` match the receiver to the callee's first parameter by
+shape: a value receiver for a `*T` first parameter becomes an `&` (only
+when the receiver is addressable -- a variable, member, index, deref,
+slice, or a struct/enum literal, which materialises in a temp; a call
+result is rejected with "cannot call a method with a pointer first
+parameter on a temporary", the same class of error Go gives), and a
+pointer receiver for a `T` first parameter becomes a `*`. So `o.edit(1)`
+works for both `fn edit(o *Op, n i64)` and `fn edit(o Op, n i64)`, with
+the pointer form mutating `o` and the value form passing a copy. Plain
+calls are untouched: `edit(o)` with a value `o` for a `*Op` parameter is
+still a type error, so the sugar is opt-in. Both directions verified with
+aggregates above and below 16 bytes (by-ref and by-value argument paths).
+Costs +872 B in S2. Pinned by `tests/dotcallptr.qela` (both directions,
+struct-literal receiver) and `tests/dotcallptr_reject.qela` (plain call
+with a value receiver still rejected).
+
 **`~` opt-in dynamic typing (2026-08-05).** `var ~n = expr;` declares a
 local whose type is checked at runtime instead of compile time: it can be
 reassigned across unrelated types (`n = 5; n = "hi"; n = SomeStruct{...};`),

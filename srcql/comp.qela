@@ -187,6 +187,7 @@ struct Node {
 	ty      *Type,
 	typed   bool,
 	nobounds bool,
+	dotcall bool,
 	next    *Node,
 	lhs     *Node,
 	rhs     *Node,
