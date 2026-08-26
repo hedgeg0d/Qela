@@ -1,0 +1,18 @@
+// stage1-only
+// arm64-only
+// expect-exit: 42
+// `entry name;` picks the ELF entry point and suppresses the call-main
+// stub; the naked entry does its own exit syscall.
+entry start;
+
+fn naked start() {
+	asm($rel kmain);                  // bl kmain
+	asm(0xc0, 0x03, 0x5f, 0xd6);      // ret
+}
+
+fn kmain() int {
+	asm(0x40, 0x05, 0x80, 0xd2);      // mov x0, #42
+	asm(0xc8, 0x0b, 0x80, 0xd2);      // mov x8, #94 (exit_group)
+	asm(0x01, 0x00, 0x00, 0xd4);      // svc #0
+	return 0;
+}
