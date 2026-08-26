@@ -445,6 +445,8 @@ fn lsp_sig(b *Buf, f *Func) {
 		else if (i == 3) { v = f.p3; }
 		else if (i == 4) { v = f.p4; }
 		else if (i == 5) { v = f.p5; }
+		else if (i == 6) { v = f.p6; }
+		else if (i == 7) { v = f.p7; }
 		fmt_str(b, type_name(v.ty));
 		i = i + 1;
 	}
