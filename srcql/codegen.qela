@@ -2212,9 +2212,11 @@ fn reset_code() {
 }
 
 fn emit_code(u *Unit, main_fn *Func, panic_id int, hdr i64) {
-	// rbp is not guaranteed zero at process entry, so the backtrace walker
+	// rbp is not guaranteed zero at process entry; the backtrace walker
 	// needs a sentinel main returns into.
-	b1(0x48); b1(0x31); b1(0xed);             // xor rbp, rbp
+	if (opt_backtrace) {
+		b1(0x48); b1(0x31); b1(0xed);         // xor rbp, rbp
+	}
 	if (main_fn.nparams == 2) {
 		b1(0x48); b1(0x8b); b1(0x3c); b1(0x24);
 		b1(0x48); b1(0x8d); b1(0x74); b1(0x24); b1(8);
@@ -2327,14 +2329,6 @@ fn codegen(u *Unit, img *Image) {
 		buf_u8(&rodata, 0);
 		s = s.next;
 	}
-	// The bounds-check panic message lives right after the user strings, so
-	// the shared panic stub writes real text instead of whatever happens to
-	// be at the start of rodata. It goes before the alignment pad: the data
-	// segment must stay word-aligned or the GC's word reads miss every
-	// pointer in it. The stub's length must match: 21.
-	var pmsg str = "index out of bounds\n";
-	bytes_off[panic_id] = rodata.n;
-	buf_bytes(&rodata, pmsg.ptr, pmsg.len);
 	while ((rodata.n & 7) != 0) { buf_u8(&rodata, 0); }
 
 	s = u.strs;
@@ -2401,6 +2395,18 @@ fn codegen(u *Unit, img *Image) {
 			ft = ft.next;
 		}
 	}
+
+	// The bounds-check panic message goes here, after the pass loop, and
+	// only when a bounds check actually exists: a program without arrays
+	// carries no panic machinery at all. It has to stay inside the aligned
+	// rodata, or the data segment (and every GC word read in it) would be
+	// misaligned. The stub's length must match: 21.
+	if (bounds_checks.n != 0) {
+		var pmsg str = "index out of bounds\n";
+		bytes_off[panic_id] = rodata.n;
+		buf_bytes(&rodata, pmsg.ptr, pmsg.len);
+	}
+	while ((rodata.n & 7) != 0) { buf_u8(&rodata, 0); }
 
 	var dbase i64 = ELF_BASE + SEG_GAP + hdr + code.n + rodata.n;
 	patch_abs(&gc_base_refs, dbase);

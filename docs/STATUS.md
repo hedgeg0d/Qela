@@ -10,7 +10,7 @@ Updated 2026-08-03. Read `BOOTSTRAP.md` first; it constrains everything below.
 | **S2 — the shipped compiler, Qela compiled by itself** | **193 008 B** |
 | S2 under xz -9 (proxy for upx --lzma) | ~44 KB, ~4.3% of the 1 MiB budget |
 | stage1 sources | 8 042 lines of Qela |
-| Emitted code vs `gcc -Os` on `bench/` | **260%**, or **193%** without bounds checks (M4 gate wants ≤150%) |
+| Emitted code vs `gcc -Os` on `bench/` | **231%**, or **193%** without bounds checks (M4 gate wants ≤150%) |
 
 Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the
 54-test corpus under S2, the embedded stdlib resolving outside the source tree,
@@ -83,12 +83,12 @@ started.
 
 ### 1. Emitted code size (M4)
 
-260% of `gcc -Os`, 193% with bounds checks off, which is the number comparable
-to what gcc emits. The 218% from the previous state went up because every
-binary now carries the 21-byte `index out of bounds` message in rodata and a
-3-byte `xor rbp, rbp` in its startup header — a fixed cost that is noise on
-real programs but a big ratio swing on the tiny `bench/` files. `fib` sits at
-186%.
+231% of `gcc -Os`, 193% with bounds checks off, which is the number comparable
+to what gcc emits. `fib` sits at 153%. The bounds-check panic message
+(`index out of bounds`) costs +21 bytes of rodata in every binary that
+actually has a bounds check — a program without arrays carries no panic
+machinery at all, so `fib` and `loop` are byte-identical to before the
+message existed.
 
 Done, in `srcql/regalloc.qela`, `srcql/codegen.qela` and `srcql/bounds.qela`:
 
