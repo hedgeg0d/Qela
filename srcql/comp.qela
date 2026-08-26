@@ -160,6 +160,8 @@ struct Var {
 	next      *Var,
 	offset    int,
 	is_global bool,
+	extern    bool,
+	has_init  bool,
 	by_ref    bool,
 	data_off  i64,
 	init      i64,
