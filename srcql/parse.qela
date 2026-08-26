@@ -837,11 +837,17 @@ fn parse_primary(t **Token) *Node {
 			// call through it; type.qela checks its type and turns it into an
 			// indirect call. Functions declared later are not in the table
 			// yet, so a bare name is left alone for find_func in type_call.
+			var f0 *Func = 0 as *Func;
 			if (kind == ND_CALL) {
 				var v *Var = find_var(name);
 				if (v as i64 != 0) { n.varp = v; }
+				else {
+					f0 = find_func(name);
+					if (f0 as i64 != 0 && f0.nct != 0) { f0 = 0 as *Func; }
+				}
 			}
-			call_args(t, n);
+			if (f0 as i64 != 0) { call_args_named(t, n, f0); }
+			else { call_args(t, n); }
 			// panic(message) is assert(false, message): the condition is a
 			// constant zero prepended here, so the rest of the pipeline sees
 			// one shape only.
@@ -1500,6 +1506,172 @@ fn parse_stmt_inner(t **Token) *Node {
 
 // ── top-level ──
 
+// Walks a not-yet-typed default-value expression looking for a reference
+// to a parameter that itself carries a default. Only the parameters of
+// the function currently being declared can appear here (an identifier
+// resolves through the live scope chain, and a defaulted Var is only ever
+// a parameter of the function whose declaration is still open), so a hit
+// means exactly that: no dependency chain between two defaults.
+fn expr_refs_default_param(n *Node) bool {
+	if (n as i64 == 0) { return false; }
+	if (n.kind == ND_VAR && n.varp as i64 != 0 && n.varp.default as i64 != 0) { return true; }
+	if (expr_refs_default_param(n.next)) { return true; }
+	if (expr_refs_default_param(n.lhs)) { return true; }
+	if (expr_refs_default_param(n.rhs)) { return true; }
+	if (expr_refs_default_param(n.cond)) { return true; }
+	if (expr_refs_default_param(n.then)) { return true; }
+	if (expr_refs_default_param(n.els)) { return true; }
+	if (expr_refs_default_param(n.init)) { return true; }
+	if (expr_refs_default_param(n.step)) { return true; }
+	if (expr_refs_default_param(n.body)) { return true; }
+	if (expr_refs_default_param(n.args)) { return true; }
+	return false;
+}
+
+// Clones a parameter's default expression, substituting any reference to
+// one of f's own parameters with the value the caller actually gave for
+// it. A default may only name a required (non-defaulted) parameter, so
+// `provided` is always filled by the time substitution reaches it -- the
+// same clone-per-reference shape as `macro_expand`, keyed by Func params
+// instead of Macro params.
+fn default_expand(n *Node, f *Func, provided **Node) *Node {
+	if (n as i64 == 0) { return 0 as *Node; }
+	if (n.kind == ND_VAR) {
+		var i int = 0;
+		while (i < f.nparams) {
+			if ((n.varp as i64) == (func_param(f, i) as i64)) {
+				return default_expand(provided[i], f, provided);
+			}
+			i = i + 1;
+		}
+	}
+	var c *Node = arena_alloc(sizeof(Node), 8) as *Node;
+	*c = *n;
+	c.next = default_expand(n.next, f, provided);
+	c.lhs = default_expand(n.lhs, f, provided);
+	c.rhs = default_expand(n.rhs, f, provided);
+	c.cond = default_expand(n.cond, f, provided);
+	c.then = default_expand(n.then, f, provided);
+	c.els = default_expand(n.els, f, provided);
+	c.init = default_expand(n.init, f, provided);
+	c.step = default_expand(n.step, f, provided);
+	c.body = default_expand(n.body, f, provided);
+	c.args = default_expand(n.args, f, provided);
+	return c;
+}
+
+// A named/default call: `sum(a=1, c=3)`. The shape of the first argument
+// -- `ident '=' expr` where ident names a real parameter of f -- decides
+// the whole call; once decided every further argument must match it.
+// Missing parameters fall back to their declared default. `f` is only
+// ever non-null here for an already-resolved, non-generic function (one
+// declared earlier in the source, or in an already-parsed import), so a
+// forward reference to a function declared later in the file cannot use
+// named/default arguments -- it falls back to a plain positional call,
+// same as if this function had never been consulted.
+fn call_args_named(t **Token, n *Node, f *Func) *Node {
+	tok_expect(t, "(");
+	var provided [14]*Node;
+	var have [14]bool;
+	var i int = 0;
+	while (i < 14) { have[i] = false; i = i + 1; }
+	var named_mode bool = false;
+	var nseen int = 0;
+	while (!tok_eq(*t, ")")) {
+		if (nseen > 0) { tok_expect(t, ","); }
+		var looks_named bool = (*t).kind == TK_IDENT && tok_eq((*t).next, "=");
+		var is_named bool = false;
+		var pidx int = -1;
+		var ppos i64 = (*t).pos;
+		if (nseen == 0) {
+			if (looks_named) {
+				pidx = func_param_index(f, (*t).text);
+				if (pidx >= 0) { named_mode = true; is_named = true; }
+			}
+		} else if (named_mode) {
+			if (!looks_named) { error_at(ppos, "expected a named argument here (this call started with one)"); }
+			pidx = func_param_index(f, (*t).text);
+			if (pidx < 0) {
+				var mb Buf;
+				fmt_str(&mb, "'");
+				fmt_str(&mb, f.name);
+				fmt_str(&mb, "' has no parameter named '");
+				fmt_str(&mb, (*t).text);
+				fmt_str(&mb, "'");
+				error_at(ppos, buf_str(&mb));
+			}
+			is_named = true;
+		} else if (looks_named && func_param_index(f, (*t).text) >= 0) {
+			// This call committed to positional mode on its first argument,
+			// but a later one looks like a named argument that would match
+			// a real parameter -- almost certainly a mixed call, which the
+			// design forbids outright rather than guessing the intent.
+			error_at(ppos, "cannot mix positional and named arguments in one call");
+			is_named = true;
+		}
+		if (is_named) {
+			*t = (*t).next;
+			*t = (*t).next;
+			var e *Node = parse_assign(t);
+			if (have[pidx]) { error_at(ppos, "duplicate named argument"); }
+			provided[pidx] = e;
+			have[pidx] = true;
+		} else {
+			var e *Node = parse_assign(t);
+			var tail **Node = &n.args;
+			while (*tail as i64 != 0) { tail = &(*tail).next; }
+			*tail = e;
+		}
+		nseen = nseen + 1;
+	}
+	tok_expect(t, ")");
+	// An empty call `f()` to a function with parameters has no first
+	// argument to read the mode from -- treat it as "everything
+	// defaulted" and let the fill loop below either supply every
+	// default or fail with "missing required argument".
+	if (!named_mode && nseen > 0) {
+		n.nargs = nseen;
+		return n;
+	}
+	i = 0;
+	while (i < f.nparams) {
+		if (!have[i]) {
+			var pv *Var = func_param(f, i);
+			if (pv.default as i64 == 0) {
+				var mb Buf;
+				fmt_str(&mb, "missing required argument '");
+				fmt_str(&mb, pv.name);
+				fmt_str(&mb, "'");
+				error_at((*t).pos, buf_str(&mb));
+			}
+			provided[i] = default_expand(pv.default, f, &provided[0]);
+			have[i] = true;
+		}
+		i = i + 1;
+	}
+	var head Node;
+	var tail *Node = &head;
+	i = 0;
+	while (i < f.nparams) {
+		tail.next = provided[i];
+		tail = tail.next;
+		i = i + 1;
+	}
+	tail.next = 0 as *Node;
+	n.args = head.next;
+	n.nargs = f.nparams;
+	return n;
+}
+
+fn func_param_index(f *Func, name str) int {
+	var i int = 0;
+	while (i < f.nparams) {
+		if (str_eq(func_param(f, i).name, name)) { return i; }
+		i = i + 1;
+	}
+	return -1;
+}
+
 fn parse_function(t **Token, is_extern bool) *Func {
 	tok_expect(t, "fn");
 	// A naked function runs without prologue or epilogue: no frame, no
@@ -1552,11 +1724,24 @@ fn parse_function(t **Token, is_extern bool) *Func {
 		var pn str = (*t).text;
 		var pp i64 = (*t).pos;
 		*t = (*t).next;
+		// `a=expr i32` -- a default value, parsed before the type since
+		// that's the declared order. It may name a global freely, or an
+		// earlier, non-defaulted parameter of this same function
+		// (substituted at the call site); it may not name a defaulted
+		// parameter -- there is no dependency order between defaults.
+		var pdefault *Node = 0 as *Node;
+		if (tok_consume(t, "=")) {
+			pdefault = parse_assign(t);
+			if (expr_refs_default_param(pdefault)) {
+				error_at(pp, "a default value cannot reference another defaulted parameter");
+			}
+		}
 		var pty *Type = parse_type(t);
 		var is2word bool = is_aggregate(pty) && pty.size > 8 && pty.size <= 16;
 		if (is2word) { rwords = rwords + 2; } else { rwords = rwords + 1; }
 		var v *Var = declare_var(pn, pty, pp);
 		v.by_ref = is_aggregate(pty) && pty.size > 16;
+		v.default = pdefault;
 		// Comptime parameters occupy p0..p5 by position too, so a run of
 		// six of them (f.nct == 6, allowed) leaves no register slot for
 		// any regular parameter that follows even if its own word cost is
