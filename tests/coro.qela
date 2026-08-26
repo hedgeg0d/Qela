@@ -25,7 +25,7 @@ fn main() int {
 	if (log.n != 8) { return 1; }
 	if (log.p[0] != '1' || log.p[1] != '2' || log.p[2] != '3') { return 2; }
 	if (log.p[6] != '1' || log.p[7] != '2') { return 3; }
-	$if (TARGET == "arm64") {
+	$if (TARGET != "x86_64") {
 		syscall(64, 1, log.p, log.n);
 	} $else {
 		syscall(1, 1, log.p, log.n);
