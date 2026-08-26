@@ -802,20 +802,32 @@ ARM64 (below), or accept the ratio and spend budget on wow/byte elsewhere.
 
 ### 2. ARM64 backend
 
-Self-hosting works for the scalar-core-plus-floats subset (2026-08-06): the
-compiler, cross-compiled to ARM64 by itself, compiles itself again under
-`qemu-aarch64` and produces a byte-identical ARM64 binary
-(`S2_arm64 == S3_arm64`, 643696 B). Floats ride the same "bits in a GPR,
-FP register only for the instant of one instruction" model x86 uses (D0/D1
-standing in for XMM0/XMM1); `tests/float.qela`, `tests/floatfmt.qela` and
-`tests/f32global.qela` all match the native x86 compiler byte-for-byte.
-See `docs/TASKS.md` for the two frame-layout bugs this found and fixed in
-`srcql/arm64_emit.qela` first, and the float opcodes added after. Not yet
-ported: `extern`, threading/coro/gc, `asm`/`atomic`/`tvar`, indirect calls
-through a function value, slice indexing, promoted-register locals
-(`regalloc.qela`'s `ra_nreg` returns 0 for this target, so every ARM64
-local sits in a frame slot), more than ~4 call arguments. RISC-V is not
-started.
+Full parity with x86 (2026-08-06): the entire 124-test corpus passes under
+both targets (`QEMU=qemu-aarch64 TARGET=arm64 tools/run-tests.sh`), and
+self-hosting still reaches a fixed point with register promotion turned on
+(`S2_arm64 == S3_arm64`, 676640 B, up from 643696 B without promotion).
+Everything x86 has is ported: `extern` marshalling, threading/coro/gc,
+`asm`/`atomic`/`tvar`, indirect calls through a function value, slice
+indexing, more than ~4 call arguments (stack-spilled), and now
+promoted-register locals -- `regalloc.qela`'s `ra_nreg` gives ARM64 its own
+pool (AAPCS64's x19-x28 callee-saved, x16-x17 free-for-leaves), the same
+weighted-allocation logic x86 uses over RBX/R8-R15.
+Register promotion surfaced two real bugs, both the same shape the M9 notes
+already called out -- a native x86 call site left unguarded in
+`srcql/codegen.qela`'s frontend, invisible on x86 because it's still x86
+there: `gen_func`'s parameter-to-register move for a promoted parameter
+called `mov_reg_reg` (x86 bytes) unconditionally instead of dispatching on
+`opt_target`, corrupting the instruction stream for any ARM64 function
+taking a promoted parameter -- caught immediately (every function with an
+argument crashed). Separately, `std/gc.qela`'s `GcThread.regs` buffer was
+sized for x86's callee-saved set (`[6]i64`, 48 B) and `gc_save_regs`'s
+ARM64 half writes all ten of x19-x28 (80 B) regardless of promotion --
+already an overrun before this session, just one that happened to land in
+stack padding until promotion's changed frame layout put something load-
+bearing there instead; fixed by sizing the buffer (now `[10]i64`, shared by
+both targets, the unused x86 tail always zero and harmless to scan) instead
+of chasing frame layouts. The full writeup is above. RISC-V is
+not started.
 
 ### 3. Smaller
 
