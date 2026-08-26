@@ -557,6 +557,23 @@ apply_twice(negate, 5);   // 5
 caller-supplied comparator, `sort_cmp(s, 0, n - 1, lt)` where
 `fn lt(a i64, b i64) bool` returns `a < b`.
 
+An anonymous function — `fn (x i64) i64 { return x * x; }` — is a hidden
+top-level function, and the expression itself is its address. It has no
+closure, so it can read only its own parameters and globals, never locals of
+the enclosing function. Zero parameters read `fn () ret`. A lambda is just a
+value: assign it, pass it inline to a parameter of function type, or return
+it.
+
+```qela
+var sq = fn (x i64) i64 { return x * x; };
+sq(9);                             // 81
+
+fn pick(v i64) fn(i64) i64 {
+	if (v == 1) { return fn (x i64) i64 { return x * x; }; }
+	return fn (x i64) i64 { return x + x; };
+}
+```
+
 Limits, all checked at compile time: a function value is only the address —
 **no closures**, so a `cmp` must be a real function, not a capture of local
 state; at most **six parameters**, each fitting in one register (no `str`,
