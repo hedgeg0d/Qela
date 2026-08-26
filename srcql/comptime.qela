@@ -162,7 +162,12 @@ fn ct_eval_block(n *Node) ComptimeVal {
 
 fn ct_eval_expr(n *Node) ComptimeVal {
 	if (n as i64 == 0) { return ct_void(); }
-	if (n.kind == ND_NUM) { return ct_int(n.val); }
+	if (n.kind == ND_NUM) {
+		if (n.ty as i64 != 0 && n.ty.kind == TY_FLOAT) {
+			error_at(n.pos, "comptime does not support floats");
+		}
+		return ct_int(n.val);
+	}
 	if (n.kind == ND_STRLIT) {
 		var cv ComptimeVal;
 		cv.kind = CV_STR; cv.str = n.name;
