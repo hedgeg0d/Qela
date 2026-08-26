@@ -280,12 +280,14 @@ let PHDR_SZ    = 56;
 let SEG_GAP    = 0x1000;
 let EM_X86_64  = 0x3e;
 let EM_AARCH64 = 0xb7;
+let EM_RISCV   = 0xf3;
 
 // Which backend codegen.qela/regalloc.qela/elf.qela emit for. Set once from
 // --target/-t, read everywhere; no per-target struct or dispatch table, just
 // this global and if/else at the handful of real target-dependent points.
 let TARGET_X86_64 = 0;
 let TARGET_ARM64  = 1;
+let TARGET_RISCV64 = 2;
 var opt_target int = 0;
 
 struct ComptimeDef;
@@ -323,15 +325,15 @@ fn abi_by_ref(size int) bool {
 	return size > 16;
 }
 
-// ABI parameters. The two current targets agree on the by-ref cutoff but
+// ABI parameters. The three current targets agree on the by-ref cutoff but
 // differ in the number of argument registers: six integer registers for
-// x86, eight for ARM64. Floats cross in float registers at the extern
-// boundary only, and both targets have eight of those. A future target with
-// a different shape overrides these numbers; codegen.qela's call_reg() is
-// the other half of the ABI, mapping a register rank to the target's
+// x86, eight for ARM64 and RISC-V. Floats cross in float registers at the
+// extern boundary only, and all targets have eight of those. A future target
+// with a different shape overrides these numbers; codegen.qela's call_reg()
+// is the other half of the ABI, mapping a register rank to the target's
 // encoding.
 fn abi_n_arg_regs() int {
-	if (opt_target == TARGET_ARM64) { return 8; }
+	if (opt_target == TARGET_ARM64 || opt_target == TARGET_RISCV64) { return 8; }
 	return 6;
 }
 
@@ -406,6 +408,11 @@ let REL_ABS32S       = 3;
 let REL_ARM64_CALL26   = 4;
 let REL_ARM64_ADRP     = 5;
 let REL_ARM64_ADD_LO12 = 6;
+// RISC-V object-mode kinds: the PCREL_HI20 + PCREL_LO12_I pair every
+// address reference uses, and a plain JAL for direct calls.
+let REL_RISCV_PCREL_HI20   = 7;
+let REL_RISCV_PCREL_LO12_I = 8;
+let REL_RISCV_JAL          = 9;
 
 struct ComptimeVal {
 	kind int,
