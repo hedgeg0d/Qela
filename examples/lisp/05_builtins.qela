@@ -1,0 +1,517 @@
+// 05_builtins.qela — the builtin procedures.
+//
+// Dispatch is by name: every builtin is stored in the environment as
+// Obj.Builtin(name), and bl_call walks a name chain. That keeps the table
+// data-free — no function pointers, no registry — at the cost of a linear
+// lookup, which is invisible at this scale.
+
+import "std/buf.qela";
+import "std/fmt.qela";
+import "std/str.qela";
+import "std/sys.qela";
+
+var g_true_ready bool = false;
+var g_true Obj;
+
+fn bl_true() Obj {
+	if (!g_true_ready) {
+		g_true = sym_intern("t");
+		g_true_ready = true;
+	}
+	return g_true;
+}
+
+fn bl_count(args Obj) i64 {
+	var n i64 = 0;
+	while (obj_is_pair(args)) { n = n + 1; args = obj_cdr(args); }
+	return n;
+}
+
+fn bl_arg(args Obj, i i64) Obj {
+	var k i64 = 0;
+	while (obj_is_pair(args)) {
+		if (k == i) { return obj_car(args); }
+		k = k + 1;
+		args = obj_cdr(args);
+	}
+	return Obj.Nil;
+}
+
+fn bl_arity(args Obj, want i64) bool {
+	return bl_count(args) == want;
+}
+
+fn bl_num(o Obj, name str, out *i64) bool {
+	match (o) {
+		Int(v) => { *out = v; return true; }
+		_ => {
+			var mb Buf;
+			fmt_str(&mb, name);
+			fmt_str(&mb, ": expected a number");
+			obj_err(buf_str(&mb));
+			return false;
+		}
+	}
+	return false;
+}
+
+fn bl_expect(args Obj, want i64, name str) bool {
+	if (bl_count(args) == want) { return true; }
+	var mb Buf;
+	fmt_str(&mb, name);
+	fmt_str(&mb, ": wrong number of arguments");
+	obj_err(buf_str(&mb));
+	return false;
+}
+
+// ── arithmetic ──
+
+fn bl_add(args Obj) Obj {
+	var sum i64 = 0;
+	while (obj_is_pair(args)) {
+		var v i64 = 0;
+		if (!bl_num(obj_car(args), "+", &v)) { return Obj.Nil; }
+		sum = sum + v;
+		args = obj_cdr(args);
+	}
+	return Obj.Int(sum);
+}
+
+fn bl_mul(args Obj) Obj {
+	var prod i64 = 1;
+	while (obj_is_pair(args)) {
+		var v i64 = 0;
+		if (!bl_num(obj_car(args), "*", &v)) { return Obj.Nil; }
+		prod = prod * v;
+		args = obj_cdr(args);
+	}
+	return Obj.Int(prod);
+}
+
+fn bl_sub(args Obj) Obj {
+	var n i64 = bl_count(args);
+	if (n == 0) { return Obj.Int(0); }
+	var a i64 = 0;
+	if (!bl_num(obj_car(args), "-", &a)) { return Obj.Nil; }
+	if (n == 1) { return Obj.Int(-a); }
+	var acc i64 = a;
+	args = obj_cdr(args);
+	while (obj_is_pair(args)) {
+		var v i64 = 0;
+		if (!bl_num(obj_car(args), "-", &v)) { return Obj.Nil; }
+		acc = acc - v;
+		args = obj_cdr(args);
+	}
+	return Obj.Int(acc);
+}
+
+fn bl_div(args Obj) Obj {
+	if (!bl_expect(args, 2, "/")) { return Obj.Nil; }
+	var a i64 = 0;
+	var b i64 = 0;
+	if (!bl_num(obj_car(args), "/", &a)) { return Obj.Nil; }
+	if (!bl_num(bl_arg(args, 1), "/", &b)) { return Obj.Nil; }
+	if (b == 0) { return obj_err("/: division by zero"); }
+	return Obj.Int(a / b);
+}
+
+fn bl_mod(args Obj) Obj {
+	if (!bl_expect(args, 2, "mod")) { return Obj.Nil; }
+	var a i64 = 0;
+	var b i64 = 0;
+	if (!bl_num(obj_car(args), "mod", &a)) { return Obj.Nil; }
+	if (!bl_num(bl_arg(args, 1), "mod", &b)) { return Obj.Nil; }
+	if (b == 0) { return obj_err("mod: division by zero"); }
+	return Obj.Int(a % b);
+}
+
+fn bl_cmp(args Obj, name str, kind int) Obj {
+	if (!bl_expect(args, 2, name)) { return Obj.Nil; }
+	var a i64 = 0;
+	var b i64 = 0;
+	if (!bl_num(obj_car(args), name, &a)) { return Obj.Nil; }
+	if (!bl_num(bl_arg(args, 1), name, &b)) { return Obj.Nil; }
+	if (kind == 1) { if (a < b) { return bl_true(); } return Obj.Nil; }
+	if (kind == 2) { if (a > b) { return bl_true(); } return Obj.Nil; }
+	if (kind == 3) { if (a <= b) { return bl_true(); } return Obj.Nil; }
+	if (a >= b) { return bl_true(); }
+	return Obj.Nil;
+}
+
+fn bl_eq(args Obj) Obj {
+	if (!bl_expect(args, 2, "=")) { return Obj.Nil; }
+	var a i64 = 0;
+	var b i64 = 0;
+	if (!bl_num(obj_car(args), "=", &a)) { return Obj.Nil; }
+	if (!bl_num(bl_arg(args, 1), "=", &b)) { return Obj.Nil; }
+	if (a == b) { return bl_true(); }
+	return Obj.Nil;
+}
+
+fn bl_not(args Obj) Obj {
+	if (!bl_expect(args, 1, "not")) { return Obj.Nil; }
+	if (obj_is_nil(obj_car(args))) { return bl_true(); }
+	return Obj.Nil;
+}
+
+fn bl_eqv(args Obj) Obj {
+	if (!bl_expect(args, 2, "eq?")) { return Obj.Nil; }
+	var a Obj = obj_car(args);
+	var b Obj = bl_arg(args, 1);
+	match (a) {
+		Int(x) => {
+			match (b) {
+				Int(y) => { if (x == y) { return bl_true(); } return Obj.Nil; }
+				_ => { return Obj.Nil; }
+			}
+		}
+		Sym(x) => {
+			match (b) {
+				Sym(y) => { if (str_eq(x, y)) { return bl_true(); } return Obj.Nil; }
+				_ => { return Obj.Nil; }
+			}
+		}
+		Nil => {
+			if (obj_is_nil(b)) { return bl_true(); }
+			return Obj.Nil;
+		}
+		_ => { return Obj.Nil; }
+	}
+	return Obj.Nil;
+}
+
+// ── lists ──
+
+fn bl_cons(args Obj) Obj {
+	if (!bl_expect(args, 2, "cons")) { return Obj.Nil; }
+	return obj_cons(obj_car(args), bl_arg(args, 1));
+}
+
+fn bl_car(args Obj) Obj {
+	if (!bl_expect(args, 1, "car")) { return Obj.Nil; }
+	if (!obj_is_pair(obj_car(args))) { return obj_err("car: not a pair"); }
+	return obj_car(obj_car(args));
+}
+
+fn bl_cdr(args Obj) Obj {
+	if (!bl_expect(args, 1, "cdr")) { return Obj.Nil; }
+	if (!obj_is_pair(obj_car(args))) { return obj_err("cdr: not a pair"); }
+	return obj_cdr(obj_car(args));
+}
+
+fn bl_list(args Obj) Obj {
+	return args;
+}
+
+fn bl_append(args Obj) Obj {
+	var result Obj = Obj.Nil;
+	var tail *ConsCell = 0 as *ConsCell;
+	while (obj_is_pair(args)) {
+		var lst Obj = obj_car(args);
+		while (obj_is_pair(lst)) {
+			var cell *ConsCell = arena_alloc(sizeof(ConsCell), 8) as *ConsCell;
+			cell.car = obj_car(lst);
+			cell.cdr = Obj.Nil;
+			if (tail as i64 == 0) { result = Obj.Cons(cell); }
+			else { tail.cdr = Obj.Cons(cell); }
+			tail = cell;
+			lst = obj_cdr(lst);
+		}
+		args = obj_cdr(args);
+	}
+	return result;
+}
+
+fn bl_length(args Obj) Obj {
+	if (!bl_expect(args, 1, "length")) { return Obj.Nil; }
+	if (!obj_is_list(obj_car(args))) { return obj_err("length: not a list"); }
+	return Obj.Int(bl_count(obj_car(args)));
+}
+
+fn bl_reverse(args Obj) Obj {
+	if (!bl_expect(args, 1, "reverse")) { return Obj.Nil; }
+	var out Obj = Obj.Nil;
+	var lst Obj = obj_car(args);
+	while (obj_is_pair(lst)) {
+		out = obj_cons(obj_car(lst), out);
+		lst = obj_cdr(lst);
+	}
+	return out;
+}
+
+fn bl_list_ref(args Obj) Obj {
+	if (!bl_expect(args, 2, "list-ref")) { return Obj.Nil; }
+	var idx i64 = 0;
+	if (!bl_num(bl_arg(args, 1), "list-ref", &idx)) { return Obj.Nil; }
+	var lst Obj = obj_car(args);
+	var i i64 = 0;
+	while (obj_is_pair(lst)) {
+		if (i == idx) { return obj_car(lst); }
+		i = i + 1;
+		lst = obj_cdr(lst);
+	}
+	return obj_err("list-ref: index out of range");
+}
+
+// ── predicates ──
+
+fn bl_pred(args Obj, name str, kind int) Obj {
+	if (!bl_expect(args, 1, name)) { return Obj.Nil; }
+	var o Obj = obj_car(args);
+	match (o) {
+		Int(v) => {
+			if (kind == 1) { return bl_true(); }
+		}
+		Sym(s) => {
+			if (kind == 2) { return bl_true(); }
+		}
+		Str(s) => {
+			if (kind == 3) { return bl_true(); }
+		}
+		Cons(c) => {
+			if (kind == 4) { return bl_true(); }
+		}
+		Builtin(n) => {
+			if (kind == 6) { return bl_true(); }
+		}
+		Lambda(c) => {
+			if (kind == 6) { return bl_true(); }
+		}
+		Nil => {
+			if (kind == 5) { return bl_true(); }
+		}
+		_ => { }
+	}
+	return Obj.Nil;
+}
+
+fn bl_listp(args Obj) Obj {
+	if (!bl_expect(args, 1, "list?")) { return Obj.Nil; }
+	if (obj_is_list(obj_car(args))) { return bl_true(); }
+	return Obj.Nil;
+}
+
+// ── strings ──
+
+fn bl_str_append(args Obj) Obj {
+	var b Buf;
+	while (obj_is_pair(args)) {
+		match (obj_car(args)) {
+			Str(s) => { fmt_str(&b, s); }
+			_ => { return obj_err("string-append: expected a string"); }
+		}
+		args = obj_cdr(args);
+	}
+	return Obj.Str(buf_str(&b));
+}
+
+fn bl_str_length(args Obj) Obj {
+	if (!bl_expect(args, 1, "string-length")) { return Obj.Nil; }
+	match (obj_car(args)) {
+		Str(s) => { return Obj.Int(s.len); }
+		_ => { return obj_err("string-length: expected a string"); }
+	}
+	return Obj.Nil;
+}
+
+fn bl_str_ref(args Obj) Obj {
+	if (!bl_expect(args, 2, "string-ref")) { return Obj.Nil; }
+	var idx i64 = 0;
+	if (!bl_num(bl_arg(args, 1), "string-ref", &idx)) { return Obj.Nil; }
+	match (obj_car(args)) {
+		Str(s) => {
+			if (idx < 0 || idx >= s.len) { return obj_err("string-ref: index out of range"); }
+			return Obj.Int(s.ptr[idx] as i64);
+		}
+		_ => { return obj_err("string-ref: expected a string"); }
+	}
+	return Obj.Nil;
+}
+
+fn bl_num_to_str(args Obj) Obj {
+	if (!bl_expect(args, 1, "number->string")) { return Obj.Nil; }
+	var v i64 = 0;
+	if (!bl_num(obj_car(args), "number->string", &v)) { return Obj.Nil; }
+	var b Buf;
+	fmt_i64(&b, v);
+	return Obj.Str(buf_str(&b));
+}
+
+fn bl_str_to_num(args Obj) Obj {
+	if (!bl_expect(args, 1, "string->number")) { return Obj.Nil; }
+	match (obj_car(args)) {
+		Str(s) => {
+			var n i64 = 0;
+			if (rd_num(s, &n)) { return Obj.Int(n); }
+			return Obj.Nil;
+		}
+		_ => { return obj_err("string->number: expected a string"); }
+	}
+	return Obj.Nil;
+}
+
+// ── output ──
+
+fn bl_display(args Obj) Obj {
+	if (!bl_expect(args, 1, "display")) { return Obj.Nil; }
+	var b Buf;
+	pr_obj(&b, obj_car(args), false);
+	sys_write(1, b.p, b.n);
+	return Obj.Nil;
+}
+
+fn bl_write(args Obj) Obj {
+	if (!bl_expect(args, 1, "write")) { return Obj.Nil; }
+	var b Buf;
+	pr_obj(&b, obj_car(args), true);
+	sys_write(1, b.p, b.n);
+	return Obj.Nil;
+}
+
+fn bl_newline(args Obj) Obj {
+	write_str(1, "\n");
+	return Obj.Nil;
+}
+
+// ── apply and map ──
+
+fn bl_apply(args Obj) Obj {
+	if (!bl_expect(args, 2, "apply")) { return Obj.Nil; }
+	return ev_apply(obj_car(args), bl_arg(args, 1));
+}
+
+fn bl_map(args Obj) Obj {
+	if (!bl_expect(args, 2, "map")) { return Obj.Nil; }
+	var f Obj = obj_car(args);
+	var lst Obj = bl_arg(args, 1);
+	var result Obj = Obj.Nil;
+	var tail *ConsCell = 0 as *ConsCell;
+	while (obj_is_pair(lst)) {
+		var cell *ConsCell = arena_alloc(sizeof(ConsCell), 8) as *ConsCell;
+		cell.car = ev_apply(f, obj_cons(obj_car(lst), Obj.Nil));
+		if (g_err) { return Obj.Nil; }
+		cell.cdr = Obj.Nil;
+		if (tail as i64 == 0) { result = Obj.Cons(cell); }
+		else { tail.cdr = Obj.Cons(cell); }
+		tail = cell;
+		lst = obj_cdr(lst);
+	}
+	return result;
+}
+
+// ── I/O and control ──
+
+fn bl_read_line(args Obj) Obj {
+	var b Buf;
+	var got i64 = io_read_line(&b);
+	if (got == 0) { return Obj.Nil; }
+	return Obj.Str(buf_str(&b));
+}
+
+fn bl_error(args Obj) Obj {
+	if (!bl_expect(args, 1, "error")) { return Obj.Nil; }
+	match (obj_car(args)) {
+		Str(s) => { return obj_err(s); }
+		_ => { return obj_err("error"); }
+	}
+	return Obj.Nil;
+}
+
+fn bl_exit(args Obj) Obj {
+	var code i64 = 0;
+	if (bl_count(args) >= 1) {
+		if (!bl_num(obj_car(args), "exit", &code)) { return Obj.Nil; }
+	}
+	sys_exit(code);
+	return Obj.Nil;
+}
+
+// ── dispatch ──
+
+fn bl_call(name str, args Obj) Obj {
+	if (str_eq(name, "car")) { return bl_car(args); }
+	if (str_eq(name, "cdr")) { return bl_cdr(args); }
+	if (str_eq(name, "cons")) { return bl_cons(args); }
+	if (str_eq(name, "list")) { return bl_list(args); }
+	if (str_eq(name, "append")) { return bl_append(args); }
+	if (str_eq(name, "length")) { return bl_length(args); }
+	if (str_eq(name, "reverse")) { return bl_reverse(args); }
+	if (str_eq(name, "list-ref")) { return bl_list_ref(args); }
+	if (str_eq(name, "+")) { return bl_add(args); }
+	if (str_eq(name, "-")) { return bl_sub(args); }
+	if (str_eq(name, "*")) { return bl_mul(args); }
+	if (str_eq(name, "/")) { return bl_div(args); }
+	if (str_eq(name, "mod")) { return bl_mod(args); }
+	if (str_eq(name, "<")) { return bl_cmp(args, "<", 1); }
+	if (str_eq(name, ">")) { return bl_cmp(args, ">", 2); }
+	if (str_eq(name, "<=")) { return bl_cmp(args, "<=", 3); }
+	if (str_eq(name, ">=")) { return bl_cmp(args, ">=", 4); }
+	if (str_eq(name, "=")) { return bl_eq(args); }
+	if (str_eq(name, "eq?")) { return bl_eqv(args); }
+	if (str_eq(name, "not")) { return bl_not(args); }
+	if (str_eq(name, "number?")) { return bl_pred(args, "number?", 1); }
+	if (str_eq(name, "symbol?")) { return bl_pred(args, "symbol?", 2); }
+	if (str_eq(name, "string?")) { return bl_pred(args, "string?", 3); }
+	if (str_eq(name, "pair?")) { return bl_pred(args, "pair?", 4); }
+	if (str_eq(name, "null?")) { return bl_pred(args, "null?", 5); }
+	if (str_eq(name, "procedure?")) { return bl_pred(args, "procedure?", 6); }
+	if (str_eq(name, "list?")) { return bl_listp(args); }
+	if (str_eq(name, "string-append")) { return bl_str_append(args); }
+	if (str_eq(name, "string-length")) { return bl_str_length(args); }
+	if (str_eq(name, "string-ref")) { return bl_str_ref(args); }
+	if (str_eq(name, "number->string")) { return bl_num_to_str(args); }
+	if (str_eq(name, "string->number")) { return bl_str_to_num(args); }
+	if (str_eq(name, "display")) { return bl_display(args); }
+	if (str_eq(name, "write")) { return bl_write(args); }
+	if (str_eq(name, "newline")) { return bl_newline(args); }
+	if (str_eq(name, "apply")) { return bl_apply(args); }
+	if (str_eq(name, "map")) { return bl_map(args); }
+	if (str_eq(name, "read-line")) { return bl_read_line(args); }
+	if (str_eq(name, "error")) { return bl_error(args); }
+	if (str_eq(name, "exit")) { return bl_exit(args); }
+	return obj_err("unknown builtin");
+}
+
+// Registers every builtin in the environment under its name.
+fn bl_install(env *Env) {
+	env_define(env, "car", Obj.Builtin("car"));
+	env_define(env, "cdr", Obj.Builtin("cdr"));
+	env_define(env, "cons", Obj.Builtin("cons"));
+	env_define(env, "list", Obj.Builtin("list"));
+	env_define(env, "append", Obj.Builtin("append"));
+	env_define(env, "length", Obj.Builtin("length"));
+	env_define(env, "reverse", Obj.Builtin("reverse"));
+	env_define(env, "list-ref", Obj.Builtin("list-ref"));
+	env_define(env, "+", Obj.Builtin("+"));
+	env_define(env, "-", Obj.Builtin("-"));
+	env_define(env, "*", Obj.Builtin("*"));
+	env_define(env, "/", Obj.Builtin("/"));
+	env_define(env, "mod", Obj.Builtin("mod"));
+	env_define(env, "<", Obj.Builtin("<"));
+	env_define(env, ">", Obj.Builtin(">"));
+	env_define(env, "<=", Obj.Builtin("<="));
+	env_define(env, ">=", Obj.Builtin(">="));
+	env_define(env, "=", Obj.Builtin("="));
+	env_define(env, "eq?", Obj.Builtin("eq?"));
+	env_define(env, "not", Obj.Builtin("not"));
+	env_define(env, "number?", Obj.Builtin("number?"));
+	env_define(env, "symbol?", Obj.Builtin("symbol?"));
+	env_define(env, "string?", Obj.Builtin("string?"));
+	env_define(env, "pair?", Obj.Builtin("pair?"));
+	env_define(env, "null?", Obj.Builtin("null?"));
+	env_define(env, "procedure?", Obj.Builtin("procedure?"));
+	env_define(env, "list?", Obj.Builtin("list?"));
+	env_define(env, "string-append", Obj.Builtin("string-append"));
+	env_define(env, "string-length", Obj.Builtin("string-length"));
+	env_define(env, "string-ref", Obj.Builtin("string-ref"));
+	env_define(env, "number->string", Obj.Builtin("number->string"));
+	env_define(env, "string->number", Obj.Builtin("string->number"));
+	env_define(env, "display", Obj.Builtin("display"));
+	env_define(env, "write", Obj.Builtin("write"));
+	env_define(env, "newline", Obj.Builtin("newline"));
+	env_define(env, "apply", Obj.Builtin("apply"));
+	env_define(env, "map", Obj.Builtin("map"));
+	env_define(env, "read-line", Obj.Builtin("read-line"));
+	env_define(env, "error", Obj.Builtin("error"));
+	env_define(env, "exit", Obj.Builtin("exit"));
+}
