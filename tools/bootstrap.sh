@@ -273,7 +273,8 @@ cat > "$tmp2/tc.qela" <<'EOF'
 fn main() int { var x i64 = "no"; return 0; }
 EOF
 ( "$root/$OUT/s2" test "$tmp2/tt.qela" &&
-  "$root/$OUT/s2" test "$tmp2/tc.qela" ) ||
+  "$root/$OUT/s2" test "$tmp2/tc.qela" &&
+  "$root/$OUT/s2" test "$tmp2/tt.qela" "$tmp2/tc.qela" >/dev/null ) ||
 	fail "qela test does not check expect-exit/expect-out/expect-compile-error"
 printf '    ok\n'
 
