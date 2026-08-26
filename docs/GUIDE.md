@@ -16,8 +16,10 @@ Qela is a compiled systems language for x86-64 Linux:
   is a handful of small files. Floats are the exception that proves the rule:
   `f32`/`f64` cost no calling convention — a float is raw bits in an ordinary
   register, with SSE only at the instant of an operation.
-- **Memory is an arena by default**, with an optional conservative garbage
-  collector for programs whose lifetimes are not stack-shaped.
+- **Memory is an arena by default**, with a scoped `arena_mark`/`arena_reset`
+  rewind, a K&R `std/heap.qela` malloc/free/realloc for blocks that come back,
+  and an optional conservative garbage collector for programs whose lifetimes
+  are not stack-shaped.
 - **Concurrency is cooperative**: coroutines on their own stacks, plus typed
   channels.
 
@@ -218,15 +220,16 @@ simply omits the return type), no classes. There *is* floating point — next.
 ### f32 and f64
 
 `f32` and `f64` (aliases `float` and `double`) are IEEE-754. A literal is
-float when it has a `.` or an exponent: `1.5`, `2.0`, `1e3`, `1.5e2`,
-`-0.25`. A digit is required on both sides of the dot, so `.5` and `1.` are
-not literals.
+float when it has a `.` (digit required on both sides: `.5` and `1.` are not
+literals), an `f` suffix, or an exponent with a dot present: `1.5`, `2.0`,
+`5f`, `2.5e-3`, `-0.25`. A bare exponent stays integer — `1e3` is the
+integer 1000.
 
 ```qela
 var a f64 = 1.5;
 var b f64 = a * 2.0;        // 3
 var c f32 = 2.5;
-var d f64 = 1e3;            // 1000
+var d i64 = 1e3;            // 1000, an integer
 var e f64 = 1.5e2;          // 150
 ```
 
@@ -571,7 +574,7 @@ var v u8 = *status;     // a real load, every time
 
 ### Allocation
 
-There is no `malloc`/`free` in the language. The default allocator is an
+There is no `malloc`/`free` in the language itself. The default allocator is an
 arena: `arena_alloc(size, align)` in `std/arena.qela` hands out blocks and
 never frees anything — the program's lifetime is the arena's. Great for
 compilers, interpreters and short-lived programs; this is what the Qela
@@ -588,8 +591,28 @@ fn make_point(x int, y int) *Point {
 }
 ```
 
+`arena_mark()` / `arena_reset(m)` checkpoint and rewind the bump pointer for
+scoped temporaries — a parse, a request, one loop iteration — freeing them in
+one call with no per-allocation bookkeeping:
+
+```qela
+import "std/arena.qela";
+
+var m ArenaMark = arena_mark();   // start of the scope
+// ... temporary allocations ...
+arena_reset(m);                   // all of them gone
+```
+
+Rewinding is safe across a chunk-growth boundary (the arena never returns
+memory to the OS, the old chunk stays mapped), but it does not zero: memory
+reused past a rewind reads stale bytes.
+
 For programs whose lifetimes are not stack-shaped, `std/gc.qela` is a
 conservative mark-sweep collector — see section 18.
+
+When individual blocks must come back, `std/heap.qela` is a K&R-style
+`heap_alloc` / `heap_free` / `heap_realloc` on its own mmap regions, independent
+of the arena — see section 18.
 
 ## 11. Arrays and slices
 
@@ -871,6 +894,8 @@ couple of hundred lines of Qela and you can read the source with
 | random number | `rand_range(lo, hi)` in `[lo, hi)` |
 | sort `i64`s | `sort_i64(slice, 0, n-1)` |
 | allocate | `arena_alloc(size, align)` — never frees |
+| scoped temporary blocks | `arena_mark()` / `arena_reset(m)` — free in one call |
+| individual blocks, malloc-style | `heap_alloc` / `heap_free` / `heap_realloc` |
 | object lifetimes that are not stack-shaped | `gc_alloc`, `gc_collect` |
 
 ### sys — raw syscalls
@@ -969,6 +994,28 @@ eprint_i64(v i64)
 ### arena — the default allocator
 
 `std/arena.qela`: `arena_alloc(size i64, align i64) *u8`. Never frees.
+
+`arena_mark() ArenaMark` / `arena_reset(m)` checkpoint and rewind the bump
+pointer: every allocation since the mark vanishes in one call. Safe across a
+chunk-growth boundary (the arena never returns memory to the OS), but it does
+not zero — memory past a rewind reads stale bytes.
+
+### heap — malloc/free/realloc
+
+`std/heap.qela`, a K&R free-list allocator on its own mmap regions,
+independent of the arena:
+
+```qela
+import "std/heap.qela";
+
+var p *u8 = heap_alloc(64);      // first-fit, header per block
+heap_free(p);                    // coalesces adjacent free blocks
+var q *u8 = heap_realloc(p, 128); // copy + free; contents preserved
+```
+
+Leaks stay leaked (nothing is scanned, unlike `std/gc.qela`), and it is not
+thread-safe. Reach for it when individual blocks must come back; the arena is
+the default.
 
 ### vec — generic growable vector
 
