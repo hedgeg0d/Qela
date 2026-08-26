@@ -1,10 +1,6 @@
-// A free-list allocator: malloc/free/realloc, in the K&R sense. Individual
-// blocks come back to the allocator (unlike std/arena.qela, which only ever
-// grows) and adjacent free blocks coalesce, at the cost of a header per
-// allocation and a linear free-list search. Backed by its own mmap regions,
-// independent of the bump arena — the two never share memory.
-//
-// Not thread-safe, same as arena.qela: qela has no OS threads yet.
+// K&R free-list malloc/free/realloc. Blocks return to the allocator (unlike
+// the arena) and adjacent frees coalesce. Backed by its own mmap regions,
+// independent of the bump arena. Not thread-safe: qela has no threads.
 
 struct Header {
 	size  i64,     // size in Header-units, including this header
