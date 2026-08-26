@@ -1921,17 +1921,23 @@ fn unwind_to(target int) {
 fn gen_match(n *Node) {
 	var soff i64 = n.tmp.offset as i64;
 	gen_addr(n.cond);
-	st_local(soff, RAX);
+	ir_store_stackslot_acc(soff, type_ptr(ty_i64), n.pos);
 
 	var end i64 = ir_new_label();
 	var arm *Node = n.body;
 	while (arm as i64 != 0) {
 		var miss i64 = -1;
 		if (arm.name.len != 0) {
-			ld_local(RAX, soff);
-			b1(0x48); b1(0x83);
-			modrm(0, 7, RAX);
-			b1(arm.variant.tag as i64);
+			if (opt_target == TARGET_ARM64) {
+				ir_load_slot_acc(soff, type_ptr(ty_i64), arm.pos);
+				ir_load_acc(ty_i64, arm.pos);
+				ir_cmp_acc_imm(arm.variant.tag as i64, arm.pos);
+			} else {
+				ld_local(RAX, soff);
+				b1(0x48); b1(0x83);
+				modrm(0, 7, RAX);
+				b1(arm.variant.tag as i64);
+			}
 			miss = ir_new_label();
 			ir_branch(CC_NE, miss, arm.pos);
 		}
