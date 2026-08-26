@@ -1,0 +1,19 @@
+// expect-exit: 0
+// arena_mark/arena_reset: scoped bump-allocator checkpoints on top of the
+// single arena. A mark taken, allocations made, then reset must give back
+// exactly the same pointer arena_alloc would hand out next.
+import "std/arena.qela";
+
+fn main() int {
+	var p1 *u8 = arena_alloc(64, 1);
+	var m ArenaMark = arena_mark();
+
+	arena_alloc(100, 1);
+	arena_alloc(200, 8);
+	arena_reset(m);
+
+	var p2 *u8 = arena_alloc(64, 1);
+	if (p1 == p2) { return 1; }
+	if (m.ptr != (p2 as i64)) { return 2; }
+	return 0;
+}
