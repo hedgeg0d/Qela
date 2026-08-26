@@ -59,7 +59,9 @@ var v Msg = <-ch;
 ```
 
 A conservative mark-sweep collector for programs whose lifetimes are not
-stack-shaped; arenas remain the default.
+stack-shaped; arenas remain the default. `std/rand.qela` is a deterministic
+xorshift64* — `rand_init`, `rand_u64`, `rand_range` — seeded with a fixed
+constant so unseeded programs reproduce.
 
 The compiler is also its own build system and test runner. `qela .` merges
 every `.qela` file in a directory into one program, no imports needed between
