@@ -405,6 +405,7 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) {
 	// looks, so its own check stays a no-op for this call.
 	var pad i64 = 0;
 	if (m > 0) {
+		if (opt_target == TARGET_ARM64) { die("error: -target arm64 does not support this many call arguments yet"); }
 		if (((depth as i64 + m) & 1) != 0) {
 			alu_rax_imm_reg(5, RSP, 8);
 			depth = depth + 1;
@@ -1030,6 +1031,7 @@ fn gen_compare(n *Node) i64 {
 // return address that the call pushed onto whichever stack is current,
 // which is exactly how control lands back where a coroutine left off.
 fn gen_coro_switch(n *Node) {
+	if (opt_target == TARGET_ARM64) { die("error: -target arm64 does not support coroutines yet"); }
 	gen_args(n, false, false, -1, false);
 	b1(0xe8);
 	ilist_push(&coro_switch_refs, code.n);
@@ -1776,6 +1778,15 @@ fn gen_expr(n *Node) {
 		return;
 	}
 	if (k == ND_CALL) {
+		if (opt_target == TARGET_ARM64 &&
+		    (str_eq(n.name, "gc_data_base") || str_eq(n.name, "gc_data_end") ||
+		     str_eq(n.name, "gc_save_regs") || str_eq(n.name, "coro_entry_addr") ||
+		     str_eq(n.name, "atomic_cas") || str_eq(n.name, "atomic_add") ||
+		     str_eq(n.name, "atomic_load") || str_eq(n.name, "atomic_store") ||
+		     str_eq(n.name, "fence") || str_eq(n.name, "thread_clone") ||
+		     str_eq(n.name, "tls_init"))) {
+			die("error: -target arm64 does not support gc/atomic/thread/tls builtins yet");
+		}
 		if (str_eq(n.name, "coro_switch")) { gen_coro_switch(n); return; }
 		if (str_eq(n.name, "gc_data_base") || str_eq(n.name, "gc_data_end")) {
 			rex_w(0, RAX);
