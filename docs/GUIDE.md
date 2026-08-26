@@ -172,7 +172,7 @@ Signed and unsigned, fixed width:
 Plus the machine-word aliases `int`, `uint`, `usize` — 64-bit here. Integer
 literals are typed by their value and context; there is no suffix. Values
 widen implicitly through the ordinary arithmetic rules, but a narrowing cast
-is always explicit:
+is explicit — unless the value is a constant that provably fits (section 6):
 
 ```qela
 var b u8 = 200;
@@ -304,6 +304,28 @@ between integers and pointers, and between integers and floats
 var p *u8 = 0 as *u8;
 var addr i64 = p as i64;
 ```
+
+Implicit conversions between integers happen only when the value cannot
+change: **widening** (`i32` → `i64`, and `u8`/`u16`/`u32` → `i64`, which all
+fit). A signed → unsigned widening (`i32` → `u64`), a signedness change at the
+same width (`i64` → `u64`), and any narrowing (`i64` → `i32`) need an explicit
+`as` — except a constant that fits, which is compile-time-checkable and stays
+implicit:
+
+```qela
+var x i64 = some_u8;     // ok: u8 -> i64, value always preserved
+var y u64 = 5;           // ok: signed constant that fits
+var z u8 = 'A';          // ok: constant that fits
+var v u32 = 300;         // ok: constant that fits
+var w i64 = some_u64;    // error: u64 -> i64 needs `as i64`
+var u u64 = some_i64;    // error: i64 -> u64 needs `as u64`
+some_u64 + some_i64;     // error: mixing u64 and i64 needs a cast
+```
+
+Why: a narrowing cast can truncate, and a signed → unsigned cast reinterprets
+a negative value as a huge positive one. Both are classic silent-corruption
+bugs, so the compiler refuses them unless you write the cast — or the value is
+a constant that provably fits.
 
 `sizeof(T)` gives the size of a type in bytes:
 

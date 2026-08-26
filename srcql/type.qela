@@ -282,8 +282,47 @@ fn node_alloc() *Node {
 	return arena_alloc(sizeof(Node), 8) as *Node;
 }
 
+// Implicit integer conversions only widen, and only when the value cannot
+// change: unsigned->signed widening (u8/u16/u32 all fit in i64) is safe and
+// stays implicit, but signed->unsigned widening would sign-extend, and any
+// same-size signedness cross or any narrowing would corrupt or truncate — so
+// those need an explicit `as`. The one relief is a constant that fits:
+// `var c u8 = 'a'`, `arr[i] = 3` and `var b bool = true` are all
+// compile-time-checkable and stay implicit (a constant that does not fit is
+// an error, not a silent wrap). Everything else (pointers, arrays decaying
+// to pointers, the literal zero becoming a null pointer) is untouched.
+fn int_fits(val i64, ty *Type) bool {
+	if (ty.is_unsigned) {
+		if (val < 0) { return false; }
+		if (ty.size == 8) { return true; }
+		return val < (1 as i64 << (ty.size * 8));
+	}
+	if (ty.size == 8) { return true; }
+	var min i64 = -(1 as i64 << (ty.size * 8 - 1));
+	var max i64 = (1 as i64 << (ty.size * 8 - 1)) - 1;
+	return val >= min && val <= max;
+}
+
+fn can_implicit(n *Node, ty *Type) bool {
+	var src *Type = n.ty;
+	if (is_float(src) || is_float(ty)) {
+		if (!is_float(src) || !is_float(ty)) { return false; }
+		if (ty.size > src.size) { return true; }
+		return n.kind == ND_NUM;
+	}
+	if (is_integer(src) && is_integer(ty)) {
+		var widening bool = ty.size > src.size;
+		if (widening && !(ty.is_unsigned && !src.is_unsigned)) { return true; }
+		return n.kind == ND_NUM && int_fits(n.val, ty);
+	}
+	return true;
+}
+
 fn cast_to(n *Node, ty *Type) *Node {
 	if (n.ty as i64 == ty as i64) { return n; }
+	if (!can_implicit(n, ty)) {
+		emsg("implicit conversion from '"); emsg_ty(n.ty); emsg("' to '"); emsg_ty(ty); emsg("' requires an explicit cast"); efail(n.pos);
+	}
 	var c *Node = node_alloc();
 	c.kind = ND_CAST;
 	c.lhs = n;

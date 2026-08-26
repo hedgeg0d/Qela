@@ -190,11 +190,11 @@ fn ct_eval_expr(n *Node) ComptimeVal {
 			return ct_int(((v.num as u64) as u8) as i64);
 		}
 		if (n.ty.size == 2) {
-			if (n.ty.is_unsigned) { return ct_int(v.num as u64 & 0xffff); }
+			if (n.ty.is_unsigned) { return ct_int((v.num as u64 & 0xffff) as i64); }
 			return ct_int(((v.num as u64) as u16) as i64);
 		}
 		if (n.ty.size == 4) {
-			if (n.ty.is_unsigned) { return ct_int(v.num as u64 & 0xffffffff); }
+			if (n.ty.is_unsigned) { return ct_int((v.num as u64 & 0xffffffff) as i64); }
 			return ct_int(((v.num as u64) as u32) as i64);
 		}
 		return v;
