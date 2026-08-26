@@ -7,9 +7,9 @@ Updated 2026-08-03. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **193 008 B** |
+| **S2 — the shipped compiler, Qela compiled by itself** | **200 264 B** |
 | S2 under xz -9 (proxy for upx --lzma) | ~44 KB, ~4.3% of the 1 MiB budget |
-| stage1 sources | 8 042 lines of Qela |
+| stage1 sources | 8 240 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **193%** without bounds checks (M4 gate wants ≤150%) |
 
 Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the
@@ -59,11 +59,16 @@ walker at the end of the image print `in <name>` for the panicking function
 and every caller (the trampoline that reaches the panic stub is a call, so its
 return address names the frame; the walk stops at main because the startup
 header zeroes rbp). Plain compiles take `--backtrace` too, but default to the
-deterministic, flag-free output the bootstrap gate compares; `qela fmt`, which
-formats over the token stream so comments survive and which is idempotent;
-`--dump-std` for the embedded library; a shebang first line (`#!...`) is
-skipped by the lexer, so scripts run as `#!/usr/bin/env qela run`;
-`tools/torture.py` for randomized differential testing. **`qela --lsp`** is a
+deterministic, flag-free output the bootstrap gate compares; **`qela .` builds
+a directory as one project**: every `.qela` file in it is merged into a single
+program (entry `main.qela`, or the sole file, merged last; the rest in sorted
+order), so functions call across files without imports, while imports inside
+the files still work and one already merged by path is skipped — the compiler
+is its own build system; `qela fmt`, which formats over the token stream so
+comments survive and which is idempotent; `--dump-std` for the embedded
+library; a shebang first line (`#!...`) is skipped by the lexer, so scripts
+run as `#!/usr/bin/env qela run`; `tools/torture.py` for randomized
+differential testing. **`qela --lsp`** is a
 language server in the same binary: JSON-RPC over framed stdio, hand-written
 JSON, full-document sync, diagnostics, hover with types and signatures, and
 go-to-definition for locals, globals, functions and fields. A compile runs in
