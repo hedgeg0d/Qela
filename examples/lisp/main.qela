@@ -1,3 +1,5 @@
+// expect-exit: 0
+// The self-test lives in tests.lisp; `qela test . tests.lisp` runs it.
 // main.qela — the driver: an interactive REPL, a batch mode for scripts,
 // and a built-in self-test.
 //
@@ -123,109 +125,6 @@ fn batch(env *Env, path str) int {
 	return 0;
 }
 
-// ── self-test ──
-
-var t_pass int = 0;
-var t_fail int = 0;
-
-fn check(env *Env, src str, want str) {
-	g_err = false;
-	var toks *Tok = lex(src);
-	var t *Tok = toks;
-	var last Obj = Obj.Nil;
-	while (t.kind != TK_END) {
-		last = ev_eval(env, rd_read(&t));
-		if (g_err) { break; }
-	}
-	var pb Buf;
-	if (g_err) {
-		fmt_str(&pb, "error: ");
-		fmt_str(&pb, g_msg);
-	} else {
-		pr_obj(&pb, last, true);
-	}
-	if (str_eq(buf_str(&pb), want)) {
-		t_pass = t_pass + 1;
-	} else {
-		var ob Buf;
-		fmt_str(&ob, "FAIL  ");
-		fmt_str(&ob, src);
-		fmt_str(&ob, "\n      got  ");
-		fmt_str(&ob, buf_str(&pb));
-		fmt_str(&ob, "\n      want ");
-		fmt_str(&ob, want);
-		fmt_str(&ob, "\n");
-		sys_write(2, ob.p, ob.n);
-		t_fail = t_fail + 1;
-	}
-}
-
-fn run_tests() int {
-	var env *Env = env_new(0 as *Env);
-	init_env(env);
-
-	check(env, "(+ 1 2 3)", "6");
-	check(env, "(- 10 3 2)", "5");
-	check(env, "(* 2 3 4)", "24");
-	check(env, "(/ 17 5)", "3");
-	check(env, "(mod 17 5)", "2");
-	check(env, "(- 5)", "-5");
-	check(env, "(car '(1 2 3))", "1");
-	check(env, "(cdr '(1 2 3))", "(2 3)");
-	check(env, "(cons 1 '(2 3))", "(1 2 3)");
-	check(env, "(list 1 2 3)", "(1 2 3)");
-	check(env, "(append '(1 2) '(3 4) '(5))", "(1 2 3 4 5)");
-	check(env, "(length '(a b c))", "3");
-	check(env, "(reverse '(1 2 3))", "(3 2 1)");
-	check(env, "(list-ref '(10 20 30) 1)", "20");
-	check(env, "(quote (a . b))", "(a . b)");
-	check(env, "'(1 2 (3 4))", "(1 2 (3 4))");
-	check(env, "(if (> 3 2) 'yes 'no)", "yes");
-	check(env, "(if nil 'no 'yes)", "yes");
-	check(env, "(cond ((< 1 0) 'neg) ((> 1 0) 'pos) (else 'zero))", "pos");
-	check(env, "(define x 10) (* x x)", "100");
-	check(env, "(begin (define y 5) (set! y 6) y)", "6");
-	check(env, "(define (fact n) (if (< n 2) 1 (* n (fact (- n 1))))) (fact 10)", "3628800");
-	check(env, "(define (fib n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))) (fib 15)", "610");
-	check(env, "((lambda (x) (* x x)) 7)", "49");
-	check(env, "(let ((a 3) (b 4)) (+ a b))", "7");
-	check(env, "(let* ((a 2) (b (* a 10))) (+ a b))", "22");
-	check(env, "(define (mk n) (lambda (x) (+ x n))) (define add3 (mk 3)) (add3 10)", "13");
-	check(env, "(map (lambda (x) (* x x)) '(1 2 3 4))", "(1 4 9 16)");
-	check(env, "(apply + '(10 20 30))", "60");
-	check(env, "(define i 0) (define acc '()) (while (< i 3) (set! acc (cons i acc)) (set! i (+ i 1))) (reverse acc)", "(0 1 2)");
-	check(env, "(defmacro (twice x) (list 'begin x x)) (define counter 0) (twice (set! counter (+ counter 1))) counter", "2");
-	check(env, "(string-append \"ab\" \"cd\" \"e\")", "\"abcde\"");
-	check(env, "(string-length \"hello\")", "5");
-	check(env, "(string-ref \"abc\" 1)", "98");
-	check(env, "(number->string 42)", "\"42\"");
-	check(env, "(string->number \"-17\")", "-17");
-	check(env, "(not nil)", "t");
-	check(env, "(eq? 'a 'a)", "t");
-	check(env, "(eq? 3 3)", "t");
-	check(env, "(null? '())", "t");
-	check(env, "(pair? '(1 2))", "t");
-	check(env, "(list? '(1 2))", "t");
-	check(env, "(symbol? 'foo)", "t");
-	check(env, "(number? 42)", "t");
-	check(env, "(procedure? car)", "t");
-	check(env, "(map car '((1 2) (3 4)))", "(1 3)");
-	check(env, "(define (my-list . xs) xs) (my-list 1 2 3)", "(1 2 3)");
-	check(env, "(define (gcd a b) (if (= b 0) a (gcd b (mod a b)))) (gcd 1071 462)", "21");
-	check(env,
-		"(defmacro (unless c . body) (list 'if c nil (cons 'begin body))) (define n 0) (unless (= n 0) (set! n 1)) (+ n 100)",
-		"100");
-	check(env, "(begin (define acc '()) (define i 10) (while (> i 0) (set! acc (cons i acc)) (set! i (- i 1))) (apply + acc))", "55");
-
-	var sb Buf;
-	fmt_i64(&sb, t_pass as i64);
-	fmt_str(&sb, " passed, ");
-	fmt_i64(&sb, t_fail as i64);
-	fmt_str(&sb, " failed\n");
-	sys_write(2, sb.p, sb.n);
-	if (t_fail > 0) { return 1; }
-	return 0;
-}
 fn init_env(env *Env) {
 	env_define(env, "t", sym_intern("t"));
 	env_define(env, "nil", Obj.Nil);
@@ -233,7 +132,7 @@ fn init_env(env *Env) {
 }
 
 fn usage() {
-	write_str(1, "qela-lisp — a Lisp interpreter in Qela\n\nusage: lisp [--test] [file.lisp]\n\nno arguments     start the REPL\n--test           run the self-test suite\nfile.lisp        evaluate the file, then exit\n");
+	write_str(1, "qela-lisp — a Lisp interpreter in Qela\n\nusage: lisp [file.lisp]\n\nno arguments     start the REPL\nfile.lisp        evaluate the file, then exit\n\nself-test:       qela test . tests.lisp\n");
 }
 
 fn main(argc int, argv **u8) int {
@@ -241,7 +140,6 @@ fn main(argc int, argv **u8) int {
 	init_env(env);
 	if (argc >= 2) {
 		var a str = str_from_cstr(argv[1]);
-		if (str_eq(a, "--test")) { return run_tests(); }
 		if (str_eq(a, "-h") || str_eq(a, "--help")) { usage(); return 0; }
 		return batch(env, a);
 	}
