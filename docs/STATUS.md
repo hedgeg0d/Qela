@@ -7,9 +7,10 @@ Updated 2026-08-03. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **205 072 B** |
-| S2 under xz -9 (proxy for upx --lzma) | ~44 KB, ~4.3% of the 1 MiB budget |
-| stage1 sources | 8 560 lines of Qela |
+| **S2 — the shipped compiler, Qela compiled by itself** | **205 952 B** |
+| S2 under `upx --lzma` (measured 2026-08-03) | 48 124 B, ~4.6% of the 1 MiB budget |
+| S2 under xz -9 (proxy for upx) | 49 956 B |
+| stage1 sources | 8 600 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **193%** without bounds checks (M4 gate wants ≤150%) |
 
 Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the
