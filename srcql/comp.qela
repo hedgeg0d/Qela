@@ -15,6 +15,7 @@ let TK_NUM   = 3;
 let TK_STR   = 4;
 let TK_PUNCT = 5;
 let TK_COMMENT = 6;
+let TK_FLOAT = 7;
 
 // Positions of every file share one i64: file_id << FILE_SHIFT | offset.
 let FILE_SHIFT = 40;
@@ -40,6 +41,7 @@ let TY_ENUM    = 7;
 let TY_TYPE    = 8;
 let TY_TYPEVAR = 9;
 let TY_GENERIC = 10;
+let TY_FLOAT   = 11;
 
 struct Type;
 struct Member;
@@ -309,6 +311,9 @@ let CV_VOID = 3;
 //   fmt_begin() Buf                       fmt_put_str(b Buf, s str) Buf
 //   fmt_put_i64(b Buf, v i64) Buf         fmt_put_hex(b Buf, v i64) Buf
 //   fmt_result(b Buf) str
+//   fmt_f64_bits(b *Buf, bits i64)        fmt_put_f64_bits(b Buf, bits i64) Buf
+//     -- bits is a double's raw bit pattern, not a float: this module is
+//        part of the bootstrap subset and stage0 has no float support.
 //
 // std/sys.qela
 //   sys_getenv(name str) str              sys_isatty() i64
