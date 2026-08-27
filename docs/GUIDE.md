@@ -12,8 +12,10 @@ Qela is a compiled systems language for x86-64 Linux:
   whole thing — compiler plus standard library — is one static binary under
   1 MiB.
 - **Small on purpose.** Every feature is judged by wow-effect per byte. That
-  is why there is no `float`, no `interface`, no exceptions, and why the
-  standard library is a handful of small files.
+  is why there is no `interface`, no exceptions, and why the standard library
+  is a handful of small files. Floats are the exception that proves the rule:
+  `f32`/`f64` cost no calling convention — a float is raw bits in an ordinary
+  register, with SSE only at the instant of an operation.
 - **Memory is an arena by default**, with an optional conservative garbage
   collector for programs whose lifetimes are not stack-shaped.
 - **Concurrency is cooperative**: coroutines on their own stacks, plus typed
@@ -210,8 +212,42 @@ many parameters (section 9).
 ### Compound types
 
 Pointers (`*T`), arrays (`[N]T`), slices (`[]T`), structs, enums — all in
-later sections. There is no `float`, no `void` value type (a function that
-returns nothing simply omits the return type), no classes.
+later sections. There is no `void` value type (a function that returns nothing
+simply omits the return type), no classes. There *is* floating point — next.
+
+### f32 and f64
+
+`f32` and `f64` (aliases `float` and `double`) are IEEE-754. A literal is
+float when it has a `.` or an exponent: `1.5`, `2.0`, `1e3`, `1.5e2`,
+`-0.25`. A digit is required on both sides of the dot, so `.5` and `1.` are
+not literals.
+
+```qela
+var a f64 = 1.5;
+var b f64 = a * 2.0;        // 3
+var c f32 = 2.5;
+var d f64 = 1e3;            // 1000
+var e f64 = 1.5e2;          // 150
+```
+
+`+ - * /`, unary minus and all comparisons work on floats. `as` casts between
+a float and an integer (float-to-int truncates) and between `f32` and `f64`:
+
+```qela
+var h i64 = 7;
+var f f64 = h as f64;       // int -> float
+var back i64 = f as i64;    // float -> int, truncates
+var wide f64 = c as f64;    // f32 -> f64
+var half f32 = a as f32;    // f64 -> f32
+```
+
+Inside, a float is raw bits in an ordinary register; SSE registers appear only
+for the moment of an operation, so parameters, returns, struct fields and
+arrays work like any 4- or 8-byte value. Interpolation prints floats
+(`"${a}"` → `1.5`). Floats are not comptime constants, subnormal literals
+flush to zero, and printing rounds half-up rather than half-to-even — fine for
+games and numerics, not a libc.
+
 
 ## 5. Variables
 
@@ -260,8 +296,9 @@ var shifted int = 1 << 8;
 ```
 
 Division and remainder by a constant zero are compile errors; by a runtime
-zero they do whatever the CPU does. `as` casts between any two integer types
-or between integers and pointers:
+zero they do whatever the CPU does. `as` casts between any two integer types,
+between integers and pointers, and between integers and floats
+(section 4):
 
 ```qela
 var p *u8 = 0 as *u8;
