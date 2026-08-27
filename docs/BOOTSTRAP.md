@@ -144,6 +144,7 @@ std/heap.qela      K&R malloc/free/realloc on its own mmap regions
 std/math.qela      abs, min, max
 std/rand.qela      deterministic xorshift64*
 std/sort.qela      Hoare quicksort over []i64
+std/sortcmp.qela   the same quicksort with a fn-comparator (fn values)
 std/vec.qela       generic growable vector
 
 srcql/comp.qela    types and the module contract, the only shared header
