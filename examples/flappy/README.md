@@ -1,7 +1,8 @@
 # Flappy Bird on Qela + raylib
 
 Flappy Bird written in Qela, rendered with [raylib](https://www.raylib.com/).
-SPACE flaps, R restarts, ESC quits.
+SPACE flaps, R restarts, ESC quits. Difficulty grows with survival time:
+pipe speed climbs from 150 to 260 px/s and the gap narrows from 170 to 120 px.
 
 ## Build and run
 
