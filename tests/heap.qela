@@ -1,0 +1,34 @@
+// expect-exit: 0
+// stage1-only
+// std/heap.qela: a real malloc/free/realloc, independent of the bump arena.
+// Freed blocks are reused and adjacent free blocks coalesce.
+import "std/heap.qela";
+
+fn main() int {
+	var a *u8 = heap_alloc(32);
+	var b *u8 = heap_alloc(32);
+	if (a == (0 as *u8) || b == (0 as *u8)) { return 1; }
+	if (a == b) { return 2; }
+
+	*a = 42;
+	*(a + 1) = 7;
+	if (*a != 42 || *(a + 1) != 7) { return 3; }
+
+	heap_free(a);
+	heap_free(b);
+
+	var c *u8 = heap_alloc(48);
+	if (c == (0 as *u8)) { return 4; }
+
+	var d *u8 = heap_alloc(16);
+	*d = 1;
+	*(d + 1) = 2;
+	*(d + 2) = 3;
+	var e *u8 = heap_realloc(d, 256);
+	if (e == (0 as *u8)) { return 6; }
+	if (*e != 1 || *(e + 1) != 2 || *(e + 2) != 3) { return 7; }
+
+	heap_free(c);
+	heap_free(e);
+	return 0;
+}
