@@ -7,17 +7,49 @@ Updated 2026-08-05. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **291 968 B** |
+| **S2 — the shipped compiler, Qela compiled by itself** | **294 944 B** |
 | stage1 sources | 11 886 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
 
-Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 107-test corpus under S2, the embedded stdlib resolving outside the source tree,
+Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 109-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
 backtrace, interpolation and the repl, the compiler flags (`-g`,
 `--backtrace`, `--no-bounds-checks`, `--dump-std`), and a scripted language
 server conversation.
 
 ## Done
+
+**Typed block expressions (2026-08-05).** `T { stmts...; super v; }` in
+expression position: an inline, value-producing block. It desugars at parse
+time to a hidden function called immediately in place (`parse_typed_block`
+in `srcql/parse.qela`), the same shape a lambda already produces, so codegen
+needed no changes at all. `super v` is `return v` inside that hidden
+function -- a separate keyword so it reads as "this is the block's value",
+not "exit the enclosing function"; valid only inside a typed block
+(`capturing` flag), rejected everywhere else. Unlike a lambda it can read
+outer locals: the existing "no closures" check in `parse_primary` (a
+variable resolved outside the lambda's own scope chain is an error) gets a
+second mode, gated by the same `capturing` flag -- instead of erroring, the
+first read of an outer local turns it into a hidden by-value parameter
+(`capture_get_or_add`), reusing the exact register-word/stack-spill
+bookkeeping `parse_func`'s parameter loop already does. Every later read of
+the same local resolves to the same hidden parameter (deduped by `Var`
+pointer identity in a small capture list). Since a parameter is always a
+copy, the capture is readonly by construction -- no separate enforcement,
+and verified both for scalars and for a >16-byte struct (passed by pointer
+in this ABI): mutating the capture inside the block never changes the
+caller's variable, confirming the by-ref path already copies to a temp
+rather than aliasing caller storage. Nested typed blocks capture through
+both levels correctly (a plain lambda nested inside one still rejects
+captures -- `capturing` is forced false for the duration of `parse_lambda`'s
+own body). `Name{` stays struct-literal syntax; a typed block is only
+offered for non-struct types (`named.kind != TY_STRUCT`), since telling
+`StructName { field: val }` apart from `StructName { statements... }`
+would need real lookahead -- not built, a known v1 gap. `super` and `T {`
+are stage1-only, like every construct that reaches through `parse_lambda`'s
+machinery. Costs +2976 B in S2. Pinned by `tests/typedblock.qela` (no
+capture, readonly scalar and struct capture, multiple captures, nesting)
+and `tests/typedblock_reject.qela` (`super` outside a typed block).
 
 **Dot-call method sugar (2026-08-05).** `x.foo(y, z)` desugars to
 `foo(x, y, z)` at parse time (`srcql/parse.qela`, `parse_postfix`), before
