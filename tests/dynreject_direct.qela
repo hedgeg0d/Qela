@@ -1,0 +1,10 @@
+// stage1-only
+// expect-compile-error
+// Assigning one dynamic value straight into another would alias their
+// heap boxes; go through `as` (a copy) instead.
+fn main() int {
+	var ~a = 5;
+	var ~b = "x";
+	b = a;
+	return 0;
+}

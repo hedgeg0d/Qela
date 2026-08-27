@@ -99,6 +99,10 @@ fn reset_compile() {
 	br_short.n = 0;
 	lex_keep_comments = false;
 	need_fmt = false;
+	need_dyn = false;
+	ty_dynval_cache = 0 as *Type;
+	dyn_types_head = 0 as *TypeIdEnt;
+	dyn_types_n = 0;
 	depth = 0;
 	overflow_pushed = 0;
 	cur_loop = 0 as *Loop;
