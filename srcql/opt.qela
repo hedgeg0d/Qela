@@ -3,18 +3,18 @@ import "type.qela";
 
 fn trunc_val(v i64, t *Type) i64 {
 	if (t.size == 1) {
-		if (t.is_unsigned || t.kind == TY_BOOL) { return v as u64 & 0xff; }
-		if ((v & 0x80) != 0) { return (v & 0xff) as u64 | 0xffffffffffffff00 as i64; }
+		if (t.is_unsigned || t.kind == TY_BOOL) { return v & 0xff; }
+		if ((v & 0x80) != 0) { return (v & 0xff) | 0xffffffffffffff00; }
 		return v & 0xff;
 	}
 	if (t.size == 2) {
-		if (t.is_unsigned) { return v as u64 & 0xffff; }
-		if ((v & 0x8000) != 0) { return (v & 0xffff) as u64 | 0xffffffffffff0000 as i64; }
+		if (t.is_unsigned) { return v & 0xffff; }
+		if ((v & 0x8000) != 0) { return (v & 0xffff) | 0xffffffffffff0000; }
 		return v & 0xffff;
 	}
 	if (t.size == 4) {
-		if (t.is_unsigned) { return v as u64 & 0xffffffff; }
-		if ((v & 0x80000000) != 0) { return (v & 0xffffffff) as u64 | 0xffffffff00000000 as i64; }
+		if (t.is_unsigned) { return v & 0xffffffff; }
+		if ((v & 0x80000000) != 0) { return (v & 0xffffffff) | 0xffffffff00000000; }
 		return v & 0xffffffff;
 	}
 	return v;
