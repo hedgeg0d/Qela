@@ -2,7 +2,6 @@ import "arena.qela";
 import "sys.qela";
 
 // Growable pointer array. Elements are opaque *u8; the caller casts.
-//Doubles+ when full. Never frees.
 struct List {
 	data *u8,
 	len  i64,
@@ -21,7 +20,6 @@ fn list_grow(l *List, need i64) {
 	}
 	var i i64 = 0;
 	while (i < l.len) {
-		// Copy 8-byte pointers.
 		var src *i64 = (l.data as *i64) + i;
 		var dst *i64 = (r as *i64) + i;
 		*dst = *src;

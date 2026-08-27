@@ -2,23 +2,12 @@ import "coro.qela";
 import "arena.qela";
 import "sys.qela";
 
-// Buffered channels of any element type, over the cooperative scheduler.
-// `ch <- v` and `<-ch` desugar to chan_send and chan_recv; the element type is
-// read off the channel, so neither is written out at the call site.
-//
-// chan_init with cap 0 is a rendezvous: the sender blocks until a receiver
-// takes the value, and buf[0] is the single handoff slot.
-//
-// A blocked operation yields until the channel changes. Waiting is polling:
-// a blocked coroutine has to run again to notice the change, so the scheduler
-// keeps scheduling everyone.
-//
-// Deadlock is when every coroutine that could run is parked inside a wait and
-// no channel has changed since. Counting the waits alone is not enough — a
-// sender may be blocked while the receiver is busy doing something else, and
-// that program is fine. So the test is the two together: everyone parked, and
-// the epoch, which every channel state change bumps, standing still for long
-// enough that each of them has had its turn to wake up.
+// Buffered channels over the cooperative scheduler; `ch <- v` and `<-ch`
+// desugar to chan_send/chan_recv. cap 0 is a rendezvous: buf[0] is the
+// handoff slot. Waiting polls, so the scheduler keeps everyone running.
+// Deadlock is everyone parked while the epoch — bumped by every channel
+// change — stands still; a sender may be blocked while its receiver is
+// busy, so waits alone do not prove it.
 
 struct Chan(T) {
 	buf     *T,
