@@ -90,7 +90,7 @@ fn is_struct_literal(t *Token) bool {
 fn tight_after(t *Token) bool {
 	return is_text(t, "(") || is_text(t, "[") || is_text(t, ".") ||
 	       is_text(t, "..") || is_text(t, "&") || is_text(t, "!") ||
-	       is_text(t, "~") || is_text(t, "<-");
+	       is_text(t, "~") || is_text(t, "<-") || is_text(t, "$");
 }
 
 fn fmt_run(src str, tok *Token) {
@@ -133,7 +133,7 @@ fn fmt_run(src str, tok *Token) {
 		// the matching "}" must come out verbatim or the string changes.
 		// The "$" cannot appear anywhere else, so it marks the run. The
 		// closing brace is the one that brings the brace count to zero.
-		if (is_text(tok, "$")) {
+		if (prev as i64 != 0 && prev.kind == TK_STR && is_text(tok, "$")) {
 			fmt_emit(tok.text);
 			var t2 *Token = tok.next;
 			var bdepth int = 0;

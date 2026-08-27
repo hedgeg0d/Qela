@@ -994,6 +994,7 @@ fn type_asm(n *Node) {
 	var a *Node = n.args;
 	while (a as i64 != 0) {
 		if (a.kind != ND_NUM) {
+			if (a.kind == ND_ASMREF) { a = a.next; continue; }
 			if (a.kind == ND_VAR && !a.varp.is_global) {
 				error_at(a.pos, "asm operand must be a byte constant");
 			}
