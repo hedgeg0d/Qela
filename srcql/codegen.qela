@@ -2866,7 +2866,7 @@ fn emit_code(u *Unit, main_fn *Func, panic_id int, hdr i64) {
 		// main's return value is already in X0, which is also exit_group's
 		// first argument on AAPCS64, so unlike x86 no move is needed before
 		// the syscall.
-		if (opt_backtrace) { die("error: -target arm64 does not support --backtrace yet"); }
+		if (opt_backtrace) { die("error: --target arm64 does not support --backtrace yet"); }
 		if (tls_block_size > 8) {
 			// The stub clobbers X0-X7, so argc/argv load after the BL, not
 			// before; SP still holds the argument vector untouched.
