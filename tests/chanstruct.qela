@@ -1,3 +1,4 @@
+// interp-todo
 // stage1-only
 // expect-exit: 30
 // A channel of a 16-byte struct: the aggregate is copied whole and the

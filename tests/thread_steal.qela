@@ -1,3 +1,4 @@
+// interp-todo
 // stage1-only
 // expect-exit: 42
 // Every task is pushed directly onto pool thread 0's queue, bypassing

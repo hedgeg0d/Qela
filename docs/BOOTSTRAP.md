@@ -32,6 +32,35 @@ rather than assuming it.
 stage0 is **frozen**. Changes to `src/*.c` are bug fixes backed by a test, never
 new language features.
 
+## The one file in `srcql/` outside the subset
+
+`srcql/interp.qela`, the tree-walking interpreter behind `qela irun`, is
+stage1-only. It needs `f64` arithmetic, `match` and `coro_switch`, and stage0
+has none of the three — writing it inside the subset would have meant a
+hand-written softfloat and no coroutines at all.
+
+Its import in `srcql/main.qela` (and the `irun` line in `main`) sit inside
+`$if (BOOTSTRAP != "1")`, and `tools/bootstrap.sh` passes `-D BOOTSTRAP=1` to
+the **stage0 step only**:
+
+```
+S1a = stage0(srcql/main.qela -D BOOTSTRAP=1)   without the interpreter
+S2  = S1a(srcql/main.qela)                     with it
+S3  = S2(srcql/main.qela)                      with it
+```
+
+S1a is a throwaway intermediate that never ships, so it lacking `irun` costs
+nothing, and both compilers that do carry the interpreter compile it from the
+same sources — `S2 == S3` covers `interp.qela` exactly like every other file.
+What is lost is the cross-check on that file specifically: stage0 and stage1
+disagreeing about it can no longer surface at the gate, because stage0 never
+sees it.
+
+`tools/check-subset.sh` skips it, and filters it out of the import scan so its
+`std/` imports do not drag modules into the subset for everyone else. It is
+still held to the layering rule that a raw `syscall` belongs in
+`std/sys.qela`.
+
 ## Allowed
 
 Top level:
@@ -175,7 +204,7 @@ files. Changing it changes the contract and is agreed separately.
 ## The gate
 
 ```
-S1a = stage0(srcql/main.qela)
+S1a = stage0(srcql/main.qela -D BOOTSTRAP=1)
 S2  = S1a(srcql/main.qela)
 S3  = S2(srcql/main.qela)
 cmp S2 S3
