@@ -39,6 +39,11 @@ convention and register allocation are untouched. Floats parse, print and
 interpolate through pure integer arithmetic, because stage0 has no float —
 the bootstrap subset stays float-free.
 
+Implicit integer conversions only widen, and only in the value-preserving
+direction: `u8`→`i64` is fine, `i64`↔`u64` and any narrowing need an explicit
+`as` — a fitting constant stays implicit, a constant that does not fit is an
+error, not a silent wrap.
+
 Generics by monomorphization, over functions and over types, with the type
 argument inferred from the call:
 
