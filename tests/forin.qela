@@ -1,3 +1,4 @@
+// stage1-only
 // expect-exit: 115
 // for x in a iterates by value; the hidden index lets the bounds elision
 // drop the check on a fixed array (same shape the range-for already
