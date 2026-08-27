@@ -1,0 +1,6 @@
+// stage1-only
+// expect-compile-error
+// A dynamic value's type id is only stable within the compilation that
+// assigned it, so it cannot cross the extern/object boundary.
+extern var ~x;
+fn main() int { return 0; }
