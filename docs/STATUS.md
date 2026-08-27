@@ -1,6 +1,6 @@
 # Where the project stands
 
-Updated 2026-08-03. Read `BOOTSTRAP.md` first; it constrains everything below.
+Updated 2026-08-04. Read `BOOTSTRAP.md` first; it constrains everything below.
 
 ## Numbers
 
@@ -8,15 +8,16 @@ Updated 2026-08-03. Read `BOOTSTRAP.md` first; it constrains everything below.
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
 | **S2 — the shipped compiler, Qela compiled by itself** | **227 656 B** |
-| S2 under `upx --lzma` (measured 2026-08-03) | 51 388 B, ~4.9% of the 1 MiB budget |
+| S2 under `upx --lzma` (measured 2026-08-04) | 52 764 B, ~5.0% of the 1 MiB budget |
 | S2 under xz -9 (proxy for upx) | 55 180 B |
-| stage1 sources | 9 100 lines of Qela |
+| stage1 sources | 10 463 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **193%** without bounds checks (M4 gate wants ≤150%) |
 
 Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the
-56-test corpus under S2, the embedded stdlib resolving outside the source tree,
+66-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
-backtrace, and a scripted language server conversation.
+backtrace, interpolation and the repl, and a scripted language server
+conversation.
 
 ## Done
 
@@ -46,8 +47,10 @@ the split string verbatim from the token texts, idempotently.
 in `parse.qela` builds the exact `for (i = 0; i < a.len; i += 1)` shape with
 a hidden index (named with a `$`, which no identifier can contain); on a
 fixed array `a.len` folds to a literal during typing, so the bounds elision
-drops the check — the most natural loop is also the smallest. The
-collection is evaluated per iteration, like the range form's bound.
+drops the check — the most natural loop is also the smallest. A collection
+that is not a plain variable is evaluated once into a hidden variable
+(gen_for walks the init chain for it); the range form's bound is still
+evaluated per iteration.
 
 **`qela repl`**. Each line is compiled in a forked child as
 `write_str(STDOUT, "${line}")`, so integer, string and pointer expressions
