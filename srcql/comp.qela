@@ -215,6 +215,7 @@ struct Func {
 	nsaved     int,
 	leaf       bool,
 	naked      bool,
+	extern     bool,
 	body       *Node,
 	ret_slot   *Var,
 	addr       i64,
@@ -268,6 +269,9 @@ let EHDR_SZ  = 64;
 let PHDR_SZ  = 56;
 let SEG_GAP  = 0x1000;
 
+// Forward: Image below carries the object-mode relocation lists.
+struct Reloc;
+
 struct Image {
 	code     Buf,
 	rodata   Buf,
@@ -275,7 +279,28 @@ struct Image {
 	bss_size i64,
 	entry    i64,
 	nph      int,
+	// Object mode (-c) carries the symbol material here; the exe path
+	// leaves these empty.
+	funcs     *Func,
+	globals   *Var,
+	strs      *StrLit,
+	nstrs     int,
+	str_off   *i64,
+	bytes_off *i64,
+	relocs    *Reloc,
+	rodata_relocs *Reloc,
 }
+
+// A relocation for the object writer. at is the offset inside the target
+// section; kind is the x86-64 type. name names the symbol, except string
+// relocations where name is empty and id selects the generated `.Lstr` pair.
+struct Reloc;
+struct Reloc { next *Reloc, at i64, name str, kind int, id i64, }
+
+let R_64   = 1;
+let R_PC32 = 2;
+let R_PLT32 = 4;
+let R_32S  = 11;
 
 struct ComptimeVal {
 	kind int,
