@@ -22,6 +22,58 @@ var global_vars *Var;
 // std/fmt.qela at the next top-level splice point.
 var need_fmt bool = false;
 
+// ── top-level asm and the entry point ──
+
+// `asm { ... }` bytes land at the start of the code segment, before any
+// function; `entry name;` picks the ELF entry and suppresses the default
+// call-main stub. Neither is OS-specific: the first is raw bytes at a
+// known place, the second generalizes "main is the entry".
+var top_asm_head *Node;
+var top_asm_tail *Node;
+var entry_name str;
+
+fn find_global(name str) *Var {
+	var v *Var = global_vars;
+	while (v as i64 != 0) {
+		if (str_eq(v.name, name)) { return v; }
+		v = v.next;
+	}
+	return 0 as *Var;
+}
+
+fn parse_top_asm(t **Token) {
+	*t = (*t).next;
+	tok_expect(t, "{");
+	var head Node;
+	var tail *Node = &head;
+	while (!tok_eq(*t, "}")) {
+		if (tail as i64 != &head as i64) { tok_expect(t, ","); }
+		var a *Node = parse_assign(t);
+		if (a.kind != ND_ASMREF) {
+			var cv ComptimeVal = comptime_eval(a);
+			if (cv.kind != CV_INT || cv.num < 0) { error_at(a.pos, "top-level asm operand must be a constant"); }
+			a.kind = ND_NUM;
+			a.val = cv.num;
+		}
+		tail.next = a;
+		tail = a;
+	}
+	tok_expect(t, "}");
+	tok_expect(t, ";");
+	if (top_asm_tail as i64 == 0) { top_asm_head = head.next; }
+	else { top_asm_tail.next = head.next; }
+	top_asm_tail = tail;
+}
+
+fn parse_entry(t **Token) {
+	var p i64 = (*t).pos;
+	*t = (*t).next;
+	if ((*t).kind != TK_IDENT) { error_at((*t).pos, "entry needs a function name"); }
+	entry_name = (*t).text;
+	*t = (*t).next;
+	tok_expect(t, ";");
+}
+
 // ── macros ──
 
 var macro_list *Macro;
@@ -326,8 +378,27 @@ fn call_args(t **Token, n *Node) *Node {
 
 fn parse_primary(t **Token) *Node {
 	if (tok_consume(t, "(")) {
+		var p i64 = (*t).pos;
 		var n *Node = parse_expr(t);
 		tok_expect(t, ")");
+		return n;
+	}
+	// A symbol reference for asm operands: `$name` embeds the absolute
+	// address, `$rel name` a rel32 slot, patched when addresses are known.
+	if (tok_consume(t, "$")) {
+		var p i64 = (*t).pos;
+		if ((*t).kind != TK_IDENT) { error_at((*t).pos, "expected a symbol after '$'"); }
+		var sname str = (*t).text;
+		*t = (*t).next;
+		var n *Node = new_node(ND_ASMREF, p);
+		if (str_eq(sname, "rel") && (*t).kind == TK_IDENT) {
+			n.val = 1;
+			n.name = (*t).text;
+			*t = (*t).next;
+		} else {
+			n.val = 0;
+			n.name = sname;
+		}
 		return n;
 	}
 	if ((*t).kind == TK_NUM) {
@@ -1374,6 +1445,10 @@ fn parse(tok *Token) *Unit {
 			tok = splice_import(tok, "std/fmt.qela", tok.pos);
 		}
 		if (tok.kind == TK_EOF) { break; }
+		if (tok_eq(tok, "asm") && tok.next.kind == TK_PUNCT && tok_eq(tok.next, "{")) {
+			parse_top_asm(&tok); continue;
+		}
+		if (tok_eq(tok, "entry")) { parse_entry(&tok); continue; }
 		if (tok_eq(tok, "macro")) { parse_macro(&tok); continue; }
 		if (tok_eq(tok, "struct")) { parse_struct(&tok); continue; }
 		if (tok_eq(tok, "enum")) { parse_enum(&tok); continue; }
