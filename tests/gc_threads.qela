@@ -1,0 +1,91 @@
+// stage1-only
+// expect-exit: 42
+// A real OS thread keeps a linked list alive only through a local variable
+// on its own stack -- never a global -- while the main thread forces a
+// collection. This only survives if gc_collect's per-OS-thread registry
+// scan actually finds the other thread's parked registers/stack, not just
+// the data segment (globals would survive regardless and prove nothing).
+import "std/gc.qela";
+import "std/sys.qela";
+
+struct Node { val i64, next *Node, }
+
+let ROUNDS = 2000;
+
+var worker_built i64 = 0;
+var main_collected i64 = 0;
+var worker_done i64 = 0;
+var worker_sum i64 = 0;
+
+fn sum_of(head *Node) i64 {
+	var t i64 = 0;
+	var p *Node = head;
+	while (p as i64 != 0) { t = t + p.val; p = p.next; }
+	return t;
+}
+
+fn worker(arg i64) i64 {
+	tls_init();
+	gc_thread_enter();
+	var head *Node = 0 as *Node;
+	var i i64 = 0;
+	while (i < ROUNDS) {
+		var n *Node = gc_alloc(sizeof(Node)) as *Node;
+		n.val = i;
+		n.next = head;
+		head = n;
+		i = i + 1;
+	}
+	atomic_store(&worker_built, 1);
+
+	// Parked here, reachable only through the local `head`: gives the
+	// collector on the other thread a safepoint to catch us at.
+	while (atomic_load(&main_collected) == 0) {
+		var junk *u8 = gc_alloc(8);
+		junk[0] = 0;
+	}
+
+	var s i64 = sum_of(head);
+	atomic_store(&worker_sum, s);
+	gc_thread_exit();
+	atomic_store(&worker_done, 1);
+	return 0;
+}
+
+fn main() int {
+	gc_thread_enter();
+
+	var stack_size i64 = 262144;
+	var stack i64 = sys_mmap_anon(stack_size);
+	if (stack < 0 && stack > -4096) { return 1; }
+	var top i64 = (stack + stack_size) & ~15;
+
+	var tid i64 = thread_clone(worker, 0, top, CLONE_THREAD_FLAGS);
+	if (tid <= 0) { return 2; }
+
+	var spins i64 = 0;
+	while (atomic_load(&worker_built) == 0) {
+		spins = spins + 1;
+		if (spins > 200000000) { return 3; }
+	}
+
+	// A round of unrelated main-thread garbage first, so the collector has
+	// something real to reclaim, then the collection that must not touch
+	// the worker's only-on-its-stack list.
+	var i i64 = 0;
+	while (i < 500) { var junk *u8 = gc_alloc(64); junk[0] = 1; i = i + 1; }
+	gc_collect();
+	atomic_store(&main_collected, 1);
+
+	spins = 0;
+	while (atomic_load(&worker_done) == 0) {
+		spins = spins + 1;
+		if (spins > 200000000) { return 4; }
+	}
+
+	var want i64 = (ROUNDS as i64 - 1) * ROUNDS / 2;
+	if (atomic_load(&worker_sum) != want) { return 5; }
+
+	gc_thread_exit();
+	return 42;
+}
