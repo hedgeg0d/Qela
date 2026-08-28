@@ -1,0 +1,24 @@
+// stage1-only
+// expect-compile-error
+// The dot-call auto-& is opt-in via the dot syntax: a plain call with a
+// value receiver for a pointer parameter is still a type error, and a
+// temporary (non-addressable) receiver cannot be auto-addressed.
+struct Op { x i64, }
+
+fn edit(o *Op, n i64) i64 {
+	o.x = o.x + n;
+	return o.x;
+}
+
+fn mk() Op {
+	var o Op;
+	o.x = 5;
+	return o;
+}
+
+fn main() i64 {
+	var o Op;
+	o.x = 1;
+	edit(o, 1);
+	return 0;
+}
