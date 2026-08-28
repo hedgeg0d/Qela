@@ -1,0 +1,33 @@
+// expect-exit: 42
+// stage1-only
+// Anonymous functions without closures: a `fn (..) { .. }` literal is hidden
+// top-level function, and the expression is its address. No capture allowed:
+// the reject case lives in lambda_capture.qela. Zero-argument and
+// multi-argument lambdas, a lambda returned from a function, and one passed
+// inline.
+fn apply(f fn(i64) i64, x i64) i64 { return f(x); }
+
+fn pick(v i64) fn(i64) i64 {
+	if (v == 1) { return fn (x i64) i64 { return x * x; }; }
+	return fn (x i64) i64 { return x + x; };
+}
+
+fn main() int {
+	var sq = fn (x i64) i64 { return x * x; };
+	if (sq(9) != 81) { return 1; }
+
+	var twice = fn () i64 { return 21; };
+	if (twice() != 21) { return 2; }
+
+	var duo = fn (a i64, b i64) i64 { return a * 10 + b; };
+	if (duo(4, 2) != 42) { return 3; }
+
+	if (apply(sq, 6) != 36) { return 4; }
+	if (apply(fn (y i64) i64 { return y + 1; }, 41) != 42) { return 5; }
+
+	var pick1 = pick(1);
+	if (pick1(7) != 49) { return 6; }
+	var pick0 = pick(0);
+	if (pick0(5) != 10) { return 7; }
+	return 42;
+}
