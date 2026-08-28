@@ -1,0 +1,7 @@
+// expect-compile-error
+// return inside a defer body is rejected: codegen runs defer bodies while
+// unwinding, and another return would re-enter the same defer forever.
+fn main() int {
+	defer { return 1; }
+	return 0;
+}

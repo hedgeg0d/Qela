@@ -1,0 +1,6 @@
+// expect-compile-error
+// A constant remainder by zero folds at compile time and is rejected.
+fn main() int {
+	var x = 5 % 0;
+	return 0;
+}

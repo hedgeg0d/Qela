@@ -1,0 +1,11 @@
+// expect-compile-error
+// A comptime op-assign by zero silently kept the old value; it is now
+// rejected like any other constant division by zero.
+fn main() int {
+	let x = comptime {
+		var a int = 5;
+		a /= 0;
+		return a;
+	};
+	return x;
+}
