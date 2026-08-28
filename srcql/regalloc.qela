@@ -126,6 +126,8 @@ fn ra_walk(n *Node) {
 	// The panic path never returns, but the register file is clobbered across
 	// the stub call just the same, so an asserting function is not a leaf.
 	if (k == ND_CALL || k == ND_SYSCALL || k == ND_ASM || k == ND_ASSERT) { ra_calls = true; }
+	// A call through a function-typed variable reads the variable itself.
+	if (k == ND_CALL && n.varp as i64 != 0) { ra_use(n.varp); }
 	if (k == ND_ASM) { ra_deny_all(); return; }
 	if (k == ND_VAR || k == ND_ZERO) { ra_use(n.varp); return; }
 	if (k == ND_ADDR) { ra_deny(n.lhs); ra_walk(n.lhs); return; }
