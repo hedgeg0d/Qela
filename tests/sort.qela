@@ -1,8 +1,7 @@
-// stage1-only
 // expect-exit: 42
-// std/math.qela and std/sort.qela, written in the bootstrap subset. The
-// import of a "std/..." module resolves via S2's embedded library; stage0
-// resolves every import against the importing file, so it skips this.
+// std/math.qela and std/sort.qela, written in the bootstrap subset. A
+// leading "std/" import resolves against the working directory (stage0)
+// or the embedded library (S2), so this runs under both compilers.
 import "std/math.qela";
 import "std/sort.qela";
 
