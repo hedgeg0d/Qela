@@ -232,7 +232,10 @@ fn add_str(s str) int {
 // ── type parser ──
 
 fn parse_type(t **Token) *Type {
-	if (tok_consume(t, "*")) { return type_ptr(parse_type(t)); }
+	if (tok_consume(t, "*")) {
+		if (tok_consume(t, "volatile")) { return type_ptr_volatile(parse_type(t)); }
+		return type_ptr(parse_type(t));
+	}
 	if (tok_eq(*t, "[")) {
 		*t = (*t).next;
 		if (tok_consume(t, "]")) {
@@ -472,6 +475,9 @@ fn parse_primary(t **Token) *Node {
 
 		// function call
 		if (tok_eq(*t, "(")) {
+			if (cur_func as i64 != 0 && cur_func.naked && !str_eq(name, "asm") && !str_eq(name, "syscall")) {
+				error_at(p, "naked functions cannot call other functions");
+			}
 			var m *Macro = macro_find(name);
 			if (m as i64 != 0) { return macro_call(m, t, p); }
 			var kind int = ND_CALL;
@@ -777,6 +783,14 @@ fn macro_expand(n *Node, m *Macro, args **Node, nargs int, pos i64) *Node {
 fn parse_stmt(t **Token) *Node {
 	var p i64 = (*t).pos;
 
+	if (cur_func as i64 != 0 && cur_func.naked) {
+		if (tok_eq(*t, "let") || tok_eq(*t, "var")) {
+			error_at(p, "naked functions cannot have locals");
+		}
+		if (tok_eq(*t, "return")) { error_at(p, "naked functions cannot return a value"); }
+		if (tok_eq(*t, "defer")) { error_at(p, "naked functions cannot defer"); }
+	}
+
 	if (tok_eq(*t, "{")) { return parse_block(t); }
 
 	if (tok_eq(*t, "spawn") && (*t).next.kind == TK_IDENT) {
@@ -991,6 +1005,10 @@ fn parse_stmt(t **Token) *Node {
 
 fn parse_function(t **Token) *Func {
 	tok_expect(t, "fn");
+	// A naked function runs without prologue or epilogue: no frame, no
+	// implicit ret. The body is asm bytes plus bare stores, so the
+	// restrictions below are the frame's absence stated out loud.
+	var naked_fn bool = tok_consume(t, "naked");
 	var name str = (*t).text;
 	var p i64 = (*t).pos;
 	*t = (*t).next;
@@ -999,6 +1017,7 @@ fn parse_function(t **Token) *Func {
 	f.name = name;
 	f.ret = type_lookup("void");
 	f.pos = p;
+	f.naked = naked_fn;
 	cur_func = f;
 	type_set_fn(f);
 
@@ -1010,6 +1029,7 @@ fn parse_function(t **Token) *Func {
 	var saved_ntype_vars int = ntype_vars;
 	while (!tok_eq(*t, ")")) {
 		if (nparams > 0) { tok_expect(t, ","); }
+		if (naked_fn) { error_at((*t).pos, "naked functions cannot take parameters"); }
 
 		if (tok_consume(t, "comptime")) {
 			var pn str = (*t).text;
