@@ -23,7 +23,6 @@ import "../std/io.qela";
 var lsp_uri str;
 var lsp_path str;
 var lsp_text str;
-var lsp_seq i64 = 0;
 var lsp_shutdown bool = false;
 
 // ── JSON values ──
@@ -612,22 +611,17 @@ fn lsp_publish(diag_path str) {
 }
 
 fn lsp_compile() {
-	var base Buf;
-	fmt_str(&base, "/tmp/qela-lsp-");
-	fmt_i64(&base, sys_getpid());
-	fmt_str(&base, "-");
-	fmt_i64(&base, lsp_seq);
-	lsp_seq = lsp_seq + 1;
+	var base str = qela_mktmp("qela-lsp-");
 	var s Buf;
-	fmt_str(&s, buf_str(&base));
+	fmt_str(&s, base);
 	fmt_str(&s, ".qela");
 	var tmp_src str = buf_str(&s);
 	var db Buf;
-	fmt_str(&db, buf_str(&base));
+	fmt_str(&db, base);
 	fmt_str(&db, ".diag");
 	var diag_path str = buf_str(&db);
 	var ib Buf;
-	fmt_str(&ib, buf_str(&base));
+	fmt_str(&ib, base);
 	fmt_str(&ib, ".idx");
 	var idx_path str = buf_str(&ib);
 
