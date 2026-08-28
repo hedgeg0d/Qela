@@ -100,3 +100,4 @@ _Noreturn void error_at(isize pos, const char *fmt, ...) {
 	sys1(SYS_exit, 1);
 	__builtin_unreachable();
 }
+# daily maintenance 2026-08-28
