@@ -9,3 +9,4 @@
 /build/
 *.pyc
 __pycache__/
+qemu_*.core

@@ -1,7 +1,9 @@
 // stage1-only
-// expect-compile-error
+// expect-compile-error x86
+// expect-exit: 22
 // A str parameter that would overflow the register budget is rejected: v1
-// only spills one-word parameters, never a two-word str/struct.
+// only spills one-word parameters, never a two-word str/struct. arm64's
+// M10 stack spill covers it, so on that target the call runs (exit 22).
 fn f(a int, b int, c int, d int, e int, f int, g str) int {
 	return a + b + c + d + e + f + g.len;
 }
