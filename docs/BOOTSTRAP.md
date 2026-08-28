@@ -100,7 +100,7 @@ is larger — see `STATUS.md`.
 | `assert(...)`, `panic(...)` | stage0 does not know them; the corpus tests using them are `// stage1-only` |
 | global aggregates with an initializer | stage0 cannot emit them; fill tables at startup |
 | more than 6 parameters | pass a context struct by pointer |
-| `extern fn` / `-c` | a user-facing C-interop path; stage1 does not lean on it and the bootstrap gate cannot drive the external linker |
+ | `extern fn` / `extern var` / `-c` | a user-facing C-interop path; stage1 does not lean on it and the bootstrap gate cannot drive the external linker |
 
 `tools/check-subset.sh` enforces this over `srcql/` and the `std/` modules
 stage1 imports; it works that set out from the imports, so a new `std/` module
