@@ -562,96 +562,179 @@ fn ip_slice_expr(n *Node) i64 {
 	return base;
 }
 
-fn ip_eval(n *Node) i64 {
-	if (n as i64 == 0) { return 0; }
-	var k int = n.kind;
+fn ip_ev_num(n *Node) i64 { return n.val; }
+fn ip_ev_sizeof(n *Node) i64 { return n.typeval.size as i64; }
 
-	if (k == ND_NUM) { return n.val; }
-	if (k == ND_COMPTIME) { return n.val; }
-	if (k == ND_SIZEOF) { return n.typeval.size as i64; }
-	if (k == ND_STRLIT) {
-		if (n.ip_cached) { return n.ip_off; }
-		var s *StrLit = ip_unit.strs;
-		while (s as i64 != 0) {
-			if ((s.id as i64) == n.val) {
-				n.ip_off = s.off;
-				n.ip_cached = true;
-				return s.off;
-			}
-			s = s.next;
+fn ip_ev_strlit(n *Node) i64 {
+	if (n.ip_cached) { return n.ip_off; }
+	var s *StrLit = ip_unit.strs;
+	while (s as i64 != 0) {
+		if ((s.id as i64) == n.val) {
+			n.ip_off = s.off;
+			n.ip_cached = true;
+			return s.off;
 		}
-		error_at(n.pos, "interpreter: unknown string literal");
+		s = s.next;
 	}
-	if (k == ND_VAR) {
-		var a i64 = ip_var_addr(n.varp);
-		if (is_aggregate(n.ty)) { return a; }
-		return ip_load(a, n.ty);
-	}
-	if (k == ND_ADDR) { return ip_addr(n.lhs); }
-	if (k == ND_DEREF) {
-		var a i64 = ip_eval(n.lhs);
-		if (is_aggregate(n.ty)) { return a; }
-		return ip_load(a, n.ty);
-	}
-	if (k == ND_MEMBER || k == ND_INDEX) {
-		var a i64 = ip_addr(n);
-		if (is_aggregate(n.ty)) { return a; }
-		return ip_load(a, n.ty);
-	}
-	if (k == ND_SLICE) { return ip_slice_expr(n); }
-	if (k == ND_STRUCTLIT) { return ip_structlit(n); }
-	if (k == ND_ENUMLIT) { return ip_enumlit(n); }
-	if (k == ND_CAST) { return ip_cast(n); }
-	if (k == ND_ASSIGN) { return ip_assign(n); }
-	if (k == ND_OPASSIGN) { return ip_opassign(n); }
-	if (k == ND_COMMA) { ip_eval(n.lhs); return ip_eval(n.rhs); }
-	if (k == ND_NOT) { return (ip_eval(n.lhs) == 0) as i64; }
-	if (k == ND_BITNOT) { return ip_narrow(~ip_eval(n.lhs), n.ty); }
-	if (k == ND_NEG) {
-		if (is_float(n.ty)) { return ip_fbits(-ip_fval(ip_eval(n.lhs), n.ty), n.ty); }
-		return ip_narrow(-ip_eval(n.lhs), n.ty);
-	}
-	if (k == ND_AND) {
-		if (ip_eval(n.lhs) == 0) { return 0; }
-		return (ip_eval(n.rhs) != 0) as i64;
-	}
-	if (k == ND_OR) {
-		if (ip_eval(n.lhs) != 0) { return 1; }
-		return (ip_eval(n.rhs) != 0) as i64;
-	}
-	if (k == ND_ADD || k == ND_SUB || k == ND_MUL || k == ND_DIV ||
-	    k == ND_MOD || k == ND_BITAND || k == ND_BITOR || k == ND_BITXOR ||
-	    k == ND_SHL || k == ND_SHR || k == ND_EQ || k == ND_NE ||
-	    k == ND_LT || k == ND_LE) {
-		return ip_binop(n);
-	}
-	if (k == ND_CALL) { return ip_call_node(n); }
-	if (k == ND_SYSCALL) { return ip_syscall(n); }
-	if (k == ND_FUNCADDR) {
-		// There is no code address to hand out, so a function value is the
-		// *Func itself; ip_call_node casts it back for an indirect call.
-		var f *Func = find_func(n.name);
-		if (f as i64 == 0) { error_at(n.pos, "interpreter: undefined function"); }
-		return f as i64;
-	}
-	if (k == ND_ASSERT) { ip_assert(n); return 0; }
-	if (k == ND_ASM || k == ND_ASMREF) {
-		ip_warn_asm(n.pos);
-		return 0;
-	}
-	if (k == ND_ZERO) {
-		var a i64 = ip_slot(n.varp);
-		ip_memzero(a, n.varp.ty.size as i64);
-		return 0;
-	}
-	if (k == ND_IF || k == ND_FOR || k == ND_BLOCK || k == ND_MATCH ||
-	    k == ND_EXPRSTMT || k == ND_RET || k == ND_BREAK || k == ND_CONT ||
-	    k == ND_DEFER) {
-		ip_stmt(n);
-		return 0;
-	}
+	error_at(n.pos, "interpreter: unknown string literal");
+	return 0;
+}
+
+fn ip_ev_var(n *Node) i64 {
+	var a i64 = ip_var_addr(n.varp);
+	if (is_aggregate(n.ty)) { return a; }
+	return ip_load(a, n.ty);
+}
+
+fn ip_ev_addr(n *Node) i64 { return ip_addr(n.lhs); }
+
+fn ip_ev_deref(n *Node) i64 {
+	var a i64 = ip_eval(n.lhs);
+	if (is_aggregate(n.ty)) { return a; }
+	return ip_load(a, n.ty);
+}
+
+fn ip_ev_memberidx(n *Node) i64 {
+	var a i64 = ip_addr(n);
+	if (is_aggregate(n.ty)) { return a; }
+	return ip_load(a, n.ty);
+}
+
+fn ip_ev_slice(n *Node) i64 { return ip_slice_expr(n); }
+fn ip_ev_structlit(n *Node) i64 { return ip_structlit(n); }
+fn ip_ev_enumlit(n *Node) i64 { return ip_enumlit(n); }
+fn ip_ev_cast(n *Node) i64 { return ip_cast(n); }
+fn ip_ev_assign(n *Node) i64 { return ip_assign(n); }
+fn ip_ev_opassign(n *Node) i64 { return ip_opassign(n); }
+fn ip_ev_comma(n *Node) i64 { ip_eval(n.lhs); return ip_eval(n.rhs); }
+fn ip_ev_not(n *Node) i64 { return (ip_eval(n.lhs) == 0) as i64; }
+fn ip_ev_bitnot(n *Node) i64 { return ip_narrow(~ip_eval(n.lhs), n.ty); }
+
+fn ip_ev_neg(n *Node) i64 {
+	if (is_float(n.ty)) { return ip_fbits(-ip_fval(ip_eval(n.lhs), n.ty), n.ty); }
+	return ip_narrow(-ip_eval(n.lhs), n.ty);
+}
+
+fn ip_ev_and(n *Node) i64 {
+	if (ip_eval(n.lhs) == 0) { return 0; }
+	return (ip_eval(n.rhs) != 0) as i64;
+}
+
+fn ip_ev_or(n *Node) i64 {
+	if (ip_eval(n.lhs) != 0) { return 1; }
+	return (ip_eval(n.rhs) != 0) as i64;
+}
+
+fn ip_ev_binop(n *Node) i64 { return ip_binop(n); }
+fn ip_ev_call(n *Node) i64 { return ip_call_node(n); }
+fn ip_ev_syscall(n *Node) i64 { return ip_syscall(n); }
+
+fn ip_ev_funcaddr(n *Node) i64 {
+	// There is no code address to hand out, so a function value is the
+	// *Func itself; ip_call_node casts it back for an indirect call.
+	var f *Func = find_func(n.name);
+	if (f as i64 == 0) { error_at(n.pos, "interpreter: undefined function"); }
+	return f as i64;
+}
+
+fn ip_ev_assert(n *Node) i64 { ip_assert(n); return 0; }
+fn ip_ev_asm(n *Node) i64 { ip_warn_asm(n.pos); return 0; }
+
+fn ip_ev_zero(n *Node) i64 {
+	var a i64 = ip_slot(n.varp);
+	ip_memzero(a, n.varp.ty.size as i64);
+	return 0;
+}
+
+fn ip_ev_stmt(n *Node) i64 { ip_stmt(n); return 0; }
+
+fn ip_ev_unsupported(n *Node) i64 {
 	error_at(n.pos, "interpreter: unsupported expression");
 	return 0;
+}
+
+let IP_NKIND = 56;
+var ip_eval_table [56]fn(*Node) i64;
+var ip_stmt_table [56]fn(*Node) i64;
+var ip_dispatch_ready bool = false;
+
+fn ip_dispatch_init() {
+	var i int = 0;
+	while (i < IP_NKIND) {
+		ip_eval_table[i] = ip_ev_unsupported;
+		ip_stmt_table[i] = ip_st_fallback;
+		i = i + 1;
+	}
+
+	ip_eval_table[ND_NUM] = ip_ev_num;
+	ip_eval_table[ND_COMPTIME] = ip_ev_num;
+	ip_eval_table[ND_SIZEOF] = ip_ev_sizeof;
+	ip_eval_table[ND_STRLIT] = ip_ev_strlit;
+	ip_eval_table[ND_VAR] = ip_ev_var;
+	ip_eval_table[ND_ADDR] = ip_ev_addr;
+	ip_eval_table[ND_DEREF] = ip_ev_deref;
+	ip_eval_table[ND_MEMBER] = ip_ev_memberidx;
+	ip_eval_table[ND_INDEX] = ip_ev_memberidx;
+	ip_eval_table[ND_SLICE] = ip_ev_slice;
+	ip_eval_table[ND_STRUCTLIT] = ip_ev_structlit;
+	ip_eval_table[ND_ENUMLIT] = ip_ev_enumlit;
+	ip_eval_table[ND_CAST] = ip_ev_cast;
+	ip_eval_table[ND_ASSIGN] = ip_ev_assign;
+	ip_eval_table[ND_OPASSIGN] = ip_ev_opassign;
+	ip_eval_table[ND_COMMA] = ip_ev_comma;
+	ip_eval_table[ND_NOT] = ip_ev_not;
+	ip_eval_table[ND_BITNOT] = ip_ev_bitnot;
+	ip_eval_table[ND_NEG] = ip_ev_neg;
+	ip_eval_table[ND_AND] = ip_ev_and;
+	ip_eval_table[ND_OR] = ip_ev_or;
+	ip_eval_table[ND_ADD] = ip_ev_binop;
+	ip_eval_table[ND_SUB] = ip_ev_binop;
+	ip_eval_table[ND_MUL] = ip_ev_binop;
+	ip_eval_table[ND_DIV] = ip_ev_binop;
+	ip_eval_table[ND_MOD] = ip_ev_binop;
+	ip_eval_table[ND_BITAND] = ip_ev_binop;
+	ip_eval_table[ND_BITOR] = ip_ev_binop;
+	ip_eval_table[ND_BITXOR] = ip_ev_binop;
+	ip_eval_table[ND_SHL] = ip_ev_binop;
+	ip_eval_table[ND_SHR] = ip_ev_binop;
+	ip_eval_table[ND_EQ] = ip_ev_binop;
+	ip_eval_table[ND_NE] = ip_ev_binop;
+	ip_eval_table[ND_LT] = ip_ev_binop;
+	ip_eval_table[ND_LE] = ip_ev_binop;
+	ip_eval_table[ND_CALL] = ip_ev_call;
+	ip_eval_table[ND_SYSCALL] = ip_ev_syscall;
+	ip_eval_table[ND_FUNCADDR] = ip_ev_funcaddr;
+	ip_eval_table[ND_ASSERT] = ip_ev_assert;
+	ip_eval_table[ND_ASM] = ip_ev_asm;
+	ip_eval_table[ND_ASMREF] = ip_ev_asm;
+	ip_eval_table[ND_ZERO] = ip_ev_zero;
+	ip_eval_table[ND_IF] = ip_ev_stmt;
+	ip_eval_table[ND_FOR] = ip_ev_stmt;
+	ip_eval_table[ND_BLOCK] = ip_ev_stmt;
+	ip_eval_table[ND_MATCH] = ip_ev_stmt;
+	ip_eval_table[ND_EXPRSTMT] = ip_ev_stmt;
+	ip_eval_table[ND_RET] = ip_ev_stmt;
+	ip_eval_table[ND_BREAK] = ip_ev_stmt;
+	ip_eval_table[ND_CONT] = ip_ev_stmt;
+	ip_eval_table[ND_DEFER] = ip_ev_stmt;
+
+	ip_stmt_table[ND_BLOCK] = ip_st_block;
+	ip_stmt_table[ND_EXPRSTMT] = ip_st_exprstmt;
+	ip_stmt_table[ND_IF] = ip_st_if;
+	ip_stmt_table[ND_FOR] = ip_st_for;
+	ip_stmt_table[ND_MATCH] = ip_st_match;
+	ip_stmt_table[ND_BREAK] = ip_st_break;
+	ip_stmt_table[ND_CONT] = ip_st_cont;
+	ip_stmt_table[ND_DEFER] = ip_st_defer;
+	ip_stmt_table[ND_RET] = ip_st_ret;
+
+	ip_dispatch_ready = true;
+}
+
+fn ip_eval(n *Node) i64 {
+	if (n as i64 == 0) { return 0; }
+	var h fn(*Node) i64 = ip_eval_table[n.kind];
+	return h(n);
 }
 
 // ── asm, naked, entry: ignored, once per site ──
@@ -1150,47 +1233,52 @@ fn ip_match(n *Node) {
 	}
 }
 
+// Every statement releases whatever temporaries its expressions took;
+// frames nest below them, so the discipline stays LIFO.
+
+fn ip_st_block(n *Node) i64 { var mark i64 = ip_sp; ip_block(n); ip_sp = mark; return 0; }
+fn ip_st_exprstmt(n *Node) i64 { var mark i64 = ip_sp; ip_eval(n.lhs); ip_sp = mark; return 0; }
+
+fn ip_st_if(n *Node) i64 {
+	var mark i64 = ip_sp;
+	if (ip_eval(n.cond) != 0) { ip_sp = mark; ip_stmt(n.then); }
+	else { ip_sp = mark; ip_stmt(n.els); }
+	return 0;
+}
+
+fn ip_st_for(n *Node) i64 { var mark i64 = ip_sp; ip_for(n); ip_sp = mark; return 0; }
+fn ip_st_match(n *Node) i64 { var mark i64 = ip_sp; ip_match(n); ip_sp = mark; return 0; }
+fn ip_st_break(n *Node) i64 { ip_broke = true; return 0; }
+fn ip_st_cont(n *Node) i64 { ip_continued = true; return 0; }
+
+fn ip_st_defer(n *Node) i64 {
+	if (ip_ndefer >= IP_MAX_DEFERS) { error_at(n.pos, "interpreter: too many live defers"); }
+	ip_defers[ip_ndefer] = n;
+	ip_ndefer = ip_ndefer + 1;
+	return 0;
+}
+
+fn ip_st_ret(n *Node) i64 {
+	var v i64 = 0;
+	if (n.lhs as i64 != 0) {
+		v = ip_eval(n.lhs);
+		if (is_aggregate(n.lhs.ty) && ip_retdst != 0) {
+			ip_memcpy(ip_retdst, v, n.lhs.ty.size as i64);
+			v = ip_retdst;
+		}
+	}
+	ip_ret = v;
+	ip_returning = true;
+	return 0;
+}
+
+fn ip_st_fallback(n *Node) i64 { var mark i64 = ip_sp; ip_eval(n); ip_sp = mark; return 0; }
+
 fn ip_stmt(n *Node) {
 	if (n as i64 == 0) { return; }
 	if (ip_returning || ip_broke || ip_continued) { return; }
-	var k int = n.kind;
-
-	// Every statement releases whatever temporaries its expressions took;
-	// frames nest below them, so the discipline stays LIFO.
-	var mark i64 = ip_sp;
-
-	if (k == ND_BLOCK) { ip_block(n); ip_sp = mark; return; }
-	if (k == ND_EXPRSTMT) { ip_eval(n.lhs); ip_sp = mark; return; }
-	if (k == ND_IF) {
-		if (ip_eval(n.cond) != 0) { ip_sp = mark; ip_stmt(n.then); }
-		else { ip_sp = mark; ip_stmt(n.els); }
-		return;
-	}
-	if (k == ND_FOR) { ip_for(n); ip_sp = mark; return; }
-	if (k == ND_MATCH) { ip_match(n); ip_sp = mark; return; }
-	if (k == ND_BREAK) { ip_broke = true; return; }
-	if (k == ND_CONT) { ip_continued = true; return; }
-	if (k == ND_DEFER) {
-		if (ip_ndefer >= IP_MAX_DEFERS) { error_at(n.pos, "interpreter: too many live defers"); }
-		ip_defers[ip_ndefer] = n;
-		ip_ndefer = ip_ndefer + 1;
-		return;
-	}
-	if (k == ND_RET) {
-		var v i64 = 0;
-		if (n.lhs as i64 != 0) {
-			v = ip_eval(n.lhs);
-			if (is_aggregate(n.lhs.ty) && ip_retdst != 0) {
-				ip_memcpy(ip_retdst, v, n.lhs.ty.size as i64);
-				v = ip_retdst;
-			}
-		}
-		ip_ret = v;
-		ip_returning = true;
-		return;
-	}
-	ip_eval(n);
-	ip_sp = mark;
+	var h fn(*Node) i64 = ip_stmt_table[n.kind];
+	h(n);
 }
 
 // ── driver ──
@@ -1202,6 +1290,7 @@ fn ip_find_main() *Func {
 }
 
 fn ip_run(u *Unit, argc int, argv **u8) int {
+	if (!ip_dispatch_ready) { ip_dispatch_init(); }
 	ip_unit = u;
 
 	ip_layout(u, false);
