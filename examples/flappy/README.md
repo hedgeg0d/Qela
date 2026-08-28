@@ -8,7 +8,7 @@ pipe speed climbs from 150 to 260 px/s and the gap narrows from 170 to 120 px.
 
 ```sh
 qela -c flappy.qela -o flappy.o
-gcc -o flappy flappy.o glue.c -lraylib -lm
+gcc -o flappy flappy.o -lraylib -lm
 ./flappy
 ```
 
@@ -22,17 +22,16 @@ declarations. `str` crosses as a `{ptr, len}` pair, which is why the code
 passes `s.ptr as *i8` where raylib wants a `const char*` (string bytes are
 NUL-terminated in the object).
 
-Two things do not cross directly, and both are float-shaped:
-
-- **float arguments**: a Qela float is raw bits in an integer register,
-  SysV (what raylib expects) wants it in an XMM register;
-- **float returns**: same mismatch in the other direction.
-
-`glue.c` bridges exactly the two float-touching calls (`GetFrameTime`,
-`DrawCircle`): the float crosses as an integer bit pattern and is
-reinterpreted on the C side. Everything else — `DrawRectangle`,
-`DrawText`, `ClearBackground`, `Color` by value — is called directly.
-The bird physics (gravity, flap, pipe speed, delta time) runs in `f32`.
+Floats cross directly too. Qela computes with floats in integer registers
+(a Qela `f32`/`f64` is raw bits in a GPR), but on the `extern` boundary the
+compiler marshals scalar floats into the SysV XMM registers a C caller
+expects: arguments go to `xmm0` and up, a float result comes back in
+`xmm0`. On the callee side incoming floats are re-staged from XMM into
+their Qela word slots. That is exactly what `GetFrameTime` and
+`DrawCircle`'s radius need, so this example needs no glue at all. Only
+scalar floats are marshalled so far — `Vector2` and friends are outside
+the boundary (the bird physics, gravity, flap, pipe speed and delta time
+all run in `f32` on the Qela side, and the circle position stays `int`).
 
 ## Why Qela does not link yet
 
