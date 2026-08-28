@@ -507,7 +507,7 @@ fn cmd_repl(argc int, argv **u8) int {
 		var tmp str = buf_str(&tb);
 		var tmpc *u8 = cstr(tmp);
 		var src Buf;
-		fmt_str(&src, "import \"std/io.qela\";\nfn main() int {\n\twrite_str(STDOUT, \"");
+		fmt_str(&src, "import \"std/io.qela\";\nimport \"std/rand.qela\";\nfn main() int {\n\twrite_str(STDOUT, \"");
 		buf_u8(&src, '$');
 		buf_u8(&src, '{');
 		fmt_str(&src, line);

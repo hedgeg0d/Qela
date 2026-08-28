@@ -1,0 +1,40 @@
+// expect-exit: 0
+// The generator: seeds reproduce the same stream, dice stay in range with
+// a plausible average, and a degenerate range is the lower bound.
+import "std/rand.qela";
+
+fn main() int {
+	rand_init(42);
+	var s i64 = 0;
+	var i i64 = 0;
+	while (i < 1000) {
+		s = s + rand_range(1, 7);
+		i = i + 1;
+	}
+	if (s < 3000 || s > 4000) { return 1; }
+
+	rand_init(7);
+	var a i64 = rand_u64();
+	rand_init(7);
+	if (rand_u64() != a) { return 2; }
+
+	rand_init(3);
+	var j i64 = 0;
+	while (j < 1000) {
+		var r i64 = rand_range(-5, 5);
+		if (r < -5 || r >= 5) { return 3; }
+		j = j + 1;
+	}
+	if (rand_range(5, 5) != 5) { return 4; }
+	if (rand_range(5, 3) != 5) { return 5; }
+
+	var z i64 = 0;
+	rand_init(11);
+	var k i64 = 0;
+	while (k < 100000) {
+		z = z ^ rand_u64();
+		k = k + 1;
+	}
+	if (z == 0) { return 6; }
+	return 0;
+}
