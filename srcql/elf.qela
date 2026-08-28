@@ -91,8 +91,12 @@ fn write_elf(path str, img *Image) {
 	}
 
 	buf_u16(&f, 2);
-	if (opt_target == TARGET_ARM64) { buf_u16(&f, EM_AARCH64); } else { buf_u16(&f, EM_X86_64); }
-	buf_u32(&f, 1);
+	if (opt_target == TARGET_RISCV64) { buf_u16(&f, EM_RISCV); }
+	else if (opt_target == TARGET_ARM64) { buf_u16(&f, EM_AARCH64); }
+	else { buf_u16(&f, EM_X86_64); }
+	// RISC-V e_flags: the LP64D ABI's double-float tag -- the linker checks
+	// it against C objects' flags. EF_RISCV_FLOAT_ABI_DOUBLE = 4.
+	if (opt_target == TARGET_RISCV64) { buf_u32(&f, 4); } else { buf_u32(&f, 1); }
 	buf_u64(&f, ELF_BASE + hdr + img.entry);
 	buf_u64(&f, EHDR_SZ);
 	var shoff_at i64 = f.n;
@@ -365,8 +369,15 @@ fn o_sym_rec(f *Buf, i int) {
 }
 
 // The only place that knows REL_* purposes map to the target's relocation
-// type numbers: R_X86_64_* here, R_AARCH64_* under --target arm64.
+// type numbers: R_X86_64_* here, R_AARCH64_* under --target arm64,
+// R_RISCV_* under --target riscv64.
 fn elf_reloc_type(kind int) int {
+	if (opt_target == TARGET_RISCV64) {
+		if (kind == REL_ABS64) { return 2; }         // R_RISCV_64
+		if (kind == REL_RISCV_PCREL_HI20) { return 23; }   // R_RISCV_PCREL_HI20
+		if (kind == REL_RISCV_PCREL_LO12_I) { return 24; } // R_RISCV_PCREL_LO12_I
+		return 17;                                   // R_RISCV_JAL
+	}
 	if (opt_target == TARGET_ARM64) {
 		if (kind == REL_ABS64) { return 257; }          // R_AARCH64_ABS64
 		if (kind == REL_ARM64_CALL26) { return 283; }   // R_AARCH64_CALL26
@@ -385,10 +396,10 @@ fn o_rela_rec(f *Buf, r *Reloc, img *Image, base i64) {
 	// x86 PC-relative slots resolve from the *next* instruction; the
 	// linker's P is the slot's own address, so a -4 addend aligns the two
 	// (gcc emits the same). Absolute relocations carry no addend, and none
-	// of the AArch64 kinds need one -- A64 bakes its own immediates into
-	// the instruction the relocation names.
+	// of the AArch64 or RISC-V kinds need one -- both bake their own
+	// immediates into the instruction the relocation names.
 	var add i64 = 0;
-	if (opt_target != TARGET_ARM64) {
+	if (opt_target == TARGET_X86_64) {
 		if (r.kind == REL_PCREL32_PLT || r.kind == REL_PCREL32) { add = -4; }
 	}
 	buf_u64(f, add);
@@ -469,8 +480,10 @@ fn write_object(path str, img *Image) {
 	var k i64 = 7;
 	while (k < 16) { buf_u8(&f, 0); k = k + 1; }
 	buf_u16(&f, 1);
-	if (opt_target == TARGET_ARM64) { buf_u16(&f, EM_AARCH64); } else { buf_u16(&f, EM_X86_64); }
-	buf_u32(&f, 1);
+	if (opt_target == TARGET_RISCV64) { buf_u16(&f, EM_RISCV); }
+	else if (opt_target == TARGET_ARM64) { buf_u16(&f, EM_AARCH64); }
+	else { buf_u16(&f, EM_X86_64); }
+	if (opt_target == TARGET_RISCV64) { buf_u32(&f, 4); } else { buf_u32(&f, 1); }
 	buf_u64(&f, 0);
 	buf_u64(&f, 0);
 	buf_u64(&f, shoff);
