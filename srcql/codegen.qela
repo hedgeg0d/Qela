@@ -385,6 +385,21 @@ fn add_absref(name str, pos i64) {
 }
 
 fn add_strref(reg int, id int) {
+	if (opt_object) {
+		// RIP-relative slot the linker resolves: the address of the string
+		// header is S + A - P from the slot, so it works at any load base
+		// (PIE included). The absolute mov below would only fit a -no-pie
+		// image, and R_X86_64_32S forces DT_TEXTREL there.
+		rip_ref(0x8d, reg);
+		var f *StrFixup = arena_alloc(sizeof(StrFixup), 8) as *StrFixup;
+		f.at = code.n;
+		f.id = id;
+		if (strrefs_tail as i64 == 0) { strrefs_head = f; } else { strrefs_tail.next = f; }
+		strrefs_tail = f;
+		b4(0);
+		push_reloc_id(f.at, id as i64, R_PC32);
+		return;
+	}
 	if (reg >= 8) { b1(0x41); }
 	b1(0xb8 + ((reg as i64) & 7));
 	var f *StrFixup = arena_alloc(sizeof(StrFixup), 8) as *StrFixup;
@@ -393,10 +408,29 @@ fn add_strref(reg int, id int) {
 	if (strrefs_tail as i64 == 0) { strrefs_head = f; } else { strrefs_tail.next = f; }
 	strrefs_tail = f;
 	b4(0);
-	if (opt_object) { push_reloc_id(f.at, id as i64, R_32S); }
 }
 
 fn add_dataref(v *Var) {
+	if (opt_object) {
+		// Every global is a RIP-relative lea here: own symbols and exported
+		// externs live in this image, and an imported extern resolves at
+		// static link (gcc -fno-pic uses the same PC32 references). The
+		// GOT path would be needed only for DSO data, and binutils 2.46
+		// aborts on our GOTPCREL objects -- so externs must be statically
+		// linked, no shared-library data.
+		rip_ref(0x8d, RAX);
+		var at i64 = code.n;
+		b4(0);
+		push_reloc(at, v.name, R_PC32);
+		return;
+	}
+	if (v.extern && !v.has_init) {
+		var sb Buf;
+		fmt_str(&sb, "extern '");
+		fmt_str(&sb, v.name);
+		fmt_str(&sb, "' is not linked (extern needs -c and the linker)");
+		error_at(v.pos, buf_str(&sb));
+	}
 	b1(0xb8);
 	var f *DataFixup = arena_alloc(sizeof(DataFixup), 8) as *DataFixup;
 	f.at = code.n;
@@ -404,7 +438,15 @@ fn add_dataref(v *Var) {
 	if (datarefs_tail as i64 == 0) { datarefs_head = f; } else { datarefs_tail.next = f; }
 	datarefs_tail = f;
 	b4(0);
-	if (opt_object) { push_reloc(f.at, v.name, R_32S); }
+}
+
+// `lea reg, [rip + disp32]` / `mov reg, [rip + disp32]` in object mode: the
+// disp is a relocation the linker fills, so a reference works at any load
+// base. op 0x8d is a lea (own symbol), 0x8b a GOT load (imported extern).
+fn rip_ref(op int, reg int) {
+	if ((reg as i64) >= 8) { b1(0x49); } else { b1(0x48); }
+	b1(op);
+	b1(0x05 | (((reg as i64) & 7) << 3));
 }
 
 fn add_funcaddr(name str, pos i64) {
@@ -2411,7 +2453,9 @@ fn layout_globals(globals *Var) {
 	var bss i64 = gdata.n;
 	v = globals;
 	while (v as i64 != 0) {
-		if (v.init == 0) {
+		if (v.init == 0 && !(v.extern && !v.has_init)) {
+			// An imported extern is allocated by the C side; it must not
+			// take a .bss slot here.
 			var align i64 = v.ty.align as i64;
 			bss = (bss + align - 1) & ~(align - 1);
 			v.data_off = bss;
@@ -2428,10 +2472,22 @@ fn layout_globals(globals *Var) {
 // to the walker instead of exiting, so the caller of the trampoline call
 // below is still on the stack when the walker reads it.
 fn gen_panic_stub(msg_id int, msg_len i64) {
-	b1(0xbe);
-	ilist_push(&panic_msg_at, code.n);
-	ilist_push(&panic_msg_ids, msg_id as i64);
-	b4(0);
+	if (opt_object) {
+		// The message bytes get a `.Lstrd<id>` symbol; a RIP-relative lea
+		// with a PC32 reloc survives PIE (an absolute slot would be TEXTREL).
+		rip_ref(0x8d, RSI);
+		var at i64 = code.n;
+		b4(0);
+		var nb Buf;
+		fmt_str(&nb, ".Lstrd");
+		fmt_i64(&nb, msg_id as i64);
+		push_reloc(at, buf_str(&nb), R_PC32);
+	} else {
+		b1(0xbe);
+		ilist_push(&panic_msg_at, code.n);
+		ilist_push(&panic_msg_ids, msg_id as i64);
+		b4(0);
+	}
 	mov_reg_imm(RAX, 1);
 	mov_reg_imm(RDI, 2);
 	mov_reg_imm(RDX, msg_len);
@@ -2598,6 +2654,16 @@ fn emit_code(u *Unit, main_fn *Func, panic_id int, hdr i64) {
 fn codegen(u *Unit, img *Image) {
 	gen_unit = u;
 	var panic_id int = u.nstrs;
+	if (opt_object) {
+		// The object's panic stub references the message through a `.Lstrd`
+		// symbol, so the bounds message has to be a real string in u.strs
+		// (the exe path appends it as raw bytes after the pass loop instead).
+		// Reserved here only in object mode: an exe without arrays carries no
+		// panic machinery at all.
+		panic_id = add_str("index out of bounds\n");
+		u.strs = strlist_head;
+		u.nstrs = nstrs;
+	}
 	var bytes_off *i64 = arena_alloc((u.nstrs as i64 + 1) * 8, 8) as *i64;
 	str_off = arena_alloc((u.nstrs as i64 + 1) * 8, 8) as *i64;
 
@@ -2633,6 +2699,49 @@ fn codegen(u *Unit, img *Image) {
 			}
 			if (!br_grew || pass >= 8) { break; }
 			pass = pass + 1;
+		}
+		// The bounds trampolines and the panic/assert stubs are appended
+		// after the last pass (reset_code clears the lists per pass). Their
+		// rel32 jumps are intra-image, patched the same way the exe path
+		// does; the stub message pointers carry real relocations.
+		if (bounds_checks.n != 0) {
+			var panic_addr i64 = code.n;
+			gen_panic_stub(panic_id, 20);
+			var i i64 = 0;
+			while (i < bounds_checks.n) {
+				buf_patch32(&code, bounds_checks.p[i], panic_addr - (bounds_checks.p[i] + 4));
+				i = i + 1;
+			}
+		}
+		if (assert_sites.n != 0) {
+			var ai i64 = 0;
+			while (ai < assert_sites.n) {
+				var msg i64 = assert_msgs.p[ai];
+				var dup bool = false;
+				var bi i64 = 0;
+				while (bi < ai) {
+					if (assert_msgs.p[bi] == msg) { dup = true; }
+					bi = bi + 1;
+				}
+				if (!dup) {
+					var len i64 = 0;
+					var ls *StrLit = u.strs;
+					while (ls as i64 != 0) {
+						if (ls.id == (msg as int)) { len = ls.s.len; }
+						ls = ls.next;
+					}
+					var sa i64 = code.n;
+					gen_panic_stub(msg as int, len);
+					var ci i64 = 0;
+					while (ci < assert_sites.n) {
+						if (assert_msgs.p[ci] == msg) {
+							buf_patch32(&code, assert_sites.p[ci], sa - (assert_sites.p[ci] + 4));
+						}
+						ci = ci + 1;
+					}
+				}
+				ai = ai + 1;
+			}
 		}
 		img.code = code;
 		img.rodata = rodata;
