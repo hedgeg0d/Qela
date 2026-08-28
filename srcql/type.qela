@@ -987,7 +987,9 @@ fn type_syscall(n *Node) {
 // The operand must be a known byte value at compile time -- there is no
 // runtime operand-evaluation step, codegen just splats each value straight
 // into the code buffer. Constants count: a global with a constant init
-// (`let OPCODE = 0x48`) or any constant expression folds here.
+// (`let OPCODE = 0x48`) or any constant expression folds here. A value
+// wider than a byte emits as little-endian minimal bytes, so a whole
+// instruction prefix fits in one name: `let MOV_RAX_IMM32 = 0x48c7c0;`.
 fn type_asm(n *Node) {
 	var a *Node = n.args;
 	while (a as i64 != 0) {
@@ -1002,8 +1004,8 @@ fn type_asm(n *Node) {
 			a.kind = ND_NUM;
 			a.val = cv.num;
 		}
-		if (a.val < 0 || a.val > 255) {
-			error_at(a.pos, "asm operand must be a byte literal 0-255");
+		if (a.val < 0) {
+			error_at(a.pos, "asm operand must be a byte constant");
 		}
 		a = a.next;
 	}
