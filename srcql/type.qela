@@ -1124,6 +1124,14 @@ fn add_type(n *Node) {
 	if (k == ND_MEMBER) {
 		var lt *Type = n.lhs.ty;
 		if (lt.kind == TY_PTR) { lt = lt.base; }
+		// A fixed array's length is known at compile time, so `a.len`
+		// folds to a literal. The bounds elision relies on this shape.
+		if (lt.kind == TY_ARRAY && str_eq(n.name, "len")) {
+			n.kind = ND_NUM;
+			n.val = lt.len;
+			n.ty = ty_i64;
+			return;
+		}
 		if (lt.kind != TY_STRUCT && lt.kind != TY_SLICE) {
 			emsg("type '"); emsg_ty(n.lhs.ty); emsg("' has no fields"); efail(n.pos);
 		}
@@ -1183,8 +1191,71 @@ fn add_type(n *Node) {
 	if (k == ND_SYSCALL) { type_syscall(n); return; }
 	if (k == ND_ASM) { type_asm(n); return; }
 	if (k == ND_ASSERT) { type_assert(n); return; }
+	if (k == ND_INTERP) { type_interp(n); return; }
 
 	if (n.ty as i64 == 0) { n.ty = ty_void; }
+}
+
+// ── "..." interpolation ──
+//
+// The parse-time ND_INTERP holds literal parts and expressions as ND_STRPART
+// children. With types known, each part picks its own formatting function
+// and the node is rewritten in place into a nested call chain:
+//
+//   "a=${x}b"  ->  fmt_result(fmt_put_str(fmt_put_i64(fmt_begin(), x), "b"))
+
+fn mk_call0(name str) *Node {
+	var n *Node = arena_alloc(sizeof(Node), 8) as *Node;
+	n.kind = ND_CALL;
+	n.name = name;
+	return n;
+}
+
+fn mk_call1(name str, a0 *Node) *Node {
+	var n *Node = mk_call0(name);
+	n.args = a0;
+	n.nargs = 1;
+	return n;
+}
+
+fn mk_call2(name str, a0 *Node, a1 *Node) *Node {
+	var n *Node = mk_call0(name);
+	n.args = a0;
+	a0.next = a1;
+	n.nargs = 2;
+	return n;
+}
+
+fn type_interp(n *Node) {
+	var b *Node = mk_call0("fmt_begin");
+	var p *Node = n.args;
+	while (p as i64 != 0) {
+		var part *Node = p.lhs;
+		var fname str;
+		if (p.val != 0 || same_type(part.ty, type_str())) { fname = "fmt_put_str"; }
+		else if (part.ty.kind == TY_PTR) {
+			// fmt_put_hex takes the bits; a pointer needs an explicit cast.
+			var c *Node = arena_alloc(sizeof(Node), 8) as *Node;
+			c.kind = ND_CAST;
+			c.lhs = part;
+			c.ty = ty_i64;
+			c.typed = true;
+			c.ty = ty_i64;
+			part = c;
+			fname = "fmt_put_hex";
+		}
+		else if (is_integer(part.ty)) { fname = "fmt_put_i64"; }
+		else {
+			emsg("cannot interpolate a value of type '"); emsg_ty(part.ty); emsg("'"); efail(part.pos);
+		}
+		b = mk_call2(fname, b, part);
+		p = p.next;
+	}
+	var end *Node = mk_call1("fmt_result", b);
+	var nxt *Node = n.next;
+	add_type(end);
+	*n = *end;
+	n.next = nxt;
 }
 
 fn type_unit(u *Unit) {
