@@ -70,6 +70,7 @@ fn reset_compile() {
 	nstrs = 0;
 	strlist_head = 0 as *StrLit;
 	strlist_tail = 0 as *StrLit;
+	o_nsyms = 0;
 	global_vars = 0 as *Var;
 	scope_root = 0 as *Scope;
 	cur_func = 0 as *Func;
@@ -132,7 +133,8 @@ fn compile_src(name str, src str, output str) {
 	var unit *Unit = parse(lex(src, (file as i64) << FILE_SHIFT));
 	var img Image;
 	codegen(unit, &img);
-	write_elf(output, &img);
+	if (opt_object) { write_object(output, &img); }
+	else { write_elf(output, &img); }
 }
 
 fn compile_file(input str, output str) {
@@ -663,7 +665,7 @@ fn cmd_repl(argc int, argv **u8) int {
 }
 
 fn cmd_help() int {
-	write_str(STDOUT, "usage: qela <file.qela> [-o output] [options]\n       qela . [dir]   build a project from a directory\n       qela run <file.qela> [args]\n       qela test <file.qela|dir> [files...] [-- args]\n       qela fmt <file.qela>\n       qela repl\n       qela --lsp\n       qela --dump-std <module>\n\ncompile a Qela program to a static binary; '-' reads the source\nfrom stdin. A directory merges every .qela file in it into one\nprogram (entry: main.qela, or the sole file) -- no imports needed\nbetween project files. 'run' compiles to a temp file and executes\nit, and panics print a backtrace there. 'test' runs the program and\nchecks its leading comments: // expect-exit: N, // expect-out: text\n(one line each, compared in order) and // expect-compile-error;\nseveral files can be tested in one run -- '--' separates the\nprogram arguments, e.g. qela test a.qela b.qela -- 5 6. 'repl'\ncompiles each line as an expression and prints its value.\n\nstrings interpolate, so n = ${40 + 2} prints 42 and pointers\nrender as hex; the expression is evaluated at runtime.\n\noptions:\n  -o <file>        output path (default: input name without .qela)\n  -g               DWARF line info and symbols for gdb\n  --backtrace         print function frames on panic\n  --no-bounds-checks  disable index checks\n  --no-warn           suppress warnings\n  --color=auto|always|never  control coloured diagnostics (auto: tty + NO_COLOR)\n  -h, --help          this text\n");
+	write_str(STDOUT, "usage: qela <file.qela> [-o output] [options]\n       qela . [dir]   build a project from a directory\n       qela run <file.qela> [args]\n       qela test <file.qela|dir> [files...] [-- args]\n       qela fmt <file.qela>\n       qela repl\n       qela --lsp\n       qela --dump-std <module>\n\ncompile a Qela program to a static binary; '-' reads the source\nfrom stdin. A directory merges every .qela file in it into one\nprogram (entry: main.qela, or the sole file) -- no imports needed\nbetween project files. 'run' compiles to a temp file and executes\nit, and panics print a backtrace there. 'test' runs the program and\nchecks its leading comments: // expect-exit: N, // expect-out: text\n(one line each, compared in order) and // expect-compile-error;\nseveral files can be tested in one run -- '--' separates the\nprogram arguments, e.g. qela test a.qela b.qela -- 5 6. 'repl'\ncompiles each line as an expression and prints its value.\n\nstrings interpolate, so n = ${40 + 2} prints 42 and pointers\nrender as hex; the expression is evaluated at runtime.\n\noptions:\n  -o <file>        output path (default: input name without .qela)\n  -c               emit a relocatable object (.o) for an external linker\n  -g               DWARF line info and symbols for gdb\n  --backtrace         print function frames on panic\n  --no-bounds-checks  disable index checks\n  --no-warn           suppress warnings\n  --color=auto|always|never  control coloured diagnostics (auto: tty + NO_COLOR)\n  -h, --help          this text\n");
 	return 0;
 }
 
@@ -708,6 +710,8 @@ fn main(argc int, argv **u8) int {
 			return dump_std(str_from_cstr(argv[i]));
 		} else if (str_eq(a, "-g")) {
 			opt_debug = true;
+		} else if (str_eq(a, "-c")) {
+			opt_object = true;
 		} else if (str_eq(a, "--no-bounds-checks")) {
 			opt_no_bounds = true;
 		} else if (str_eq(a, "--backtrace")) {

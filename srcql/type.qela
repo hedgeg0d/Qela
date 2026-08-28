@@ -797,7 +797,8 @@ fn type_func(f *Func) {
 	if (is_aggregate(f.ret) && f.ret.size > 16) {
 		f.ret_slot = alloc_temp(type_ptr(f.ret));
 	}
-	add_type(f.body);
+	// An extern declaration has no body; the symbol comes from the linker.
+	if (f.body as i64 != 0) { add_type(f.body); }
 }
 
 // ── match ──

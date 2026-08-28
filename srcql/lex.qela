@@ -67,6 +67,7 @@ fn is_keyword(src str, start i64, end i64) bool {
 		if (src.ptr[start] == 's' && src.ptr[start+1] == 't' && src.ptr[start+2] == 'r' && src.ptr[start+3] == 'u' && src.ptr[start+4] == 'c' && src.ptr[start+5] == 't') { return true; }
 		if (src.ptr[start] == 'i' && src.ptr[start+1] == 'm' && src.ptr[start+2] == 'p' && src.ptr[start+3] == 'o' && src.ptr[start+4] == 'r' && src.ptr[start+5] == 't') { return true; }
 		if (src.ptr[start] == 's' && src.ptr[start+1] == 'i' && src.ptr[start+2] == 'z' && src.ptr[start+3] == 'e' && src.ptr[start+4] == 'o' && src.ptr[start+5] == 'f') { return true; }
+		if (src.ptr[start] == 'e' && src.ptr[start+1] == 'x' && src.ptr[start+2] == 't' && src.ptr[start+3] == 'e' && src.ptr[start+4] == 'r' && src.ptr[start+5] == 'n') { return true; }
 		return false;
 	}
 	if (end - start == 8) {
