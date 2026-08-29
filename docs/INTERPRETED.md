@@ -86,10 +86,13 @@ if the whole build is compiled with one of them — those flags upgrade
 ones. This gives a real dial: everything patchable by default except an
 explicitly walled-off core (auth checks, the eval sandboxing logic itself,
 anything that shouldn't be self-modifying no matter what flag someone
-builds with). Whether `frozen` is a real third annotation or just "the
-default, and the two global flags only upgrade `interpreted`/`dynamic`
-functions that are *already* marked, never bare ones" is an open question
-— see below.
+builds with). Resolved: `frozen` is a real fourth modifier, not a default posture. An
+unmarked function is not automatically frozen — it's just ordinary AOT
+code that the (not yet built) `--interpreted`/`--jit` global flags are free
+to upgrade. `frozen` is the explicit opt-out from that upgrade, the same
+way `eval var`/`eval fn` (below) is an explicit opt-in to ABI visibility —
+both are grep-able properties of the source rather than an implicit
+default, matching how this document already argued for `eval`'s allowlist.
 
 ## Resolved: one mechanism for everything, subprocess plus an ABI
 
@@ -251,7 +254,9 @@ already-shipped binaries — a feature (reproducibility), not a bug.
 
 ## Size measurements (real numbers, not estimates)
 
-Baseline: `qela` (S2) = 501,488 bytes, 47.8% of the 1 MiB budget.
+Baseline: `qela` (S2) = 503,312 bytes, 48.0% of the 1 MiB budget (up from
+501,488 before the sys.qela wrappers and the grammar work above — six new
+syscall wrappers and four new modifiers/fields, ~1.8 KB total).
 
 Self-copy (whole binary embedded in the *output*, cost does not touch
 `qela` itself):
@@ -299,12 +304,26 @@ that, don't assume gzip-level ratios from a from-scratch LZSS.
    `interpreted`/`dynamic` function (isolation vs. simplicity)? What
    happens if the child dies mid-run (crashed, killed) — does the next
    call respawn it, or is that a hard error for the host too?
-3. **Grammar.** `fn interpreted name(...)`/`fn dynamic name(...)` as
-   modifiers parsed the same place `fn naked` already is (see
-   `docs/BOOTSTRAP.md`'s grammar list); `eval var`/`eval fn` for the
-   export-side allowlist (see "foreign-globals/foreign-calls ABI").
-   Decide `frozen`'s status (real third keyword vs. "default posture,
-   global flags only upgrade already-annotated functions") here too.
+3. **Grammar — done.** `fn interpreted name(...)`/`fn dynamic name(...)`/
+   `fn frozen name(...)` are contextual modifiers, mutually exclusive with
+   each other and with `naked`, parsed in `parse_function`
+   (`srcql/parse.qela`) the same place `naked` already is. `eval var
+   name T;`/`eval fn name(...)` at top level set `Var.eval_export`/
+   `Func.eval_export` (`srcql/comp.qela`). None of the four new words
+   (`interpreted`, `dynamic`, `frozen`, `eval`) were added to
+   `srcql/lex.qela`'s `is_keyword` table — same choice already made for
+   `comptime` — so they stay ordinary identifiers everywhere except these
+   exact syntactic positions; `tests/match.qela`'s `fn eval(op Op) int`
+   (an unrelated user function literally named `eval`) still compiles
+   because of this. `extern fn interpreted`/`extern fn dynamic` is a
+   compile error (an extern function is C-linked, not tree-walked or
+   JIT'd). Since no call-site trampoline exists yet (item 4), an AOT
+   compile of a function actually marked `interpreted`/`dynamic` errors
+   at `srcql/codegen.qela`'s `gen_func` with a message pointing at `qela
+   irun`, which already runs such a function correctly today — every
+   function is interpreted there regardless of the annotation. `frozen`
+   and `eval_export` are otherwise inert until items 1/2/4 exist: a program
+   using them compiles as ordinary AOT code today.
 4. **Call-site trampolines in codegen.qela.** New call shape for
    `interpreted`/`dynamic` targets, built on the ABI from (1) — real,
    nontrivial codegen work. The `dynamic` half needs the local
@@ -315,7 +334,9 @@ that, don't assume gzip-level ratios from a from-scratch LZSS.
    or a handle into the child's memory (see "Call-site mechanics") — scope
    as its own design pass once (1)–(4) are settled.
 6. **`sys_readlink`, `memfd_create`, `fexecve`, and pipe/socketpair
-   wrappers** in `std/sys.qela` — needed regardless.
+   wrappers — done**, in `std/sys.qela`: `sys_readlink`,
+   `sys_memfd_create`, `sys_fexecve` (via `execveat` + `AT_EMPTY_PATH`,
+   there is no bare `fexecve` syscall), `sys_pipe2`, `sys_socketpair`.
 7. **W^X on hardened kernels.** `mprotect(RW→RX)` for the `dynamic` path
    can be restricted under some hardening policies (SELinux, some
    container runtimes) — needs a real error message, not a silent
