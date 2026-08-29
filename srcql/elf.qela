@@ -498,7 +498,7 @@ fn write_object(path str, img *Image) {
 	a.typ = 0;
 	a.name = 0; a.flags = 0; a.off = 0; a.size = 0; a.link = 0; a.info = 0; a.align = 0; a.entsize = 0;
 	o_shdr(&f, &a);
-	a.typ = SHT_PROGBITS; a.flags = SHF_EXECINSTR;
+	a.typ = SHT_PROGBITS; a.flags = SHF_ALLOC | SHF_EXECINSTR;
 	a.name = n_text; a.off = text_off; a.size = img.code.n; a.align = 16;
 	o_shdr(&f, &a);
 	a.typ = SHT_PROGBITS; a.flags = SHF_ALLOC;
