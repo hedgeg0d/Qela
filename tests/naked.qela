@@ -1,3 +1,4 @@
+// stage1-only
 // expect-exit: 42
 // A naked function is bare bytes: no prologue, no epilogue, no implicit
 // ret. It cannot take parameters or have locals, return, defer or call —
