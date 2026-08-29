@@ -1113,16 +1113,10 @@ fn sse2(prefix i64, opcode i64, dst int, src int) {
 // Unsigned-integer cc codes double as float cc codes: ucomisd sets CF/ZF/PF
 // exactly like an unsigned integer compare (NaN aside, which this does not
 // try to get right -- a hobby compiler, not a libc).
-fn float_cc_for(n *Node) i64 {
-	if (n.kind == ND_EQ) { return 0x94; }
-	if (n.kind == ND_NE) { return 0x95; }
-	if (n.kind == ND_LT) { return 0x92; }
-	return 0x96;
-}
-
-// The neutral form of float_cc_for: what a branch or setcc should carry
-// after ucomisd. The x86 lowering folds it back into the exact byte table
-// above, so callers that branch on a float comparison stay byte-identical.
+// The neutral form of a float comparison: what a branch or setcc should
+// carry after ucomisd. The x86 lowering folds it back into the exact byte
+// table above, so callers that branch on a float comparison stay byte-
+// identical.
 fn float_cc_neutral(n *Node) i64 {
 	if (n.kind == ND_EQ) { return CC_EQ; }
 	if (n.kind == ND_NE) { return CC_NE; }
@@ -1145,7 +1139,7 @@ fn gen_binop_float(n *Node) {
 		var cprefix i64 = 0x66;
 		if (sz == 4) { cprefix = 0; }
 		sse2(cprefix, 0x2e, XMM0, XMM1);
-		setcc(float_cc_for(n));
+		ir_setcc_acc(float_cc_neutral(n), n.pos);
 		return;
 	}
 	error_at(n.pos, "operator not defined for floats");
@@ -1584,15 +1578,6 @@ fn shift_ext_for(n *Node) int {
 	return 7;
 }
 
-fn cmp_cc_for(n *Node) i64 {
-	var uns bool = n.lhs.ty.is_unsigned || n.lhs.ty.kind == TY_PTR;
-	if (n.kind == ND_EQ) { return 0x94; }
-	if (n.kind == ND_NE) { return 0x95; }
-	if (n.kind == ND_LT) { if (uns) { return 0x92; } return 0x9c; }
-	if (uns) { return 0x96; }
-	return 0x9e;
-}
-
 // Folds a constant right operand into the instruction, which removes the
 // materialise/push/pop sequence the stack machine would otherwise emit.
 fn gen_binop_imm(n *Node, v i64) bool {
@@ -1615,7 +1600,7 @@ fn gen_binop_imm(n *Node, v i64) bool {
 	if (k == ND_EQ || k == ND_NE || k == ND_LT || k == ND_LE) {
 		gen_expr(n.lhs);
 		alu_rax_imm(7, v);
-		setcc(cmp_cc_for(n));
+		ir_setcc_acc(cc_for_compare(n), n.pos);
 		return true;
 	}
 	if (k == ND_SHL || k == ND_SHR) {
@@ -1760,7 +1745,7 @@ fn gen_binop_mem(n *Node, val *Node, rm *Node) bool {
 	if (k == ND_BITXOR) { alu_rax_rm(0, 0x33, rm); return true; }
 	if (k == ND_MUL)    { alu_rax_rm(0x0f, 0xaf, rm); return true; }
 	alu_rax_rm(0, 0x3b, rm);
-	setcc(cmp_cc_for(n));
+	ir_setcc_acc(cc_for_compare(n), n.pos);
 	return true;
 }
 
@@ -2306,6 +2291,12 @@ fn x86_lower_op(op *IrOp) {
 		b1(0xc3);
 		return;
 	}
+	if (op.kind == IR_SYSCALL) {
+		// The number and arguments were already staged by gen_args into the
+		// backend's syscall registers; only the trapping instruction is IR.
+		b1(0x0f); b1(0x05);
+		return;
+	}
 	die("internal: x86_lower_op: unhandled IR shape");
 }
 
@@ -2357,6 +2348,18 @@ fn ir_funcaddr(f *Func, pos i64) {
 
 fn ir_ret(pos i64) {
 	var op *IrOp = ir_emit(IR_RET, pos);
+	x86_lower_all();
+}
+
+fn ir_setcc_acc(cc i64, pos i64) {
+	var op *IrOp = ir_emit(IR_SETCC, pos);
+	op.dst = operand_acc();
+	op.aux = cc;
+	x86_lower_all();
+}
+
+fn ir_syscall(pos i64) {
+	var op *IrOp = ir_emit(IR_SYSCALL, pos);
 	x86_lower_all();
 }
 
@@ -2578,7 +2581,7 @@ fn gen_expr(n *Node) {
 	}
 	if (k == ND_SYSCALL) {
 		gen_args(n, true, true, -1, false);
-		b1(0x0f); b1(0x05);
+		ir_syscall(n.pos);
 		return;
 	}
 	if (k == ND_ASM) {
