@@ -168,6 +168,11 @@ var tls_stub_at i64 = -1;
 
 var tls_stub_src_at i64 = -1;
 
+// arm64: the template's MOVZ/MOVK placeholder sites inside the TLS init
+// stub, patched at finalize like gc_*_refs (x86 writes the address into a
+// single trailing u64 slot instead, tls_stub_src_at).
+var tls_src_refs I64List;
+
 var opt_backtrace bool = false;
 
 // `qela -c`: emit a relocatable object instead of a static binary. The
