@@ -167,6 +167,57 @@ fn type_str() *Type {
 	return ty_str_cache;
 }
 
+// ── `~` dynamic typing ──
+//
+// A dynamic local's declared type is this one singleton struct, `{type_id
+// i64, ptr *u8}`, matching str's own two-word convention so every existing
+// aggregate rule (storage, copy, by_ref) already applies to it unchanged.
+// Registered into named_types here (not by parsing `struct DynVal {...}`
+// somewhere) so std/dyn.qela's own signatures, parsed later when spliced
+// in, resolve to this exact pointer -- same_type is identity, not
+// structural, so two separately-built structs would never compare equal.
+var ty_dynval_cache *Type;
+
+fn type_dynval() *Type {
+	type_init();
+	if (ty_dynval_cache as i64 == 0) {
+		var t *Type = type_alloc();
+		*t = Type{kind: TY_STRUCT, size: 16, align: 8, name: "DynVal"};
+		var pm *Member = member_alloc();
+		*pm = Member{name: "ptr", ty: type_ptr(ty_u8), offset: 8};
+		var idm *Member = member_alloc();
+		*idm = Member{next: pm, name: "type_id", ty: ty_i64, offset: 0};
+		t.members = idm;
+		ty_dynval_cache = t;
+		type_define("DynVal", t);
+	}
+	return ty_dynval_cache;
+}
+
+// Every distinct type ever boxed or cast-checked gets one sequential id,
+// assigned by pointer identity (same_type's own rule) the first time it is
+// seen. The id is baked into the generated code as a plain constant -- no
+// table ships in the compiled binary, only the comparison.
+struct TypeIdEnt;
+struct TypeIdEnt { next *TypeIdEnt, ty *Type, id i64, }
+var dyn_types_head *TypeIdEnt;
+var dyn_types_n i64 = 0;
+
+fn type_id_of(t *Type) i64 {
+	var e *TypeIdEnt = dyn_types_head;
+	while (e as i64 != 0) {
+		if (e.ty as i64 == t as i64) { return e.id; }
+		e = e.next;
+	}
+	var ne *TypeIdEnt = arena_alloc(sizeof(TypeIdEnt), 8) as *TypeIdEnt;
+	ne.ty = t;
+	ne.id = dyn_types_n;
+	dyn_types_n = dyn_types_n + 1;
+	ne.next = dyn_types_head;
+	dyn_types_head = ne;
+	return ne.id;
+}
+
 fn enum_tag_of(ty *Type, name str, out **Variant) int {
 	var v *Variant = ty.variants;
 	while (v as i64 != 0) {
@@ -927,7 +978,85 @@ fn type_addsub(n *Node) {
 	n.ty = n.lhs.ty;
 }
 
+// Rewrites `dynvar = expr;` into `dynvar = (tmp = expr, dyn_box(id, &tmp,
+// sizeof(expr's type)));` -- a comma of an ordinary assign and an ordinary
+// call, both built from node kinds that already exist, so codegen needs no
+// new cases at all. `dyn_box` always boxes fresh; nothing here frees a
+// value that may already sit in `dynvar` (see docs/TASKS.md).
+fn type_assign_dyn(n *Node) {
+	if (n.rhs.ty as i64 == ty_dynval_cache as i64) {
+		error_at(n.pos, "cannot assign a dynamic value directly; cast it out with 'as' first");
+	}
+	var rv *Node = to_value(n.rhs);
+	if (rv.ty.kind == TY_VOID) { error_at(n.pos, "cannot box a void value"); }
+	var id i64 = type_id_of(rv.ty);
+	var tmp *Var = alloc_temp(rv.ty);
+	if (tmp as i64 == 0) { error_at(n.pos, "a dynamic variable needs a function scope"); }
+
+	var tv *Node = node_alloc();
+	tv.kind = ND_VAR; tv.varp = tmp; tv.ty = rv.ty; tv.typed = true; tv.pos = n.pos;
+	var asg *Node = node_alloc();
+	asg.kind = ND_ASSIGN; asg.lhs = tv; asg.rhs = rv; asg.ty = rv.ty; asg.typed = true; asg.pos = n.pos;
+
+	var addr *Node = node_alloc();
+	addr.kind = ND_ADDR; addr.lhs = tv; addr.ty = type_ptr(ty_u8); addr.typed = true; addr.pos = n.pos;
+
+	var idn *Node = node_alloc();
+	idn.kind = ND_NUM; idn.val = id; idn.ty = ty_i64; idn.typed = true; idn.pos = n.pos;
+	var szn *Node = node_alloc();
+	szn.kind = ND_NUM; szn.val = rv.ty.size as i64; szn.ty = ty_i64; szn.typed = true; szn.pos = n.pos;
+
+	var call *Node = mk_call0("dyn_box");
+	call.args = idn; idn.next = addr; addr.next = szn;
+	call.nargs = 3;
+	call.pos = n.pos;
+	call.typed = true;
+	type_call(call);
+
+	var comma *Node = node_alloc();
+	comma.kind = ND_COMMA; comma.lhs = asg; comma.rhs = call; comma.ty = call.ty;
+	comma.typed = true; comma.pos = n.pos;
+
+	n.rhs = comma;
+	n.ty = ty_dynval_cache;
+}
+
+// Rewrites `dynval as T` into `*(dyn_check(dynval, id) as *T)`: a call, a
+// pointer cast and a deref, all existing node kinds, so the aggregate-copy
+// and scalar-load paths that already handle `*p` for any T (T being
+// arbitrary -- primitive, pointer, or a user struct -- is exactly why this
+// reuses the general deref path instead of a hand-written one) apply here
+// unchanged. `dyn_check` panics at runtime on a tag mismatch.
+fn type_cast_from_dyn(n *Node) {
+	var target *Type = n.ty;
+	var id i64 = type_id_of(target);
+
+	var idn *Node = node_alloc();
+	idn.kind = ND_NUM; idn.val = id; idn.ty = ty_i64; idn.typed = true; idn.pos = n.pos;
+
+	var call *Node = mk_call0("dyn_check");
+	call.args = n.lhs; n.lhs.next = idn;
+	call.nargs = 2;
+	call.pos = n.pos;
+	call.typed = true;
+	type_call(call);
+
+	var castp *Node = node_alloc();
+	castp.kind = ND_CAST; castp.lhs = call; castp.ty = type_ptr(target); castp.typed = true; castp.pos = n.pos;
+
+	n.kind = ND_DEREF;
+	n.lhs = castp;
+	n.ty = target;
+}
+
 fn type_assign(n *Node) {
+	if (ty_dynval_cache as i64 != 0 && n.lhs.ty as i64 == ty_dynval_cache as i64) {
+		type_assign_dyn(n);
+		return;
+	}
+	if (ty_dynval_cache as i64 != 0 && n.rhs.ty as i64 == ty_dynval_cache as i64) {
+		error_at(n.pos, "cannot assign a dynamic value directly; cast it out with 'as' first");
+	}
 	if (n.lhs.ty.kind == TY_ARRAY) { error_at(n.pos, "cannot assign to an array"); }
 	if (is_aggregate(n.lhs.ty)) {
 		n.rhs = coerce(n.rhs, n.lhs.ty);
@@ -1507,6 +1636,10 @@ fn add_type(n *Node) {
 	}
 
 	if (k == ND_CAST) {
+		if (ty_dynval_cache as i64 != 0 && n.lhs.ty as i64 == ty_dynval_cache as i64) {
+			type_cast_from_dyn(n);
+			return;
+		}
 		if (!is_numeric(n.ty) && n.ty.kind != TY_VOID) {
 			error_at(n.pos, "unsupported cast target");
 		}

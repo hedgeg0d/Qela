@@ -7,19 +7,70 @@ Updated 2026-08-05. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **287 088 B** |
-| S2 under `upx --lzma` (measured 2026-08-04) | 61 996 B, ~6% of the 1 MiB budget |
-| S2 under xz -9 (proxy for upx) | 65 376 B |
-| stage1 sources | 10 869 lines of Qela |
+| **S2 — the shipped compiler, Qela compiled by itself** | **291 576 B** |
+| S2 under `upx --lzma` (measured 2026-08-05) | 66 172 B, ~6% of the 1 MiB budget |
+| S2 under xz -9 (proxy for upx) | 70 296 B |
+| stage1 sources | 11 865 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
 
-Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 101-test corpus under S2, the embedded stdlib resolving outside the source tree,
+Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 106-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
 backtrace, interpolation and the repl, the compiler flags (`-g`,
 `--backtrace`, `--no-bounds-checks`, `--dump-std`), and a scripted language
 server conversation.
 
 ## Done
+
+**`~` opt-in dynamic typing (2026-08-05).** `var ~n = expr;` declares a
+local whose type is checked at runtime instead of compile time: it can be
+reassigned across unrelated types (`n = 5; n = "hi"; n = SomeStruct{...};`),
+and its value only comes back out through an explicit `n as T`, which
+checks a runtime tag and panics on mismatch rather than reinterpreting the
+bytes. No operators work on a `~` value directly (no `~n + 1`) -- everything
+has to be cast out first, so this is a boxed variant, not JS-style implicit
+coercion. Locals only: no `~` parameters, struct fields or return types yet
+(see above), and `let` cannot be dynamic (nothing to reassign).
+`extern ~var` is a compile error -- a value's type id is only stable within
+the compilation that assigned it, so it cannot cross the `-c` object
+boundary -- and assigning one dynamic value straight into another is
+rejected too, to avoid two variables aliasing the same heap box.
+
+The representation is `{type_id i64, ptr *u8}`, a 16-byte struct built
+once by the compiler (`type_dynval` in `srcql/type.qela`) and registered
+under the name `DynVal` before `std/dyn.qela` (the two runtime helpers,
+`dyn_box` and `dyn_check`) is spliced in, so every site agrees on the exact
+same `Type` pointer -- `same_type` is identity, not structural equality,
+so two independently-parsed copies of the same shape would never compare
+equal. `type_id`s are sequential integers assigned by the compiler itself,
+by pointer identity, the first time a type is boxed or cast-checked; the
+id is baked into the generated code as a plain constant, so nothing like a
+type registry ships in the compiled binary. The value is always heap-
+allocated (`std/heap.qela`, never the arena) regardless of size, so there
+is exactly one code path for a primitive and for an arbitrary user struct.
+
+Both `var ~n = expr;` and `n as T` are pure rewrites in `srcql/type.qela`
+into node kinds that already exist -- a box becomes `(tmp = expr,
+dyn_box(id, &tmp, size))` (a comma of an ordinary assign and an ordinary
+call), an unbox becomes `*(dyn_check(n, id) as *T)` (a call, a pointer
+cast, a deref) -- so `srcql/codegen.qela` needed no changes at all: the
+existing aggregate-copy, call and deref paths just run. Costs +4488 B in
+S2. Pinned by `tests/dyn.qela` (box/reassign/cast, including a user
+struct), `tests/dynmismatch.qela` (the runtime panic), and the reject
+triple `tests/dynreject.qela` (`let ~x`), `tests/dynreject_extern.qela`
+(`extern ~var`), `tests/dynreject_direct.qela` (dynamic-to-dynamic
+assignment).
+
+**Known gap, not built:** nothing frees a `~` value's heap box yet. A
+reassigned or loop-redeclared dynamic local leaks its previous box; there
+is no scope-exit or block-exit cleanup. Wiring that in correctly needs the
+parser to attach a second, synthetic statement (a `defer dyn_free(...)`)
+to a declaration it did not itself chain -- and the block-statement chain
+is built by the caller (`parse_block`'s `tail.next = parse_stmt(t)`), not
+by `parse_decl`, so this cannot be done as a safe tree-splice from within
+type-checking without risking the exact "local chain loses the append"
+class of bug the funcs_tail fix (`docs/STATUS.md`, first-class functions)
+was written to prevent. Treated for now like the arena: it leaks until the
+process exits. Real fix is scoped out in this file.
 
 **Float global initializers (2026-08-05).** Two constants bugs, both found
 while writing the raylib example (`examples/flappy/`): an `f32` global

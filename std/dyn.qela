@@ -1,0 +1,30 @@
+// Runtime support for `~` (opt-in dynamic typing). `DynVal` itself is not
+// declared here: the compiler registers it programmatically (type_dynval in
+// srcql/type.qela) before this file is spliced in, so every `~` site and
+// every call here agree on the exact same Type object.
+import "heap.qela";
+
+// Boxes `size` bytes starting at `src` onto the heap and tags them `id`
+// (a compile-time-assigned integer identifying the source type). Always
+// boxes, even for a scalar: one path for every type keeps this small.
+fn dyn_box(id i64, src *u8, size i64) DynVal {
+	var d DynVal;
+	d.type_id = id;
+	if (size <= 0) { d.ptr = 0 as *u8; return d; }
+	var p *u8 = heap_alloc(size);
+	var i i64 = 0;
+	while (i < size) {
+		*(p + i) = *(src + i);
+		i = i + 1;
+	}
+	d.ptr = p;
+	return d;
+}
+
+// The runtime half of `n as T`: T's compile-time id is compared against the
+// value's tag, and a mismatch panics rather than silently reinterpreting
+// bytes. The caller derefs the returned pointer as T.
+fn dyn_check(d DynVal, id i64) *u8 {
+	if (d.type_id != id) { panic("dynamic cast: type mismatch"); }
+	return d.ptr;
+}
