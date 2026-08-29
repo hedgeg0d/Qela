@@ -7,19 +7,35 @@ Updated 2026-08-05. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **291 576 B** |
-| S2 under `upx --lzma` (measured 2026-08-05) | 66 172 B, ~6% of the 1 MiB budget |
-| S2 under xz -9 (proxy for upx) | 70 296 B |
-| stage1 sources | 11 865 lines of Qela |
+| **S2 — the shipped compiler, Qela compiled by itself** | **291 968 B** |
+| stage1 sources | 11 886 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
 
-Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 106-test corpus under S2, the embedded stdlib resolving outside the source tree,
+Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 107-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
 backtrace, interpolation and the repl, the compiler flags (`-g`,
 `--backtrace`, `--no-bounds-checks`, `--dump-std`), and a scripted language
 server conversation.
 
 ## Done
+
+**Dot-call method sugar (2026-08-05).** `x.foo(y, z)` desugars to
+`foo(x, y, z)` at parse time (`srcql/parse.qela`, `parse_postfix`), before
+any name is resolved. No new node kind, no new type-check or codegen path:
+the rewritten call goes through the exact `find_func`/`type_call` path an
+ordinary `foo(x, y, z)` would, so an argument-type mismatch on `x` reports
+the same way. `.name` with no trailing `(` still parses as `ND_MEMBER`
+(field access) exactly as before, so a struct field and a free function can
+share a name -- `x.val` reads the field, `x.val()` calls the function,
+distinguished purely by whether `(` follows. No overloading exists yet
+(`find_func` is a plain linear name lookup, first match wins), so there was
+no receiver-type dispatch to build; the rewrite intentionally goes through
+the same call-resolution path a plain call uses, so overload resolution,
+if it's added later, applies to both call styles at once with no separate
+work. Chains fold naturally (`a.foo().bar()`) since the postfix loop just
+keeps consuming `.`. Costs +392 B in S2. Pinned by `tests/dotcall.qela`
+(chained calls, field/method name sharing). Stage1-only: the rewrite lives
+only in `srcql/parse.qela`, not the frozen `src/parse.c`.
 
 **`~` opt-in dynamic typing (2026-08-05).** `var ~n = expr;` declares a
 local whose type is checked at runtime instead of compile time: it can be
