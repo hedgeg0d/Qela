@@ -94,15 +94,15 @@ fn write_elf(path str, img *Image) {
 	if (opt_target == TARGET_RISCV64) { buf_u16(&f, EM_RISCV); }
 	else if (opt_target == TARGET_ARM64) { buf_u16(&f, EM_AARCH64); }
 	else { buf_u16(&f, EM_X86_64); }
-	// RISC-V e_flags: the LP64D ABI's double-float tag -- the linker checks
-	// it against C objects' flags. EF_RISCV_FLOAT_ABI_DOUBLE = 4 (the
-	// three-bit FLOAT_ABI field: soft 0, single 2, double 4).
-	if (opt_target == TARGET_RISCV64) { buf_u32(&f, 4); } else { buf_u32(&f, 1); }
+	buf_u32(&f, 1);
 	buf_u64(&f, ELF_BASE + hdr + img.entry);
 	buf_u64(&f, EHDR_SZ);
 	var shoff_at i64 = f.n;
 	buf_u64(&f, 0);
-	buf_u32(&f, 0);
+	// e_flags: RISC-V's LP64D double-float tag (EF_RISCV_FLOAT_ABI_DOUBLE
+	// = 4) so the linker accepts our objects against C's; everyone else
+	// leaves it zero.
+	if (opt_target == TARGET_RISCV64) { buf_u32(&f, 4); } else { buf_u32(&f, 0); }
 	buf_u16(&f, EHDR_SZ);
 	buf_u16(&f, PHDR_SZ);
 	buf_u16(&f, nph as i64);
