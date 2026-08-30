@@ -7,19 +7,39 @@ Updated 2026-08-05. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **286 544 B** |
+| **S2 — the shipped compiler, Qela compiled by itself** | **287 088 B** |
 | S2 under `upx --lzma` (measured 2026-08-04) | 61 996 B, ~6% of the 1 MiB budget |
 | S2 under xz -9 (proxy for upx) | 65 376 B |
 | stage1 sources | 10 869 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
 
-Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 100-test corpus under S2, the embedded stdlib resolving outside the source tree,
+Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 101-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
 backtrace, interpolation and the repl, the compiler flags (`-g`,
 `--backtrace`, `--no-bounds-checks`, `--dump-std`), and a scripted language
 server conversation.
 
 ## Done
+
+**Float global initializers (2026-08-05).** Two constants bugs, both found
+while writing the raylib example (`examples/flappy/`): an `f32` global
+initializer stored the *f64* bit pattern in the 4-byte slot — the low half
+of the pattern is zero for any exponent above 0x3ff, so the global read as
+`0.0` in both the exe and the object writer — and a negated float literal
+(`-340.0`) was folded by two's-complementing the bits in `eval_const`
+instead of flipping the IEEE sign bit (the optimizer already did it
+right; the parse-time constant path did not). Fixes: `f64_to_f32_bits` in
+`srcql/codegen.qela` narrows the pattern with pure integer math (the
+bootstrap subset has no float, and subnormal doubles are below the f32
+range anyway, so they underflow to zero), and `eval_const` mirrors
+`opt.qela`'s sign-flip for float negation. Pinned by
+`tests/f32global.qela` (`// stage1-only`). `examples/flappy/` — Flappy
+Bird against raylib, `-c` + `gcc -lraylib`, with a two-function C glue for
+the float calls (Qela keeps floats in GPRs, SysV wants XMM; everything
+else — ints, pointers, `bool`, `str` as `const char*`, `Color` by value —
+crosses directly). Verified headless by driving `update()` with stub
+externs, and on the display by a `TakeScreenshot` of frame 30 (sky,
+ground, green strip, yellow bird, score all present).
 
 **C interop, first cut (2026-08-04).** `extern fn` declares a function whose
 body lives elsewhere, and `qela -c file.qela -o file.o` emits a relocatable

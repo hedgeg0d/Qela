@@ -1,0 +1,228 @@
+// Flappy Bird for Qela, rendering with raylib.
+//
+// Compile + run:
+//   qela -c flappy.qela -o flappy.o
+//   gcc -o flappy flappy.o glue.c -lraylib -lm
+//   ./flappy
+//
+// SPACE flaps, R restarts, ESC quits.
+//
+// Qela's extern ABI crosses ints, pointers, bool and small structs by value
+// directly, but NOT floats: a Qela float lives in an integer register while
+// SysV (what raylib expects) wants it in an XMM register. glue.c bridges
+// exactly the two float-touching calls (GetFrameTime, DrawCircle).
+
+struct Color { r u8, g u8, b u8, a u8, }
+struct Pipe { x f32, top int, gap int, done bool, }
+
+extern fn InitWindow(w int, h int, title *i8) void;
+extern fn WindowShouldClose() bool;
+extern fn CloseWindow() void;
+extern fn IsKeyPressed(k int) bool;
+extern fn SetTargetFPS(f int) void;
+extern fn GetRandomValue(min int, max int) int;
+extern fn BeginDrawing() void;
+extern fn EndDrawing() void;
+extern fn ClearBackground(c Color) void;
+extern fn DrawRectangle(x int, y int, w int, h int, c Color) void;
+extern fn DrawText(t *i8, x int, y int, sz int, c Color) void;
+extern fn DrawFPS(x int, y int) void;
+extern fn gl_frame_time_bits() i64;
+extern fn gl_draw_circle(x int, y int, r int, c Color) void;
+
+fn rgb(r u8, g u8, b u8) Color {
+	var c Color;
+	c.r = r;
+	c.g = g;
+	c.b = b;
+	c.a = 255;
+	return c;
+}
+
+let W = 640;
+let H = 480;
+let GROUND = 390;
+let GAP_BASE = 170;
+let MIN_GAP = 120;
+let PIPE_W = 60;
+let BR = 13;
+let FX = 160;
+
+let KEY_SPACE = 32;
+let KEY_R = 82;
+
+var state int = 0;
+var score int = 0;
+var np int = 0;
+var fy f32 = 200.0;
+var vy f32 = 0.0;
+var pipes [3]Pipe;
+
+var GRAVITY f32 = 900.0;
+var FLAP f32 = -340.0;
+var START_Y f32 = 200.0;
+var SPEED_BASE f32 = 150.0;
+var SPEED_GROW f32 = 6.0;
+var MAX_SPEED f32 = 260.0;
+var elapsed f32 = 0.0;
+
+fn main() int {
+	InitWindow(W, H, "Flappy Qela".ptr as *i8);
+	SetTargetFPS(60);
+	while (!WindowShouldClose()) {
+		update();
+		draw();
+	}
+	CloseWindow();
+	return 0;
+}
+
+fn update() {
+	var fb i64 = gl_frame_time_bits();
+	var pf *f32 = (&fb) as *f32;
+	var dt f32 = *pf;
+	if (dt > 0.05) { dt = 0.05 as f32; }
+	if (IsKeyPressed(KEY_SPACE)) {
+		if (state == 0 || state == 2) {
+			if (state == 2) { reset(); }
+			state = 1;
+		}
+		vy = FLAP;
+	}
+	if (IsKeyPressed(KEY_R)) { reset(); }
+	if (state == 1) {
+		elapsed = elapsed + dt;
+		vy = vy + GRAVITY * dt;
+		fy = fy + vy * dt;
+		update_pipes(dt);
+		if (fy < -30.0 || fy > (GROUND - BR) as f32 || collided()) {
+			state = 2;
+		}
+	}
+}
+
+// Difficulty grows with survival time: the pipes speed up and the gap
+// narrows. The gap is fixed per pipe at spawn, so drawing and collision
+// always agree on it.
+fn pipe_speed() f32 {
+	var s f32 = SPEED_BASE + elapsed * SPEED_GROW;
+	if (s > MAX_SPEED) { s = MAX_SPEED; }
+	return s;
+}
+
+fn pipe_gap() int {
+	var g int = GAP_BASE - (elapsed as i64 as int) * 2;
+	if (g < MIN_GAP) { g = MIN_GAP; }
+	return g;
+}
+
+fn update_pipes(dt f32) {
+	var speed f32 = pipe_speed();
+	var gap int = pipe_gap();
+	var i int = 0;
+	while (i < np) {
+		pipes[i].x = pipes[i].x - speed * dt;
+		if (!pipes[i].done && pipes[i].x + (PIPE_W as f32) < (FX as f32)) {
+			pipes[i].done = true;
+			score = score + 1;
+		}
+		i = i + 1;
+	}
+	if (np > 0 && pipes[0].x < -70.0) {
+		var j int = 0;
+		while (j < np - 1) {
+			pipes[j] = pipes[j + 1];
+			j = j + 1;
+		}
+		np = np - 1;
+	}
+	if (np < 3 && (np == 0 || pipes[np - 1].x < 400.0)) {
+		var p *Pipe = &pipes[np];
+		p.x = (W as f32) + 40.0 as f32;
+		p.top = GetRandomValue(80, GROUND - gap - 80);
+		p.gap = gap;
+		p.done = false;
+		np = np + 1;
+	}
+}
+
+fn collided() bool {
+	var i int = 0;
+	while (i < np) {
+		var x0 f32 = pipes[i].x;
+		var x1 f32 = x0 + (PIPE_W as f32);
+		if (hit_rect(FX as f32, fy, x0, x1, 0.0, pipes[i].top as f32)) { return true; }
+		if (hit_rect(FX as f32, fy, x0, x1, (pipes[i].top + pipes[i].gap) as f32, GROUND as f32)) { return true; }
+		i = i + 1;
+	}
+	return false;
+}
+
+fn hit_rect(cx f32, cy f32, rx0 f32, rx1 f32, ry0 f32, ry1 f32) bool {
+	var ncx f32 = cx;
+	var ncy f32 = cy;
+	if (ncx < rx0) { ncx = rx0; }
+	if (ncx > rx1) { ncx = rx1; }
+	if (ncy < ry0) { ncy = ry0; }
+	if (ncy > ry1) { ncy = ry1; }
+	var dx f32 = cx - ncx;
+	var dy f32 = cy - ncy;
+	var r f32 = BR as f32;
+	return dx * dx + dy * dy < r * r;
+}
+
+fn reset() {
+	state = 0;
+	score = 0;
+	np = 0;
+	elapsed = 0.0 as f32;
+	fy = START_Y;
+	vy = 0.0 as f32;
+}
+
+fn text(s str, x int, y int, sz int, c Color) {
+	DrawText(s.ptr as *i8, x, y, sz, c);
+}
+
+fn draw_score(n int, x int, y int, sz int, c Color) {
+	var sb [16]u8;
+	sb[15] = 0;
+	var i int = 15;
+	var v int = n;
+	if (v == 0) {
+		i = 14;
+		sb[i] = 48;
+	}
+	while (v > 0) {
+		i = i - 1;
+		sb[i] = (48 + v % 10) as u8;
+		v = v / 10;
+	}
+	DrawText(sb[i..16].ptr as *i8, x, y, sz, c);
+}
+
+fn draw() {
+	BeginDrawing();
+	ClearBackground(rgb(102, 191, 255));
+	DrawRectangle(0, GROUND, W, H - GROUND, rgb(80, 80, 80));
+	DrawRectangle(0, GROUND, W, 6, rgb(0, 228, 48));
+	var i int = 0;
+	while (i < np) {
+		var p *Pipe = &pipes[i];
+		var x int = p.x as int;
+		DrawRectangle(x, 0, PIPE_W, p.top, rgb(0, 228, 48));
+		DrawRectangle(x, p.top + p.gap, PIPE_W, GROUND - (p.top + p.gap), rgb(0, 228, 48));
+		i = i + 1;
+	}
+	gl_draw_circle(FX, fy as int, BR, rgb(253, 249, 0));
+	draw_score(score, W / 2 - 15, 60, 48, rgb(230, 41, 55));
+	DrawFPS(10, 10);
+	if (state == 0) {
+		text("SPACE to flap", W / 2 - 60, 170, 20, rgb(80, 80, 80));
+	}
+	if (state == 2) {
+		text("GAME OVER", W / 2 - 70, 160, 36, rgb(230, 41, 55));
+		text("SPACE to restart", W / 2 - 80, 210, 20, rgb(80, 80, 80));
+	}
+	EndDrawing();
+}
