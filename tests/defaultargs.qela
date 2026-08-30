@@ -1,0 +1,25 @@
+// stage1-only
+// expect-exit: 231
+// Default parameter values (`fn f(a=0 i64)`) and named calls. Naming any
+// argument requires naming all of them (all-or-nothing, no mixed
+// positional+named); missing named arguments fall back to their declared
+// default. A default may name a global freely, or an earlier required
+// (non-defaulted) parameter of the same function -- substituted with
+// whatever the caller actually passed for it -- but never another
+// defaulted parameter.
+var G i64 = 100;
+
+fn sum(a=0 i64, b=0 i64, c=0 i64) i64 { return a + b + c; }
+
+fn withdeps(a i64, b=a+1 i64, c=G i64) i64 { return a * 1000 + b * 10 + c; }
+
+fn main() i64 {
+	if (sum(1, 2, 3) != 6) { return 1; }          // full positional, unchanged path
+	if (sum(a=1, c=3) != 4) { return 2; }          // named, b defaults to 0
+	if (sum(a=1, b=2, c=3) != 6) { return 3; }     // named, no gaps
+	if (sum(c=3, a=1) != 4) { return 4; }          // named, order doesn't matter
+	if (sum() != 0) { return 5; }                  // all defaulted
+	if (withdeps(a=5) != 5000 + 60 + 100) { return 6; } // b from a+1, c from global
+	if (withdeps(a=5, c=1) != 5000 + 60 + 1) { return 7; }
+	return 231;
+}

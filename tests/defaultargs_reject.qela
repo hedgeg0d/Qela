@@ -1,0 +1,8 @@
+// stage1-only
+// expect-compile-error
+// A call cannot mix positional and named arguments: the first argument's
+// shape decides the whole call.
+fn f(a=0 i64, b=0 i64) i64 { return a + b; }
+fn main() int {
+	return f(1, b=2) as int;
+}
