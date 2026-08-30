@@ -1,0 +1,9 @@
+// stage1-only
+// expect-compile-error
+// expect-warn: redeclaration of 'x'
+// expect-warn: previous declaration here
+fn main() int {
+	var x int = 1;
+	var x int = 2;
+	return 0;
+}
