@@ -1,0 +1,33 @@
+// stage1-only
+// expect-exit: 42
+// A bare clone()'d thread: no scheduler, no TLS yet -- just proof the raw
+// syscall/register dance in thread_clone lands the child on its own stack
+// and control safely returns to the parent.
+import "std/sys.qela";
+
+var done i64 = 0;
+var seen i64 = 0;
+
+fn child(arg i64) i64 {
+	atomic_store(&seen, arg);
+	atomic_store(&done, 1);
+	return 0;
+}
+
+fn main() int {
+	var stack_size i64 = 65536;
+	var stack i64 = sys_mmap_anon(stack_size);
+	if (stack < 0 && stack > -4096) { return 1; }
+	var top i64 = (stack + stack_size) & ~15;
+
+	var tid i64 = thread_clone(child, 99, top, CLONE_THREAD_FLAGS);
+	if (tid <= 0) { return 2; }
+
+	var spins i64 = 0;
+	while (atomic_load(&done) == 0) {
+		spins = spins + 1;
+		if (spins > 100000000) { return 3; }
+	}
+	if (atomic_load(&seen) != 99) { return 4; }
+	return 42;
+}

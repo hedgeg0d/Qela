@@ -16,6 +16,22 @@ let SYS_GETPID = 39;
 let SYS_GETDENTS = 217;
 let SYS_DUP2 = 33;
 let SYS_IOCTL = 16;
+let SYS_MUNMAP = 11;
+let SYS_CLONE = 56;
+let SYS_ARCH_PRCTL = 158;
+let SYS_FUTEX = 202;
+
+let ARCH_SET_FS = 0x1002;
+let ARCH_GET_FS = 0x1003;
+
+let FUTEX_WAIT = 0;
+let FUTEX_WAKE = 1;
+
+// CLONE_VM(0x100)|CLONE_FS(0x200)|CLONE_FILES(0x400)|CLONE_SIGHAND(0x800)|
+// CLONE_THREAD(0x10000) -- a real OS thread sharing the parent's address
+// space, not a fork. No CLONE_SETTLS yet: that lands with the tvar/TLS
+// phase, once there's a per-thread block to point %fs at.
+let CLONE_THREAD_FLAGS = 69376;
 
 let STDOUT = 1;
 let STDERR = 2;
@@ -49,6 +65,26 @@ fn sys_close(fd i64) i64 {
 
 fn sys_mmap_anon(n i64) i64 {
 	return syscall(SYS_MMAP, 0, n, 3, 34, -1, 0);
+}
+
+fn sys_munmap(addr i64, n i64) i64 {
+	return syscall(SYS_MUNMAP, addr, n, 0);
+}
+
+// Raw x86-64 clone() argument order: flags, child stack top, parent tid
+// pointer, child tid pointer, tls base. The caller builds the child's
+// initial stack image itself -- there is no libc clone() wrapper to hide
+// that behind.
+fn sys_clone(flags i64, stack i64, ptid i64, ctid i64, tls i64) i64 {
+	return syscall(SYS_CLONE, flags, stack, ptid, ctid, tls);
+}
+
+fn sys_arch_prctl(code i64, addr i64) i64 {
+	return syscall(SYS_ARCH_PRCTL, code, addr, 0);
+}
+
+fn sys_futex(uaddr *i64, op i64, val i64, timeout i64) i64 {
+	return syscall(SYS_FUTEX, uaddr as i64, op, val, timeout, 0, 0);
 }
 
 fn sys_exit(code i64) {
