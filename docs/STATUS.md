@@ -7,19 +7,43 @@ Updated 2026-08-04. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **231 368 B** |
-| S2 under `upx --lzma` (measured 2026-08-04) | 53 620 B, ~5.1% of the 1 MiB budget |
-| S2 under xz -9 (proxy for upx) | 55 180 B |
-| stage1 sources | 9 503 lines of Qela |
-| Emitted code vs `gcc -Os` on `bench/` | **231%**, or **193%** without bounds checks (M4 gate wants ≤150%) |
+| **S2 — the shipped compiler, Qela compiled by itself** | **261 032 B** |
+| S2 under `upx --lzma` (measured 2026-08-04) | 60 196 B, ~5.8% of the 1 MiB budget |
+| S2 under xz -9 (proxy for upx) | 63 332 B |
+| stage1 sources | 10 569 lines of Qela |
+| Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
 
-Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 82-test corpus under S2, the embedded stdlib resolving outside the source tree,
+Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 88-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
 backtrace, interpolation and the repl, the compiler flags (`-g`,
 `--backtrace`, `--no-bounds-checks`, `--dump-std`), and a scripted language
 server conversation.
 
 ## Done
+
+**Floats (2026-08-04).** `f32`/`f64` (aliases `float`/`double`): literals
+(`1.5`, `2.0`, `1e3`, `1.5e2`; a digit is required on both sides of the dot),
+`+ - * /`, unary minus, comparisons and `==`/`!=`, `as` casts in both
+directions (float-to-int truncates), parameters and returns, struct fields,
+array elements, and interpolation (`"${x}"`). The gate stayed green throughout
+and `tests/float.qela` + `tests/floatfmt.qela` (stage1-only) pin the surface.
+
+The implementation deliberately costs the bootstrap nothing. A float is raw
+IEEE-754 bits in an ordinary general-purpose register or stack slot; SSE
+registers (`movq`/`addsd`/`mulsd`/`ucomisd`...) appear only for the instant of
+an operation, so the calling convention and register allocation are untouched.
+Parsing (decimal → bits) and printing (bits → decimal) are pure integer
+big-decimal arithmetic in `srcql/lex.qela` (`dec_to_f64_bits`) and
+`std/fmt.qela` (`fmt_f64_bits`) — stage0 has no float, so the bootstrap subset
+stays float-free and `tools/check-subset.sh` is still clean.
+
+Four latent bugs surfaced because code that assumed "an 8-byte value is an
+integer" met float bits: `spine_ok` folded float comparisons as integers
+(`srcql/opt.qela`), and `gen_into`, `stmt_update` and `gen_compare`
+miscopied or mistyped float moves (`srcql/codegen.qela`). All fixed.
+
+Known limits: subnormal literals flush to zero on parse, printing rounds
+half up instead of half to even, and there is no comptime float.
 
 **Hardening pass (2026-08-04).** Every fix below is mirrored in stage0 where
 the feature exists there, and pinned by a corpus test; the gate stayed green
@@ -84,7 +108,8 @@ that print to stdout, which the runner compares along with the exit code.
 quicksort over `[]i64`, both written in the bootstrap subset.
 `tests/sort.qela` runs under S2.
 
-**Language.** i8–u64, bool, int/uint/usize; pointers, arrays, slices, `str`;
+**Language.** i8–u64, bool, int/uint/usize, `f32`/`f64` (`float`/`double`);
+pointers, arrays, slices, `str`;
 structs with literals and forward declarations; enums with payloads and
 exhaustive `match`; parameterized types `struct Pair(T)` and `enum Opt(T)`,
 instantiated on use and cached so identical arguments name the same type;
