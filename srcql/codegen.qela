@@ -2068,12 +2068,41 @@ fn gen_tls_init_stub() {
 	b1(0xc3);                      // ret
 }
 
+// Turns one IrOp into x86 bytes. Temporary home: once codegen.qela stops
+// emitting bytes directly and always goes through the IR, this becomes
+// x86_emit.qela's x86_lower walking a whole function's op list at once;
+// today it is called right after building each op, one at a time, as the
+// IR vocabulary is proven out case by case.
+fn x86_lower_op(op *IrOp) {
+	if (op.kind == IR_MOV && op.dst.kind == OP_ACC && op.src0.kind == OP_IMM) {
+		mov_reg_imm(RAX, op.src0.off);
+		return;
+	}
+	die("internal: x86_lower_op: unhandled IR shape");
+}
+
+fn x86_lower_all() {
+	var op *IrOp = ir_head;
+	while (op as i64 != 0) {
+		x86_lower_op(op);
+		op = op.next;
+	}
+	ir_reset();
+}
+
+fn ir_mov_acc_imm(v i64, pos i64) {
+	var op *IrOp = ir_emit(IR_MOV, pos);
+	op.dst = operand_acc();
+	op.src0 = operand_imm(v);
+	x86_lower_all();
+}
+
 fn gen_expr(n *Node) {
 	var k int = n.kind;
 
-	if (k == ND_NUM) { mov_reg_imm(RAX, n.val); return; }
+	if (k == ND_NUM) { ir_mov_acc_imm(n.val, n.pos); return; }
 	if (k == ND_STRLIT) { add_strref(RAX, n.val as int); return; }
-	if (k == ND_COMPTIME) { mov_reg_imm(RAX, n.val); return; }
+	if (k == ND_COMPTIME) { ir_mov_acc_imm(n.val, n.pos); return; }
 	if (k == ND_SIZEOF) { mov_reg_imm(RAX, n.typeval.size as i64); return; }
 	if (k == ND_VAR) {
 		if (direct_local(n)) { ld_rm(RAX, n); return; }
