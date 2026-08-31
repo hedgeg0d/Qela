@@ -7,8 +7,8 @@ Updated 2026-08-08. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **480 576 B** |
-| stage1 sources | 20 313 lines of Qela |
+| **S2 — the shipped compiler, Qela compiled by itself** | **488 440 B** |
+| stage1 sources | 20 608 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
 
 Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 124-test corpus under S2, the embedded stdlib resolving outside the source tree,
@@ -36,17 +36,37 @@ the way `layout_globals` lays out `.data`, so `gc_data_base`/`gc_data_end`
 are just its bounds; frames come off a second block growing downward, which
 is the shape `std/gc.qela`'s conservative stack scan already expects.
 
-`asm`, `fn naked`, top-level `asm { }` and `entry` are ignored with one
-warning per site -- there is no machine code for them to be part of.
-`coro_switch`, `thread_clone` and any extern are a clear error rather than a
-wrong answer. Atomics, `fence`, `tls_init` and `tvar` work as the
-single-threaded operations they reduce to here.
+Coroutines do work, which is the part that has no obvious answer: a
+tree-walking interpreter's state *is* this process's call stack, so
+suspending an interpreted coroutine means suspending the interpreter. Each
+one gets its own native stack for the interpreter's recursion and its own
+frame region for the program's locals, and `coro_switch` -- the same
+intrinsic the compiled runtime uses -- switches between them. `std/coro.qela`
+keeps its slot table, `coro_next` and its alive/done bookkeeping
+interpreted, so `std/chan.qela` and `std/gc.qela` read exactly the state
+they always read; a `$if (INTERP == "1")` branch hands the two operations it
+cannot do itself back to the interpreter. The collector scans the frame
+region of every parked coroutine, which is where their roots are.
 
-Verified: 104/104 under `TARGET=interp tools/run-tests.sh` (9 tests
-`// interp-skip` as machine-level by definition, 15 `// interp-todo`
-pending coroutines), and `examples/lisp` -- a lisp interpreter running
-inside the Qela interpreter -- gives the same 57 ok / 0 fail as compiled.
-Costs +23 368 B in S2.
+`asm`, `fn naked`, top-level `asm { }` and `entry` are ignored with one
+warning per site -- there is no machine code for them to be part of. Real
+OS threads (`thread_clone`, `go`, the pool) and any `extern` are a clear
+error rather than a wrong answer. Atomics, `fence`, `tls_init` and `tvar`
+work as the single-threaded operations they reduce to here.
+
+Verified: 113/113 under `TARGET=interp tools/run-tests.sh` (9 tests
+`// interp-skip` as machine-level by definition, 6 `// interp-todo` waiting
+on threads), and `examples/lisp` -- a lisp interpreter running inside the
+Qela interpreter -- gives the same 57 ok / 0 fail as compiled.
+
+**The compiler runs under its own interpreter.** `qela irun srcql/main.qela
+srcql/main.qela -o s2i` produces a binary byte-identical to S2, in 2 min 17 s
+against 0.25 s compiled -- about 550x, which is what a tree-walker costs.
+`tools/bootstrap.sh` checks the cheap half of this on every run (the
+interpreted compiler compiling `tests/hello.qela` must emit the same bytes
+as the compiled one); the full self-compile is run by hand.
+
+Costs +31 232 B in S2.
 
 `interp.qela` is the one file in `srcql/` stage0 does not compile; the `$if
 (BOOTSTRAP != "1")` guard and its consequences are written up in

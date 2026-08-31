@@ -61,6 +61,23 @@ printf '\n\033[32mM7 GATE PASSED\033[0m: S2 == S3, %s bytes\n' \
 step "test corpus under S2"
 QELA="$OUT/s2" tools/run-tests.sh || fail "S2 does not pass the test corpus"
 
+step "test corpus interpreted (qela irun)"
+QELA="$OUT/s2" TARGET=interp tools/run-tests.sh ||
+	fail "the interpreter does not pass the test corpus"
+
+# The compiler run by its own interpreter has to emit what the compiled one
+# emits, byte for byte. hello keeps this cheap; interpreting the compiler
+# compiling the whole compiler is the same check at ~550x the wall time and
+# is run by hand (docs/STATUS.md records the last measurement).
+step "self-interpretation"
+"$OUT/s2" tests/hello.qela -o "$OUT/hello.compiled" >/dev/null 2>&1 ||
+	fail "S2 cannot compile tests/hello.qela"
+"$OUT/s2" irun --no-warn srcql/main.qela tests/hello.qela -o "$OUT/hello.interp" >/dev/null 2>&1 ||
+	fail "the interpreted compiler failed to compile tests/hello.qela"
+cmp "$OUT/hello.compiled" "$OUT/hello.interp" ||
+	fail "the interpreted compiler emitted different bytes"
+printf '    ok\n'
+
 step "embedded stdlib, outside the source tree"
 root=$(pwd)
 tmp=$(mktemp -d)
