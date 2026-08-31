@@ -2,15 +2,15 @@
 //
 // Compile + run:
 //   qela -c flappy.qela -o flappy.o
-//   gcc -o flappy flappy.o glue.c -lraylib -lm
+//   gcc -o flappy flappy.o -lraylib -lm
 //   ./flappy
 //
 // SPACE flaps, R restarts, ESC quits.
 //
 // Qela's extern ABI crosses ints, pointers, bool and small structs by value
-// directly, but NOT floats: a Qela float lives in an integer register while
-// SysV (what raylib expects) wants it in an XMM register. glue.c bridges
-// exactly the two float-touching calls (GetFrameTime, DrawCircle).
+// directly. Floats cross too: the compiler marshals scalar floats into the
+// SysV XMM registers a C caller expects, and re-stages incoming floats on
+// the callee side. So GetFrameTime and DrawCircle's radius need no glue.
 
 struct Color { r u8, g u8, b u8, a u8, }
 struct Pipe { x f32, top int, gap int, done bool, }
@@ -27,8 +27,8 @@ extern fn ClearBackground(c Color) void;
 extern fn DrawRectangle(x int, y int, w int, h int, c Color) void;
 extern fn DrawText(t *i8, x int, y int, sz int, c Color) void;
 extern fn DrawFPS(x int, y int) void;
-extern fn gl_frame_time_bits() i64;
-extern fn gl_draw_circle(x int, y int, r int, c Color) void;
+extern fn GetFrameTime() f32;
+extern fn DrawCircle(x int, y int, r f32, c Color) void;
 
 fn rgb(r u8, g u8, b u8) Color {
 	var c Color;
@@ -78,9 +78,7 @@ fn main() int {
 }
 
 fn update() {
-	var fb i64 = gl_frame_time_bits();
-	var pf *f32 = (&fb) as *f32;
-	var dt f32 = *pf;
+	var dt f32 = GetFrameTime();
 	if (dt > 0.05) { dt = 0.05 as f32; }
 	if (IsKeyPressed(KEY_SPACE)) {
 		if (state == 0 || state == 2) {
@@ -214,7 +212,7 @@ fn draw() {
 		DrawRectangle(x, p.top + p.gap, PIPE_W, GROUND - (p.top + p.gap), rgb(0, 228, 48));
 		i = i + 1;
 	}
-	gl_draw_circle(FX, fy as int, BR, rgb(253, 249, 0));
+	DrawCircle(FX, fy as int, BR as f32, rgb(253, 249, 0));
 	draw_score(score, W / 2 - 15, 60, 48, rgb(230, 41, 55));
 	DrawFPS(10, 10);
 	if (state == 0) {
