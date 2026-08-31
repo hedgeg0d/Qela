@@ -696,11 +696,14 @@ fn ip_call_node(n *Node) i64 {
 		var target i64 = ip_load(ip_var_addr(n.varp), n.varp.ty);
 		if (target == 0) { ip_panic("call through a null function pointer\n"); }
 		f = target as *Func;
+	} else if (n.ip_fn as i64 != 0) {
+		f = n.ip_fn;
 	} else {
 		ip_intrinsic(n);
 		if (ip_was_intrinsic) { return ip_intrinsic_val; }
 		f = find_func(n.name);
 		if (f as i64 == 0) { error_at(n.pos, "interpreter: undefined function"); }
+		n.ip_fn = f;
 	}
 
 	var dst i64 = 0;
