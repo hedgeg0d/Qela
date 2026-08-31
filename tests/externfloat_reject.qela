@@ -1,0 +1,9 @@
+// expect-compile-error
+// stage1-only
+// SysV marshalling is register-only for now: an extern function whose
+// parameter would spill to the stack is rejected rather than silently
+// mismatched with the C convention.
+extern fn bad(a f32, b f32, c f32, d f32, e f32, f f32, g f32) f32;
+fn main() int {
+	return 0;
+}
