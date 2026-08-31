@@ -1,0 +1,40 @@
+// stage1-only
+// expect-exit: 42
+// Two real OS threads, each with its own TLS block: the same tvar name
+// holds an independent value per thread.
+import "std/sys.qela";
+
+tvar counter i64 = 1;
+
+var child_seen i64 = 0;
+var done i64 = 0;
+
+fn child(arg i64) i64 {
+	tls_init();
+	counter = 2;
+	atomic_store(&child_seen, counter);
+	atomic_store(&done, 1);
+	return 0;
+}
+
+fn main() int {
+	if (counter != 1) { return 1; }
+
+	var stack_size i64 = 65536;
+	var stack i64 = sys_mmap_anon(stack_size);
+	if (stack < 0 && stack > -4096) { return 2; }
+	var top i64 = (stack + stack_size) & ~15;
+
+	var tid i64 = thread_clone(child, 0, top, CLONE_THREAD_FLAGS);
+	if (tid <= 0) { return 3; }
+
+	var spins i64 = 0;
+	while (atomic_load(&done) == 0) {
+		spins = spins + 1;
+		if (spins > 100000000) { return 4; }
+	}
+
+	if (atomic_load(&child_seen) != 2) { return 5; }
+	if (counter != 1) { return 6; }
+	return 42;
+}
