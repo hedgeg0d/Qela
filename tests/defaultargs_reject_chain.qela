@@ -1,0 +1,8 @@
+// stage1-only
+// expect-compile-error
+// A default value cannot reference another defaulted parameter -- no
+// dependency order between defaults.
+fn f(a=1 i64, b=a i64) i64 { return a + b; }
+fn main() int {
+	return f() as int;
+}
