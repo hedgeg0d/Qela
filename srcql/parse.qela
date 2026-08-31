@@ -430,11 +430,18 @@ fn declare_var(name str, ty *Type, pos i64) *Var {
 		global_vars = v;
 	}
 	var vsc *VarScope = arena_alloc(sizeof(VarScope), 8) as *VarScope;
-	vsc.next = scope_root.vars;
 	vsc.name = name;
 	vsc.varp = v;
 	vsc.pos = pos;
-	scope_root.vars = vsc;
+	if (cur_func as i64 != 0) {
+		vsc.next = scope_root.vars;
+		scope_root.vars = vsc;
+	} else {
+		var root *Scope = scope_root;
+		while (root.next as i64 != 0) { root = root.next; }
+		vsc.next = root.vars;
+		root.vars = vsc;
+	}
 	return v;
 }
 
@@ -2511,7 +2518,6 @@ fn parse(tok *Token) *Unit {
 		all_funcs = head.next;
 	}
 	leave_scope();
-	all_funcs = head.next;
 
 	var f *Func = head.next;
 	while (f as i64 != 0) {
