@@ -85,6 +85,18 @@ fn abi_spawn() {
 	abi_pid = pid;
 	abi_in = in_pipe[1] as i64;
 	abi_out = out_pipe[0] as i64;
+
+	var bundle str = __interp_all_src();
+	if (bundle.len > 0) {
+		abi_send_frame(abi_in, 1 as u8, bundle.ptr, bundle.len);
+		var bkind u8 = 0;
+		var bbuf [8]u8;
+		var bn i64 = abi_wait_result(&bkind, &bbuf[0], 8);
+		if (bn < 0 || bkind == 2) {
+			eprint("eval: an interpreted/dynamic function failed to register at startup\n");
+			sys_exit(1);
+		}
+	}
 }
 
 fn abi_wait_result(kind *u8, buf *u8, cap i64) i64 {
