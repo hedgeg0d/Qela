@@ -271,10 +271,11 @@ struct Unit {
 	nstrs   int,
 }
 
-let ELF_BASE = 0x400000;
-let EHDR_SZ  = 64;
-let PHDR_SZ  = 56;
-let SEG_GAP  = 0x1000;
+let ELF_BASE  = 0x400000;
+let EHDR_SZ   = 64;
+let PHDR_SZ   = 56;
+let SEG_GAP   = 0x1000;
+let EM_X86_64 = 0x3e;
 
 // GPR encodings, shared between codegen.qela (which also defines its own
 // RAX..R11 for its own use) and regalloc.qela (which does not import
