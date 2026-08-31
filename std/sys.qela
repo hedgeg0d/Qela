@@ -86,13 +86,11 @@ fn sys_getenv(name str) str {
 	if (n == 0) { var e str; return e; }
 	var i i64 = 0;
 	while (i < n) {
-		// find '=' and NUL terminator for this entry
 		var eq i64 = i;
 		while (eq < n && buf[eq] != '=') { eq = eq + 1; }
 		if (eq >= n) { break; }
 		var end i64 = eq + 1;
 		while (end < n && buf[end] != 0) { end = end + 1; }
-		// compare key against name
 		if (eq - i == name.len) {
 			var k i64 = 0;
 			var found bool = true;
