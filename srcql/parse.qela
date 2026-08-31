@@ -2633,6 +2633,51 @@ fn parse(tok *Token) *Unit {
 		if (head.next as i64 == 0) { head.next = all_funcs; }
 		all_funcs = head.next;
 	}
+
+	if (find_func("abi_spawn") as i64 != 0 && find_func("__eval_call_dispatch") as i64 == 0) {
+		var db Buf;
+		fmt_str(&db, "fn __eval_call_dispatch(name str, args *i64) i64 { if (name.ptr as i64 == args as i64) { return 0; }");
+		var ef *Func = all_funcs;
+		while (ef as i64 != 0) {
+			if (ef.eval_export && ef.nct == 0) {
+				if (ef.nparams > 6) {
+					error_at(ef.pos, "'eval fn' takes at most six arguments over the runtime ABI");
+				}
+				interp_check_scalar(ef.ret, ef.pos, "return types");
+				var ei int = 0;
+				while (ei < ef.nparams) {
+					interp_check_scalar(func_param(ef, ei).ty, ef.pos, "parameters");
+					ei = ei + 1;
+				}
+				fmt_str(&db, " if (str_eq(name, \"");
+				fmt_str(&db, ef.name);
+				fmt_str(&db, "\")) { return ");
+				fmt_str(&db, ef.name);
+				fmt_str(&db, "(");
+				ei = 0;
+				while (ei < ef.nparams) {
+					if (ei > 0) { fmt_str(&db, ", "); }
+					fmt_str(&db, "args[");
+					fmt_i64(&db, ei as i64);
+					fmt_str(&db, "]");
+					ei = ei + 1;
+				}
+				fmt_str(&db, "); }");
+			}
+			ef = ef.next;
+		}
+		fmt_str(&db, " return 0; }");
+
+		var dfile int = diag_add_file("<eval-dispatch>", buf_str(&db));
+		var dtoks *Token = lex(buf_str(&db), (dfile as i64) << FILE_SHIFT);
+		var dnf *Func = parse_function(&dtoks, false);
+		if (funcs_tail as i64 == 0) { head.next = dnf; }
+		else { funcs_tail.next = dnf; }
+		funcs_tail = dnf;
+		if (head.next as i64 == 0) { head.next = all_funcs; }
+		all_funcs = head.next;
+	}
+
 	leave_scope();
 
 	var f *Func = head.next;
