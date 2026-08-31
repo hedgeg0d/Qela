@@ -217,7 +217,7 @@ fn load(ty *Type) {
 		return;
 	}
 	if (ty.size == 4) {
-		if (ty.is_unsigned) { b1(0x8b); } else { b1(0x48); b1(0x63); }
+		if (ty.is_unsigned || ty.kind == TY_FLOAT) { b1(0x8b); } else { b1(0x48); b1(0x63); }
 		modrm(0, RAX, RAX);
 		return;
 	}
@@ -247,7 +247,7 @@ fn truncate_to(ty *Type) {
 		return;
 	}
 	if (ty.size == 4) {
-		if (ty.is_unsigned) {
+		if (ty.is_unsigned || ty.kind == TY_FLOAT) {
 			b1(0x89); modrm(3, RAX, RAX);
 		} else {
 			b1(0x48); b1(0x63); modrm(3, RAX, RAX);
@@ -903,10 +903,113 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64) {
 	overflow_pushed = m + pad;
 }
 
+// ── floats ──
+//
+// A float never gets its own register class: it lives in a GPR/stack slot as
+// a raw bit pattern everywhere except the instant an SSE instruction needs
+// it, bounced through xmm0/xmm1 via movd/movq. This means the whole calling
+// convention, spilling and regalloc machinery is unchanged -- only the ops
+// that actually compute on a float know it is one.
+let XMM0 = 0;
+let XMM1 = 1;
+
+fn xmm_from_gpr(xmm int, gpr int, sz int) {
+	b1(0x66);
+	if (sz == 8) { rex_w(gpr, xmm); }
+	b1(0x0f); b1(0x6e);
+	modrm(3, xmm, gpr);
+}
+
+fn gpr_from_xmm(gpr int, xmm int, sz int) {
+	b1(0x66);
+	if (sz == 8) { rex_w(xmm, gpr); }
+	b1(0x0f); b1(0x7e);
+	modrm(3, xmm, gpr);
+}
+
+fn sse2(prefix i64, opcode i64, dst int, src int) {
+	if (prefix != 0) { b1(prefix); }
+	b1(0x0f); b1(opcode);
+	modrm(3, dst, src);
+}
+
+// Unsigned-integer cc codes double as float cc codes: ucomisd sets CF/ZF/PF
+// exactly like an unsigned integer compare (NaN aside, which this does not
+// try to get right -- a hobby compiler, not a libc).
+fn float_cc_for(n *Node) i64 {
+	if (n.kind == ND_EQ) { return 0x94; }
+	if (n.kind == ND_NE) { return 0x95; }
+	if (n.kind == ND_LT) { return 0x92; }
+	return 0x96;
+}
+
+fn gen_binop_float(n *Node) {
+	var sz int = n.lhs.ty.size;
+	var dprefix i64 = 0xf2;
+	if (sz == 4) { dprefix = 0xf3; }
+	xmm_from_gpr(XMM0, RAX, sz);
+	xmm_from_gpr(XMM1, RDI, sz);
+	var k int = n.kind;
+	if (k == ND_ADD) { sse2(dprefix, 0x58, XMM0, XMM1); gpr_from_xmm(RAX, XMM0, sz); return; }
+	if (k == ND_SUB) { sse2(dprefix, 0x5c, XMM0, XMM1); gpr_from_xmm(RAX, XMM0, sz); return; }
+	if (k == ND_MUL) { sse2(dprefix, 0x59, XMM0, XMM1); gpr_from_xmm(RAX, XMM0, sz); return; }
+	if (k == ND_DIV) { sse2(dprefix, 0x5e, XMM0, XMM1); gpr_from_xmm(RAX, XMM0, sz); return; }
+	if (k == ND_EQ || k == ND_NE || k == ND_LT || k == ND_LE) {
+		var cprefix i64 = 0x66;
+		if (sz == 4) { cprefix = 0; }
+		sse2(cprefix, 0x2e, XMM0, XMM1);
+		setcc(float_cc_for(n));
+		return;
+	}
+	error_at(n.pos, "operator not defined for floats");
+}
+
+fn gen_neg_float(sz int) {
+	var mask i64 = 0x8000000000000000;
+	if (sz == 4) { mask = 0x80000000; }
+	mov_reg_imm(RDI, mask);
+	rex_w(RDI, RAX); b1(0x31); modrm(3, RDI, RAX);
+}
+
+fn cvt2(prefix i64, opcode i64, dst int, src int, w bool) {
+	b1(prefix);
+	if (w) { rex_w(dst, src); }
+	b1(0x0f); b1(opcode);
+	modrm(3, dst, src);
+}
+
+// RAX holds n.lhs's bits on entry (n.lhs already generated); leaves the
+// converted bits in RAX.
+fn gen_cast_float(n *Node) {
+	var st *Type = n.lhs.ty;
+	var dt *Type = n.ty;
+	if (is_float(st) && is_float(dt)) {
+		if (st.size == dt.size) { return; }
+		xmm_from_gpr(XMM0, RAX, st.size);
+		if (st.size == 4) { cvt2(0xf3, 0x5a, XMM0, XMM0, false); }
+		else { cvt2(0xf2, 0x5a, XMM0, XMM0, false); }
+		gpr_from_xmm(RAX, XMM0, dt.size);
+		return;
+	}
+	if (is_float(dt)) {
+		var prefix i64 = 0xf2;
+		if (dt.size == 4) { prefix = 0xf3; }
+		cvt2(prefix, 0x2a, XMM0, RAX, true);
+		gpr_from_xmm(RAX, XMM0, dt.size);
+		return;
+	}
+	var prefix2 i64 = 0xf2;
+	if (st.size == 4) { prefix2 = 0xf3; }
+	xmm_from_gpr(XMM0, RAX, st.size);
+	cvt2(prefix2, 0x2c, RAX, XMM0, true);
+	if (dt.size < 8) { truncate_to(dt); }
+}
+
 fn gen_binop(n *Node) {
 	var t *Type = n.ty;
 	var k int = n.kind;
 
+	if (is_float(n.lhs.ty)) { gen_binop_float(n); return; }
 	if (k == ND_ADD) { rex_w(RDI, RAX); b1(0x01); modrm(3, RDI, RAX); return; }
 	if (k == ND_SUB) { rex_w(RDI, RAX); b1(0x29); modrm(3, RDI, RAX); return; }
 	if (k == ND_MUL) { b1(0x48); b1(0x0f); b1(0xaf); modrm(3, RAX, RDI); return; }
@@ -1144,6 +1247,7 @@ fn alu_rm_reg(op i64, n *Node, reg int) {
 fn stmt_update(v *Node, k int, e *Node) bool {
 	if (!direct_local(v)) { return false; }
 	if (v.ty.kind == TY_PTR) { return false; }
+	if (is_float(v.ty)) { return false; }
 	if (k != ND_ADD && k != ND_SUB && k != ND_BITAND && k != ND_BITOR && k != ND_BITXOR) {
 		return false;
 	}
@@ -1189,6 +1293,7 @@ fn spine_ok(e *Node, v *Var) bool {
 		return false;
 	}
 	if (e.ty.size != 8 || e.ty.kind == TY_PTR) { return false; }
+	if (is_float(e.ty)) { return false; }
 	if (e.lhs.ty.kind == TY_PTR || e.rhs.ty.kind == TY_PTR) { return false; }
 	if (refs_var(e.rhs, v)) { return false; }
 	return spine_ok(e.lhs, v);
@@ -1394,6 +1499,7 @@ fn gen_into(n *Node, dst int) bool {
 	if (n.ty.kind == TY_PTR || n.lhs.ty.kind == TY_PTR || n.rhs.ty.kind == TY_PTR) {
 		return false;
 	}
+	if (is_float(n.ty)) { return false; }
 	if (!simple_operand(n.lhs) || !simple_operand(n.rhs)) { return false; }
 	if (in_reg(n.rhs, dst)) { return false; }
 	if (!gen_into(n.lhs, dst)) { return false; }
@@ -1484,6 +1590,19 @@ fn is_compare(n *Node) bool {
 // a boolean. Callers that only branch on the result skip setcc entirely.
 fn gen_compare(n *Node) i64 {
 	var lt *Type = n.lhs.ty;
+	if (is_float(lt)) {
+		gen_expr(n.rhs);
+		push_reg(RAX);
+		gen_expr(n.lhs);
+		pop_reg(RDI);
+		var sz int = lt.size;
+		xmm_from_gpr(XMM0, RAX, sz);
+		xmm_from_gpr(XMM1, RDI, sz);
+		var cprefix i64 = 0x66;
+		if (sz == 4) { cprefix = 0; }
+		sse2(cprefix, 0x2e, XMM0, XMM1);
+		return float_cc_for(n);
+	}
 	// Equality survives a widening cast, so the load under it can be compared
 	// at its own width. Ordering cannot: the widened type decides the
 	// signedness of the condition code.
@@ -1664,9 +1783,14 @@ fn gen_expr(n *Node) {
 	}
 	if (k == ND_CAST) {
 		gen_expr(n.lhs);
-		if (n.ty.kind == TY_BOOL) {
+		if (n.val == 1) {
+			// A bit-reinterpret, not a numeric conversion: the raw bits
+			// already sit in RAX exactly as they should (see type_interp).
+		} else if (n.ty.kind == TY_BOOL) {
 			test_rax();
 			setcc(0x95);
+		} else if (is_float(n.ty) || is_float(n.lhs.ty)) {
+			gen_cast_float(n);
 		} else {
 			truncate_to(n.ty);
 		}
@@ -1709,6 +1833,7 @@ fn gen_expr(n *Node) {
 	if (k == ND_COMMA) { gen_expr(n.lhs); gen_expr(n.rhs); return; }
 	if (k == ND_NEG) {
 		gen_expr(n.lhs);
+		if (is_float(n.ty)) { gen_neg_float(n.ty.size); return; }
 		b1(0x48); b1(0xf7); modrm(3, 3, RAX);
 		return;
 	}
@@ -1771,7 +1896,7 @@ fn gen_expr(n *Node) {
 	var ptr_diff bool = k == ND_SUB && lt.kind == TY_PTR && rt.kind == TY_PTR;
 
 	var k2 int = n.kind;
-	if (n.rhs.kind == ND_NUM && !ptr_diff && !(lt.kind == TY_PTR && k2 != ND_ADD && k2 != ND_SUB && n.rhs.val != 0)) {
+	if (!is_float(lt) && n.rhs.kind == ND_NUM && !ptr_diff && !(lt.kind == TY_PTR && k2 != ND_ADD && k2 != ND_SUB && n.rhs.val != 0)) {
 		var v i64 = n.rhs.val;
 		if (lt.kind == TY_PTR) {
 			if (k2 != ND_ADD && k2 != ND_SUB) { v = v; }
@@ -1780,10 +1905,10 @@ fn gen_expr(n *Node) {
 		if (fits_imm32(v) && gen_binop_imm(n, v)) { return; }
 	}
 
-	if (!ptr_diff && lt.kind != TY_PTR && mem_binop_ok(n)) {
+	if (!is_float(lt) && !ptr_diff && lt.kind != TY_PTR && mem_binop_ok(n)) {
 		if (gen_binop_mem(n, n.lhs, n.rhs)) { return; }
 	}
-	if (!ptr_diff && lt.kind != TY_PTR && rt.kind != TY_PTR && swap_binop_ok(n)) {
+	if (!is_float(lt) && !ptr_diff && lt.kind != TY_PTR && rt.kind != TY_PTR && swap_binop_ok(n)) {
 		if (gen_binop_mem(n, n.rhs, n.lhs)) { return; }
 	}
 

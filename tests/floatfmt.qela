@@ -1,0 +1,17 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: a=3.75 b=-1.5 c=100000.25 e=0
+// Float printing: fmt_f64_bits (std/fmt.qela) is pure integer arithmetic --
+// it decodes the IEEE754 bits and does long division/multiplication on a
+// binary big-number array, since this module is part of the bootstrap
+// subset and stage0 has no float support at all.
+import "std/io.qela";
+
+fn main() int {
+	var a f64 = 3.75;
+	var b f64 = -1.5;
+	var c f64 = 100000.25;
+	var e f64 = 0.0;
+	write_str(STDOUT, "a=${a} b=${b} c=${c} e=${e}\n");
+	return 0;
+}
