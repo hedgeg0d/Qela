@@ -1,3 +1,4 @@
+// interp-skip
 // expect-exit: 0
 // stage1-only
 // Scalar floats cross the extern boundary in xmm registers (SysV), not in

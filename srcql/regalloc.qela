@@ -76,6 +76,9 @@ fn ra_nsaved() int {
 }
 
 fn ra_nreg(f *Func) int {
+	// The interpreter reads every local out of its frame slot, and a
+	// promoted local has none.
+	if (opt_interp) { return 0; }
 	if (opt_target == TARGET_RISCV64) {
 		// Promotion cost more than it saved on RV64C: every promoted local
 		// in a non-leaf function pays a prologue/epilogue spill pair, and

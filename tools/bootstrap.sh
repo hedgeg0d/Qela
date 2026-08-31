@@ -21,16 +21,25 @@ step "regenerate the embedded stdlib"
 python3 tools/genblob.py || fail "genblob failed"
 
 # An unfinished stage1 can exit 0 without writing anything, so check the file.
+# Anything after $3 is passed to the compiler: the stage0 step uses it to
+# define BOOTSTRAP=1, which drops srcql/interp.qela from S1a. See
+# docs/BOOTSTRAP.md -- stage0 cannot compile the interpreter, and S1a never
+# ships, so only S2 and S3 carry it and the S2 == S3 fixed point still covers
+# its sources.
 compile() {
-	rm -f "$3"
-	"$1" "$ENTRY" -o "$3" || fail "$2 failed to compile stage1"
-	[ -s "$3" ] || fail "$2 produced no $3 (stage1 is still incomplete)"
-	chmod +x "$3"
-	printf '    %s bytes\n' "$(stat -c %s "$3")"
+	cc="$1"
+	name="$2"
+	out="$3"
+	shift 3
+	rm -f "$out"
+	"$cc" "$ENTRY" "$@" -o "$out" || fail "$name failed to compile stage1"
+	[ -s "$out" ] || fail "$name produced no $out (stage1 is still incomplete)"
+	chmod +x "$out"
+	printf '    %s bytes\n' "$(stat -c %s "$out")"
 }
 
 step "S1a = stage0($ENTRY)"
-compile "$STAGE0" stage0 "$OUT/s1a"
+compile "$STAGE0" stage0 "$OUT/s1a" -D BOOTSTRAP=1
 
 step "S2 = S1a($ENTRY)"
 compile "$OUT/s1a" S1a "$OUT/s2"
