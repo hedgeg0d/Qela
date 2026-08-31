@@ -133,6 +133,16 @@ var coro_stub_refs I64List;
 var gc_base_refs I64List;
 var gc_end_refs I64List;
 
+// tvar (thread-local) support: a flat, compiler-private %fs:offset block,
+// not the ELF PT_TLS ABI -- there is no dynamic linker here to need it.
+// Offset 0 in the block is a self-pointer (the ABI convention every real
+// TLS implementation also uses, since LEA cannot read a segment base).
+var tls_template_off i64 = 0;
+var tls_block_size i64 = 8;
+var tls_init_refs I64List;
+var tls_stub_at i64 = -1;
+var tls_stub_src_at i64 = -1;
+
 var opt_no_bounds bool = false;
 var opt_backtrace bool = false;
 // `qela -c`: emit a relocatable object instead of a static binary. The
@@ -660,11 +670,27 @@ fn lea_index(scale int, base int, idx int) bool {
 	return true;
 }
 
+// mov reg, fs:[0] -- the thread's self-pointer, the base of its own TLS
+// block. LEA cannot read a segment base, so a tvar's address always starts
+// here before adding its offset within the block.
+fn ld_fs_self(reg int) {
+	b1(0x64);                              // fs segment override
+	rex_w(reg, 0);
+	b1(0x8b);
+	b1(0x04 | (((reg as i64) & 7) << 3));  // ModRM: mod=00, rm=100 (SIB follows)
+	b1(0x25);                              // SIB: no index, no base -> disp32 only
+	b4(0);
+}
+
 fn gen_addr(n *Node) {
 	var k int = n.kind;
 	if (k == ND_VAR) {
 		if (n.varp.has_reg) { error_at(n.pos, "internal: address of a promoted local"); }
-		if (n.varp.is_global) { add_dataref(n.varp); }
+		if (n.varp.is_tls) {
+			ld_fs_self(RAX);
+			add_rax_imm(n.varp.tls_off);
+		}
+		else if (n.varp.is_global) { add_dataref(n.varp); }
 		else if (n.varp.arg_stack) {
 			// A stack-passed parameter's offset is a positive rbp
 			// displacement already, unlike every other local: rbp_mem is
@@ -1993,6 +2019,45 @@ fn gen_thread_clone(n *Node) {
 	pop_reg(12);
 }
 
+// Builds a fresh per-thread TLS block: mmap it, copy the template in,
+// write the self-pointer at offset 0, then point %fs at it. Called once
+// for the main thread (from the entry stub, only when the program
+// declared a tvar) and once per spawned OS thread.
+fn gen_tls_init_stub() {
+	tls_stub_at = code.n;
+	// mmap(0, tls_block_size, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)
+	mov_reg_imm(RDI, 0);
+	mov_reg_imm(RSI, tls_block_size);
+	mov_reg_imm(RDX, 3);
+	mov_reg_imm(10, 34);
+	mov_reg_imm(R8, -1);
+	mov_reg_imm(R9, 0);
+	mov_reg_imm(RAX, 9);
+	b1(0x0f); b1(0x05);
+
+	mov_reg_reg(12, RAX);          // r12 = the new block, kept live across the copy
+
+	// Copy the template in, 8 bytes at a time -- tls_block_size is always
+	// a multiple of 8.
+	rex_w(0, RSI);
+	b1(0xbe);
+	tls_stub_src_at = code.n;      // patched below to the template's runtime address
+	buf_u64(&code, 0);
+	mov_reg_reg(RDI, 12);
+	mov_reg_imm(RCX, tls_block_size / 8);
+	b1(0xfc);                      // cld
+	b1(0xf3); b1(0x48); b1(0xa5);  // rep movsq
+
+	b1(0x4d); b1(0x89); b1(0x24); b1(0x24);  // mov [r12], r12 -- self-pointer
+
+	// arch_prctl(ARCH_SET_FS, r12)
+	mov_reg_reg(RSI, 12);
+	mov_reg_imm(RDI, 0x1002);
+	mov_reg_imm(RAX, 158);
+	b1(0x0f); b1(0x05);
+	b1(0xc3);                      // ret
+}
+
 fn gen_expr(n *Node) {
 	var k int = n.kind;
 
@@ -2159,6 +2224,12 @@ fn gen_expr(n *Node) {
 		}
 		if (str_eq(n.name, "thread_clone")) {
 			gen_thread_clone(n);
+			return;
+		}
+		if (str_eq(n.name, "tls_init")) {
+			b1(0xe8);
+			ilist_push(&tls_init_refs, code.n);
+			b4(0);
 			return;
 		}
 		gen_call(n);
@@ -2664,9 +2735,40 @@ fn f64_to_f32_bits(b i64) i64 {
 	return (sign << 31) | (e32 << 23) | ((man >> 29) & 0x7fffff);
 }
 
-fn layout_globals(globals *Var) {
+// tvar bytes never live in .data/.bss: they're a template copied into a
+// fresh mmap'd block per thread. Offset 0 is reserved for the self-pointer
+// tls_init writes at runtime; real tvars start at 8.
+fn layout_tls(globals *Var) {
+	var tmpl Buf;
+	buf_u64(&tmpl, 0);
 	var v *Var = globals;
 	while (v as i64 != 0) {
+		if (v.is_tls) {
+			var align i64 = v.ty.align as i64;
+			var off i64 = (tmpl.n + align - 1) & ~(align - 1);
+			while (tmpl.n < off) { buf_u8(&tmpl, 0); }
+			v.tls_off = tmpl.n;
+			var i int = 0;
+			while (i < v.ty.size) {
+				buf_u8(&tmpl, ((v.init >> (i * 8)) & 255) as u8);
+				i = i + 1;
+			}
+		}
+		v = v.next;
+	}
+	while ((tmpl.n & 7) != 0) { buf_u8(&tmpl, 0); }
+	tls_block_size = tmpl.n;
+	var align8 i64 = (gdata.n + 7) & ~7;
+	while (gdata.n < align8) { buf_u8(&gdata, 0); }
+	tls_template_off = gdata.n;
+	buf_bytes(&gdata, tmpl.p, tmpl.n);
+}
+
+fn layout_globals(globals *Var) {
+	layout_tls(globals);
+	var v *Var = globals;
+	while (v as i64 != 0) {
+		if (v.is_tls) { v = v.next; continue; }
 		if (v.init != 0) {
 			// A float literal stores f64 bits; an f32 slot is 4 bytes, so
 			// the bits must be narrowed here or the low half (zero for any
@@ -2689,7 +2791,7 @@ fn layout_globals(globals *Var) {
 	var bss i64 = gdata.n;
 	v = globals;
 	while (v as i64 != 0) {
-		if (v.init == 0 && !(v.extern && !v.has_init)) {
+		if (!v.is_tls && v.init == 0 && !(v.extern && !v.has_init)) {
 			// An imported extern is allocated by the C side; it must not
 			// take a .bss slot here.
 			var align i64 = v.ty.align as i64;
@@ -2757,6 +2859,9 @@ fn reset_code() {
 	coro_stub_at = -1;
 	gc_base_refs.n = 0;
 	gc_end_refs.n = 0;
+	tls_init_refs.n = 0;
+	tls_stub_at = -1;
+	tls_stub_src_at = -1;
 	calls_head = 0 as *CallFixup;
 	calls_tail = 0 as *CallFixup;
 	asmrefs_head = 0 as *CallFixup;
@@ -2784,6 +2889,13 @@ fn emit_code(u *Unit, main_fn *Func, panic_id int, hdr i64) {
 		// walker needs a sentinel main returns into.
 		if (opt_backtrace) {
 			b1(0x48); b1(0x31); b1(0xed);     // xor rbp, rbp
+		}
+		if (tls_block_size > 8) {
+			// Runs before argc/argv load into rdi/rsi below -- it clobbers
+			// plenty of registers and nothing needs those yet.
+			b1(0xe8);
+			ilist_push(&tls_init_refs, code.n);
+			b4(0);
 		}
 		if (main_fn as i64 != 0 && main_fn.nparams == 2) {
 			b1(0x48); b1(0x8b); b1(0x3c); b1(0x24);
@@ -2879,6 +2991,16 @@ fn emit_code(u *Unit, main_fn *Func, panic_id int, hdr i64) {
 				kk = kk + 1;
 			}
 			si = si + 1;
+		}
+	}
+
+	if (tls_init_refs.n != 0) {
+		gen_tls_init_stub();
+		var ti i64 = 0;
+		while (ti < tls_init_refs.n) {
+			var site i64 = tls_init_refs.p[ti];
+			buf_patch32(&code, site, tls_stub_at - (site + 4));
+			ti = ti + 1;
 		}
 	}
 
@@ -3081,6 +3203,14 @@ fn codegen(u *Unit, img *Image) {
 	var dbase i64 = ELF_BASE + SEG_GAP + hdr + code.n + rodata.n;
 	patch_abs(&gc_base_refs, dbase);
 	patch_abs(&gc_end_refs, dbase + gdata.n + bss_size);
+	if (tls_stub_at != -1) {
+		var tabs i64 = dbase + tls_template_off;
+		var tkk i64 = 0;
+		while (tkk < 8) {
+			code.p[tls_stub_src_at + tkk] = ((tabs >> (tkk * 8)) & 255) as u8;
+			tkk = tkk + 1;
+		}
+	}
 
 	var af *CallFixup = funcaddrs_head;
 	while (af as i64 != 0) {
