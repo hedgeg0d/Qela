@@ -1,4 +1,5 @@
 // The only place in stage1 where a raw syscall is allowed.
+import "str.qela";
 
 let SYS_READ  = 0;
 let SYS_WRITE = 1;
@@ -65,6 +66,52 @@ fn sys_wait4(pid i64, status *u8) i64 {
 }
 
 fn sys_unlink(path *u8) i64 { return syscall(SYS_UNLINK, path as i64, 0, 0); }
+
+// Reads /proc/self/environ and returns the value of `name` if set, "" if
+// not. The string is the slice between this 'name=' and the next NUL byte.
+// Used by diagnostics to honour NO_COLOR and check TERM. Empty when not on
+// Linux; the caller treats "" as "not set".
+fn sys_getenv(name str) str {
+	var path str = "/proc/self/environ";
+	var fd i64 = sys_open_read(cstr(path));
+	if (fd < 0) { var e str; return e; }
+	var buf [4096]u8;
+	var n i64 = 0;
+	var got i64 = 1;
+	while (got > 0) {
+		got = sys_read(fd, &buf[0] + n, 4096 - n);
+		if (got > 0) { n = n + got; }
+	}
+	sys_close(fd);
+	if (n == 0) { var e str; return e; }
+	var i i64 = 0;
+	while (i < n) {
+		// find '=' and NUL terminator for this entry
+		var eq i64 = i;
+		while (eq < n && buf[eq] != '=') { eq = eq + 1; }
+		if (eq >= n) { break; }
+		var end i64 = eq + 1;
+		while (end < n && buf[end] != 0) { end = end + 1; }
+		// compare key against name
+		if (eq - i == name.len) {
+			var k i64 = 0;
+			var found bool = true;
+			while (k < name.len) {
+				if (buf[i + k] != name.ptr[k]) { found = false; }
+				k = k + 1;
+			}
+			if (found) {
+				var r str;
+				r.ptr = &buf[0] + eq + 1;
+				r.len = end - eq - 1;
+				return r;
+			}
+		}
+		i = end + 1;
+	}
+	var e str;
+	return e;
+}
 
 fn sys_getpid() i64 { return syscall(SYS_GETPID, 0, 0, 0); }
 
