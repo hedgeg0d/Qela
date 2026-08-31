@@ -1,0 +1,98 @@
+import "sys.qela";
+import "coro.qela";
+import "chan.qela";
+
+// A fixed pool of OS threads, each running its own cooperative coroutine
+// scheduler -- goroutines multiplexed over real parallelism, without a
+// work-stealing scheduler. go() round-robins a spawn request onto one
+// pool thread's queue; that thread's own loop drains it into a local
+// coro_spawn the next time it polls. Channels (chan.qela) are the
+// supported way to hand results back across threads.
+//
+// A pool thread never calls gc_thread_enter itself -- that would force
+// every user of thread.qela to also pull in gc.qela. A program that wants
+// its pool threads to be GC roots has to register them itself (e.g. by
+// wrapping the function passed to go() to call gc_thread_enter on first
+// entry to that thread, or by using a custom pool loop built the same way
+// this one is).
+
+let POOL_MAX = 32;
+let POOL_QUEUE = 64;
+let POOL_STACK = 262144;
+
+struct SpawnReq {
+	fn_ptr i64,
+	a0     i64,
+	a1     i64,
+	a2     i64,
+	a3     i64,
+	a4     i64,
+}
+
+var pool_n i64 = 0;
+var pool_next i64 = 0;
+var pool_queue [32][64]SpawnReq;
+var pool_head [32]i64;
+var pool_tail [32]i64;
+var pool_lock [32]i64;
+
+fn pool_drain(id i64) {
+	while (!atomic_cas(&pool_lock[id], 0, 1)) { }
+	while (pool_head[id] != pool_tail[id]) {
+		var slot i64 = pool_head[id] % POOL_QUEUE;
+		var r SpawnReq = pool_queue[id][slot];
+		pool_head[id] = pool_head[id] + 1;
+		coro_spawn(r.fn_ptr, r.a0, r.a1, r.a2, r.a3, r.a4);
+	}
+	atomic_store(&pool_lock[id], 0);
+}
+
+fn pool_worker(id i64) i64 {
+	tls_init();
+	while (true) {
+		pool_drain(id);
+		if (!coro_yield()) { fence(); }
+	}
+	return 0;
+}
+
+// Spawns n OS threads, each running its own coroutine scheduler. Call
+// once; there is no way to grow the pool afterward.
+fn thread_pool_init(n i64) {
+	// The single-scheduler deadlock heuristic in chan.qela can't tell a
+	// slow sibling thread from real deadlock; see chan_deadlock_check.
+	chan_deadlock_check = false;
+	if (n > POOL_MAX) { n = POOL_MAX; }
+	var i i64 = 0;
+	while (i < n) {
+		pool_head[i] = 0;
+		pool_tail[i] = 0;
+		pool_lock[i] = 0;
+		var stack i64 = sys_mmap_anon(POOL_STACK);
+		var top i64 = (stack + POOL_STACK) & ~15;
+		thread_clone(pool_worker, i, top, CLONE_THREAD_FLAGS);
+		i = i + 1;
+	}
+	pool_n = n;
+}
+
+// Round-robins a goroutine onto one of the pool's threads. fn takes up to
+// five i64/pointer-sized arguments, the same convention coro_spawn uses.
+fn go(fn_ptr i64, a0 i64, a1 i64, a2 i64, a3 i64, a4 i64) {
+	var id i64 = atomic_add(&pool_next, 1) % pool_n;
+	while (!atomic_cas(&pool_lock[id], 0, 1)) { }
+	while (pool_tail[id] - pool_head[id] >= POOL_QUEUE) {
+		atomic_store(&pool_lock[id], 0);
+		fence();
+		while (!atomic_cas(&pool_lock[id], 0, 1)) { }
+	}
+	var slot i64 = pool_tail[id] % POOL_QUEUE;
+	pool_queue[id][slot].fn_ptr = fn_ptr;
+	pool_queue[id][slot].a0 = a0;
+	pool_queue[id][slot].a1 = a1;
+	pool_queue[id][slot].a2 = a2;
+	pool_queue[id][slot].a3 = a3;
+	pool_queue[id][slot].a4 = a4;
+	pool_tail[id] = pool_tail[id] + 1;
+	atomic_store(&pool_lock[id], 0);
+}
