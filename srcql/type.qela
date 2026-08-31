@@ -1224,6 +1224,14 @@ fn type_ret(n *Node) {
 	n.lhs = cast_to(n.lhs, want);
 }
 
+// Intrinsics take their scalar arguments as raw i64 registers, so a
+// smaller int, an untyped literal, or a function reference (thread_clone's
+// entry point) all go through the same implicit i64 slot an ordinary
+// function parameter would coerce them into.
+fn intrinsic_i64_arg(a *Node) *Node {
+	return cast_to(to_value(a), ty_i64);
+}
+
 // Two calls have no Qela definition: the compiler emits them directly.
 fn type_intrinsic(n *Node) bool {
 	if (str_eq(n.name, "gc_data_base") || str_eq(n.name, "gc_data_end")) {
@@ -1265,14 +1273,12 @@ fn type_intrinsic(n *Node) bool {
 		if (p.ty.kind != TY_PTR) {
 			error_at(p.pos, "atomic_cas's first argument must be a pointer");
 		}
-		var a *Node = n.args.next;
-		while (a as i64 != 0) {
-			var v *Node = to_value(a);
-			if (!is_integer(v.ty) || v.ty.size != 8) {
-				error_at(v.pos, "atomic_cas's value arguments must be i64");
-			}
-			a = a.next;
-		}
+		var exp0 *Node = p.next;
+		var nv0 *Node = exp0.next;
+		var exp *Node = intrinsic_i64_arg(exp0);
+		var nv *Node = intrinsic_i64_arg(nv0);
+		p.next = exp; exp.next = nv; nv.next = 0 as *Node;
+		n.args = p;
 		n.ty = ty_bool;
 		return true;
 	}
@@ -1282,10 +1288,9 @@ fn type_intrinsic(n *Node) bool {
 		if (p.ty.kind != TY_PTR) {
 			error_at(p.pos, "atomic_add's first argument must be a pointer");
 		}
-		var v *Node = to_value(n.args.next);
-		if (!is_integer(v.ty) || v.ty.size != 8) {
-			error_at(v.pos, "atomic_add's delta must be i64");
-		}
+		var d *Node = intrinsic_i64_arg(p.next);
+		p.next = d; d.next = 0 as *Node;
+		n.args = p;
 		n.ty = ty_i64;
 		return true;
 	}
@@ -1293,6 +1298,7 @@ fn type_intrinsic(n *Node) bool {
 		if (n.nargs != 1) { error_at(n.pos, "atomic_load takes one pointer"); }
 		var p *Node = to_value(n.args);
 		if (p.ty.kind != TY_PTR) { error_at(p.pos, "atomic_load takes a pointer"); }
+		n.args = p;
 		n.ty = ty_i64;
 		return true;
 	}
@@ -1302,16 +1308,28 @@ fn type_intrinsic(n *Node) bool {
 		if (p.ty.kind != TY_PTR) {
 			error_at(p.pos, "atomic_store's first argument must be a pointer");
 		}
-		var v *Node = to_value(n.args.next);
-		if (!is_integer(v.ty) || v.ty.size != 8) {
-			error_at(v.pos, "atomic_store's value must be i64");
-		}
+		var v *Node = intrinsic_i64_arg(p.next);
+		p.next = v; v.next = 0 as *Node;
+		n.args = p;
 		n.ty = ty_void;
 		return true;
 	}
 	if (str_eq(n.name, "fence")) {
 		if (n.nargs != 0) { error_at(n.pos, "fence takes no arguments"); }
 		n.ty = ty_void;
+		return true;
+	}
+	if (str_eq(n.name, "thread_clone")) {
+		if (n.nargs != 4) {
+			error_at(n.pos, "thread_clone takes a function, an argument, a stack top and clone flags");
+		}
+		var a0 *Node = intrinsic_i64_arg(n.args);
+		var a1 *Node = intrinsic_i64_arg(n.args.next);
+		var a2 *Node = intrinsic_i64_arg(n.args.next.next);
+		var a3 *Node = intrinsic_i64_arg(n.args.next.next.next);
+		a0.next = a1; a1.next = a2; a2.next = a3; a3.next = 0 as *Node;
+		n.args = a0;
+		n.ty = ty_i64;
 		return true;
 	}
 	return false;
