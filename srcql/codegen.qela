@@ -2072,6 +2072,43 @@ fn gen_expr(n *Node) {
 			buf_u64(&code, 0);
 			return;
 		}
+		if (str_eq(n.name, "atomic_cas")) {
+			gen_args(n, false, false, -1, false);
+			mov_reg_reg(RAX, RSI);       // rax = expected
+			b1(0xf0);                    // lock
+			rex_w(RDX, RDI);
+			b1(0x0f); b1(0xb1);
+			modrm(0, RDX, RDI);          // cmpxchg [rdi], rdx
+			setcc(0x94);                 // rax = (old == expected)
+			return;
+		}
+		if (str_eq(n.name, "atomic_add")) {
+			gen_args(n, false, false, -1, false);
+			b1(0xf0);                    // lock
+			rex_w(RSI, RDI);
+			b1(0x0f); b1(0xc1);
+			modrm(0, RSI, RDI);          // xadd [rdi], rsi
+			mov_reg_reg(RAX, RSI);       // rax = old value
+			return;
+		}
+		if (str_eq(n.name, "atomic_load")) {
+			gen_args(n, false, false, -1, false);
+			rex_w(RAX, RDI);
+			b1(0x8b);
+			modrm(0, RAX, RDI);          // mov rax, [rdi]
+			return;
+		}
+		if (str_eq(n.name, "atomic_store")) {
+			gen_args(n, false, false, -1, false);
+			rex_w(RSI, RDI);
+			b1(0x89);
+			modrm(0, RSI, RDI);          // mov [rdi], rsi
+			return;
+		}
+		if (str_eq(n.name, "fence")) {
+			b1(0x0f); b1(0xae); b1(0xf0); // mfence
+			return;
+		}
 		gen_call(n);
 		return;
 	}
