@@ -2739,6 +2739,19 @@ fn f64_to_f32_bits(b i64) i64 {
 // fresh mmap'd block per thread. Offset 0 is reserved for the self-pointer
 // tls_init writes at runtime; real tvars start at 8.
 fn layout_tls(globals *Var) {
+	var any bool = false;
+	var v0 *Var = globals;
+	while (v0 as i64 != 0) {
+		if (v0.is_tls) { any = true; }
+		v0 = v0.next;
+	}
+	// A program with no tvar at all must cost nothing: no template bytes
+	// in the data segment, no second LOAD segment for the RW section to
+	// need at all (that's a whole extra program header, 56 bytes, for
+	// zero benefit). tls_block_size stays at its default 8 and tls_init
+	// is never emitted -- see the tls_block_size > 8 check in emit_code.
+	if (!any) { return; }
+
 	var tmpl Buf;
 	buf_u64(&tmpl, 0);
 	var v *Var = globals;
