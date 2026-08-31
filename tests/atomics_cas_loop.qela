@@ -1,0 +1,28 @@
+// stage1-only
+// expect-exit: 42
+// Two coroutines increment a shared counter through a CAS retry loop
+// instead of a plain "load, add, store" -- this is the pattern later
+// phases build cross-thread synchronization on top of.
+import "std/coro.qela";
+
+var counter i64 = 0;
+
+fn bump(times i64) {
+	var i i64 = 0;
+	while (i < times) {
+		var old i64 = atomic_load(&counter);
+		while (!atomic_cas(&counter, old, old + 1)) {
+			old = atomic_load(&counter);
+		}
+		coro_yield();
+		i = i + 1;
+	}
+}
+
+fn main() int {
+	spawn bump(500);
+	spawn bump(500);
+	coro_run_all();
+	if (counter != 1000) { return 1; }
+	return 42;
+}
