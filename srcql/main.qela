@@ -327,6 +327,9 @@ fn cmd_run(argc int, argv **u8) int {
 //   // expect-exit: 42          the program must exit 42 (default 0)
 //   // expect-out: text         each line the output must contain, in order
 //   // expect-compile-error     the compiler must reject the file
+//   // expect-warn: text        each line must appear, in order, in the
+//                               compiler's diagnostic output (stderr) --
+//                               works with or without expect-compile-error
 //
 // then compiles (a directory input merges like `qela .`), runs the binary
 // with any remaining arguments, captures stdout+stderr into a temp file
@@ -366,6 +369,46 @@ fn expect_lines(src str, mark str, out *Buf, n *int) bool {
 	return found;
 }
 
+// Index of the first occurrence of needle in haystack at or after `from`,
+// or -1. Used to check expect-warn lines appear in order in captured stderr.
+fn str_find_sub(haystack str, needle str, from i64) i64 {
+	if (needle.len == 0) { return from; }
+	var i i64 = from;
+	while (i + needle.len <= haystack.len) {
+		var j i64 = 0;
+		while (j < needle.len && haystack.ptr[i + j] == needle.ptr[j]) { j = j + 1; }
+		if (j == needle.len) { return i; }
+		i = i + 1;
+	}
+	return -1;
+}
+
+// True if every `// expect-warn: text` line in src appears, in order, as a
+// substring of captured (text is stderr diagnostic output, so this checks
+// warnings, hints and "did you mean" / secondary-location notes alike).
+fn expect_warn_ok(src str, captured str) bool {
+	var wanted Buf;
+	var wn int = 0;
+	if (!expect_lines(src, "expect-warn:", &wanted, &wn)) { return true; }
+	var lines str = buf_str(&wanted);
+	var li i64 = 0;
+	var cur i64 = 0;
+	var at i64 = 0;
+	var ok bool = true;
+	while (li <= lines.len) {
+		if (li == lines.len || lines.ptr[li] == '\n') {
+			var one str = str_slice(lines, cur, li);
+			if (one.len > 0) {
+				at = str_find_sub(captured, one, at);
+				if (at < 0) { ok = false; } else { at = at + one.len; }
+			}
+			cur = li + 1;
+		}
+		li = li + 1;
+	}
+	return ok;
+}
+
 fn parse_i64(s str) i64 {
 	var i i64 = 0;
 	var neg bool = false;
@@ -399,16 +442,29 @@ fn test_fail(name str, msg str) {
 fn test_one(input str, src str, prog_argv **u8, nprog int) int {
 	// The compile itself may be the test.
 	if (expect_has(src, "expect-compile-error")) {
+		var warn_path str = qela_mktmp("qela-test-warn-");
+		var warn_c *u8 = cstr(warn_path);
+		var warn_fd i64 = sys_open_exec(warn_c);
+		if (warn_fd < 0) { die("error: cannot create the warning capture file"); }
 		var pid i64 = sys_fork();
 		if (pid == 0) {
+			sys_dup2(warn_fd, STDERR);
 			compile_file(input, qela_mktmp("qela-test-reject-"));
 			sys_exit(0);
 		}
 		var status [1]i64;
 		sys_wait4(pid, &status[0] as *u8);
+		sys_close(warn_fd);
+		var warn_out str = read_file(warn_path);
+		sys_unlink(warn_c);
+		if (warn_out.len > 0) { sys_write(STDERR, warn_out.ptr, warn_out.len); }
 		var code i64 = (status[0] >> 8) & 255;
 		if (code == 0) {
 			test_fail(input, "compiled, but was expected to be rejected");
+			return 1;
+		}
+		if (!expect_warn_ok(src, warn_out)) {
+			test_fail(input, "diagnostics do not match expect-warn");
 			return 1;
 		}
 		test_ok(input);
@@ -422,7 +478,36 @@ fn test_one(input str, src str, prog_argv **u8, nprog int) int {
 	fmt_str(&ob, ".out");
 	var outc *u8 = cstr(buf_str(&ob));
 
-	compile_file(input, tmp);
+	// Compile in a fork with stderr redirected to a temp file, so any
+	// diagnostics (warnings) can be checked against `expect-warn:` lines.
+	// The captured text is echoed to the real stderr afterward, so a
+	// test run without expect-warn still shows warnings as before.
+	var warn_path str = qela_mktmp("qela-test-warn-");
+	var warn_c *u8 = cstr(warn_path);
+	var warn_fd i64 = sys_open_exec(warn_c);
+	if (warn_fd < 0) { die("error: cannot create the warning capture file"); }
+	var cpid i64 = sys_fork();
+	if (cpid == 0) {
+		sys_dup2(warn_fd, STDERR);
+		compile_file(input, tmp);
+		sys_exit(0);
+	}
+	var cstatus [1]i64;
+	sys_wait4(cpid, &cstatus[0] as *u8);
+	sys_close(warn_fd);
+	var warn_out str = read_file(warn_path);
+	sys_unlink(warn_c);
+	if (warn_out.len > 0) { sys_write(STDERR, warn_out.ptr, warn_out.len); }
+	var ccode i64 = (cstatus[0] >> 8) & 255;
+	if (ccode != 0) {
+		test_fail(input, "compile failed");
+		return 1;
+	}
+
+	if (!expect_warn_ok(src, warn_out)) {
+		test_fail(input, "warnings do not match expect-warn");
+		return 1;
+	}
 
 	var out_fd i64 = sys_open_exec(outc);
 	if (out_fd < 0) { die("error: cannot create the test output file"); }

@@ -1,0 +1,12 @@
+// stage1-only
+// expect-exit: 1
+// expect-warn: unused variable 'y'
+// expect-warn: unused parameter 'b'
+fn add(a int, b int) int {
+	var y int = 0;
+	return a;
+}
+
+fn main() int {
+	return add(1, 2);
+}
