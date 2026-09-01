@@ -18,9 +18,19 @@ fn task(n i64) i64 {
 	return 0;
 }
 
-// Pushes straight into queue 0's ring buffer, the same shape go() writes.
+// Pushes straight into queue 0's ring buffer, the same shape go() writes --
+// including go()'s backpressure wait when the ring is full (TASKS=400 is
+// six times POOL_QUEUE=64; without this, main outruns the four workers
+// draining it, wraps the ring, and silently overwrites entries no one has
+// read yet -- lost tasks, not a scheduling fluke, and done_count then
+// never reaches TASKS).
 fn push_to_zero(fn_ptr i64, n i64) {
 	while (!atomic_cas(&pool_lock[0], 0, 1)) { }
+	while (pool_tail[0] - pool_head[0] >= POOL_QUEUE) {
+		atomic_store(&pool_lock[0], 0);
+		fence();
+		while (!atomic_cas(&pool_lock[0], 0, 1)) { }
+	}
 	var slot i64 = pool_tail[0] % POOL_QUEUE;
 	pool_queue[0][slot].fn_ptr = fn_ptr;
 	pool_queue[0][slot].a0 = n;
