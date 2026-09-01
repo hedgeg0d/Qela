@@ -14,6 +14,8 @@ var ty_u8 *Type;
 var ty_u16 *Type;
 var ty_u32 *Type;
 var ty_u64 *Type;
+var ty_f32 *Type;
+var ty_f64 *Type;
 var ty_str_cache *Type;
 var types_ready bool = false;
 
@@ -41,6 +43,8 @@ fn type_init() {
 	ty_u16 = prim(TY_INT, 2, true, "u16");
 	ty_u32 = prim(TY_INT, 4, true, "u32");
 	ty_u64 = prim(TY_INT, 8, true, "u64");
+	ty_f32 = prim(TY_FLOAT, 4, false, "f32");
+	ty_f64 = prim(TY_FLOAT, 8, false, "f64");
 }
 
 fn type_ptr(base *Type) *Type {
@@ -136,6 +140,10 @@ fn type_lookup(name str) *Type {
 	if (str_eq(name, "int"))  { return ty_i64; }
 	if (str_eq(name, "uint")) { return ty_u64; }
 	if (str_eq(name, "usize")) { return ty_u64; }
+	if (str_eq(name, "f32"))  { return ty_f32; }
+	if (str_eq(name, "f64"))  { return ty_f64; }
+	if (str_eq(name, "float"))  { return ty_f32; }
+	if (str_eq(name, "double")) { return ty_f64; }
 	if (str_eq(name, "str"))  { return type_str(); }
 
 	var n *Named = named_types;
@@ -150,8 +158,12 @@ fn is_integer(t *Type) bool {
 	return t.kind == TY_INT || t.kind == TY_BOOL;
 }
 
+fn is_float(t *Type) bool {
+	return t.kind == TY_FLOAT;
+}
+
 fn is_numeric(t *Type) bool {
-	return is_integer(t) || t.kind == TY_PTR;
+	return is_integer(t) || is_float(t) || t.kind == TY_PTR;
 }
 
 fn is_aggregate(t *Type) bool {
@@ -254,6 +266,11 @@ fn same_type(a *Type, b *Type) bool {
 fn common(a *Type, b *Type) *Type {
 	if (a.kind == TY_PTR) { return a; }
 	if (b.kind == TY_PTR) { return b; }
+	if (a.kind == TY_FLOAT || b.kind == TY_FLOAT) {
+		if (a.size > b.size) { return a; }
+		if (b.size > a.size) { return b; }
+		return a;
+	}
 	if (a.size < 8 && b.size < 8) { return ty_i64; }
 	if (a.size > b.size) { return a; }
 	if (b.size > a.size) { return b; }
@@ -298,6 +315,15 @@ fn to_value(n *Node) *Node {
 fn reject_aggregate(v *Node, want *Type, pos i64) {
 	if (is_aggregate(v.ty) && !is_aggregate(want)) {
 		emsg("cannot use a value of type '"); emsg_ty(v.ty); emsg("' where '"); emsg_ty(want); emsg("' is expected"); efail(pos);
+	}
+}
+
+// A cast between int and float bit-reinterprets nothing sane, so it is
+// always explicit; only same-kind (int<->int, float<->float) width changes
+// are implicit.
+fn reject_float_mismatch(v *Node, want *Type, pos i64) {
+	if (is_float(v.ty) != is_float(want) && is_numeric(v.ty) && is_numeric(want)) {
+		emsg("cannot use '"); emsg_ty(v.ty); emsg("' where '"); emsg_ty(want); emsg("' is expected without a cast"); efail(pos);
 	}
 }
 
@@ -731,6 +757,14 @@ fn type_addsub(n *Node) {
 		n.ty = n.lhs.ty;
 		return;
 	}
+	if (is_float(lt) || is_float(rt)) {
+		if (!is_float(lt) || !is_float(rt)) {
+			error_at(n.pos, "cannot mix float and integer operands without a cast");
+		}
+		usual_conv(n);
+		n.ty = n.lhs.ty;
+		return;
+	}
 	if (!is_integer(lt) || !is_integer(rt)) {
 		error_at(n.pos, "operands must be numeric");
 	}
@@ -764,6 +798,7 @@ fn type_assign(n *Node) {
 			emsg("cannot assign '"); emsg_ty(n.rhs.ty); emsg("' to '"); emsg_ty(n.lhs.ty); emsg("'"); efail(n.pos);
 		}
 	}
+	reject_float_mismatch(n.rhs, n.lhs.ty, n.pos);
 	n.rhs = cast_to(n.rhs, n.lhs.ty);
 	n.ty = n.lhs.ty;
 }
@@ -793,6 +828,7 @@ fn type_enumlit(n *Node) {
 		} else {
 			a = to_value(a);
 			reject_aggregate(a, fm.ty, a.pos);
+			reject_float_mismatch(a, fm.ty, a.pos);
 			tail.next = cast_to(a, fm.ty);
 		}
 		tail = tail.next;
@@ -837,6 +873,7 @@ fn type_structlit(n *Node) {
 		} else {
 			a.lhs = to_value(a.lhs);
 			reject_aggregate(a.lhs, m.ty, a.pos);
+			reject_float_mismatch(a.lhs, m.ty, a.pos);
 			a.lhs = cast_to(a.lhs, m.ty);
 		}
 		a.member = m;
@@ -871,6 +908,7 @@ fn type_ret(n *Node) {
 			emsg("cannot return '"); emsg_ty(n.lhs.ty); emsg("' from a function returning '"); emsg_ty(want); emsg("'"); efail(n.pos);
 		}
 	}
+	reject_float_mismatch(n.lhs, want, n.pos);
 	n.lhs = cast_to(n.lhs, want);
 }
 
@@ -951,6 +989,7 @@ fn type_call(n *Node) {
 			if ((want.kind == TY_PTR) != (a.ty.kind == TY_PTR)) {
 				emsg("argument must have type '"); emsg_ty(want); emsg("'"); efail(a.pos);
 			}
+			reject_float_mismatch(a, want, a.pos);
 			tail.next = cast_to(a, want);
 		}
 		// A stack-passed argument's final one-word value (a scalar, or the
@@ -1075,8 +1114,24 @@ fn add_type(n *Node) {
 	}
 	if (k == ND_ADD || k == ND_SUB) { type_addsub(n); return; }
 
-	if (k == ND_MUL || k == ND_DIV || k == ND_MOD || k == ND_BITAND ||
-	    k == ND_BITOR || k == ND_BITXOR) {
+	if (k == ND_MUL || k == ND_DIV) {
+		if (is_float(n.lhs.ty) || is_float(n.rhs.ty)) {
+			if (!is_float(n.lhs.ty) || !is_float(n.rhs.ty)) {
+				error_at(n.pos, "cannot mix float and integer operands without a cast");
+			}
+			usual_conv(n);
+			n.ty = n.lhs.ty;
+			return;
+		}
+		if (!is_integer(n.lhs.ty) || !is_integer(n.rhs.ty)) {
+			error_at(n.pos, "operands must be integers");
+		}
+		usual_conv(n);
+		n.ty = n.lhs.ty;
+		return;
+	}
+
+	if (k == ND_MOD || k == ND_BITAND || k == ND_BITOR || k == ND_BITXOR) {
 		if (!is_integer(n.lhs.ty) || !is_integer(n.rhs.ty)) {
 			error_at(n.pos, "operands must be integers");
 		}
@@ -1094,7 +1149,14 @@ fn add_type(n *Node) {
 		return;
 	}
 
-	if (k == ND_NEG || k == ND_BITNOT) {
+	if (k == ND_NEG) {
+		if (is_float(n.lhs.ty)) { n.ty = n.lhs.ty; return; }
+		if (!is_integer(n.lhs.ty)) { error_at(n.pos, "operand must be an integer"); }
+		if (n.lhs.ty.size < 8) { n.ty = ty_i64; } else { n.ty = n.lhs.ty; }
+		return;
+	}
+
+	if (k == ND_BITNOT) {
 		if (!is_integer(n.lhs.ty)) { error_at(n.pos, "operand must be an integer"); }
 		if (n.lhs.ty.size < 8) { n.ty = ty_i64; } else { n.ty = n.lhs.ty; }
 		return;
@@ -1106,7 +1168,11 @@ fn add_type(n *Node) {
 		if (is_aggregate(n.lhs.ty) || is_aggregate(n.rhs.ty)) {
 			error_at(n.pos, "aggregates cannot be compared");
 		}
+		if (is_float(n.lhs.ty) != is_float(n.rhs.ty)) {
+			error_at(n.pos, "cannot compare float and integer without a cast");
+		}
 		if (is_integer(n.lhs.ty) && is_integer(n.rhs.ty)) { usual_conv(n); }
+		if (is_float(n.lhs.ty) && is_float(n.rhs.ty)) { usual_conv(n); }
 		n.ty = ty_bool;
 		return;
 	}
@@ -1200,6 +1266,14 @@ fn add_type(n *Node) {
 			if (!is_integer(n.rhs.ty)) {
 				error_at(n.pos, "pointer arithmetic needs an integer offset");
 			}
+		} else if (is_float(lt)) {
+			if (n.val == ND_MOD as i64 || n.val == ND_BITAND as i64 ||
+			    n.val == ND_BITOR as i64 || n.val == ND_BITXOR as i64) {
+				error_at(n.pos, "operator not defined for floats");
+			}
+			if (!is_float(n.rhs.ty)) {
+				error_at(n.pos, "cannot mix float and integer operands without a cast");
+			}
 		} else {
 			if (!is_integer(lt) || !is_integer(n.rhs.ty)) {
 				error_at(n.pos, "operands must be numeric");
@@ -1284,6 +1358,28 @@ fn type_interp(n *Node) {
 			fname = "fmt_put_hex";
 		}
 		else if (is_integer(part.ty)) { fname = "fmt_put_i64"; }
+		else if (is_float(part.ty)) {
+			if (part.ty.size != 8) {
+				var fc *Node = arena_alloc(sizeof(Node), 8) as *Node;
+				fc.kind = ND_CAST;
+				fc.lhs = part;
+				fc.ty = ty_f64;
+				fc.typed = true;
+				part = fc;
+			}
+			// fmt_put_f64_bits takes the bits: this file is compiled by
+			// stage0 too, and it has no float support, so the callee's
+			// parameter is an i64. n.val marks this cast a bit-reinterpret,
+			// not a numeric conversion -- codegen must not touch the bits.
+			var bc *Node = arena_alloc(sizeof(Node), 8) as *Node;
+			bc.kind = ND_CAST;
+			bc.lhs = part;
+			bc.ty = ty_i64;
+			bc.typed = true;
+			bc.val = 1;
+			part = bc;
+			fname = "fmt_put_f64_bits";
+		}
 		else {
 			emsg("cannot interpolate a value of type '"); emsg_ty(part.ty); emsg("'"); efail(part.pos);
 		}
