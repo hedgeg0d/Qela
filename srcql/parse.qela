@@ -990,7 +990,15 @@ fn parse_decl(t **Token) *Node {
 	if (tok_consume(t, "=")) {
 		var rhs *Node = parse_assign(t);
 		var v *Var = declare_var(name, ty, p);
-		if (ty as i64 == 0) { add_type(rhs); ty = rhs.ty; v.ty = ty; }
+		if (ty as i64 == 0) {
+			// An interpolation's result type is always str, known without
+			// typing it: typing it now would rewrite it into calls on
+			// std/fmt.qela, which is only auto-spliced in at the next
+			// top-level boundary, still ahead of us here.
+			if (rhs.kind == ND_INTERP) { ty = type_str(); }
+			else { add_type(rhs); ty = rhs.ty; }
+			v.ty = ty;
+		}
 		var lhs *Node = new_node(ND_VAR, p);
 		lhs.varp = v;
 		n.lhs = bin_node(ND_ASSIGN, lhs, rhs, p);
