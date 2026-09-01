@@ -158,8 +158,35 @@ static Type *common(Type *a, Type *b) {
 	return a->is_unsigned ? a : b;
 }
 
+static bool int_fits(long v, Type *ty) {
+	if (ty->is_unsigned) {
+		if (v < 0) return false;
+		if (ty->size == 8) return true;
+		return v < (1L << (ty->size * 8));
+	}
+	if (ty->size == 8) return true;
+	long min = -(1L << (ty->size * 8 - 1));
+	long max = (1L << (ty->size * 8 - 1)) - 1;
+	return v >= min && v <= max;
+}
+
+// Mirrors srcql/type.qela's can_implicit (minus the float cases, which the
+// bootstrap subset cannot contain). Must stay identical or S2 != S3.
+static bool can_implicit(Node *n, Type *ty) {
+	Type *src = n->ty;
+	if (is_integer(src) && is_integer(ty)) {
+		bool widening = ty->size > src->size;
+		if (widening && !(ty->is_unsigned && !src->is_unsigned)) return true;
+		return n->kind == ND_NUM && int_fits(n->val, ty);
+	}
+	return true;
+}
+
 static Node *cast_to(Node *n, Type *ty) {
 	if (n->ty == ty) return n;
+	if (!can_implicit(n, ty))
+		error_at(n->pos, "implicit conversion from '%s' to '%s' requires an explicit cast",
+		         type_name(n->ty), type_name(ty));
 	Node *c = anew(Node);
 	*c = (Node){.kind = ND_CAST, .lhs = n, .ty = ty, .pos = n->pos};
 	return c;
