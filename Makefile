@@ -41,7 +41,10 @@ install: build
 	mkdir -p $(DESTDIR)$(PREFIX)/bin
 	install -m 0755 build/bootstrap/s2 $(DESTDIR)$(PREFIX)/bin/qela
 
+uninstall:
+	rm -f $(DESTDIR)$(PREFIX)/bin/qela
+
 clean:
 	rm -f $(OBJ) $(BIN)
 
-.PHONY: all check build install clean
+.PHONY: all check build install uninstall clean
