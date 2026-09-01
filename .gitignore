@@ -4,6 +4,8 @@
 /stage3
 /examples/flappy/flappy
 /tests/out/
+/tests/out-byte/
+/tools/ref/
 /build/
 *.pyc
 __pycache__/
