@@ -1,0 +1,107 @@
+// A free-list allocator: malloc/free/realloc, in the K&R sense. Individual
+// blocks come back to the allocator (unlike std/arena.qela, which only ever
+// grows) and adjacent free blocks coalesce, at the cost of a header per
+// allocation and a linear free-list search. Backed by its own mmap regions,
+// independent of the bump arena — the two never share memory.
+//
+// Not thread-safe, same as arena.qela: qela has no OS threads yet.
+
+struct Header {
+	size  i64,     // size in Header-units, including this header
+	nextf *Header, // next free block in the circular free list
+}
+
+var heap_base Header;
+var heap_freep *Header;
+
+fn heap_morecore(nu i64) *Header {
+	var n i64 = nu;
+	if (n < 4096) { n = 4096; }
+	var bytes i64 = n * sizeof(Header);
+	var r i64 = syscall(9, 0, bytes, 3, 34, -1, 0);
+	if (r < 0 && r > -4096) { return 0 as *Header; }
+	var p *Header = r as *Header;
+	p.size = n;
+	heap_free((p + 1) as *u8);
+	return heap_freep;
+}
+
+fn heap_alloc(nbytes i64) *u8 {
+	if (nbytes <= 0) { return 0 as *u8; }
+	var nunits i64 = (nbytes + sizeof(Header) - 1) / sizeof(Header) + 1;
+
+	if (heap_freep == (0 as *Header)) {
+		heap_base.nextf = &heap_base;
+		heap_base.size = 0;
+		heap_freep = &heap_base;
+	}
+
+	var prevp *Header = heap_freep;
+	var p *Header = prevp.nextf;
+	while (true) {
+		if (p.size >= nunits) {
+			if (p.size == nunits) {
+				prevp.nextf = p.nextf;
+			} else {
+				p.size = p.size - nunits;
+				p = p + p.size;
+				p.size = nunits;
+			}
+			heap_freep = prevp;
+			return (p + 1) as *u8;
+		}
+		if (p == heap_freep) {
+			var np *Header = heap_morecore(nunits);
+			if (np == (0 as *Header)) { return 0 as *u8; }
+			p = np;
+		}
+		prevp = p;
+		p = p.nextf;
+	}
+	return 0 as *u8;
+}
+
+fn heap_free(ap *u8) {
+	if (ap == (0 as *u8)) { return; }
+	var bp *Header = (ap as *Header) - 1;
+	var p *Header = heap_freep;
+	while (true) {
+		if (bp > p && bp < p.nextf) { break; }
+		if (p >= p.nextf && (bp > p || bp < p.nextf)) { break; }
+		p = p.nextf;
+	}
+	if (bp + bp.size == p.nextf) {
+		bp.size = bp.size + p.nextf.size;
+		bp.nextf = p.nextf.nextf;
+	} else {
+		bp.nextf = p.nextf;
+	}
+	if (p + p.size == bp) {
+		p.size = p.size + bp.size;
+		p.nextf = bp.nextf;
+	} else {
+		p.nextf = bp;
+	}
+	heap_freep = p;
+}
+
+fn heap_realloc(ap *u8, nbytes i64) *u8 {
+	if (ap == (0 as *u8)) { return heap_alloc(nbytes); }
+	if (nbytes <= 0) { heap_free(ap); return 0 as *u8; }
+
+	var bp *Header = (ap as *Header) - 1;
+	var oldbytes i64 = (bp.size - 1) * sizeof(Header);
+
+	var r *u8 = heap_alloc(nbytes);
+	if (r == (0 as *u8)) { return 0 as *u8; }
+
+	var n i64 = oldbytes;
+	if (nbytes < n) { n = nbytes; }
+	var i i64 = 0;
+	while (i < n) {
+		*(r + i) = *(ap + i);
+		i = i + 1;
+	}
+	heap_free(ap);
+	return r;
+}
