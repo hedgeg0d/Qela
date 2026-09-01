@@ -13,9 +13,21 @@ import "coro.qela";
 // between the base captured at gc_init and the current frame, and the whole
 // data segment, whose bounds gc_data_base and gc_data_end get from the
 // compiler.
+//
+// Threads: a collecting thread stops the world by cooperative safepoint
+// polling, not signals -- gc_safepoint runs at gc_alloc's own entry, the
+// one call every allocating thread makes often enough to park promptly,
+// and without pulling a gc.qela dependency into coro.qela/chan.qela just
+// to add more polling points. A thread that never allocates and is not
+// registered holds no roots this collector needs to find, so it is never
+// waited on; a registered thread that stops allocating for a long stretch
+// (no allocation, no gc_thread_exit) delays the next collection until it
+// allocates again -- a known limit of polling-only safepoints, not
+// something this collector tries to paper over.
 
 let GC_CHUNK  = 1048576;
 let GC_HEADER = 32;
+let GC_MAX_THREADS = 64;
 
 // Every block carries: size, mark flag, and links for the all-blocks list
 // and the free list.
@@ -25,6 +37,14 @@ struct GcBlock {
 	marked i64,
 	next   *GcBlock,
 	free   *GcBlock,
+}
+
+struct GcThread {
+	active       i64,
+	stack_base   i64,
+	sp           i64,
+	regs         [6]i64,
+	at_safepoint i64,
 }
 
 var gc_blocks *GcBlock;
@@ -37,11 +57,66 @@ var gc_stack_base i64 = 0;
 var gc_live i64 = 0;
 var gc_ready bool = false;
 
+var gc_alloc_lock i64 = 0;
+var gc_reg_lock i64 = 0;
+var gc_stw_requested i64 = 0;
+var gc_threads [64]GcThread;
+tvar gc_my_slot i64 = -1;
+
+fn gc_lock() { while (!atomic_cas(&gc_alloc_lock, 0, 1)) { } }
+fn gc_unlock() { atomic_store(&gc_alloc_lock, 0); }
+
 fn gc_init() {
 	if (gc_ready) { return; }
 	gc_ready = true;
 	var anchor i64 = 0;
 	gc_stack_base = &anchor as i64;
+}
+
+// Registers the calling thread as a GC root source. Every thread that
+// allocates or holds a live pointer across an allocation must call this
+// once, early -- the stack base recorded here has to sit above every frame
+// that will ever need scanning, the same assumption gc_init makes for the
+// thread that happens to trigger it first.
+fn gc_thread_enter() {
+	gc_init();
+	while (!atomic_cas(&gc_reg_lock, 0, 1)) { }
+	var i int = 0;
+	while (i < GC_MAX_THREADS) {
+		if (gc_threads[i].active == 0) {
+			var anchor i64 = 0;
+			gc_threads[i].stack_base = &anchor as i64;
+			gc_threads[i].at_safepoint = 0;
+			gc_threads[i].active = 1;
+			gc_my_slot = i as i64;
+			atomic_store(&gc_reg_lock, 0);
+			return;
+		}
+		i = i + 1;
+	}
+	atomic_store(&gc_reg_lock, 0);
+}
+
+fn gc_thread_exit() {
+	if (gc_my_slot < 0) { return; }
+	while (!atomic_cas(&gc_reg_lock, 0, 1)) { }
+	gc_threads[gc_my_slot as int].active = 0;
+	atomic_store(&gc_reg_lock, 0);
+	gc_my_slot = -1;
+}
+
+// Called from every point a thread might sit idle for a while: a collector
+// on another thread can only scan roots it has actually parked.
+fn gc_safepoint() {
+	if (atomic_load(&gc_stw_requested) == 0) { return; }
+	if (gc_my_slot < 0) { return; }
+	var slot int = gc_my_slot as int;
+	gc_save_regs(&gc_threads[slot].regs[0]);
+	var here i64 = 0;
+	gc_threads[slot].sp = &here as i64;
+	atomic_store(&gc_threads[slot].at_safepoint, 1);
+	while (atomic_load(&gc_stw_requested) != 0) { }
+	atomic_store(&gc_threads[slot].at_safepoint, 0);
 }
 
 fn gc_chunk(need i64) bool {
@@ -93,10 +168,13 @@ fn gc_reuse(size i64) *u8 {
 
 fn gc_alloc(size i64) *u8 {
 	gc_init();
+	gc_safepoint();
 	if (size <= 0) { size = 1; }
+	gc_lock();
 	var p *u8 = gc_reuse(size);
-	if (p as i64 != 0) { return p; }
-	return gc_take(size);
+	if (p as i64 == 0) { p = gc_take(size); }
+	gc_unlock();
+	return p;
 }
 
 // A word is a candidate only if it lands inside a mapped chunk and points
@@ -157,6 +235,31 @@ fn gc_sweep() {
 
 fn gc_collect() {
 	gc_init();
+
+	// Ask every other registered thread to park at its next safepoint,
+	// and wait for each of them to actually get there -- this has to
+	// happen before taking gc_alloc_lock, or a thread already inside its
+	// own allocation (past its safepoint check, waiting on this same
+	// lock to finish a later one) could never reach the safepoint this
+	// loop is waiting for.
+	//
+	// A thread can also finish and call gc_thread_exit without ever
+	// hitting another safepoint after the flag above went up (its last
+	// gc_alloc, if any, already ran before the check saw the request).
+	// That is a valid way out of the wait too, by contract: a thread must
+	// stop caring about its own local roots before it deregisters, the
+	// same discipline any handoff across gc_thread_exit already needs.
+	atomic_store(&gc_stw_requested, 1);
+	var wi int = 0;
+	while (wi < GC_MAX_THREADS) {
+		if (gc_threads[wi].active != 0 && (gc_my_slot < 0 || (wi as i64) != gc_my_slot)) {
+			while (gc_threads[wi].active != 0 && atomic_load(&gc_threads[wi].at_safepoint) == 0) { }
+		}
+		wi = wi + 1;
+	}
+
+	gc_lock();
+
 	var regs [6]i64;
 	gc_save_regs(&regs[0]);
 	gc_mark_range(&regs[0] as i64, (&regs[0] as i64) + 48);
@@ -166,18 +269,30 @@ fn gc_collect() {
 	gc_mark_range(sp, gc_stack_base + 8);
 	gc_mark_range(gc_data_base(), gc_data_end());
 
-	// The scan above only covers the coroutine gc_collect runs on; every
-	// other live coroutine keeps roots parked on its own stack, between its
-	// saved sp and the top recorded at spawn.
-	var i int = 1;
-	while (i <= coro_slots()) {
-		if (i != cur_coro && coros[i].alive && !coros[i].done) {
-			gc_mark_range(coros[i].sp, coros[i].top);
+	// Every other parked OS thread's roots, captured when it hit its
+	// safepoint above.
+	var ti int = 0;
+	while (ti < GC_MAX_THREADS) {
+		if (gc_threads[ti].active != 0 && (gc_my_slot < 0 || (ti as i64) != gc_my_slot)) {
+			gc_mark_range(&gc_threads[ti].regs[0] as i64, (&gc_threads[ti].regs[0] as i64) + 48);
+			gc_mark_range(gc_threads[ti].sp, gc_threads[ti].stack_base + 8);
 		}
-		i = i + 1;
+		ti = ti + 1;
+	}
+
+	// Other live coroutines on this thread's own scheduler -- the scan
+	// above only covers the coroutine gc_collect runs on.
+	var ci int = 1;
+	while (ci <= coro_slots()) {
+		if (ci != cur_coro && coros[ci].alive && !coros[ci].done) {
+			gc_mark_range(coros[ci].sp, coros[ci].top);
+		}
+		ci = ci + 1;
 	}
 
 	gc_sweep();
+	gc_unlock();
+	atomic_store(&gc_stw_requested, 0);
 }
 
 fn gc_live_bytes() i64 { return gc_live; }
