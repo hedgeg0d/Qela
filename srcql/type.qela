@@ -1332,6 +1332,11 @@ fn type_intrinsic(n *Node) bool {
 		n.ty = ty_i64;
 		return true;
 	}
+	if (str_eq(n.name, "tls_init")) {
+		if (n.nargs != 0) { error_at(n.pos, "tls_init takes no arguments"); }
+		n.ty = ty_void;
+		return true;
+	}
 	return false;
 }
 
