@@ -24,7 +24,9 @@ let IR_RET   = 9;
 let IR_UNARY = 10; // dst = <aux: unary op> src0
 let IR_LEA   = 11; // dst = src0 + src1 * <aux: scale code 0..3 = x1,x2,x4,x8> + dst.off
 let IR_CAST  = 12; // dst = convert src0 to dst.ty; <aux: cast kind>
-let IR_MEMCPY = 13; // copy <aux> bytes from the address in src0 to the address in dst
+let IR_MEMCPY = 13; // copy <aux> bytes from the address in src0 to the
+                    // destination address on the staging stack, consuming it;
+                    // the destination address is left in the accumulator
 let IR_SYSCALL = 14; // <aux: syscall number>; arguments already staged
 let IR_ASM   = 15; // inline asm; <aux: the asm Node's address>
 let IR_ASSERT = 16; // a bounds/assert site; <aux: index into the assert-site list>
