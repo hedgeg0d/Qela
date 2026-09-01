@@ -140,6 +140,7 @@ std/map.qela       str -> pointer hash table, deterministic iteration
 std/coro.qela      coroutines on their own stacks
 std/chan.qela      Chan(T), buffered channels of any element type
 std/gc.qela        conservative mark-sweep collector
+std/heap.qela      K&R malloc/free/realloc on its own mmap regions
 std/math.qela      abs, min, max
 std/rand.qela      deterministic xorshift64*
 std/sort.qela      Hoare quicksort over []i64
