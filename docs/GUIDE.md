@@ -582,6 +582,13 @@ is rejected); and a generic function cannot be used as a value (there is no
 monomorphized address to take). Stage1-only: stage0, the frozen bootstrap,
 has no function values.
 
+An `extern` function declares a body that lives elsewhere — in a C file the
+system linker will pull in. `extern fn f(a i64) i64;` (no body) stays an
+undefined symbol for the linker to resolve; `extern fn f(a i64) i64 { ... }`
+(with a body) exports `f` for other objects to call. `str` crosses the ABI
+as a `{ptr, len}` pair — a two-word C struct; aggregates over 16 bytes pass
+by pointer as always. See `qela -c` in §20.
+
 ## 10. Pointers and memory
 
 Pointers are first-class. `&x` takes an address, `*p` dereferences, and the
@@ -1296,6 +1303,22 @@ Merge a directory of `.qela` files into one program (entry `main.qela`).
 Functions call across files with no imports; imports inside files still work,
 and a file already merged by path is skipped. The compiler is its own build
 system.
+
+### qela -c — C interop
+
+`qela -c file.qela -o file.o` emits a relocatable object instead of a
+runnable binary. The system linker joins it to C, either way:
+
+```sh
+qela -c lib.qela -o lib.o
+gcc -no-pie -o app app.c lib.o        # C main calling Qela
+qela -c app.qela -o app.o
+gcc -no-pie -o app app.o impl.c       # Qela main calling C
+```
+
+No startup stub is emitted and no `main` is required, so a Qela file of
+`extern fn` bodies compiles to a plain library. A call to a bodyless extern
+is a compile error in ordinary mode — externs exist only for `-c`.
 
 ## 21. Raw machine code
 

@@ -156,3 +156,344 @@ fn write_elf(path str, img *Image) {
 
 	write_file(path, f.p, f.n);
 }
+
+// ── `qela -c`: a relocatable object ──
+//
+// Builds an ELF64 ET_REL with .text/.rodata/.data/.bss plus a symbol table
+// and .rela sections, so the system linker can consume it. Function and
+// string relocation lists come from codegen; the exe patching never runs
+// in object mode. `extern` declarations appear as GLOBAL UNDEF symbols,
+// extern definitions as GLOBAL .text symbols, everything else is LOCAL.
+
+let SHT_SYMTAB   = 2;
+let SHT_RELA     = 4;
+let SHT_NOBITS   = 8;
+
+let SHF_WRITE    = 1;
+let SHF_ALLOC    = 2;
+let SHF_EXECINSTR = 4;
+
+let STB_LOCAL  = 0;
+let STB_GLOBAL = 1;
+let STT_NOTYPE = 0;
+let STT_OBJECT = 1;
+let STT_FUNC   = 2;
+
+var o_nsyms int = 0;
+var o_names [4096]str;
+var o_name_off [4096]i64;
+var o_info [4096]int;
+var o_shndx [4096]int;
+var o_value [4096]i64;
+var o_size [4096]i64;
+
+fn o_add(name str, info int, shndx int, value i64, size i64) {	if (o_nsyms >= 4096) { die("error: too many symbols for an object file"); }
+	o_names[o_nsyms] = name;
+	o_info[o_nsyms] = info;
+	o_shndx[o_nsyms] = shndx;
+	o_value[o_nsyms] = value;
+	o_size[o_nsyms] = size;
+	o_nsyms = o_nsyms + 1;
+}
+
+fn o_str_bytes(b *Buf, s str) {
+	var i i64 = 0;
+	while (i < s.len) { buf_u8(b, s.ptr[i]); i = i + 1; }
+	buf_u8(b, 0);
+}
+
+fn o_u64_str(v i64, b *Buf) {
+	if (v == 0) { buf_u8(b, '0'); return; }
+	var buf [20]u8;
+	var n int = 0;
+	while (v > 0) {
+		buf[n] = ((v % 10) as i64 + '0') as u8;
+		n = n + 1;
+		v = v / 10;
+	}
+	var i int = n - 1;
+	while (i >= 0) { buf_u8(b, buf[i]); i = i - 1; }
+}
+
+// The generated symbol for a string: `.Lstr<N>` is the {ptr, len} header in
+// .rodata, `.Lstrd<N>` the bytes themselves. codegen's string relocations
+// target the header symbol; the header's own ptr field relocates to the
+// bytes symbol.
+fn o_str_name(id i64, data_sym bool) str {
+	var h Buf;
+	buf_u8(&h, '.');
+	buf_u8(&h, 'L');
+	buf_u8(&h, 's');
+	buf_u8(&h, 't');
+	buf_u8(&h, 'r');
+	if (data_sym) { buf_u8(&h, 'd'); }
+	o_u64_str(id, &h);
+	return buf_str(&h);
+}
+
+// Linear scan; object files are small enough that the string ids dominate
+// and a hash table is not worth the bytes. A nameless relocation is a
+// string: R_32S slots (in code) point at the {ptr, len} header, R_64 slots
+// (the header's own ptr, in .rodata) point at the bytes.
+fn o_sym_index(img *Image, r *Reloc) int {
+	var want str = r.name;
+	if (want.len == 0) {
+		if (r.kind == R_64) { want = o_str_name(r.id, true); }
+		else { want = o_str_name(r.id, false); }
+	}
+	var i int = 0;
+	while (i < o_nsyms) {
+		if (str_eq(o_names[i], want)) { return i; }
+		i = i + 1;
+	}
+	die("error: internal: unresolved symbol in object");
+	return -1;
+}
+
+fn o_build_syms(img *Image, sec_text int, sec_rodata int, sec_data int, sec_bss int) {
+	o_add("", STB_LOCAL << 4 | STT_NOTYPE, 0, 0, 0);
+
+	// Locals first (the linker reads the boundary at sh_info), then the
+	// extern globals. Two passes: an extern definition exports its symbol,
+	// an extern declaration is an UNDEF the linker must fill.
+	var f *Func = img.funcs;
+	while (f as i64 != 0) {
+		if (f.nct != 0) { f = f.next; continue; }
+		if (f.body as i64 != 0 && !f.extern) {
+			var n2 *Func = f.next;
+			while (n2 as i64 != 0 && (n2.nct != 0 || n2.body as i64 == 0)) { n2 = n2.next; }
+			var sz i64 = img.code.n - f.addr;
+			if (n2 as i64 != 0) { sz = n2.addr - f.addr; }
+			o_add(f.name, STB_LOCAL << 4 | STT_FUNC, sec_text, f.addr, sz);
+		}
+		f = f.next;
+	}
+
+	var v *Var = img.globals;
+	while (v as i64 != 0) {
+		var sec int = sec_bss;
+		var val i64 = v.data_off - img.data.n;
+		if (v.init as i64 != 0) { sec = sec_data; val = v.data_off; }
+		o_add(v.name, STB_LOCAL << 4 | STT_OBJECT, sec, val, v.ty.size as i64);
+		v = v.next;
+	}
+
+	var s *StrLit = img.strs;
+	while (s as i64 != 0) {
+		o_add(o_str_name(s.id as i64, false), STB_LOCAL << 4 | STT_OBJECT, sec_rodata, img.str_off[s.id], 16);
+		o_add(o_str_name(s.id as i64, true), STB_LOCAL << 4 | STT_OBJECT, sec_rodata, img.bytes_off[s.id], s.s.len);
+		s = s.next;
+	}
+
+	f = img.funcs;
+	while (f as i64 != 0) {
+		if (f.nct != 0) { f = f.next; continue; }
+		if (f.body as i64 == 0) {
+			o_add(f.name, STB_GLOBAL << 4 | STT_FUNC, 0, 0, 0);
+		} else if (f.extern || str_eq(f.name, "main")) {
+			// main is always exported: the C runtime's _start calls it by
+			// name, so the symbol has to cross the object boundary.
+			var n3 *Func = f.next;
+			while (n3 as i64 != 0 && (n3.nct != 0 || n3.body as i64 == 0)) { n3 = n3.next; }
+			var sz2 i64 = img.code.n - f.addr;
+			if (n3 as i64 != 0) { sz2 = n3.addr - f.addr; }
+			o_add(f.name, STB_GLOBAL << 4 | STT_FUNC, sec_text, f.addr, sz2);
+		}
+		f = f.next;
+	}
+}
+
+// Counts relocation entries in a list.
+fn o_rela_count(head *Reloc) i64 {
+	var n i64 = 0;
+	var r *Reloc = head;
+	while (r as i64 != 0) { n = n + 1; r = r.next; }
+	return n;
+}
+
+// The bootstrap subset's parameter budget (six registers, stage0 has no
+// stack-spill for its own functions) rules out a ten-parameter shdr
+// writer, so the section header fields travel in one struct instead.
+struct ShdrArgs {
+	name i64, typ i64, flags i64, off i64, size i64,
+	link i64, info i64, align i64, entsize i64,
+}
+
+fn o_shdr(f *Buf, a *ShdrArgs) {
+	buf_u32(f, a.name);
+	buf_u32(f, a.typ);
+	buf_u64(f, a.flags);
+	buf_u64(f, 0);
+	buf_u64(f, a.off);
+	buf_u64(f, a.size);
+	buf_u32(f, a.link);
+	buf_u32(f, a.info);
+	buf_u64(f, a.align);
+	buf_u64(f, a.entsize);
+}
+
+fn o_sym_rec(f *Buf, i int) {
+	buf_u32(f, o_name_off[i]);
+	buf_u8(f, o_info[i] as u8);
+	buf_u8(f, 0);
+	buf_u16(f, o_shndx[i]);
+	buf_u64(f, o_value[i]);
+	buf_u64(f, o_size[i]);
+}
+
+fn o_rela_rec(f *Buf, r *Reloc, img *Image) {
+	buf_u64(f, r.at);
+	buf_u64(f, (o_sym_index(img, r) as i64) << 32 | (r.kind as i64));
+	// PC-relative slots resolve from the *next* instruction; the linker's P
+	// is the slot's own address, so a -4 addend aligns the two (gcc emits
+	// the same). Absolute relocations carry no addend.
+	var add i64 = 0;
+	if (r.kind == R_PLT32 || r.kind == R_PC32) { add = -4; }
+	buf_u64(f, add);
+}
+
+fn write_object(path str, img *Image) {
+	var has_rr bool = img.rodata_relocs as i64 != 0;
+	var sec_text int = 1;
+	var sec_rodata int = 2;
+	var sec_data int = 3;
+	var sec_bss int = 4;
+	var sec_relatext int = 5;
+	var sec_relaro int = 6;
+	var sec_symtab int = 7;
+	var sec_strtab int = 8;
+	var sec_shstr int = 9;
+	if (!has_rr) { sec_relaro = -1; sec_symtab = 6; sec_strtab = 7; sec_shstr = 8; }
+
+	o_build_syms(img, sec_text, sec_rodata, sec_data, sec_bss);
+
+	var text_off i64 = 64;
+	var rodata_off i64 = (text_off + img.code.n + 7) & ~7;
+	var data_off i64 = (rodata_off + img.rodata.n + 7) & ~7;
+	var bss_off i64 = (data_off + img.data.n + 7) & ~7;
+	var relatext_off i64 = (bss_off + 7) & ~7;
+	var n_rt i64 = o_rela_count(img.relocs);
+	var n_rr i64 = 0;
+	if (has_rr) { n_rr = o_rela_count(img.rodata_relocs); }
+	var relaro_off i64 = relatext_off + n_rt * 24;
+	var symtab_off i64 = relaro_off + n_rr * 24;
+
+	// strtab and shstrtab first, so the offsets are known.
+	var strtab Buf;
+	var shstr Buf;
+	buf_u8(&strtab, 0);
+	buf_u8(&shstr, 0);
+	var i int = 0;
+	while (i < o_nsyms) {
+		o_name_off[i] = strtab.n;
+		buf_bytes(&strtab, o_names[i].ptr, o_names[i].len);
+		buf_u8(&strtab, 0);
+		i = i + 1;
+	}
+	var n_text = shstr.n;
+	o_str_bytes(&shstr, ".text");
+	var n_rodata = shstr.n; o_str_bytes(&shstr, ".rodata");
+	var n_data = shstr.n;   o_str_bytes(&shstr, ".data");
+	var n_bss = shstr.n;    o_str_bytes(&shstr, ".bss");
+	var n_relatext = shstr.n; o_str_bytes(&shstr, ".rela.text");
+	var n_relaro = shstr.n;
+	if (has_rr) { o_str_bytes(&shstr, ".rela.rodata"); }
+	var n_symtab = shstr.n; o_str_bytes(&shstr, ".symtab");
+	var n_strtab = shstr.n; o_str_bytes(&shstr, ".strtab");
+	var n_shstr = shstr.n;  o_str_bytes(&shstr, ".shstrtab");
+	var strtab_off i64 = symtab_off + (o_nsyms as i64) * 24;
+	var shstr_off i64 = strtab_off + strtab.n;
+	var shoff i64 = ((shstr_off + shstr.n) + 7) & ~7;
+
+	var f Buf;
+	buf_grow(&f, shoff + 10 * 64);
+
+	buf_u8(&f, 0x7f);
+	buf_u8(&f, 'E');
+	buf_u8(&f, 'L');
+	buf_u8(&f, 'F');
+	buf_u8(&f, 2);
+	buf_u8(&f, 1);
+	buf_u8(&f, 1);
+	var k i64 = 7;
+	while (k < 16) { buf_u8(&f, 0); k = k + 1; }
+	buf_u16(&f, 1);
+	buf_u16(&f, 0x3e);
+	buf_u32(&f, 1);
+	buf_u64(&f, 0);
+	buf_u64(&f, 0);
+	buf_u64(&f, shoff);
+	buf_u32(&f, 0);
+	buf_u16(&f, 64);
+	buf_u16(&f, 0);
+	buf_u16(&f, 0);
+	buf_u16(&f, 64);
+	var nsh int = 10;
+	if (!has_rr) { nsh = 9; }
+	buf_u16(&f, nsh);
+	buf_u16(&f, sec_shstr);
+
+	while (f.n < text_off) { buf_u8(&f, 0); }
+	buf_bytes(&f, img.code.p, img.code.n);
+	while (f.n < rodata_off) { buf_u8(&f, 0); }
+	buf_bytes(&f, img.rodata.p, img.rodata.n);
+	while (f.n < data_off) { buf_u8(&f, 0); }
+	buf_bytes(&f, img.data.p, img.data.n);
+	while (f.n < relatext_off) { buf_u8(&f, 0); }
+
+	var r *Reloc = img.relocs;
+	while (r as i64 != 0) { o_rela_rec(&f, r, img); r = r.next; }
+	while (f.n < relaro_off) { buf_u8(&f, 0); }
+	r = img.rodata_relocs;
+	while (r as i64 != 0) { o_rela_rec(&f, r, img); r = r.next; }
+	while (f.n < symtab_off) { buf_u8(&f, 0); }
+	var si int = 0;
+	while (si < o_nsyms) { o_sym_rec(&f, si); si = si + 1; }
+	buf_bytes(&f, strtab.p, strtab.n);
+	buf_bytes(&f, shstr.p, shstr.n);
+	while (f.n < shoff) { buf_u8(&f, 0); }
+
+	// First global symbol: the index .symtab's sh_info wants.
+	var first_global int = o_nsyms;
+	si = 0;
+	while (si < o_nsyms) {
+		if (o_info[si] >> 4 == STB_GLOBAL) { first_global = si; break; }
+		si = si + 1;
+	}
+
+	var a ShdrArgs;
+	a.typ = 0;
+	a.name = 0; a.flags = 0; a.off = 0; a.size = 0; a.link = 0; a.info = 0; a.align = 0; a.entsize = 0;
+	o_shdr(&f, &a);
+	a.typ = SHT_PROGBITS; a.flags = SHF_EXECINSTR;
+	a.name = n_text; a.off = text_off; a.size = img.code.n; a.align = 16;
+	o_shdr(&f, &a);
+	a.typ = SHT_PROGBITS; a.flags = SHF_ALLOC;
+	a.name = n_rodata; a.off = rodata_off; a.size = img.rodata.n; a.align = 8;
+	o_shdr(&f, &a);
+	a.typ = SHT_PROGBITS; a.flags = SHF_ALLOC | SHF_WRITE;
+	a.name = n_data; a.off = data_off; a.size = img.data.n; a.align = 8;
+	o_shdr(&f, &a);
+	a.typ = SHT_NOBITS; a.flags = SHF_ALLOC | SHF_WRITE;
+	a.name = n_bss; a.off = bss_off; a.size = img.bss_size; a.align = 8;
+	o_shdr(&f, &a);
+	a.typ = SHT_RELA; a.flags = 0;
+	a.name = n_relatext; a.off = relatext_off; a.size = n_rt * 24; a.link = sec_symtab; a.info = sec_text; a.align = 8; a.entsize = 24;
+	o_shdr(&f, &a);
+	if (has_rr) {
+		a.typ = SHT_RELA;
+		a.name = n_relaro; a.off = relaro_off; a.size = n_rr * 24; a.link = sec_symtab; a.info = sec_rodata;
+		o_shdr(&f, &a);
+	}
+	a.typ = SHT_SYMTAB; a.flags = 0;
+	a.name = n_symtab; a.off = symtab_off; a.size = (o_nsyms as i64) * 24; a.link = sec_strtab; a.info = first_global; a.align = 8; a.entsize = 24;
+	o_shdr(&f, &a);
+	a.typ = SHT_STRTAB;
+	a.name = n_strtab; a.off = strtab_off; a.size = strtab.n; a.link = 0; a.info = 0; a.align = 1; a.entsize = 0;
+	o_shdr(&f, &a);
+	a.typ = SHT_STRTAB;
+	a.name = n_shstr; a.off = shstr_off; a.size = shstr.n; a.align = 1;
+	o_shdr(&f, &a);
+
+	write_file(path, f.p, f.n);
+}
