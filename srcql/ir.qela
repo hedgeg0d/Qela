@@ -19,24 +19,62 @@ let IR_CMP   = 4;  // compare src0, src1; aux is unused, a following IR_BR/IR_SE
 let IR_BR    = 5;  // aux: condition code (CC_ALWAYS for unconditional); dst.off is the target IR_LABEL id
 let IR_LABEL = 6;  // dst.off is this label's id
 let IR_SETCC = 7;  // dst = (flags satisfy <aux: condition code>) ? 1 : 0
-let IR_CALL  = 8;  // aux selects a CallFixup-style target; args already classified into OP_VREG call-arg slots
+let IR_CALL  = 8;  // src0: the target (OP_FUNC/OP_FUNCADDR slot); args already classified into OP_VREG call-arg slots
 let IR_RET   = 9;
 let IR_UNARY = 10; // dst = <aux: unary op> src0
+let IR_LEA   = 11; // dst = src0 + src1 * <aux: scale code 0..3 = x1,x2,x4,x8> + dst.off
+let IR_CAST  = 12; // dst = convert src0 to dst.ty; <aux: cast kind>
+let IR_MEMCPY = 13; // copy <aux> bytes from the address in src0 to the address in dst
+let IR_SYSCALL = 14; // <aux: syscall number>; arguments already staged
+let IR_ASM   = 15; // inline asm; <aux: the asm Node's address>
+let IR_ASSERT = 16; // a bounds/assert site; <aux: index into the assert-site list>
+let IR_FUNCADDR = 17; // dst = address of the function in src0 (OP_FUNC)
+let IR_ATOMIC = 18; // <aux: atomic subop>; dst/src0 carry address and value
+let IR_COROSWITCH = 19; // switch coroutine context around the following call
+let IR_TLSADDR = 20; // dst = address of the TLS slot in src0 (OP_TLSVAR)
+let IR_FENCE = 21; // memory fence; <aux: ordering>
 
 // IrOp.aux for IR_UNARY.
 let UOP_NEG    = 0;
 let UOP_BITNOT = 1;
 let UOP_LNOT   = 2;
 
+// IrOp.aux for IR_CAST.
+let CAST_TRUNC = 0; // narrow an integer (the low bits are the result on both targets)
+let CAST_SEXT  = 1;
+let CAST_ZEXT  = 2;
+let CAST_BOOL  = 3; // nonzero -> 0/1
+let CAST_FTOI  = 4; // float -> int (later targets)
+let CAST_ITOF  = 5; // int -> float
+let CAST_FTRUNC = 6; // f64 -> f32
+let CAST_FEXT  = 7; // f32 -> f64
+
+// IrOp.aux for IR_ATOMIC.
+let ATOMIC_CAS  = 0;
+let ATOMIC_ADD  = 1;
+let ATOMIC_SUB  = 2;
+let ATOMIC_SWAP = 3;
+let ATOMIC_LOAD = 4;
+let ATOMIC_STORE = 5;
+
+// IrOp.aux for IR_FENCE.
+let FENCE_ACQUIRE = 0;
+let FENCE_RELEASE = 1;
+let FENCE_SEQCST  = 2;
+
 // IrOperand.kind
 let OP_NONE      = 0;
 let OP_ACC       = 1;
-let OP_VREG      = 2;  // reg is a concrete backend register number (from Var.reg or a call-arg rank)
+let OP_VREG      = 2;  // reg is a concrete backend register number (from Var.reg) or a call-arg rank
 let OP_STACKSLOT = 3;  // off is a frame offset (from Var.offset)
 let OP_IMM       = 4;  // off is the immediate value
 let OP_GLOBAL    = 5;  // off is the *Var, reinterpreted as an address
 let OP_STR       = 6;  // off is a string-literal id
-let OP_REG       = 7;  // reg is a fixed convention register (a call/ALU slot), not tied to any Var
+let OP_REG       = 7;  // reg is a fixed convention register, not tied to any Var
+let OP_OP2       = 8;  // the frontend's second-operand staging register (a binop's right side); reg is its rank
+let OP_MEM       = 9;  // a memory reference: address in the base operand, displacement in off, element type in ty
+let OP_FUNC      = 10; // off is the *Func, reinterpreted as an address
+let OP_TLSVAR    = 11; // off is the *Var, reinterpreted as an address; a thread-local slot, not a plain global
 
 // IrOp.aux for IR_ALU.
 let ALU_ADD = 0;
@@ -122,6 +160,13 @@ fn operand_reg(reg int) IrOperand {
 	return o;
 }
 
+fn operand_op2(rank int) IrOperand {
+	var o IrOperand;
+	o.kind = OP_OP2;
+	o.reg = rank;
+	return o;
+}
+
 fn operand_vreg(reg int, ty *Type) IrOperand {
 	var o IrOperand;
 	o.kind = OP_VREG;
@@ -135,6 +180,45 @@ fn operand_stackslot(off i64, ty *Type) IrOperand {
 	o.kind = OP_STACKSLOT;
 	o.off = off;
 	o.ty = ty;
+	return o;
+}
+
+// A memory reference whose address lives in the base operand and whose
+// element is ty bytes after the base plus off. The base operand is the
+// address itself (OP_ACC/OP_VREG/OP_STACKSLOT); only off and ty are new.
+fn operand_mem(off i64, ty *Type) IrOperand {
+	var o IrOperand;
+	o.kind = OP_MEM;
+	o.off = off;
+	o.ty = ty;
+	return o;
+}
+
+fn operand_global(v *Var) IrOperand {
+	var o IrOperand;
+	o.kind = OP_GLOBAL;
+	o.off = v as i64;
+	return o;
+}
+
+fn operand_str(id int) IrOperand {
+	var o IrOperand;
+	o.kind = OP_STR;
+	o.off = id as i64;
+	return o;
+}
+
+fn operand_func(f *Func) IrOperand {
+	var o IrOperand;
+	o.kind = OP_FUNC;
+	o.off = f as i64;
+	return o;
+}
+
+fn operand_tlsvar(v *Var) IrOperand {
+	var o IrOperand;
+	o.kind = OP_TLSVAR;
+	o.off = v as i64;
 	return o;
 }
 
