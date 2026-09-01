@@ -292,6 +292,29 @@ fn abi_by_ref(size int) bool {
 	return size > 16;
 }
 
+// ABI parameters. The two current targets agree on the by-ref cutoff but
+// differ in the number of argument registers: six integer registers for
+// x86, eight for ARM64. Floats cross in float registers at the extern
+// boundary only, and both targets have eight of those. A future target with
+// a different shape overrides these numbers; codegen.qela's call_reg() is
+// the other half of the ABI, mapping a register rank to the target's
+// encoding.
+fn abi_n_arg_regs() int {
+	if (opt_target == TARGET_ARM64) { return 8; }
+	return 6;
+}
+
+fn abi_n_float_regs() int {
+	return 8;
+}
+
+// A result that no longer fits the return registers comes back through a
+// hidden pointer argument. Same cutoff as abi_by_ref for the two current
+// targets; the caller still checks is_aggregate separately.
+fn abi_sret(size int) bool {
+	return abi_by_ref(size);
+}
+
 // GPR encodings, shared between codegen.qela (which also defines its own
 // RAX..R11 for its own use) and regalloc.qela (which does not import
 // codegen.qela and needs these for its free/callee-saved register pools).
