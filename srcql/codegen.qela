@@ -2434,10 +2434,35 @@ fn gen_func(f *Func) {
 	gen_bounds_trampoline();
 }
 
+// f64 bit pattern -> f32 bit pattern, in pure integer math: the bootstrap
+// subset has no float, so this must never use one. Truncating, not
+// round-to-nearest. Subnormal doubles are below the f32 range anyway, so
+// they underflow to zero here.
+fn f64_to_f32_bits(b i64) i64 {
+	var sign i64 = (b >> 63) & 1;
+	var exp i64 = (b >> 52) & 0x7ff;
+	var man i64 = b & 0xfffffffffffff;
+	if (exp == 0x7ff) {
+		if (man == 0) { return (sign << 31) | 0x7f800000; }
+		return (sign << 31) | 0x7fc00000;
+	}
+	if (exp == 0) { return sign << 31; }
+	var e32 i64 = exp - 1023 + 127;
+	if (e32 <= 0) { return sign << 31; }
+	if (e32 >= 255) { return (sign << 31) | 0x7f800000; }
+	return (sign << 31) | (e32 << 23) | ((man >> 29) & 0x7fffff);
+}
+
 fn layout_globals(globals *Var) {
 	var v *Var = globals;
 	while (v as i64 != 0) {
 		if (v.init != 0) {
+			// A float literal stores f64 bits; an f32 slot is 4 bytes, so
+			// the bits must be narrowed here or the low half (zero for any
+			// double with an exponent above 0x3ff) lands in the slot.
+			if (v.ty.kind == TY_FLOAT && v.ty.size == 4) {
+				v.init = f64_to_f32_bits(v.init);
+			}
 			var align i64 = v.ty.align as i64;
 			var off i64 = (gdata.n + align - 1) & ~(align - 1);
 			while (gdata.n < off) { buf_u8(&gdata, 0); }
