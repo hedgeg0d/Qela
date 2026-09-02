@@ -421,6 +421,32 @@ EOF
 	fail "a self-contained dynamic function doesn't jit correctly, or a non-self-contained one doesn't fall back"
 printf '    ok\n'
 
+step "dynamic: self-recursive functions jit in place (no interpreted fallback)"
+cat > "$tmp2/dynrec.qela" <<'EOF'
+import "std/io.qela";
+fn dynamic fib(n i64) i64 {
+	if (n < 2) { return n; }
+	return fib(n - 1) + fib(n - 2);
+}
+fn dynamic dlen_rec(s str, n i64) i64 {
+	if (n <= 0) { return s.len; }
+	return dlen_rec(s, n - 1);
+}
+fn dynamic dgreet_rec(s str, n i64) str {
+	if (n <= 0) { return s; }
+	return dgreet_rec(s, n - 1);
+}
+fn main() int {
+	write_str(STDOUT, "fib10=${fib(10)} dlen=${dlen_rec("abc", 3)} greet=${dgreet_rec("yo", 2)}\n");
+	return 0;
+}
+EOF
+( cd "$tmp2" &&
+  "$root/$OUT/s2" dynrec.qela -o dynrec &&
+  [ "$(QELAPATH="$root/$OUT/s2" ./dynrec 2>/dev/null)" = "$(printf 'fib10=55 dlen=3 greet=yo')" ] ) ||
+	fail "a self-recursive dynamic function doesn't jit correctly"
+printf '    ok\n'
+
 
 step "interpreted/dynamic str and struct marshalling over the abi"
 cat > "$tmp2/marshalled.qela" <<'EOF'
