@@ -700,14 +700,18 @@ marshalling over the abi" and "eval fn" steps, each asserting concrete
 values. S2 535 064 -> 562 392 B.
 
 What's left, precisely — edges, not missing mechanisms:
-`eval var` globals are still scalar-only (the child has no way to learn a
-global's type at parse time — the `ND_FUNCADDR` foreign fallback types
-everything as `i64` — so a str global stays out of reach); a
-self-recursive `dynamic` function always falls back to `interpreted` (a
-call to itself is a relocation like any other call); `parse_ast` is
-expression-only; and there is no AST inspection/mutation API. None of
-these are safety gaps — every one of them is a clean, reported rejection
-or fallback, never silent wrong behavior.
+`eval var` globals are no longer scalar-only (2026-08-09): the bundle
+declares each one as an `extern var` for the child, so its type is known
+at parse time and reads/writes marshal str, float and struct values —
+the child materialises a copy at a temp on read, applies a write to one
+materialised copy and sends the whole object back; the host's generated
+dispatchers build and decode the payloads per type. A self-recursive
+`dynamic` function always fell back to `interpreted` (a call to itself
+is a relocation like any other call) — fixed the same day, it JITs in
+place now; `parse_ast` is expression-only; and there is no AST
+inspection/mutation API. None of these are safety gaps — every one of
+them is a clean, reported rejection or fallback, never silent wrong
+behavior.
 
 ## Size measurements (real numbers, not estimates)
 
