@@ -3,14 +3,8 @@ import "diag.qela";
 import "type.qela";
 import "regalloc.qela";
 import "ir.qela";
+import "x86_emit.qela";
 
-let RAX = 0;
-let RCX = 1;
-let RDX = 2;
-let RSP = 4;
-let RBP = 5;
-let RSI = 6;
-let RDI = 7;
 
 // The integer argument register for rank i on the current target -- the
 // register-mapping half of the ABI, mirrored by abi_n_arg_regs() in
@@ -27,11 +21,13 @@ fn call_reg(i int) int {
 	return R9;
 }
 
+
 fn sys_reg(i int) int {
 	if (opt_target == TARGET_ARM64) { return call_reg(i); }
 	if (i == 3) { return R10; }
 	return call_reg(i);
 }
+
 
 // The frontend stages a binop's right operand into one fixed register per
 // target (gen_expr's two-operand preamble). The IR carries the rank, not the
@@ -42,622 +38,37 @@ fn op2_reg(rank int) int {
 	return RDI;
 }
 
-struct I64List { p *i64, n i64, cap i64, }
-
-fn ilist_push(l *I64List, v i64) {
-	if (l.n == l.cap) {
-		var cap i64 = 8;
-		if (l.cap != 0) { cap = l.cap * 2; }
-		var q *i64 = arena_alloc(cap * 8, 8) as *i64;
-		var i i64 = 0;
-		while (i < l.n) { q[i] = l.p[i]; i = i + 1; }
-		l.p = q;
-		l.cap = cap;
-	}
-	l.p[l.n] = v;
-	l.n = l.n + 1;
-}
-
-fn ilist_set(l *I64List, i i64, v i64) {
-	while (l.n <= i) { ilist_push(l, 0); }
-	l.p[i] = v;
-}
-
-struct CallFixup;
-struct CallFixup { next *CallFixup, at i64, name str, pos i64, }
-
-struct StrFixup;
-struct StrFixup { next *StrFixup, at i64, id int, }
-
-struct DataFixup;
-struct DataFixup { next *DataFixup, at i64, varp *Var, }
-
-// `qela -c` output: every fixup the exe path would patch is kept as a
-// relocation instead. at is the byte offset inside its section; kind is the
-// x86-64 relocation type; name resolves through the object's symbol table
-// (functions, globals and the generated `.Lstr` symbols).
-var relocs_head *Reloc;
-var relocs_tail *Reloc;
-var rodata_relocs_head *Reloc;
-var rodata_relocs_tail *Reloc;
-
-// String relocations carry the string's id in Reloc.id (name is empty);
-// every other relocation names its symbol. The object writer turns the id
-// into the generated `.Lstr<N>` symbol.
-fn push_reloc(at i64, name str, kind int) {
-	var f *Reloc = arena_alloc(sizeof(Reloc), 8) as *Reloc;
-	f.at = at;
-	f.name = name;
-	f.kind = kind;
-	if (relocs_tail as i64 == 0) { relocs_head = f; } else { relocs_tail.next = f; }
-	relocs_tail = f;
-}
-
-fn push_reloc_id(at i64, id i64, kind int) {
-	var f *Reloc = arena_alloc(sizeof(Reloc), 8) as *Reloc;
-	f.at = at;
-	f.id = id;
-	f.kind = kind;
-	if (relocs_tail as i64 == 0) { relocs_head = f; } else { relocs_tail.next = f; }
-	relocs_tail = f;
-}
 
 struct Loop;
 struct Loop { prev *Loop, brk i64, cont i64, depth int, }
 
+
 struct DeferScope;
 struct DeferScope { prev *DeferScope, list *Node, depth int, }
 
-var code Buf;
-var rodata Buf;
-var gdata Buf;
-var bss_size i64;
-var depth int;
 // Total 8-byte slots gen_args pushed for the current call's stack-spilled
 // arguments, padding included -- gen_call reads this to clean up exactly
 // what went on the stack, without re-deriving the padding decision.
 var overflow_pushed i64;
+
 var cur_loop *Loop;
+
 var gen_fn *Func;
+
 var cur_defers *DeferScope;
+
 var defer_depth int;
 
-var calls_head *CallFixup;
-var calls_tail *CallFixup;
-var asmrefs_head *CallFixup;
-var asmrefs_tail *CallFixup;
-var strrefs_head *StrFixup;
-var strrefs_tail *StrFixup;
-var datarefs_head *DataFixup;
-var datarefs_tail *DataFixup;
-var str_off *i64;
-var bounds_checks I64List;
-var fn_bounds I64List;
-var assert_sites I64List;
-var assert_msgs I64List;
-var panic_msg_at I64List;
-var panic_msg_ids I64List;
-var bt_base_refs I64List;
-var bt_jmps I64List;
-var funcaddrs_head *CallFixup;
-var funcaddrs_tail *CallFixup;
-var coro_stub_at i64 = -1;
-var coro_stub_refs I64List;
-var gc_base_refs I64List;
-var gc_end_refs I64List;
-
-// tvar (thread-local) support: a flat, compiler-private %fs:offset block,
-// not the ELF PT_TLS ABI -- there is no dynamic linker here to need it.
-// Offset 0 in the block is a self-pointer (the ABI convention every real
-// TLS implementation also uses, since LEA cannot read a segment base).
-var tls_template_off i64 = 0;
-var tls_block_size i64 = 8;
-var tls_init_refs I64List;
-var tls_stub_at i64 = -1;
-var tls_stub_src_at i64 = -1;
 
 var opt_no_bounds bool = false;
-var opt_backtrace bool = false;
-// `qela -c`: emit a relocatable object instead of a static binary. The
-// relocation list replaces the address patching, and the ELF writer's
-// object path builds a .o the system linker can consume.
-var opt_object bool = false;
+
 var gen_unit *Unit;
 
-fn b1(v i64) { buf_u8(&code, (v & 255) as u8); }
-fn b4(v i64) { buf_u32(&code, v); }
-
-fn rex_w(reg int, rm int) {
-	var v i64 = 0x48;
-	if (reg >= 8) { v = v | 4; }
-	if (rm >= 8) { v = v | 1; }
-	b1(v);
-}
-
-fn modrm(mod int, reg int, rm int) {
-	b1(((mod as i64) << 6) | (((reg as i64) & 7) << 3) | ((rm as i64) & 7));
-}
-
-fn push_reg(r int) {
-	if (r >= 8) { b1(0x41); }
-	b1(0x50 + ((r as i64) & 7));
-	depth = depth + 1;
-}
-
-fn pop_reg(r int) {
-	if (r >= 8) { b1(0x41); }
-	b1(0x58 + ((r as i64) & 7));
-	depth = depth - 1;
-}
-
-fn mov_reg_imm(r int, v i64) {
-	if (v == 0) {
-		if (r >= 8) { b1(0x45); }
-		b1(0x31);
-		modrm(3, r, r);
-		return;
-	}
-	if (v > 0 && v <= 0xffffffff) {
-		if (r >= 8) { b1(0x41); }
-		b1(0xb8 + ((r as i64) & 7));
-		b4(v);
-		return;
-	}
-	if (v >= -2147483648 && v <= 2147483647) {
-		rex_w(0, r);
-		b1(0xc7);
-		modrm(3, 0, r);
-		b4(v);
-		return;
-	}
-	rex_w(0, r);
-	b1(0xb8 + ((r as i64) & 7));
-	buf_u64(&code, v);
-}
-
-fn mov_reg_reg(dst int, src int) {
-	if (dst == src) { return; }
-	rex_w(src, dst);
-	b1(0x89);
-	modrm(3, src, dst);
-}
-
-fn rbp_mem(op i64, reg int, disp i64) {
-	rex_w(reg, RBP);
-	b1(op);
-	if (disp >= -128 && disp <= 127) {
-		modrm(1, reg, RBP);
-		b1(disp);
-	} else {
-		modrm(2, reg, RBP);
-		b4(disp);
-	}
-}
-
-fn lea_local(reg int, off i64) { rbp_mem(0x8d, reg, -off); }
-fn ld_local(reg int, off i64) { rbp_mem(0x8b, reg, -off); }
-fn st_local(off i64, reg int) { rbp_mem(0x89, reg, -off); }
-
-fn ld_at_rax(reg int, disp i64) {
-	rex_w(reg, RAX);
-	b1(0x8b);
-	if (disp == 0) {
-		modrm(0, reg, RAX);
-	} else {
-		modrm(1, reg, RAX);
-		b1(disp);
-	}
-}
-
-fn push_at_rax(disp i64) {
-	b1(0xff);
-	if (disp == 0) {
-		modrm(0, 6, RAX);
-	} else {
-		modrm(1, 6, RAX);
-		b1(disp);
-	}
-	depth = depth + 1;
-}
-
-fn load(ty *Type) {
-	if (ty.size == 1) {
-		b1(0x48); b1(0x0f);
-		if (ty.is_unsigned || ty.kind == TY_BOOL) { b1(0xb6); } else { b1(0xbe); }
-		modrm(0, RAX, RAX);
-		return;
-	}
-	if (ty.size == 2) {
-		b1(0x48); b1(0x0f);
-		if (ty.is_unsigned) { b1(0xb7); } else { b1(0xbf); }
-		modrm(0, RAX, RAX);
-		return;
-	}
-	if (ty.size == 4) {
-		if (ty.is_unsigned || ty.kind == TY_FLOAT) { b1(0x8b); } else { b1(0x48); b1(0x63); }
-		modrm(0, RAX, RAX);
-		return;
-	}
-	b1(0x48); b1(0x8b);
-	modrm(0, RAX, RAX);
-}
-
-fn store(ty *Type) {
-	pop_reg(RDI);
-	if (ty.size == 1) { b1(0x88); modrm(0, RAX, RDI); return; }
-	if (ty.size == 2) { b1(0x66); b1(0x89); modrm(0, RAX, RDI); return; }
-	if (ty.size == 4) { b1(0x89); modrm(0, RAX, RDI); return; }
-	b1(0x48); b1(0x89); modrm(0, RAX, RDI);
-}
-
-fn truncate_to(ty *Type) {
-	if (ty.size == 1) {
-		b1(0x48); b1(0x0f);
-		if (ty.is_unsigned || ty.kind == TY_BOOL) { b1(0xb6); } else { b1(0xbe); }
-		modrm(3, RAX, RAX);
-		return;
-	}
-	if (ty.size == 2) {
-		b1(0x48); b1(0x0f);
-		if (ty.is_unsigned) { b1(0xb7); } else { b1(0xbf); }
-		modrm(3, RAX, RAX);
-		return;
-	}
-	if (ty.size == 4) {
-		if (ty.is_unsigned || ty.kind == TY_FLOAT) {
-			b1(0x89); modrm(3, RAX, RAX);
-		} else {
-			b1(0x48); b1(0x63); modrm(3, RAX, RAX);
-		}
-	}
-}
-
-fn test_rax() {
-	b1(0x48); b1(0x85);
-	modrm(3, RAX, RAX);
-}
-
-fn setcc(cc i64) {
-	b1(0x0f);
-	b1(cc);
-	modrm(3, 0, RAX);
-	b1(0x0f); b1(0xb6);
-	modrm(3, RAX, RAX);
-}
-
-// Branches are emitted long, then the whole unit is emitted again with the
-// ones that turned out to be within a byte encoded short. Branch ids come from
-// the walk order of the tree, so they name the same branch in every pass, and
-// shortening only ever brings targets closer, so the choice never has to be
-// taken back.
-var br_at I64List;
-var br_short I64List;
-var br_n i64;
-var br_grew bool;
-
-fn br_is_short(id i64) bool {
-	return id < br_short.n && br_short.p[id] != 0;
-}
-
-fn jump(opcode2 i64) i64 {
-	var id i64 = br_n;
-	br_n = br_n + 1;
-	if (br_is_short(id)) {
-		if (opcode2 != 0) { b1(opcode2 - 0x10); } else { b1(0xeb); }
-		ilist_set(&br_at, id, code.n);
-		b1(0);
-	} else {
-		if (opcode2 != 0) { b1(0x0f); b1(opcode2); } else { b1(0xe9); }
-		ilist_set(&br_at, id, code.n);
-		b4(0);
-	}
-	return id;
-}
-
-// A backward branch to a target already emitted: unlike jump()/patch_here(),
-// which patch a placeholder once the far end is known, both ends are known
-// up front here, so the short-vs-near choice is made in one pass.
-fn jump_back(target i64) {
-	var back i64 = target - (code.n + 2);
-	if (back >= -128 && back <= 127) {
-		b1(0xeb); b1(back);
-	} else {
-		b1(0xe9);
-		b4(target - (code.n + 4));
-	}
-}
-
-fn patch_here(id i64) {
-	var at i64 = br_at.p[id];
-	if (br_is_short(id)) {
-		var d8 i64 = code.n - (at + 1);
-		if (d8 < -128 || d8 > 127) { die("internal: short branch out of range"); }
-		code.p[at] = (d8 & 255) as u8;
-		return;
-	}
-	var d i64 = code.n - (at + 4);
-	buf_patch32(&code, at, d);
-	if (d >= -128 && d <= 127) {
-		ilist_set(&br_short, id, 1);
-		br_grew = true;
-	}
-}
-
-fn add_call(name str, pos i64) {
-	b1(0xe8);
-	var f *CallFixup = arena_alloc(sizeof(CallFixup), 8) as *CallFixup;
-	f.at = code.n;
-	f.name = name;
-	f.pos = pos;
-	if (calls_tail as i64 == 0) { calls_head = f; } else { calls_tail.next = f; }
-	calls_tail = f;
-	b4(0);
-	if (opt_object) { push_reloc(f.at, name, REL_PCREL32_PLT); }
-}
-
-// `$rel name` in asm operands: a rel32 slot patched like a call target.
-fn add_callref(name str, pos i64) {
-	b4(0);
-	var f *CallFixup = arena_alloc(sizeof(CallFixup), 8) as *CallFixup;
-	f.at = code.n - 4;
-	f.name = name;
-	f.pos = pos;
-	if (calls_tail as i64 == 0) { calls_head = f; } else { calls_tail.next = f; }
-	calls_tail = f;
-	if (opt_object) { push_reloc(f.at, name, REL_PCREL32); }
-}
-
-// `$name` in asm operands: an 8-byte absolute address slot.
-fn add_absref(name str, pos i64) {
-	var k i64 = 0;
-	while (k < 8) { b1(0); k = k + 1; }
-	var f *CallFixup = arena_alloc(sizeof(CallFixup), 8) as *CallFixup;
-	f.at = code.n - 8;
-	f.name = name;
-	f.pos = pos;
-	if (asmrefs_tail as i64 == 0) { asmrefs_head = f; } else { asmrefs_tail.next = f; }
-	asmrefs_tail = f;
-	if (opt_object) { push_reloc(f.at, name, REL_ABS64); }
-}
-
-fn add_strref(reg int, id int) {
-	if (opt_object) {
-		// RIP-relative slot the linker resolves: the address of the string
-		// header is S + A - P from the slot, so it works at any load base
-		// (PIE included). The absolute mov below would only fit a -no-pie
-		// image, and R_X86_64_32S forces DT_TEXTREL there.
-		rip_ref(0x8d, reg);
-		var f *StrFixup = arena_alloc(sizeof(StrFixup), 8) as *StrFixup;
-		f.at = code.n;
-		f.id = id;
-		if (strrefs_tail as i64 == 0) { strrefs_head = f; } else { strrefs_tail.next = f; }
-		strrefs_tail = f;
-		b4(0);
-		push_reloc_id(f.at, id as i64, REL_PCREL32);
-		return;
-	}
-	if (reg >= 8) { b1(0x41); }
-	b1(0xb8 + ((reg as i64) & 7));
-	var f *StrFixup = arena_alloc(sizeof(StrFixup), 8) as *StrFixup;
-	f.at = code.n;
-	f.id = id;
-	if (strrefs_tail as i64 == 0) { strrefs_head = f; } else { strrefs_tail.next = f; }
-	strrefs_tail = f;
-	b4(0);
-}
-
-fn add_dataref(v *Var) {
-	if (opt_object) {
-		// Every global is a RIP-relative lea here: own symbols and exported
-		// externs live in this image, and an imported extern resolves at
-		// static link (gcc -fno-pic uses the same PC32 references). The
-		// GOT path would be needed only for DSO data, and binutils 2.46
-		// aborts on our GOTPCREL objects -- so externs must be statically
-		// linked, no shared-library data.
-		rip_ref(0x8d, RAX);
-		var at i64 = code.n;
-		b4(0);
-		push_reloc(at, v.name, REL_PCREL32);
-		return;
-	}
-	if (v.extern && !v.has_init) {
-		var sb Buf;
-		fmt_str(&sb, "extern '");
-		fmt_str(&sb, v.name);
-		fmt_str(&sb, "' is not linked (extern needs -c and the linker)");
-		error_at(v.pos, buf_str(&sb));
-	}
-	b1(0xb8);
-	var f *DataFixup = arena_alloc(sizeof(DataFixup), 8) as *DataFixup;
-	f.at = code.n;
-	f.varp = v;
-	if (datarefs_tail as i64 == 0) { datarefs_head = f; } else { datarefs_tail.next = f; }
-	datarefs_tail = f;
-	b4(0);
-}
-
-// `lea reg, [rip + disp32]` / `mov reg, [rip + disp32]` in object mode: the
-// disp is a relocation the linker fills, so a reference works at any load
-// base. op 0x8d is a lea (own symbol), 0x8b a GOT load (imported extern).
-fn rip_ref(op int, reg int) {
-	if ((reg as i64) >= 8) { b1(0x49); } else { b1(0x48); }
-	b1(op);
-	b1(0x05 | (((reg as i64) & 7) << 3));
-}
-
-fn add_funcaddr(name str, pos i64) {
-	rex_w(0, RAX);
-	b1(0xb8);
-	var f *CallFixup = arena_alloc(sizeof(CallFixup), 8) as *CallFixup;
-	f.at = code.n;
-	f.name = name;
-	f.pos = pos;
-	if (funcaddrs_tail as i64 == 0) { funcaddrs_head = f; }
-	else { funcaddrs_tail.next = f; }
-	funcaddrs_tail = f;
-	buf_u64(&code, 0);
-	if (opt_object) { push_reloc(f.at, name, REL_ABS64); }
-}
-
-fn add_rax_imm(v i64) {
-	if (v == 0) { return; }
-	b1(0x48);
-	if (v >= -128 && v <= 127) {
-		b1(0x83);
-		modrm(3, 0, RAX);
-		b1(v);
-	} else {
-		b1(0x81);
-		modrm(3, 0, RAX);
-		b4(v);
-	}
-}
-
-fn scale_by(size int) {
-	if (size == 1) { return; }
-	mov_reg_imm(RCX, size as i64);
-	b1(0x48); b1(0x0f); b1(0xaf);
-	modrm(3, RAX, RCX);
-}
-
-// A bounds check jumps to a trampoline at the end of its own function rather
-// than to the panic stub at the end of the image, so branch relaxation can
-// bring it down to two bytes.
-fn jump_bounds(cc i64) {
-	ilist_push(&fn_bounds, jump(cc));
-}
-
-fn gen_bounds_trampoline() {
-	if (fn_bounds.n == 0) { return; }
-	patch_all(&fn_bounds);
-	// With backtraces on this becomes a call, so the return address left on
-	// the stack names the function that tripped the check.
-	if (opt_backtrace) { b1(0xe8); } else { b1(0xe9); }
-	ilist_push(&bounds_checks, code.n);
-	b4(0);
-	fn_bounds.n = 0;
-}
-
-// assert(cond, "msg") emits test; jnz over a direct call to the message's
-// stub. The call is a fixed five bytes, so the jnz is always in short range
-// and nothing here needs branch relaxation.
-fn gen_assert(n *Node) {
-	gen_expr(n.cond);
-	ir_assert(n.args.val, n.pos);
-}
-
-// ── the backtrace walker ──
-//
-// Entry: the panic stub's jmp left [rsp] = the return address of the call
-// that reached it, i.e. an address inside the panicking function, and rbp =
-// that function's frame base (or the nearest ancestor's, for a frameless
-// leaf). The walker prints the function containing [rsp], then walks the
-// rbp chain printing every caller, then exits 134.
-//
-// r8  = function table base (patched absolute)
-// rbx = address being resolved
-// r9  = frames left to walk -- rcx and r11 are clobbered by syscalls
-fn gen_bt_walker() {
-	b1(0x41); b1(0xb8);                       // mov r8d, imm32
-	ilist_push(&bt_base_refs, code.n);
-	b4(0);
-	b1(0x48); b1(0x8b); b1(0x1c); b1(0x24);   // mov rbx, [rsp]
-	b1(0xe8);
-	var c1 i64 = code.n;                      // call bt_print (rel32 field)
-	b4(0);
-	b1(0x49); b1(0xc7); b1(0xc1); b4(32);     // mov r9, 32 (REX.W|REX.B)
-	var loop_at i64 = code.n;
-	b1(0x48); b1(0x85); b1(0xed);             // test rbp, rbp
-	var jz_exit i64 = code.n;
-	b1(0x74); b1(0);                          // jz exit
-	b1(0x48); b1(0x8b); b1(0x5d); b1(0x08);   // mov rbx, [rbp+8]
-	b1(0xe8);
-	var c2 i64 = code.n;                      // call bt_print (rel32 field)
-	b4(0);
-	b1(0x48); b1(0x8b); b1(0x6d); b1(0x00);   // mov rbp, [rbp]
-	b1(0x49); b1(0xff); b1(0xc9);             // dec r9
-	var jnz_loop i64 = code.n;
-	b1(0x75); b1(0);                          // jnz loop
-	var exit_at i64 = code.n;
-	mov_reg_imm(RAX, 231);   // exit_group: a crash kills every thread, not just this one
-	mov_reg_imm(RDI, 134);
-	b1(0x0f); b1(0x05);
-	var print_at i64 = code.n;
-
-	// bt_print: entries are sorted by function start address, so the last
-	// entry whose start is <= rbx contains rbx. The scan keeps the best
-	// candidate in r11 (safe from the write syscall, which clobbers rcx
-	// and r11 only after the name is located).
-	b1(0x49); b1(0x8b); b1(0x00);             // mov rax, [r8]  (count)
-	b1(0x48); b1(0x85); b1(0xc0);             // test rax, rax
-	var jz_nf i64 = code.n;
-	b1(0x74); b1(0);                          // jz notfound
-	b1(0x48); b1(0x89); b1(0xc1);             // mov rcx, rax
-	b1(0x49); b1(0x8d); b1(0x50); b1(0x08);   // lea rdx, [r8+8]
-	mov_reg_imm(R11, 0);                      // best = 0
-	b1(0x49); b1(0xc7); b1(0xc2); b4(0);      // mov r10, 0
-	var scan_at i64 = code.n;
-	b1(0x8b); b1(0x02);                       // mov eax, [rdx]
-	alu_rax_imm(0, ELF_BASE);                 // add rax, ELF_BASE
-	b1(0x48); b1(0x39); b1(0xd8);             // cmp rax, rbx
-	var ja_end i64 = code.n;
-	b1(0x77); b1(0);                          // ja endscan
-	b1(0x49); b1(0x89); b1(0xd3);             // mov r11, rdx
-	b1(0x48); b1(0x83); b1(0xc2); b1(0x08);   // add rdx, 8
-	b1(0x49); b1(0xff); b1(0xc2);             // inc r10
-	b1(0x49); b1(0x39); b1(0xca);             // cmp r10, rcx
-	var jb_scan i64 = code.n;
-	b1(0x72); b1(0);                          // jb scan
-	var endscan_at i64 = code.n;
-	b1(0x4d); b1(0x85); b1(0xdb);             // test r11, r11
-	var jz_nf2 i64 = code.n;
-	b1(0x74); b1(0);                          // jz notfound
-	mov_reg_reg(RDX, R11);                    // rdx = best entry
-	b1(0x8b); b1(0x72); b1(0x04);             // mov esi, [rdx+4]
-	b1(0x48); b1(0xc1); b1(0xe1); b1(0x03);   // shl rcx, 3
-	b1(0x48); b1(0x01); b1(0xce);             // add rsi, rcx
-	rex_w(R8, RSI); b1(0x01); modrm(3, R8, RSI); // add rsi, r8
-	b1(0x48); b1(0x83); b1(0xc6); b1(0x08);   // add rsi, 8
-	b1(0x48); b1(0x89); b1(0xf7);             // mov rdi, rsi
-	b1(0x31); b1(0xc0);                       // xor eax, eax
-	b1(0x48); b1(0xc7); b1(0xc1); b4(-1);     // mov rcx, -1
-	b1(0xf2); b1(0xae);                       // repne scasb
-	b1(0x48); b1(0xf7); b1(0xd1);             // not rcx
-	b1(0x48); b1(0xff); b1(0xc9);             // dec rcx  (length)
-	mov_reg_imm(RAX, 1);
-	mov_reg_imm(RDI, 2);
-	mov_reg_reg(RDX, RCX);
-	b1(0x0f); b1(0x05);
-	var notfound_at i64 = code.n;
-	b1(0xc3);                                 // ret
-
-	code.p[jz_exit + 1] = (exit_at - (jz_exit + 2)) as u8;
-	code.p[jnz_loop + 1] = (loop_at - (jnz_loop + 2)) as u8;
-	code.p[jz_nf + 1] = (notfound_at - (jz_nf + 2)) as u8;
-	code.p[jz_nf2 + 1] = (notfound_at - (jz_nf2 + 2)) as u8;
-	code.p[ja_end + 1] = (endscan_at - (ja_end + 2)) as u8;
-	code.p[jb_scan + 1] = (scan_at - (jb_scan + 2)) as u8;
-	buf_patch32(&code, c1, print_at - (c1 + 4));
-	buf_patch32(&code, c2, print_at - (c2 + 4));
-}
 
 fn by_ref_ty(ty *Type) bool {
 	return is_aggregate(ty) && abi_by_ref(ty.size);
 }
 
-fn copy_rsi_rdi(size int) {
-	mov_reg_imm(RCX, size as i64);
-	b1(0xf3); b1(0xa4);
-}
-
-fn copy_aggregate(size int) {
-	pop_reg(RDI);
-	mov_reg_reg(RSI, RAX);
-	push_reg(RDI);
-	mov_reg_imm(RCX, size as i64);
-	b1(0xf3); b1(0xa4);
-	pop_reg(RAX);
-}
 
 // A local scalar of machine width lives at a known rbp offset, so it can be
 // read or written with one instruction instead of materialising its address.
@@ -669,38 +80,6 @@ fn direct_local(n *Node) bool {
 	return n.ty.size == 8;
 }
 
-// rax = base + idx*scale. A power-of-two element size folds the scaling and
-// the addition into a single lea.
-fn lea_scale_ok(scale int) bool {
-	return scale == 1 || scale == 2 || scale == 4 || scale == 8;
-}
-
-fn lea_index(scale int, base int, idx int) bool {
-	if (!lea_scale_ok(scale)) { return false; }
-	var sh i64 = 0;
-	if (scale == 2) { sh = 1; }
-	if (scale == 4) { sh = 2; }
-	if (scale == 8) { sh = 3; }
-	var rex i64 = 0x48;
-	if (idx >= 8) { rex = rex | 2; }
-	if (base >= 8) { rex = rex | 1; }
-	b1(rex); b1(0x8d);
-	modrm(0, RAX, 4);
-	b1((sh << 6) | (((idx as i64) & 7) << 3) | ((base as i64) & 7));
-	return true;
-}
-
-// mov reg, fs:[0] -- the thread's self-pointer, the base of its own TLS
-// block. LEA cannot read a segment base, so a tvar's address always starts
-// here before adding its offset within the block.
-fn ld_fs_self(reg int) {
-	b1(0x64);                              // fs segment override
-	rex_w(reg, 0);
-	b1(0x8b);
-	b1(0x04 | (((reg as i64) & 7) << 3));  // ModRM: mod=00, rm=100 (SIB follows)
-	b1(0x25);                              // SIB: no index, no base -> disp32 only
-	b4(0);
-}
 
 fn gen_addr(n *Node) {
 	var k int = n.kind;
@@ -826,10 +205,12 @@ fn gen_addr(n *Node) {
 	error_at(n.pos, "not an addressable expression");
 }
 
+
 fn gen_lvalue(n *Node) {
 	gen_addr(n);
 	if (!is_aggregate(n.ty)) { ir_load_acc(n.ty, n.pos); }
 }
+
 
 // An argument with no side effects can be loaded straight into its register
 // instead of going through the stack, but only if every argument after it is
@@ -843,6 +224,7 @@ fn arg_leaf_ok(a *Node) bool {
 	return a.varp.reg == 3 || a.varp.reg >= 12;
 }
 
+
 fn arg_direct_ok(a *Node) bool {
 	if (arg_leaf_ok(a)) { return true; }
 	var k int = a.kind;
@@ -853,6 +235,7 @@ fn arg_direct_ok(a *Node) bool {
 	if (a.lhs.ty.kind == TY_PTR || a.rhs.ty.kind == TY_PTR) { return false; }
 	return arg_leaf_ok(a.lhs) && arg_leaf_ok(a.rhs);
 }
+
 
 // marshall is set for a call to an extern-marked function (SysV on the
 // other side): scalar float arguments land in xmm registers with their own
@@ -1032,66 +415,6 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) {
 	overflow_pushed = m + pad;
 }
 
-// ── floats ──
-//
-// A float never gets its own register class: it lives in a GPR/stack slot as
-// a raw bit pattern everywhere except the instant an SSE instruction needs
-// it, bounced through xmm0/xmm1 via movd/movq. This means the whole calling
-// convention, spilling and regalloc machinery is unchanged -- only the ops
-// that actually compute on a float know it is one.
-let XMM0 = 0;
-let XMM1 = 1;
-
-fn xmm_from_gpr(xmm int, gpr int, sz int) {
-	b1(0x66);
-	if (sz == 8) { rex_w(gpr, xmm); }
-	b1(0x0f); b1(0x6e);
-	modrm(3, xmm, gpr);
-}
-
-fn gpr_from_xmm(gpr int, xmm int, sz int) {
-	b1(0x66);
-	if (sz == 8) { rex_w(xmm, gpr); }
-	b1(0x0f); b1(0x7e);
-	modrm(3, xmm, gpr);
-}
-
-// SysV marshalling at the extern boundary: floats cross in xmm registers
-// while Qela's own convention keeps them in integer registers. Unlike the
-// helpers above, the REX fields here are right for r8/r9 -- the originals
-// never see a register >= 8, so they get away with swapping the two.
-
-fn gpr_to_xmm(xmm int, gpr int, sz int) {
-	b1(0x66);
-	var rex i64 = 0;
-	if (sz == 8) {
-		rex = 0x48;
-		if (xmm >= 8) { rex = rex | 4; }
-		if (gpr >= 8) { rex = rex | 1; }
-		b1(rex);
-	}
-	b1(0x0f); b1(0x6e);
-	modrm(3, xmm, gpr);
-}
-
-fn xmm_to_gpr(gpr int, xmm int, sz int) {
-	b1(0x66);
-	var rex i64 = 0;
-	if (sz == 8) {
-		rex = 0x48;
-		if (xmm >= 8) { rex = rex | 4; }
-		if (gpr >= 8) { rex = rex | 1; }
-		b1(rex);
-	}
-	b1(0x0f); b1(0x7e);
-	modrm(3, xmm, gpr);
-}
-
-fn sse2(prefix i64, opcode i64, dst int, src int) {
-	if (prefix != 0) { b1(prefix); }
-	b1(0x0f); b1(opcode);
-	modrm(3, dst, src);
-}
 
 // Unsigned-integer cc codes double as float cc codes: ucomisd sets CF/ZF/PF
 // exactly like an unsigned integer compare (NaN aside, which this does not
@@ -1107,6 +430,7 @@ fn float_cc_neutral(n *Node) i64 {
 	return CC_ULE;
 }
 
+
 fn gen_binop_float(n *Node) {
 	var k int = n.kind;
 	if (k == ND_ADD) { ir_alu_acc(ALU_FADD, n.ty, n.pos); return; }
@@ -1121,6 +445,7 @@ fn gen_binop_float(n *Node) {
 	error_at(n.pos, "operator not defined for floats");
 }
 
+
 fn gen_neg_float(sz int, pos i64) {
 	var mask i64 = 0x8000000000000000;
 	if (sz == 4) { mask = 0x80000000; }
@@ -1128,12 +453,6 @@ fn gen_neg_float(sz int, pos i64) {
 	ir_alu_acc(ALU_XOR, type_ptr(ty_i64), pos);
 }
 
-fn cvt2(prefix i64, opcode i64, dst int, src int, w bool) {
-	b1(prefix);
-	if (w) { rex_w(dst, src); }
-	b1(0x0f); b1(opcode);
-	modrm(3, dst, src);
-}
 
 // RAX holds n.lhs's bits on entry (n.lhs already generated); leaves the
 // converted bits in RAX.
@@ -1150,6 +469,7 @@ fn gen_cast_float(n *Node) {
 	ir_cast_float(CAST_FTOI, st, dt, n.pos);
 }
 
+
 fn cc_for_compare(n *Node) i64 {
 	var uns bool = n.lhs.ty.is_unsigned || n.lhs.ty.kind == TY_PTR;
 	if (n.kind == ND_EQ) { return CC_EQ; }
@@ -1158,6 +478,7 @@ fn cc_for_compare(n *Node) i64 {
 	if (uns) { return CC_ULE; }
 	return CC_LE;
 }
+
 
 fn gen_binop(n *Node) {
 	var t *Type = n.ty;
@@ -1181,6 +502,7 @@ fn gen_binop(n *Node) {
 	error_at(n.pos, "invalid expression");
 }
 
+
 fn gen_enumlit(n *Node) {
 	var off i64 = n.tmp.offset as i64;
 	ir_mov_acc_imm(n.variant.tag as i64, n.pos);
@@ -1199,6 +521,7 @@ fn gen_enumlit(n *Node) {
 	}
 	ir_lea_slot_acc(off, n.pos);
 }
+
 
 fn gen_structlit(n *Node) {
 	var off i64 = n.tmp.offset as i64;
@@ -1224,6 +547,7 @@ fn gen_structlit(n *Node) {
 	}
 	ir_lea_slot_acc(off, n.pos);
 }
+
 
 fn gen_call(n *Node) {
 	if (n.varp as i64 != 0) { gen_indirect_call(n); return; }
@@ -1256,6 +580,7 @@ fn gen_call(n *Node) {
 		ir_store2(n.tmp.offset as i64, n.ty.size as i64, n.pos);
 	}
 }
+
 
 // A call through a function-typed variable. The signature check already ran
 // in type_indirect_call, so here it is only the mechanics. The address goes
@@ -1294,6 +619,7 @@ fn gen_indirect_call(n *Node) {
 	}
 }
 
+
 fn gen_logical(n *Node) {
 	gen_expr(n.lhs);
 	test_rax();
@@ -1314,6 +640,7 @@ fn gen_logical(n *Node) {
 	if (n.kind == ND_AND) { ir_mov_acc_imm(0, n.pos); } else { ir_mov_acc_imm(1, n.pos); }
 	ir_label(end, n.pos);
 }
+
 
 fn gen_opassign(n *Node) {
 	if (n.lhs.kind == ND_VAR && n.lhs.varp.has_reg) {
@@ -1360,6 +687,7 @@ fn gen_opassign(n *Node) {
 	ir_store_op2_acc(n.lhs.ty, n.pos);
 }
 
+
 // An assignment written as a statement discards its result, so it can write
 // straight to the slot without routing the value through rax.
 // mov [rax], imm: a constant store needs no round trip through rax and no
@@ -1370,6 +698,7 @@ fn store_imm(ty *Type, v i64) {
 	if (ty.size == 4) { b1(0xc7); modrm(0, 0, RAX); b4(v); return; }
 	b1(0x48); b1(0xc7); modrm(0, 0, RAX); b4(v);
 }
+
 
 fn stmt_assign(n *Node) bool {
 	if (!direct_local(n.lhs)) { return stmt_store_imm(n); }
@@ -1397,6 +726,7 @@ fn stmt_assign(n *Node) bool {
 	return true;
 }
 
+
 fn stmt_store_imm(n *Node) bool {
 	if (n.rhs.kind != ND_NUM) { return false; }
 	var ty *Type = n.lhs.ty;
@@ -1408,19 +738,6 @@ fn stmt_store_imm(n *Node) bool {
 	return true;
 }
 
-fn alu_op_for(kind int) i64 {
-	if (kind == ND_ADD)    { return 0x01; }
-	if (kind == ND_SUB)    { return 0x29; }
-	if (kind == ND_BITAND) { return 0x21; }
-	if (kind == ND_BITOR)  { return 0x09; }
-	return 0x31;
-}
-
-fn alu_rm_reg(op i64, n *Node, reg int) {
-	rm_rex(reg, n);
-	b1(op);
-	rm_modrm(reg, n);
-}
 
 // v op= e as a statement: fold the update into one instruction against the
 // slot or register holding v, instead of loading it and storing it back.
@@ -1450,9 +767,11 @@ fn stmt_update(v *Node, k int, e *Node) bool {
 	return true;
 }
 
+
 fn stmt_opassign(n *Node) bool {
 	return stmt_update(n.lhs, n.val as int, n.rhs);
 }
+
 
 fn refs_var(e *Node, v *Var) bool {
 	if (e as i64 == 0) { return false; }
@@ -1466,6 +785,7 @@ fn refs_var(e *Node, v *Var) bool {
 	}
 	return false;
 }
+
 
 // v = ((v op a) op b) is v op= a; v op= b. Each step updates the register in
 // place, so nothing is copied back at the end. Only promoted locals qualify:
@@ -1484,6 +804,7 @@ fn spine_ok(e *Node, v *Var) bool {
 	return spine_ok(e.lhs, v);
 }
 
+
 fn emit_spine(e *Node, dst *Node) {
 	if (e.kind == ND_VAR) { return; }
 	emit_spine(e.lhs, dst);
@@ -1491,93 +812,13 @@ fn emit_spine(e *Node, dst *Node) {
 	ir_alu_vreg_acc(alu_ir_for(e.kind), dst.varp.reg, e.pos);
 }
 
+
 fn gen_exprstmt(n *Node) {
 	if (n.kind == ND_ASSIGN && stmt_assign(n)) { return; }
 	if (n.kind == ND_OPASSIGN && stmt_opassign(n)) { return; }
 	gen_expr(n);
 }
 
-fn fits_imm32(v i64) bool {
-	return v >= -2147483648 && v <= 2147483647;
-}
-
-// group-1 ALU op on rax with an immediate: 48 83 /ext ib or 48 81 /ext id
-fn alu_rax_imm(ext int, v i64) {
-	b1(0x48);
-	if (v >= -128 && v <= 127) {
-		b1(0x83);
-		modrm(3, ext, RAX);
-		b1(v);
-		return;
-	}
-	// The accumulator has a one-byte-shorter form with a full immediate.
-	b1(0x05 | ((ext as i64) << 3));
-	b4(v);
-}
-
-fn alu_rax_imm_reg(ext int, reg int, v i64) {
-	rex_w(0, reg);
-	if (v >= -128 && v <= 127) {
-		b1(0x83);
-		modrm(3, ext, reg);
-		b1(v);
-	} else {
-		b1(0x81);
-		modrm(3, ext, reg);
-		b4(v);
-	}
-}
-
-fn alu_ext_for(kind int) int {
-	if (kind == ND_ADD) { return 0; }
-	if (kind == ND_BITOR) { return 1; }
-	if (kind == ND_BITAND) { return 4; }
-	if (kind == ND_SUB) { return 5; }
-	if (kind == ND_BITXOR) { return 6; }
-	return 7;
-}
-
-fn alu_ir_for(kind int) int {
-	if (kind == ND_ADD) { return ALU_ADD; }
-	if (kind == ND_SUB) { return ALU_SUB; }
-	if (kind == ND_BITAND) { return ALU_AND; }
-	if (kind == ND_BITOR) { return ALU_OR; }
-	return ALU_XOR;
-}
-
-// The /digit in the 83/81 immediate form, for an ALU_* enum.
-fn alu_ext_code(aop int) int {
-	if (aop == ALU_ADD) { return 0; }
-	if (aop == ALU_OR)  { return 1; }
-	if (aop == ALU_AND) { return 4; }
-	if (aop == ALU_SUB) { return 5; }
-	return 6;
-}
-
-// The single-byte opcode of the "r/m op= reg" form, for an ALU_* enum.
-fn alu_op_code(aop int) i64 {
-	if (aop == ALU_ADD) { return 0x01; }
-	if (aop == ALU_SUB) { return 0x29; }
-	if (aop == ALU_AND) { return 0x21; }
-	if (aop == ALU_OR)  { return 0x09; }
-	return 0x31;
-}
-
-// The single-byte opcode of the "reg op= r/m" form (gen_into's register-rm
-// arm, rm_op_for's family), for an ALU_* enum.
-fn alu_rm_op_code(aop int) i64 {
-	if (aop == ALU_ADD) { return 0x03; }
-	if (aop == ALU_SUB) { return 0x2b; }
-	if (aop == ALU_AND) { return 0x23; }
-	if (aop == ALU_OR)  { return 0x0b; }
-	return 0x33;
-}
-
-// modrm for [rbp-disp], the frame-slot r/m path of rm_modrm.
-fn slot_modrm(reg int, disp i64) {
-	if (disp >= -128 && disp <= 127) { modrm(1, reg, RBP); b1(disp); }
-	else { modrm(2, reg, RBP); b4(disp); }
-}
 
 // Folds a constant right operand into the instruction, which removes the
 // materialise/push/pop sequence the stack machine would otherwise emit.
@@ -1613,99 +854,17 @@ fn gen_binop_imm(n *Node, v i64) bool {
 	return false;
 }
 
-// A direct local is one r/m operand: either the register it was promoted to or
-// its frame slot. Both encode the same instruction forms, so every fast path
-// below works unchanged whichever one it is.
-fn rm_rex(reg int, n *Node) {
-	if (n.varp.has_reg) { rex_w(reg, n.varp.reg); } else { rex_w(reg, RBP); }
-}
-
-fn rm_modrm(reg int, n *Node) {
-	if (n.varp.has_reg) {
-		modrm(3, reg, n.varp.reg);
-		return;
-	}
-	var disp i64 = -(n.varp.offset as i64);
-	if (disp >= -128 && disp <= 127) {
-		modrm(1, reg, RBP);
-		b1(disp);
-	} else {
-		modrm(2, reg, RBP);
-		b4(disp);
-	}
-}
-
-fn ld_rm(reg int, n *Node) { rm_rex(reg, n); b1(0x8b); rm_modrm(reg, n); }
-fn st_rm(n *Node, reg int) { rm_rex(reg, n); b1(0x89); rm_modrm(reg, n); }
-
-fn alu_rax_rm(op0 i64, op1 i64, n *Node) {
-	alu_reg_rm(op0, op1, RAX, n);
-}
-
-// The IR_ALU/IR_CMP r/m forms: rax op= a direct local, replaying
-// alu_reg_rm(.., RAX, ..) with the same rex/reg-rm roles so the REX.B/REX.R
-// bits come out as the node-driven path would have written them.
-fn x86_alu_acc_rm(op0 i64, op1 i64, src IrOperand) {
-	if (src.kind == OP_VREG) {
-		rex_w(RAX, src.reg);
-		if (op0 != 0) { b1(op0); }
-		b1(op1);
-		modrm(3, RAX, src.reg);
-		return;
-	}
-	if (src.kind == OP_STACKSLOT) {
-		rex_w(RAX, RBP);
-		if (op0 != 0) { b1(op0); }
-		b1(op1);
-		var disp i64 = -(src.off);
-		if (disp >= -128 && disp <= 127) {
-			modrm(1, RAX, RBP);
-			b1(disp);
-		} else {
-			modrm(2, RAX, RBP);
-			b4(disp);
-		}
-		return;
-	}
-	die("internal: x86_alu_acc_rm: unhandled operand");
-}
-
-fn alu_reg_rm(op0 i64, op1 i64, reg int, n *Node) {
-	rm_rex(reg, n);
-	if (op0 != 0) { b1(op0); }
-	b1(op1);
-	rm_modrm(reg, n);
-}
-
-fn alu_reg_imm(ext int, reg int, v i64) {
-	rex_w(0, reg);
-	if (v >= -128 && v <= 127) {
-		b1(0x83);
-		modrm(3, ext, reg);
-		b1(v);
-	} else {
-		b1(0x81);
-		modrm(3, ext, reg);
-		b4(v);
-	}
-}
-
-fn rm_op_for(kind int) i64 {
-	if (kind == ND_ADD)    { return 0x03; }
-	if (kind == ND_SUB)    { return 0x2b; }
-	if (kind == ND_BITAND) { return 0x23; }
-	if (kind == ND_BITOR)  { return 0x0b; }
-	return 0x33;
-}
 
 fn simple_operand(n *Node) bool {
 	if (n.kind == ND_NUM) { return fits_imm32(n.val); }
 	return direct_local(n);
 }
 
+
 fn in_reg(n *Node, reg int) bool {
 	return n.kind == ND_VAR && n.varp.has_reg && n.varp.reg == reg;
 }
+
 
 // Evaluate n straight into dst instead of through rax. Only side-effect-free
 // operands qualify, and the right side must not live in dst, since the left
@@ -1735,24 +894,6 @@ fn gen_into(n *Node, dst int) bool {
 	return true;
 }
 
-fn alu_rm_imm(ext int, n *Node, v i64) {
-	rm_rex(0, n);
-	if (v >= -128 && v <= 127) {
-		b1(0x83);
-		rm_modrm(ext, n);
-		b1(v);
-	} else {
-		b1(0x81);
-		rm_modrm(ext, n);
-		b4(v);
-	}
-}
-
-// A direct local's r/m operand: its promoted register or frame slot.
-fn direct_operand(n *Node) IrOperand {
-	if (n.varp.has_reg) { return operand_vreg(n.varp.reg, n.ty); }
-	return operand_stackslot(n.varp.offset as i64, n.ty);
-}
 
 fn gen_binop_mem(n *Node, val *Node, rm *Node) bool {
 	var k int = n.kind;
@@ -1769,6 +910,7 @@ fn gen_binop_mem(n *Node, val *Node, rm *Node) bool {
 	return true;
 }
 
+
 fn mem_binop_ok(n *Node) bool {
 	var k int = n.kind;
 	if (k != ND_ADD && k != ND_SUB && k != ND_BITAND && k != ND_BITOR &&
@@ -1778,6 +920,7 @@ fn mem_binop_ok(n *Node) bool {
 	}
 	return direct_local(n.rhs);
 }
+
 
 // For a commutative operator a direct local on the left folds in just as well,
 // once the sides are evaluated the other way round.
@@ -1790,6 +933,7 @@ fn swap_binop_ok(n *Node) bool {
 	return direct_local(n.lhs) && !direct_local(n.rhs);
 }
 
+
 // An lvalue reached through a pointer is loaded only to be compared, so the
 // comparison can read memory itself.
 fn addressable_load(n *Node) bool {
@@ -1798,6 +942,7 @@ fn addressable_load(n *Node) bool {
 	return !is_aggregate(n.ty) && n.ty.kind != TY_SLICE;
 }
 
+
 fn fits_width(v i64, ty *Type) bool {
 	if (!fits_imm32(v)) { return false; }
 	if (ty.size >= 4) { return true; }
@@ -1805,17 +950,12 @@ fn fits_width(v i64, ty *Type) bool {
 	return v >= -128 && v <= 255;
 }
 
-fn cmp_at_rax_imm(ty *Type, v i64) {
-	if (ty.size == 1) { b1(0x80); modrm(0, 7, RAX); b1(v); return; }
-	if (ty.size == 2) { b1(0x66); b1(0x81); modrm(0, 7, RAX); b1(v); b1(v >> 8); return; }
-	if (ty.size == 4) { b1(0x81); modrm(0, 7, RAX); b4(v); return; }
-	b1(0x48); b1(0x81); modrm(0, 7, RAX); b4(v);
-}
 
 fn is_compare(n *Node) bool {
 	var k int = n.kind;
 	return k == ND_EQ || k == ND_NE || k == ND_LT || k == ND_LE;
 }
+
 
 // Emits the comparison and returns its setcc opcode, without materialising
 // a boolean. Callers that only branch on the result skip setcc entirely.
@@ -1866,66 +1006,6 @@ fn gen_compare(n *Node) i64 {
 	return cc_for_compare(n);
 }
 
-fn patch_all(l *I64List) {
-	var i i64 = 0;
-	while (i < l.n) { patch_here(l.p[i]); i = i + 1; }
-}
-
-// Short-circuit conditions become branches instead of a materialised 0/1.
-// The label is the code point that is jumped to when the condition is false;
-// the frontend emits its IR_LABEL (ir_label) where that point actually is.
-fn branch_false(n *Node, label i64) {
-	var k int = n.kind;
-	if (k == ND_AND) {
-		branch_false(n.lhs, label);
-		branch_false(n.rhs, label);
-		return;
-	}
-	if (k == ND_OR) {
-		var taken i64 = ir_new_label();
-		branch_true(n.lhs, taken);
-		branch_false(n.rhs, label);
-		ir_label(taken, n.pos);
-		return;
-	}
-	if (k == ND_NOT) { branch_true(n.lhs, label); return; }
-	if (is_compare(n)) {
-		var cc i64 = gen_compare(n);
-		ir_branch(cc_invert(cc), label, n.pos);
-		return;
-	}
-	gen_expr(n);
-	test_rax();
-	ir_branch(CC_EQ, label, n.pos);
-}
-
-fn branch_true(n *Node, label i64) {
-	var k int = n.kind;
-	if (k == ND_OR) {
-		branch_true(n.lhs, label);
-		branch_true(n.rhs, label);
-		return;
-	}
-	if (k == ND_AND) {
-		var missed i64 = ir_new_label();
-		branch_false(n.lhs, missed);
-		branch_true(n.rhs, label);
-		ir_label(missed, n.pos);
-		return;
-	}
-	if (k == ND_NOT) { branch_false(n.lhs, label); return; }
-	if (is_compare(n)) {
-		var cc i64 = gen_compare(n);
-		ir_branch(cc, label, n.pos);
-		return;
-	}
-	gen_expr(n);
-	test_rax();
-	ir_branch(CC_NE, label, n.pos);
-}
-
-var coro_switch_at i64 = -1;
-var coro_switch_refs I64List;
 
 // The switch has to be a real function: its trailing ret consumes the
 // return address that the call pushed onto whichever stack is current,
@@ -1937,841 +1017,6 @@ fn gen_coro_switch(n *Node) {
 	b4(0);
 }
 
-fn gen_coro_switch_stub() {
-	coro_switch_at = code.n;
-	b1(0x53);                            // push rbx
-	b1(0x55);                            // push rbp
-	b1(0x41); b1(0x54);                  // push r12
-	b1(0x41); b1(0x55);                  // push r13
-	b1(0x41); b1(0x56);                  // push r14
-	b1(0x41); b1(0x57);                  // push r15
-	b1(0x48); b1(0x89); b1(0x27);        // mov [rdi], rsp
-	b1(0x48); b1(0x8b); b1(0x26);        // mov rsp, [rsi]
-	b1(0x41); b1(0x5f);                  // pop r15
-	b1(0x41); b1(0x5e);                  // pop r14
-	b1(0x41); b1(0x5d);                  // pop r13
-	b1(0x41); b1(0x5c);                  // pop r12
-	b1(0x5d);                            // pop rbp
-	b1(0x5b);                            // pop rbx
-	b1(0xc3);                            // ret
-}
-
-// Emitted once. A new coroutine's stack holds its arguments above the
-// return address, so the trampoline pops them into place and calls through.
-fn patch_abs(sites *I64List, value i64) {
-	var i i64 = 0;
-	while (i < sites.n) {
-		var k i64 = 0;
-		while (k < 8) {
-			code.p[sites.p[i] + k] = ((value >> (k * 8)) & 255) as u8;
-			k = k + 1;
-		}
-		i = i + 1;
-	}
-}
-
-fn gen_coro_stub() {
-	coro_stub_at = code.n;
-	b1(0x5f);                            // pop rdi
-	b1(0x5e);                            // pop rsi
-	b1(0x5a);                            // pop rdx
-	b1(0x59);                            // pop rcx
-	b1(0x41); b1(0x58);                  // pop r8
-	b1(0x58);                            // pop rax  (target)
-	b1(0xff); b1(0xd0);                  // call rax
-	add_call("coro_finish", 0);
-	b1(0x0f); b1(0x0b);                  // ud2: coro_finish never returns
-}
-
-// clone()'s child resumes at the very next instruction after the syscall,
-// on a brand-new stack that holds none of the caller's frames -- an
-// ordinary compiled function epilogue's `ret` would pop garbage off it. So
-// this never lets compiled code run on that path: fn/arg are carried across
-// the syscall in r12/r13 (syscall only clobbers rcx/r11), and the child
-// branch calls fn directly and exits without ever executing a `ret`.
-//
-// r12/r13 are callee-saved: the register allocator may be keeping a
-// caller's local live in either across this call, so their old values are
-// saved on the parent's own stack and restored before falling through --
-// the child never reaches that path, it exits instead.
-fn gen_thread_clone(n *Node) {
-	gen_args(n, false, false, -1, false);   // fn->rdi, arg->rsi, stack->rdx, flags->rcx
-	push_reg(12);
-	push_reg(13);
-	mov_reg_reg(12, RDI);                   // r12 = fn
-	mov_reg_reg(13, RSI);                   // r13 = arg
-	mov_reg_reg(RSI, RDX);                  // rsi = child stack
-	mov_reg_reg(RDI, RCX);                  // rdi = flags
-	mov_reg_imm(RDX, 0);                    // rdx = parent tid ptr
-	mov_reg_imm(10, 0);                     // r10 = child tid ptr
-	mov_reg_imm(R8, 0);                     // r8  = tls
-	mov_reg_imm(RAX, 56);                   // SYS_CLONE
-	b1(0x0f); b1(0x05);                     // syscall
-
-	test_rax();
-	b1(0x0f); b1(0x85);                     // jnz rel32 (rax != 0 -> parent)
-	var jnz_at i64 = code.n;
-	b4(0);
-
-	// Child: call fn(arg), then exit with its return value.
-	mov_reg_reg(RDI, 13);
-	b1(0x41); b1(0xff); modrm(3, 2, 12);    // call r12
-	mov_reg_reg(RDI, RAX);
-	mov_reg_imm(RAX, 60);                   // SYS_EXIT
-	b1(0x0f); b1(0x05);
-	b1(0x0f); b1(0x0b);                     // ud2: sys_exit never returns
-
-	var rel i64 = code.n - (jnz_at + 4);
-	code.p[jnz_at] = (rel & 255) as u8;
-	code.p[jnz_at + 1] = ((rel >> 8) & 255) as u8;
-	code.p[jnz_at + 2] = ((rel >> 16) & 255) as u8;
-	code.p[jnz_at + 3] = ((rel >> 24) & 255) as u8;
-	// Parent lands here with rax still holding clone()'s result.
-	pop_reg(13);
-	pop_reg(12);
-}
-
-// Builds a fresh per-thread TLS block: mmap it, copy the template in,
-// write the self-pointer at offset 0, then point %fs at it. Called once
-// for the main thread (from the entry stub, only when the program
-// declared a tvar) and once per spawned OS thread.
-fn gen_tls_init_stub() {
-	tls_stub_at = code.n;
-	// mmap(0, tls_block_size, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)
-	mov_reg_imm(RDI, 0);
-	mov_reg_imm(RSI, tls_block_size);
-	mov_reg_imm(RDX, 3);
-	mov_reg_imm(10, 34);
-	mov_reg_imm(R8, -1);
-	mov_reg_imm(R9, 0);
-	mov_reg_imm(RAX, 9);
-	b1(0x0f); b1(0x05);
-
-	mov_reg_reg(12, RAX);          // r12 = the new block, kept live across the copy
-
-	// Copy the template in, 8 bytes at a time -- tls_block_size is always
-	// a multiple of 8.
-	rex_w(0, RSI);
-	b1(0xbe);
-	tls_stub_src_at = code.n;      // patched below to the template's runtime address
-	buf_u64(&code, 0);
-	mov_reg_reg(RDI, 12);
-	mov_reg_imm(RCX, tls_block_size / 8);
-	b1(0xfc);                      // cld
-	b1(0xf3); b1(0x48); b1(0xa5);  // rep movsq
-
-	b1(0x4d); b1(0x89); b1(0x24); b1(0x24);  // mov [r12], r12 -- self-pointer
-
-	// arch_prctl(ARCH_SET_FS, r12)
-	mov_reg_reg(RSI, 12);
-	mov_reg_imm(RDI, 0x1002);
-	mov_reg_imm(RAX, 158);
-	b1(0x0f); b1(0x05);
-	b1(0xc3);                      // ret
-}
-
-// Control flow: an IR_BR carries a label id and is patched the same way
-// jump()/patch_here() patch a forward branch today, just one indirection
-// later. Label ids are a per-function counter; a backend lowers one op at a
-// time (x86_lower_all below), so the pending branches of each label have to
-// live in lists keyed by label id rather than in the byte stream.
-var ir_label_n i64;       // per-function label id counter
-var ir_label_br I64List;  // [label] -> head of its pending-branch chain, or -1
-var ir_br_next I64List;   // [branch id] -> next branch in its label's chain, or -1
-var ir_label_pos I64List; // [label] -> code.n once its IR_LABEL is lowered, or -1
-
-// A fresh label id. Every slot a label can ever own is pre-initialized to
-// -1 here, so a label that no branch references can never be mistaken for
-// one holding a real (non-negative) pending branch.
-fn ir_new_label() i64 {
-	var id i64 = ir_label_n;
-	ilist_set(&ir_label_br, id, -1);
-	ilist_set(&ir_label_pos, id, -1);
-	ir_label_n = ir_label_n + 1;
-	return id;
-}
-
-// Turns one IrOp into x86 bytes. Temporary home: once codegen.qela stops
-// emitting bytes directly and always goes through the IR, this becomes
-// x86_emit.qela's x86_lower walking a whole function's op list at once;
-// today it is called right after building each op, one at a time, as the
-// IR vocabulary is proven out case by case.
-fn x86_setcc_byte(cc i64) i64 {
-	if (cc == CC_EQ) { return 0x94; }
-	if (cc == CC_NE) { return 0x95; }
-	if (cc == CC_LT) { return 0x9c; }
-	if (cc == CC_LE) { return 0x9e; }
-	if (cc == CC_GT) { return 0x9f; }
-	if (cc == CC_GE) { return 0x9d; }
-	if (cc == CC_ULT) { return 0x92; }
-	if (cc == CC_ULE) { return 0x96; }
-	if (cc == CC_UGT) { return 0x97; }
-	if (cc == CC_UGE) { return 0x93; }
-	die("internal: x86_setcc_byte: unhandled cc");
-	return 0;
-}
-
-fn x86_lower_op(op *IrOp) {
-	if (op.kind == IR_MOV && op.dst.kind == OP_ACC && op.src0.kind == OP_IMM) {
-		mov_reg_imm(RAX, op.src0.off);
-		return;
-	}
-	if (op.kind == IR_MOV && op.dst.kind == OP_ACC && op.src0.kind == OP_STR) {
-		// The string fixup is a side effect of the lowering, not of IR
-		// emission: the byte offset it records only exists once bytes are out.
-		add_strref(RAX, op.src0.off as int);
-		return;
-	}
-	if (op.kind == IR_MOV && op.dst.kind == OP_ACC && op.src0.kind == OP_GLOBAL) {
-		add_dataref(op.src0.off as *Var);
-		return;
-	}
-	if (op.kind == IR_MOV && op.dst.kind == OP_VREG && op.src0.kind == OP_IMM) {
-		mov_reg_imm(op.dst.reg, op.src0.off);
-		return;
-	}
-	if (op.kind == IR_MOV && op.dst.kind == OP_OP2 && op.src0.kind == OP_ACC) {
-		mov_reg_reg(op2_reg(op.dst.reg), RAX);
-		return;
-	}
-	if (op.kind == IR_MOV && op.dst.kind == OP_OP2 && op.src0.kind == OP_IMM) {
-		mov_reg_imm(op2_reg(op.dst.reg), op.src0.off);
-		return;
-	}
-	if (op.kind == IR_MOV && op.dst.kind == OP_ACC && op.src0.kind == OP_OP2) {
-		// mov rax, <op2> -- ND_SLICE restores the start index to the
-		// accumulator before scaling.
-		mov_reg_reg(RAX, op2_reg(op.src0.reg));
-		return;
-	}
-	if (op.kind == IR_TLSADDR) {
-		// ld_fs_self's mov, then the tvar's offset within the block; LEA
-		// cannot read the fs segment base, so the address always starts here.
-		ld_fs_self(RAX);
-		add_rax_imm((op.src0.off as *Var).tls_off);
-		return;
-	}
-	if (op.kind == IR_LOAD && op.dst.kind == OP_ACC && op.src0.kind == OP_STACKSLOT) {
-		// Same bytes as ld_rm's frame-slot path: an unconditional 8-byte
-		// mov from the local's home (direct_local guarantees machine width).
-		rbp_mem(0x8b, RAX, -(op.src0.off));
-		return;
-	}
-	if (op.kind == IR_LOAD && op.dst.kind == OP_ACC && op.src0.kind == OP_VREG) {
-		// ld_rm's register path, replayed with the same reg/rm roles --
-		// mov_reg_reg would emit the same instruction with the REX.B and
-		// REX.R bits swapped, different bytes.
-		rex_w(RAX, op.src0.reg);
-		b1(0x8b);
-		modrm(3, RAX, op.src0.reg);
-		return;
-	}
-	if (op.kind == IR_LOAD && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC) {
-		// The address is already in the accumulator (gen_addr's job);
-		// load() dereferences it in place, widening by dst.ty.
-		load(op.dst.ty);
-		return;
-	}
-	if (op.kind == IR_LOAD && op.dst.kind == OP_OP2 && op.src0.kind == OP_ACC) {
-		// mov <op2>, [rax + off] -- ND_SLICE's slice-field copy, ld_at_rax
-		// replayed on the staging register.
-		ld_at_rax(op2_reg(op.dst.reg), op.src0.off);
-		return;
-	}
-	if (op.kind == IR_LOAD && op.dst.kind == OP_OP2 && op.src0.kind == OP_STACKSLOT) {
-		// mov <op2>, [rbp - off] -- ND_INDEX's staged index, ld_rm's
-		// frame-slot path replayed on the staging register.
-		rbp_mem(0x8b, op2_reg(op.dst.reg), -(op.src0.off));
-		return;
-	}
-	if (op.kind == IR_LOAD && op.dst.kind == OP_OP2 && op.src0.kind == OP_VREG) {
-		// mov <op2>, <vreg> -- ld_rm's register path on a promoted index.
-		rex_w(op2_reg(op.dst.reg), op.src0.reg);
-		b1(0x8b);
-		modrm(3, op2_reg(op.dst.reg), op.src0.reg);
-		return;
-	}
-	if (op.kind == IR_LOAD && op.dst.kind == OP_VREG && op.src0.kind == OP_VREG) {
-		// mov <dst>, <vreg> -- ld_rm's register path, gen_into's load.
-		rex_w(op.dst.reg, op.src0.reg);
-		b1(0x8b);
-		modrm(3, op.dst.reg, op.src0.reg);
-		return;
-	}
-	if (op.kind == IR_LOAD && op.dst.kind == OP_VREG && op.src0.kind == OP_STACKSLOT) {
-		// mov <dst>, [rbp - off] -- ld_rm's frame-slot path, gen_into's load.
-		rbp_mem(0x8b, op.dst.reg, -(op.src0.off));
-		return;
-	}
-	if (op.kind == IR_CAST && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC) {
-		if (op.aux == CAST_BOOL) { test_rax(); setcc(0x95); return; }
-		if (op.aux == CAST_TRUNC) { truncate_to(op.dst.ty); return; }
-		if (op.aux == CAST_FTRUNC || op.aux == CAST_FEXT) {
-			// f32<->f64, gen_cast_float's first branch: the source size
-			// decides the cvt opcode, the destination size the move-out.
-			var stsz int = op.src0.ty.size;
-			xmm_from_gpr(XMM0, RAX, stsz);
-			if (stsz == 4) { cvt2(0xf3, 0x5a, XMM0, XMM0, false); }
-			else { cvt2(0xf2, 0x5a, XMM0, XMM0, false); }
-			gpr_from_xmm(RAX, XMM0, op.dst.ty.size);
-			return;
-		}
-		if (op.aux == CAST_ITOF) {
-			var dprefix i64 = 0xf2;
-			if (op.dst.ty.size == 4) { dprefix = 0xf3; }
-			cvt2(dprefix, 0x2a, XMM0, RAX, true);
-			gpr_from_xmm(RAX, XMM0, op.dst.ty.size);
-			return;
-		}
-		if (op.aux == CAST_FTOI) {
-			var prefix2 i64 = 0xf2;
-			if (op.src0.ty.size == 4) { prefix2 = 0xf3; }
-			xmm_from_gpr(XMM0, RAX, op.src0.ty.size);
-			cvt2(prefix2, 0x2c, RAX, XMM0, true);
-			if (op.dst.ty.size < 8) { truncate_to(op.dst.ty); }
-			return;
-		}
-	}
-	if (op.kind == IR_STORE && op.dst.kind == OP_ACC && op.src0.kind == OP_IMM) {
-		store_imm(op.dst.ty, op.src0.off);
-		return;
-	}
-	if (op.kind == IR_STORE && op.dst.kind == OP_STACKSLOT && op.src0.kind == OP_ACC) {
-		st_local(op.dst.off, RAX);
-		return;
-	}
-	if (op.kind == IR_STORE && op.dst.kind == OP_STACKSLOT && op.src0.kind == OP_OP2) {
-		// mov [rbp - off], <op2> -- ND_SLICE's slice-field store, st_local
-		// on the staging register.
-		st_local(op.dst.off, op2_reg(op.src0.reg));
-		return;
-	}
-	if (op.kind == IR_STORE && op.dst.kind == OP_VREG && op.src0.kind == OP_ACC) {
-		// mov <dst.reg>, rax -- st_rm's promoted-local path, replayed with
-		// the same reg/rm roles so the REX.B/REX.R bits match.
-		rex_w(RAX, op.dst.reg);
-		b1(0x89);
-		modrm(3, RAX, op.dst.reg);
-		return;
-	}
-	if (op.kind == IR_STORE && op.dst.kind == OP_OP2 && op.src0.kind == OP_ACC) {
-		// store [op2_reg], rax at width -- store()'s memory path, the
-		// address in the staging register instead of freshly popped.
-		var op2 int = op2_reg(op.dst.reg);
-		var sz int = op.dst.ty.size;
-		if (sz == 1) { b1(0x88); modrm(0, RAX, op2); return; }
-		if (sz == 2) { b1(0x66); b1(0x89); modrm(0, RAX, op2); return; }
-		if (sz == 4) { b1(0x89); modrm(0, RAX, op2); return; }
-		b1(0x48); b1(0x89); modrm(0, RAX, op2);
-		return;
-	}
-	if (op.kind == IR_UNARY && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC) {
-		if (op.aux == UOP_NEG) { b1(0x48); b1(0xf7); modrm(3, 3, RAX); return; }
-		if (op.aux == UOP_BITNOT) { b1(0x48); b1(0xf7); modrm(3, 2, RAX); return; }
-		if (op.aux == UOP_LNOT) { test_rax(); setcc(0x94); return; }
-	}
-	if (op.kind == IR_PUSH && op.src0.kind == OP_ACC) {
-		b1(0x50);
-		return;
-	}
-	if (op.kind == IR_PUSH && op.src0.kind == OP_OP2) {
-		var r int = op2_reg(op.src0.reg);
-		if (r >= 8) { b1(0x41); }
-		b1(0x50 + ((r as i64) & 7));
-		return;
-	}
-	if (op.kind == IR_PUSH && op.src0.kind == OP_REG) {
-		var r int = op.src0.reg;
-		if (r >= 8) { b1(0x41); }
-		b1(0x50 + ((r as i64) & 7));
-		return;
-	}
-	if (op.kind == IR_PUSH && op.src0.kind == OP_MEM) {
-		// push [rax + off] -- gen_args' two-word aggregate staging,
-		// push_at_rax replayed. The base is always the accumulator.
-		b1(0xff);
-		if (op.src0.off == 0) { modrm(0, 6, RAX); }
-		else { modrm(1, 6, RAX); b1(op.src0.off); }
-		return;
-	}
-	if (op.kind == IR_MEMCPYDST) {
-		// gen_args' by-ref argument copy: mov rsi,rax; lea rdi,[rbp-off];
-		// mov rcx,aux; rep movsb; lea rax,[rbp-off]. The dst slot is the
-		// destination buffer itself, not a pointer to one.
-		mov_reg_reg(RSI, RAX);
-		lea_local(RDI, op.dst.off);
-		mov_reg_imm(RCX, op.aux);
-		b1(0xf3); b1(0xa4);
-		lea_local(RAX, op.dst.off);
-		return;
-	}
-	if (op.kind == IR_MEMCPY && op.dst.kind == OP_NONE) {
-		// copy_aggregate's protocol, replayed byte for byte: pop the
-		// destination from the staging stack, copy aux bytes from [rax] to
-		// it, leave the destination address in the accumulator. Emitted raw
-		// so the staging depth stays the frontend's bookkeeping.
-		b1(0x5f);                       // pop rdi (destination)
-		mov_reg_reg(RSI, RAX);          // mov rsi, rax (source)
-		b1(0x57);                       // push rdi
-		mov_reg_imm(RCX, op.aux);
-		b1(0xf3); b1(0xa4);             // rep movsb
-		b1(0x58);                       // pop rax (result = destination)
-		return;
-	}
-	if (op.kind == IR_MEMCPY && op.dst.kind == OP_STACKSLOT) {
-		// gen_ret's ret_slot copy: copy aux bytes from [rax] to the pointer
-		// stored in the slot, then reload the pointer as the return value.
-		mov_reg_reg(RSI, RAX);
-		rbp_mem(0x8b, RDI, -(op.dst.off));
-		mov_reg_imm(RCX, op.aux);
-		b1(0xf3); b1(0xa4);
-		rbp_mem(0x8b, RAX, -(op.dst.off));
-		return;
-	}
-	if (op.kind == IR_POP && op.dst.kind == OP_ACC) {
-		b1(0x58);
-		return;
-	}
-	if (op.kind == IR_POP && op.dst.kind == OP_OP2) {
-		// pop <op2_reg>: the binop staging register. Emitted raw, not via
-		// pop_reg, so the staging depth stays the frontend's bookkeeping.
-		var r int = op2_reg(op.dst.reg);
-		if (r >= 8) { b1(0x41); }
-		b1(0x58 + ((r as i64) & 7));
-		return;
-	}
-	if (op.kind == IR_POP && op.dst.kind == OP_REG) {
-		var r int = op.dst.reg;
-		if (r >= 8) { b1(0x41); }
-		b1(0x58 + ((r as i64) & 7));
-		return;
-	}
-	if (op.kind == IR_MEMSET && op.dst.kind == OP_STACKSLOT) {
-		// lea rdi, [rbp-off]; xor eax, eax; mov rcx, size; rep stosb --
-		// ND_ZERO's aggregate path, replayed with the same bytes.
-		lea_local(RDI, op.dst.off);
-		mov_reg_imm(RAX, 0);
-		mov_reg_imm(RCX, op.aux);
-		b1(0xf3); b1(0xaa);
-		return;
-	}
-	if (op.kind == IR_ALU && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC && op.src1.kind == OP_OP2) {
-		var uns bool = op.dst.ty.is_unsigned;
-		var op2 int = op2_reg(op.src1.reg);
-		if (op.aux == ALU_FADD || op.aux == ALU_FSUB || op.aux == ALU_FMUL || op.aux == ALU_FDIV) {
-			// gen_binop_float's SSE round trip: bits ride rax/op2, the op
-			// happens in xmm0, the result lands back in rax.
-			var sz int = op.dst.ty.size;
-			var dprefix i64 = 0xf2;
-			if (sz == 4) { dprefix = 0xf3; }
-			xmm_from_gpr(XMM0, RAX, sz);
-			xmm_from_gpr(XMM1, op2, sz);
-			var opcode i64 = 0x58;
-			if (op.aux == ALU_FSUB) { opcode = 0x5c; }
-			if (op.aux == ALU_FMUL) { opcode = 0x59; }
-			if (op.aux == ALU_FDIV) { opcode = 0x5e; }
-			sse2(dprefix, opcode, XMM0, XMM1);
-			gpr_from_xmm(RAX, XMM0, sz);
-			return;
-		}
-		if (op.aux == ALU_ADD) { rex_w(op2, RAX); b1(0x01); modrm(3, op2, RAX); return; }
-		if (op.aux == ALU_SUB) { rex_w(op2, RAX); b1(0x29); modrm(3, op2, RAX); return; }
-		if (op.aux == ALU_MUL) { b1(0x48); b1(0x0f); b1(0xaf); modrm(3, RAX, op2); return; }
-		if (op.aux == ALU_DIV || op.aux == ALU_MOD) {
-			if (uns) {
-				b1(0x31); modrm(3, RDX, RDX);
-				b1(0x48); b1(0xf7); modrm(3, 6, op2);
-			} else {
-				b1(0x48); b1(0x99);
-				b1(0x48); b1(0xf7); modrm(3, 7, op2);
-			}
-			if (op.aux == ALU_MOD) { mov_reg_reg(RAX, RDX); }
-			return;
-		}
-		if (op.aux == ALU_AND) { rex_w(op2, RAX); b1(0x21); modrm(3, op2, RAX); return; }
-		if (op.aux == ALU_OR)  { rex_w(op2, RAX); b1(0x09); modrm(3, op2, RAX); return; }
-		if (op.aux == ALU_XOR) { rex_w(op2, RAX); b1(0x31); modrm(3, op2, RAX); return; }
-		if (op.aux == ALU_SHL || op.aux == ALU_SHR) {
-			mov_reg_reg(RCX, op2);
-			b1(0x48); b1(0xd3);
-			var ext int = 7;
-			if (op.aux == ALU_SHL) { ext = 4; } else if (uns) { ext = 5; }
-			modrm(3, ext, RAX);
-			return;
-		}
-	}
-	if (op.kind == IR_ALU && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC && op.src1.kind == OP_IMM) {
-		var v i64 = op.src1.off;
-		if (op.aux == ALU_ADD) { alu_rax_imm(0, v); return; }
-		if (op.aux == ALU_SUB) { alu_rax_imm(5, v); return; }
-		if (op.aux == ALU_AND) {
-			// A mask to a byte or a halfword is a zero-extending move
-			// (gen_binop_imm's fast path, replayed with the same bytes).
-			if (v == 255) { b1(0x0f); b1(0xb6); modrm(3, RAX, RAX); return; }
-			if (v == 65535) { b1(0x0f); b1(0xb7); modrm(3, RAX, RAX); return; }
-			alu_rax_imm(4, v);
-			return;
-		}
-		if (op.aux == ALU_OR)  { alu_rax_imm(1, v); return; }
-		if (op.aux == ALU_XOR) { alu_rax_imm(6, v); return; }
-		if (op.aux == ALU_MUL) {
-			b1(0x48);
-			if (v >= -128 && v <= 127) {
-				b1(0x6b);
-				modrm(3, RAX, RAX);
-				b1(v);
-			} else {
-				b1(0x69);
-				modrm(3, RAX, RAX);
-				b4(v);
-			}
-			return;
-		}
-		if (op.aux == ALU_SCALE) {
-			// scale_by: mov rcx, size; imul rax, rcx -- a distinct byte
-			// sequence from the folded imul-by-imm above.
-			mov_reg_imm(RCX, v);
-			b1(0x48); b1(0x0f); b1(0xaf);
-			modrm(3, RAX, RCX);
-			return;
-		}
-		if (op.aux == ALU_DIV || op.aux == ALU_MOD) {
-			// ptr_diff: materialise the divisor in the OP2 staging register,
-			// then cqo; idiv (signed). Clobbers OP2, which the frontend
-			// guarantees is dead at this point.
-			var d int = op2_reg(0);
-			mov_reg_imm(d, v);
-			b1(0x48); b1(0x99);
-			b1(0x48); b1(0xf7); modrm(3, 7, d);
-			if (op.aux == ALU_MOD) { mov_reg_reg(RAX, RDX); }
-			return;
-		}
-		if (op.aux == ALU_SHL || op.aux == ALU_SHR) {
-			b1(0x48); b1(0xc1);
-			var ext int = 7;
-			if (op.aux == ALU_SHL) { ext = 4; } else if (op.dst.ty.is_unsigned) { ext = 5; }
-			modrm(3, ext, RAX);
-			b1(v);
-			return;
-		}
-	}
-	// stmt_update: v op= e folded into v's own slot or register (dst), the
-	// other side being an immediate or a promoted local. The promoted-register
-	// forms replay alu_reg_imm/alu_rm_reg byte for byte; the frame-slot forms
-	// replay alu_rm_imm's r/m-imm encoding and alu_rm_reg's [rbp-disp] path.
-	if (op.kind == IR_ALU && op.dst.kind == OP_VREG && op.src0.kind == OP_VREG && op.src1.kind == OP_IMM) {
-		alu_reg_imm(alu_ext_code(op.aux as int), op.dst.reg, op.src1.off);
-		return;
-	}
-	if (op.kind == IR_ALU && op.dst.kind == OP_STACKSLOT && op.src0.kind == OP_STACKSLOT && op.src1.kind == OP_IMM) {
-		rex_w(0, RBP);
-		var v i64 = op.src1.off;
-		var disp i64 = -(op.dst.off);
-		if (v >= -128 && v <= 127) {
-			b1(0x83);
-			slot_modrm(alu_ext_code(op.aux as int), disp);
-			b1(v);
-		} else {
-			b1(0x81);
-			slot_modrm(alu_ext_code(op.aux as int), disp);
-			b4(v);
-		}
-		return;
-	}
-	if (op.kind == IR_ALU && op.dst.kind == OP_VREG && op.src0.kind == OP_VREG && op.src1.kind == OP_VREG && op.dst.ty as i64 == 0) {
-		// gen_into's register-rm arm on a promoted right side: the "r, r/m"
-		// form (0x03 family), reg=dst in modrm. stmt_update's promoted case
-		// below carries dst.ty (the local's type) and takes the "r/m, r"
-		// form instead; dst.ty distinguishes the two.
-		var opc i64 = alu_rm_op_code(op.aux as int);
-		rex_w(op.dst.reg, op.src1.reg);
-		b1(opc);
-		modrm(3, op.dst.reg, op.src1.reg);
-		return;
-	}
-	if (op.kind == IR_ALU && op.dst.kind == OP_VREG && op.src0.kind == OP_VREG && op.src1.kind == OP_VREG) {
-		var opc i64 = alu_op_code(op.aux as int);
-		rex_w(op.src1.reg, op.dst.reg);
-		b1(opc);
-		modrm(3, op.src1.reg, op.dst.reg);
-		return;
-	}
-	if (op.kind == IR_ALU && op.dst.kind == OP_VREG && op.src0.kind == OP_VREG && op.src1.kind == OP_STACKSLOT) {
-		// reg op= [rbp - off] -- alu_reg_rm's frame-slot path, gen_into's
-		// register-rm arm. The "r, r/m" form keeps the slot a pure operand.
-		var opc i64 = alu_rm_op_code(op.aux as int);
-		rex_w(op.dst.reg, RBP);
-		b1(opc);
-		slot_modrm(op.dst.reg, -(op.src1.off));
-		return;
-	}
-	if (op.kind == IR_ALU && op.dst.kind == OP_STACKSLOT && op.src0.kind == OP_STACKSLOT && op.src1.kind == OP_VREG) {
-		var opc i64 = alu_op_code(op.aux as int);
-		rex_w(op.src1.reg, RBP);
-		b1(opc);
-		slot_modrm(op.src1.reg, -(op.dst.off));
-		return;
-	}
-	if (op.kind == IR_ALU && op.dst.kind == OP_VREG && op.src0.kind == OP_VREG && op.src1.kind == OP_ACC) {
-		var opc i64 = alu_op_code(op.aux as int);
-		rex_w(RAX, op.dst.reg);
-		b1(opc);
-		modrm(3, RAX, op.dst.reg);
-		return;
-	}
-	if (op.kind == IR_ALU && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC &&
-	    (op.src1.kind == OP_VREG || op.src1.kind == OP_STACKSLOT)) {
-		if (op.aux == ALU_ADD) { x86_alu_acc_rm(0, 0x03, op.src1); return; }
-		if (op.aux == ALU_SUB) { x86_alu_acc_rm(0, 0x2b, op.src1); return; }
-		if (op.aux == ALU_AND) { x86_alu_acc_rm(0, 0x23, op.src1); return; }
-		if (op.aux == ALU_OR)  { x86_alu_acc_rm(0, 0x0b, op.src1); return; }
-		if (op.aux == ALU_XOR) { x86_alu_acc_rm(0, 0x33, op.src1); return; }
-		if (op.aux == ALU_MUL) { x86_alu_acc_rm(0x0f, 0xaf, op.src1); return; }
-	}
-	if (op.kind == IR_CMP && op.src0.kind == OP_ACC && op.src1.kind == OP_OP2) {
-		var op2 int = op2_reg(op.src1.reg);
-		if (op.src0.ty as i64 != 0 && is_float(op.src0.ty)) {
-			// gen_compare's float staging: ucomisd sets the flags exactly
-			// like an unsigned compare (NaN aside), so the neutral float
-			// condition codes are the unsigned ones.
-			var sz int = op.src0.ty.size;
-			var cprefix i64 = 0x66;
-			if (sz == 4) { cprefix = 0; }
-			xmm_from_gpr(XMM0, RAX, sz);
-			xmm_from_gpr(XMM1, op2, sz);
-			sse2(cprefix, 0x2e, XMM0, XMM1);
-			return;
-		}
-		rex_w(op2, RAX);
-		b1(0x39);
-		modrm(3, op2, RAX);
-		return;
-	}
-	if (op.kind == IR_CMP && op.src0.kind == OP_OP2 && op.src1.kind == OP_ACC) {
-		// cmp <op2>, rax -- ND_SLICE's start-vs-end check, 0x39 with the
-		// operand roles reversed from the acc-vs-op2 form above.
-		rex_w(RAX, op2_reg(op.src0.reg));
-		b1(0x39);
-		modrm(3, RAX, op2_reg(op.src0.reg));
-		return;
-	}
-	if (op.kind == IR_CMP && op.src0.kind == OP_OP2 && op.src1.kind == OP_IMM) {
-		// cmp <op2>, imm -- a staged index's bounds check. aux=1 forces the
-		// 32-bit form, which the bounds code emits unconditionally.
-		var r int = op2_reg(op.src0.reg);
-		var v i64 = op.src1.off;
-		rex_w(0, r);
-		if (op.aux == 0 && v >= -128 && v <= 127) {
-			b1(0x83); modrm(3, 7, r); b1(v);
-		} else {
-			b1(0x81); modrm(3, 7, r); b4(v);
-		}
-		return;
-	}
-	if (op.kind == IR_CMP && op.src0.kind == OP_ACC && op.src1.kind == OP_IMM) {
-		if (op.aux != 0) {
-			// A bounds check's forced 32-bit form: cmp rax, imm32 as 48 3d.
-			b1(0x48); b1(0x3d); b4(op.src1.off);
-			return;
-		}
-		alu_rax_imm(7, op.src1.off);
-		return;
-	}
-	if (op.kind == IR_CMP && op.src0.kind == OP_ACC &&
-	    (op.src1.kind == OP_VREG || op.src1.kind == OP_STACKSLOT)) {
-		x86_alu_acc_rm(0, 0x3b, op.src1);
-		return;
-	}
-	if (op.kind == IR_CMP && (op.src0.kind == OP_VREG || op.src0.kind == OP_STACKSLOT) &&
-	    op.src1.kind == OP_IMM) {
-		// cmp <direct local>, imm -- gen_compare's direct-local fast path,
-		// alu_rm_imm with /digit 7 replayed on the operand.
-		var v i64 = op.src1.off;
-		if (op.src0.kind == OP_VREG) {
-			rex_w(0, op.src0.reg);
-			if (op.aux == 0 && v >= -128 && v <= 127) {
-				b1(0x83); modrm(3, 7, op.src0.reg); b1(v);
-			} else {
-				b1(0x81); modrm(3, 7, op.src0.reg); b4(v);
-			}
-			return;
-		}
-		rex_w(0, RBP);
-		var disp i64 = -(op.src0.off);
-		if (op.aux == 0 && v >= -128 && v <= 127) {
-			b1(0x83); slot_modrm(7, disp); b1(v);
-		} else {
-			b1(0x81); slot_modrm(7, disp); b4(v);
-		}
-		return;
-	}
-	if (op.kind == IR_CMP && op.src0.kind == OP_MEM && op.src1.kind == OP_IMM) {
-		// cmp <width> [rax], imm -- gen_compare's addressable_load path;
-		// gen_addr put the address in the accumulator.
-		cmp_at_rax_imm(op.src0.ty, op.src1.off);
-		return;
-	}
-	if (op.kind == IR_SETCC && op.dst.kind == OP_ACC) {
-		setcc(x86_setcc_byte(op.aux));
-		return;
-	}
-	if (op.kind == IR_LEA && op.dst.kind == OP_ACC) {
-		var scale int = op.aux as int;
-		if (op.src0.kind == OP_ACC && op.src1.kind == OP_NONE) {
-			// A constant index folded into the address: rax += disp.
-			add_rax_imm(op.dst.off);
-			return;
-		}
-		if (op.src0.kind == OP_STACKSLOT && op.src1.kind == OP_NONE) {
-			// A local's address (lea_local's slot form).
-			lea_local(RAX, op.src0.off);
-			return;
-		}
-		if (op.src0.kind == OP_ACC && (op.src1.kind == OP_OP2 || op.src1.kind == OP_VREG)) {
-			// Array element: rax = base + idx*scale. base is the accumulator,
-			// the index a staging register (OP2) or a promoted local.
-			var idx int;
-			if (op.src1.kind == OP_OP2) { idx = op2_reg(op.src1.reg); } else { idx = op.src1.reg; }
-			if (lea_scale_ok(scale)) {
-				lea_index(scale, RAX, idx);
-			} else {
-				// The imul-with-rcx fallback. A non-power-of-two scale skips
-				// the promoted-index fast path, so idx is always the OP2 reg.
-				mov_reg_imm(RCX, scale as i64);
-				b1(0x48); b1(0x0f); b1(0xaf);
-				modrm(3, idx, RCX);
-				rex_w(idx, RAX); b1(0x01); modrm(3, idx, RAX);
-			}
-			if (op.dst.off != 0) { add_rax_imm(op.dst.off); }
-			return;
-		}
-		if (op.src0.kind == OP_OP2 && op.src1.kind == OP_ACC) {
-			// Slice element: rax = base + idx*scale, base in the OP2 staging
-			// register and the index in the accumulator.
-			var base int = op2_reg(op.src0.reg);
-			if (lea_scale_ok(scale)) {
-				lea_index(scale, base, RAX);
-			} else {
-				scale_by(scale);
-				rex_w(base, RAX); b1(0x01); modrm(3, base, RAX);
-			}
-			if (op.dst.off != 0) { add_rax_imm(op.dst.off); }
-			return;
-		}
-	}
-	if (op.kind == IR_LEA && op.dst.kind == OP_OP2 && op.src0.kind == OP_STACKSLOT && op.src1.kind == OP_NONE) {
-		lea_local(op2_reg(op.dst.reg), op.src0.off);
-		return;
-	}
-	if (op.kind == IR_BR) {
-		var label i64 = op.dst.off;
-		if (ir_label_pos.p[label] >= 0) {
-			// Backward branch: the label is already lowered, so both ends
-			// are known and the short-vs-near choice is made in one pass,
-			// exactly as jump_back did for a loop's back edge.
-			jump_back(ir_label_pos.p[label]);
-			return;
-		}
-		// Forward branch: emit a placeholder and hang it on the label's
-		// pending chain; its IR_LABEL patches every id in the chain.
-		var jcc i64 = 0;
-		if (op.aux != CC_ALWAYS) { jcc = x86_setcc_byte(op.aux) - 0x10; }
-		var id i64 = jump(jcc);
-		ilist_set(&ir_br_next, id, ir_label_br.p[label]);
-		ilist_set(&ir_label_br, label, id);
-		return;
-	}
-	if (op.kind == IR_LABEL) {
-		ilist_set(&ir_label_pos, op.dst.off, code.n);
-		var id i64 = ir_label_br.p[op.dst.off];
-		while (id >= 0) {
-			patch_here(id);
-			id = ir_br_next.p[id];
-		}
-		return;
-	}
-	if (op.kind == IR_CALL) {
-		if (op.src0.kind == OP_FUNC) {
-			add_call((op.src0.off as *Func).name, op.pos);
-			return;
-		}
-		// An indirect target goes in r10 (never an argument register) and
-		// is loaded after the arguments are set up, exactly as
-		// gen_indirect_call staged it by hand.
-		if (op.src0.kind == OP_VREG) {
-			mov_reg_reg(R10, op.src0.reg);
-		} else if (op.src0.kind == OP_GLOBAL) {
-			rex_w(0, R10);
-			b1(0xba);
-			add_dataref(op.src0.off as *Var);
-		} else if (op.src0.kind == OP_STACKSLOT) {
-			rbp_mem(0x8b, R10, -(op.src0.off));
-		} else {
-			die("internal: x86_lower_op: IR_CALL: unhandled target");
-		}
-		b1(0x41); b1(0xff); b1(0xd2);
-		return;
-	}
-	if (op.kind == IR_FUNCADDR && op.dst.kind == OP_ACC && op.src0.kind == OP_FUNC) {
-		add_funcaddr((op.src0.off as *Func).name, op.pos);
-		return;
-	}
-	if (op.kind == IR_RET) {
-		b1(0xc3);
-		return;
-	}
-	if (op.kind == IR_LOAD2) {
-		// gen_ret's register-returned aggregate: the second word first, so
-		// the accumulator still holds the base address while it is read.
-		if (op.aux > 8) { ld_at_rax(RDX, 8); }
-		ld_at_rax(RAX, 0);
-		return;
-	}
-	if (op.kind == IR_STORE2) {
-		// gen_call's aggregate-result staging: spill both words, then hand
-		// back the slot's address as the aggregate's lvalue.
-		st_local(op.dst.off, RAX);
-		if (op.aux > 8) { st_local(op.dst.off - 8, RDX); }
-		lea_local(RAX, op.dst.off);
-		return;
-	}
-	if (op.kind == IR_SYSCALL) {
-		// The number and arguments were already staged by gen_args into the
-		// backend's syscall registers; only the trapping instruction is IR.
-		b1(0x0f); b1(0x05);
-		return;
-	}
-	if (op.kind == IR_BOUNDS) {
-		// The trip jump: patched to the function-end trampoline by
-		// gen_bounds_trampoline through the fn_bounds list, exactly as
-		// jump_bounds did before the frontend went IR-only.
-		ilist_push(&fn_bounds, jump(x86_setcc_byte(op.aux) - 0x10));
-		return;
-	}
-	if (op.kind == IR_ASSERT) {
-		// test; jnz over a direct call to the message's stub. The call is a
-		// fixed five bytes, so the jnz is always in short range and nothing
-		// here needs branch relaxation.
-		test_rax();
-		var id i64 = jump(0x85);
-		b1(0xe8);
-		ilist_push(&assert_sites, code.n);
-		ilist_push(&assert_msgs, op.aux);
-		b4(0);
-		patch_here(id);
-		return;
-	}
-	die("internal: x86_lower_op: unhandled IR shape");
-}
-
-fn x86_lower_all() {
-	var op *IrOp = ir_head;
-	while (op as i64 != 0) {
-		x86_lower_op(op);
-		op = op.next;
-	}
-	ir_reset();
-}
 
 fn ir_branch(cc i64, label i64, pos i64) {
 	var op *IrOp = ir_emit(IR_BR, pos);
@@ -2780,11 +1025,13 @@ fn ir_branch(cc i64, label i64, pos i64) {
 	x86_lower_all();
 }
 
+
 fn ir_label(label i64, pos i64) {
 	var op *IrOp = ir_emit(IR_LABEL, pos);
 	op.dst = operand_imm(label);
 	x86_lower_all();
 }
+
 
 // The language-level call. Argument staging stays in the frontend (gen_args
 // classifies into the ABI's register slots); the IR_CALL carries only the
@@ -2797,11 +1044,13 @@ fn ir_call(f *Func, pos i64) {
 	x86_lower_all();
 }
 
+
 fn ir_call_ind(target IrOperand, pos i64) {
 	var op *IrOp = ir_emit(IR_CALL, pos);
 	op.src0 = target;
 	x86_lower_all();
 }
+
 
 fn ir_funcaddr(f *Func, pos i64) {
 	var op *IrOp = ir_emit(IR_FUNCADDR, pos);
@@ -2810,10 +1059,12 @@ fn ir_funcaddr(f *Func, pos i64) {
 	x86_lower_all();
 }
 
+
 fn ir_ret(pos i64) {
 	var op *IrOp = ir_emit(IR_RET, pos);
 	x86_lower_all();
 }
+
 
 fn ir_setcc_acc(cc i64, pos i64) {
 	var op *IrOp = ir_emit(IR_SETCC, pos);
@@ -2822,10 +1073,12 @@ fn ir_setcc_acc(cc i64, pos i64) {
 	x86_lower_all();
 }
 
+
 fn ir_syscall(pos i64) {
 	var op *IrOp = ir_emit(IR_SYSCALL, pos);
 	x86_lower_all();
 }
+
 
 fn ir_mov_acc_imm(v i64, pos i64) {
 	var op *IrOp = ir_emit(IR_MOV, pos);
@@ -2834,6 +1087,7 @@ fn ir_mov_acc_imm(v i64, pos i64) {
 	x86_lower_all();
 }
 
+
 fn ir_mov_acc_str(id int, pos i64) {
 	var op *IrOp = ir_emit(IR_MOV, pos);
 	op.dst = operand_acc();
@@ -2841,12 +1095,14 @@ fn ir_mov_acc_str(id int, pos i64) {
 	x86_lower_all();
 }
 
+
 fn ir_mov_acc_global(v *Var, pos i64) {
 	var op *IrOp = ir_emit(IR_MOV, pos);
 	op.dst = operand_acc();
 	op.src0 = operand_global(v);
 	x86_lower_all();
 }
+
 
 // The accumulator holds an address (gen_addr's job); load through it into the
 // accumulator, widening per ty.
@@ -2858,6 +1114,7 @@ fn ir_load_acc(ty *Type, pos i64) {
 	x86_lower_all();
 }
 
+
 // A direct scalar local: load its home (register or frame slot) into the
 // accumulator, exactly as ld_rm did.
 fn ir_load_var(v *Var, ty *Type, pos i64) {
@@ -2868,6 +1125,7 @@ fn ir_load_var(v *Var, ty *Type, pos i64) {
 	else { op.src0 = operand_stackslot(v.offset as i64, ty); }
 	x86_lower_all();
 }
+
 
 // rax = base + index*scale + disp, the INDEX address form. base is OP_ACC
 // (array) or OP_OP2 (slice); index is OP_ACC/OP_OP2/OP_VREG, or OP_NONE for a
@@ -2883,12 +1141,14 @@ fn ir_lea_acc(base IrOperand, index IrOperand, scale int, disp i64, pos i64) {
 	x86_lower_all();
 }
 
+
 // The INDEX path's index register is the OP2 staging slot, or a promoted
 // local that can be the lea index directly.
 fn operand_index(reg int) IrOperand {
 	if (reg == op2_reg(0)) { return operand_op2(0); }
 	return operand_vreg(reg, 0 as *Type);
 }
+
 
 fn ir_unary_acc(uop int, pos i64) {
 	var op *IrOp = ir_emit(IR_UNARY, pos);
@@ -2897,6 +1157,7 @@ fn ir_unary_acc(uop int, pos i64) {
 	op.aux = uop as i64;
 	x86_lower_all();
 }
+
 
 // A cast applied to the value already sitting in the accumulator, in place.
 fn ir_cast_acc(ck int, ty *Type, pos i64) {
@@ -2907,6 +1168,7 @@ fn ir_cast_acc(ck int, ty *Type, pos i64) {
 	op.aux = ck as i64;
 	x86_lower_all();
 }
+
 
 // The left operand is already in the accumulator and the right in the
 // target's OP2 staging register (x86: rdi), per gen_expr's binop preamble
@@ -2922,6 +1184,7 @@ fn ir_alu_acc(aop int, ty *Type, pos i64) {
 	x86_lower_all();
 }
 
+
 fn ir_compare_acc(cc i64, pos i64) {
 	var c *IrOp = ir_emit(IR_CMP, pos);
 	c.src0 = operand_acc();
@@ -2932,12 +1195,14 @@ fn ir_compare_acc(cc i64, pos i64) {
 	x86_lower_all();
 }
 
+
 fn ir_mov_vreg_imm(reg int, v i64, pos i64) {
 	var op *IrOp = ir_emit(IR_MOV, pos);
 	op.dst = operand_vreg(reg, 0 as *Type);
 	op.src0 = operand_imm(v);
 	x86_lower_all();
 }
+
 
 // Load a direct local into a fixed register instead of through the
 // accumulator -- gen_into's register-targeted evaluation, ld_rm's bytes.
@@ -2949,6 +1214,7 @@ fn ir_load_vreg_var(dst int, v *Var, ty *Type, pos i64) {
 	x86_lower_all();
 }
 
+
 // reg op= imm, gen_into's immediate arm.
 fn ir_alu_vreg_imm(aop int, reg int, v i64, pos i64) {
 	var op *IrOp = ir_emit(IR_ALU, pos);
@@ -2958,6 +1224,7 @@ fn ir_alu_vreg_imm(aop int, reg int, v i64, pos i64) {
 	op.aux = aop;
 	x86_lower_all();
 }
+
 
 // reg op= <rhs as r/m>, gen_into's register-rm arm; rhs is a direct local.
 fn ir_alu_vreg_rm(aop int, reg int, n *Node, pos i64) {
@@ -2970,6 +1237,7 @@ fn ir_alu_vreg_rm(aop int, reg int, n *Node, pos i64) {
 	x86_lower_all();
 }
 
+
 // The accumulator already holds the store's target address (gen_addr's
 // job), matching how store()/store_imm() already dereference RAX today.
 fn ir_store_acc_imm(ty *Type, v i64, pos i64) {
@@ -2980,12 +1248,14 @@ fn ir_store_acc_imm(ty *Type, v i64, pos i64) {
 	x86_lower_all();
 }
 
+
 fn ir_store_stackslot_acc(off i64, ty *Type, pos i64) {
 	var op *IrOp = ir_emit(IR_STORE, pos);
 	op.dst = operand_stackslot(off, ty);
 	op.src0 = operand_acc();
 	x86_lower_all();
 }
+
 
 fn ir_store_vreg_acc(reg int, ty *Type, pos i64) {
 	var op *IrOp = ir_emit(IR_STORE, pos);
@@ -2994,6 +1264,7 @@ fn ir_store_vreg_acc(reg int, ty *Type, pos i64) {
 	x86_lower_all();
 }
 
+
 // Zero <size> bytes at a frame slot (ND_ZERO's aggregate path).
 fn ir_memset_stackslot(off i64, size i64, pos i64) {
 	var op *IrOp = ir_emit(IR_MEMSET, pos);
@@ -3001,6 +1272,7 @@ fn ir_memset_stackslot(off i64, size i64, pos i64) {
 	op.aux = size;
 	x86_lower_all();
 }
+
 
 // The stack-machine staging: push the accumulator, pop into the OP2 register
 // (a binop's right side). depth tracks the 16-byte call alignment exactly as
@@ -3014,6 +1286,7 @@ fn ir_push_acc(pos i64) {
 	x86_lower_all();
 }
 
+
 fn ir_pop_op2(pos i64) {
 	var op *IrOp = ir_emit(IR_POP, pos);
 	op.dst = operand_op2(0);
@@ -3021,12 +1294,14 @@ fn ir_pop_op2(pos i64) {
 	x86_lower_all();
 }
 
+
 fn ir_pop_acc(pos i64) {
 	var op *IrOp = ir_emit(IR_POP, pos);
 	op.dst = operand_acc();
 	depth = depth - 1;
 	x86_lower_all();
 }
+
 
 // lea <op2_reg>, [rbp - off]: a field address in the staging register.
 fn ir_lea_op2_slot(off i64, pos i64) {
@@ -3038,6 +1313,7 @@ fn ir_lea_op2_slot(off i64, pos i64) {
 	x86_lower_all();
 }
 
+
 // lea rax, [rbp - off]: an aggregate literal's own address.
 fn ir_lea_slot_acc(off i64, pos i64) {
 	var op *IrOp = ir_emit(IR_LEA, pos);
@@ -3048,12 +1324,14 @@ fn ir_lea_slot_acc(off i64, pos i64) {
 	x86_lower_all();
 }
 
+
 fn ir_tlsaddr(v *Var, pos i64) {
 	var op *IrOp = ir_emit(IR_TLSADDR, pos);
 	op.dst = operand_acc();
 	op.src0 = operand_tlsvar(v);
 	x86_lower_all();
 }
+
 
 // A stack-passed parameter's slot: off is a positive rbp displacement, stored
 // negated so the STACKSLOT lowering reproduces it as written.
@@ -3066,6 +1344,7 @@ fn ir_lea_arg_acc(off i64, pos i64) {
 	x86_lower_all();
 }
 
+
 // A by-ref stack-passed parameter: load the pointer value from its slot.
 fn ir_load_arg_acc(off i64, pos i64) {
 	var op *IrOp = ir_emit(IR_LOAD, pos);
@@ -3075,12 +1354,14 @@ fn ir_load_arg_acc(off i64, pos i64) {
 	x86_lower_all();
 }
 
+
 fn ir_push_op2(pos i64) {
 	var op *IrOp = ir_emit(IR_PUSH, pos);
 	op.src0 = operand_op2(0);
 	depth = depth + 1;
 	x86_lower_all();
 }
+
 
 // push [rax + off] -- a two-word aggregate argument's word, staged whole.
 fn ir_push_at_acc(off i64, pos i64) {
@@ -3089,6 +1370,7 @@ fn ir_push_at_acc(off i64, pos i64) {
 	depth = depth + 1;
 	x86_lower_all();
 }
+
 
 // gen_args' by-ref argument staging: copy <size> bytes from the address in the
 // accumulator to the frame slot at <off>, leaving the slot's address in the
@@ -3101,6 +1383,7 @@ fn ir_memcpy_dst(off i64, size i64, pos i64) {
 	x86_lower_all();
 }
 
+
 // copy <size> bytes from the address in the accumulator to the destination
 // address pushed on the staging stack; the destination address is left in the
 // accumulator. Consumes one staging entry.
@@ -3111,6 +1394,7 @@ fn ir_memcpy_stage(size i64, pos i64) {
 	depth = depth - 1;
 	x86_lower_all();
 }
+
 
 // gen_ret's sret copy: copy <size> bytes from the address in the accumulator
 // to the pointer stored in the frame slot at <off>, leaving the slot's pointer
@@ -3123,6 +1407,7 @@ fn ir_memcpy_slot(off i64, size i64, pos i64) {
 	x86_lower_all();
 }
 
+
 // gen_ret's register-returned aggregate: the address in the accumulator, the
 // two words pulled into the accumulator and the second-value register.
 fn ir_load2(size i64, pos i64) {
@@ -3130,6 +1415,7 @@ fn ir_load2(size i64, pos i64) {
 	op.aux = size;
 	x86_lower_all();
 }
+
 
 // gen_call's aggregate-result staging: spill the two words to the temp slot
 // at <off> and hand back its address.
@@ -3140,6 +1426,7 @@ fn ir_store2(off i64, size i64, pos i64) {
 	x86_lower_all();
 }
 
+
 fn ir_push_reg(reg int, pos i64) {
 	var op *IrOp = ir_emit(IR_PUSH, pos);
 	op.src0 = operand_reg(reg);
@@ -3147,12 +1434,14 @@ fn ir_push_reg(reg int, pos i64) {
 	x86_lower_all();
 }
 
+
 fn ir_pop_reg(reg int, pos i64) {
 	var op *IrOp = ir_emit(IR_POP, pos);
 	op.dst = operand_reg(reg);
 	depth = depth - 1;
 	x86_lower_all();
 }
+
 
 // acc += v, the address-form small add (IR_LEA acc,acc,0).
 fn ir_add_acc_imm(v i64, pos i64) {
@@ -3165,6 +1454,7 @@ fn ir_add_acc_imm(v i64, pos i64) {
 	x86_lower_all();
 }
 
+
 // mov <op2_reg>, rax -- the frontend's "evaluate into the staging register".
 fn ir_mov_acc_op2(pos i64) {
 	var op *IrOp = ir_emit(IR_MOV, pos);
@@ -3172,6 +1462,7 @@ fn ir_mov_acc_op2(pos i64) {
 	op.src0 = operand_acc();
 	x86_lower_all();
 }
+
 
 // The right operand is an immediate folded into the instruction (a constant
 // binop, gen_binop_imm's fast path).
@@ -3185,6 +1476,7 @@ fn ir_alu_acc_imm(aop int, ty *Type, v i64, pos i64) {
 	x86_lower_all();
 }
 
+
 // The right operand is a direct local (promoted register or frame slot),
 // read as one r/m operand -- gen_binop_mem's fast path.
 fn ir_alu_acc_rm(aop int, ty *Type, src IrOperand, pos i64) {
@@ -3197,6 +1489,7 @@ fn ir_alu_acc_rm(aop int, ty *Type, src IrOperand, pos i64) {
 	x86_lower_all();
 }
 
+
 // stmt_update: dst op= imm folded into dst's own slot or register.
 fn ir_alu_rm_imm(aop int, dst IrOperand, v i64, pos i64) {
 	var op *IrOp = ir_emit(IR_ALU, pos);
@@ -3207,6 +1500,7 @@ fn ir_alu_rm_imm(aop int, dst IrOperand, v i64, pos i64) {
 	x86_lower_all();
 }
 
+
 // stmt_update: dst op= a promoted local's register.
 fn ir_alu_rm_reg(aop int, dst IrOperand, src IrOperand, pos i64) {
 	var op *IrOp = ir_emit(IR_ALU, pos);
@@ -3216,6 +1510,7 @@ fn ir_alu_rm_reg(aop int, dst IrOperand, src IrOperand, pos i64) {
 	op.aux = aop as i64;
 	x86_lower_all();
 }
+
 
 // stmt_update: <v.reg> op= rax, after gen_expr left the right side in the
 // accumulator.
@@ -3228,12 +1523,14 @@ fn ir_alu_vreg_acc(aop int, reg int, pos i64) {
 	x86_lower_all();
 }
 
+
 fn ir_cmp_acc_imm(v i64, pos i64) {
 	var op *IrOp = ir_emit(IR_CMP, pos);
 	op.src0 = operand_acc();
 	op.src1 = operand_imm(v);
 	x86_lower_all();
 }
+
 
 fn ir_cmp_acc_rm(src IrOperand, pos i64) {
 	var op *IrOp = ir_emit(IR_CMP, pos);
@@ -3242,6 +1539,7 @@ fn ir_cmp_acc_rm(src IrOperand, pos i64) {
 	x86_lower_all();
 }
 
+
 // cmp <direct local>, imm -- gen_compare's direct-local fast path.
 fn ir_cmp_rm_imm(n *Node, v i64, pos i64) {
 	var op *IrOp = ir_emit(IR_CMP, pos);
@@ -3249,6 +1547,7 @@ fn ir_cmp_rm_imm(n *Node, v i64, pos i64) {
 	op.src1 = operand_imm(v);
 	x86_lower_all();
 }
+
 
 // cmp <width> [rax], imm -- gen_compare's addressable_load path; gen_addr put
 // the address in the accumulator.
@@ -3259,6 +1558,7 @@ fn ir_cmp_at_acc_imm(ty *Type, v i64, pos i64) {
 	x86_lower_all();
 }
 
+
 // cmp <op2_reg>, rax -- gen_compare's generic staging: rhs pushed, then popped
 // into op2 after lhs landed in the accumulator.
 fn ir_cmp_op2_acc(pos i64) {
@@ -3267,6 +1567,7 @@ fn ir_cmp_op2_acc(pos i64) {
 	op.src1 = operand_op2(0);
 	x86_lower_all();
 }
+
 
 // ucomisd's compare -- the float version of the generic staging above; the
 // operand's float type makes the lowering pick the SSE path.
@@ -3278,6 +1579,7 @@ fn ir_cmp_op2_acc_float(ty *Type, pos i64) {
 	x86_lower_all();
 }
 
+
 // mov <op2_reg>, v -- a float negation's sign mask, staged.
 fn ir_mov_op2_imm(v i64, pos i64) {
 	var op *IrOp = ir_emit(IR_MOV, pos);
@@ -3285,6 +1587,7 @@ fn ir_mov_op2_imm(v i64, pos i64) {
 	op.src0 = operand_imm(v);
 	x86_lower_all();
 }
+
 
 // A float conversion on the accumulator's bits: st (the source type) rides in
 // op.src0.ty, dt (the destination type) in op.dst.ty.
@@ -3298,6 +1601,7 @@ fn ir_cast_float(ck int, st *Type, dt *Type, pos i64) {
 	x86_lower_all();
 }
 
+
 // A bounds-check trip: the condition code that jumps to the function-end
 // bounds trampoline.
 fn ir_bounds(cc i64, pos i64) {
@@ -3306,12 +1610,14 @@ fn ir_bounds(cc i64, pos i64) {
 	x86_lower_all();
 }
 
+
 // assert's site: the message string-literal id rides in aux.
 fn ir_assert(msg i64, pos i64) {
 	var op *IrOp = ir_emit(IR_ASSERT, pos);
 	op.aux = msg;
 	x86_lower_all();
 }
+
 
 // mov <op2>, [rax + off] -- a slice field, copied to the staging register.
 fn ir_load_at_acc_op2(off i64, pos i64) {
@@ -3322,6 +1628,7 @@ fn ir_load_at_acc_op2(off i64, pos i64) {
 	x86_lower_all();
 }
 
+
 // mov <op2>, <direct local> -- ND_INDEX's staged index.
 fn ir_load_op2_var(v *Var, ty *Type, pos i64) {
 	var op *IrOp = ir_emit(IR_LOAD, pos);
@@ -3331,6 +1638,7 @@ fn ir_load_op2_var(v *Var, ty *Type, pos i64) {
 	x86_lower_all();
 }
 
+
 // mov [rbp - off], <op2> -- a slice's field landed in the staging register.
 fn ir_store_op2_slot(off i64, pos i64) {
 	var op *IrOp = ir_emit(IR_STORE, pos);
@@ -3338,6 +1646,7 @@ fn ir_store_op2_slot(off i64, pos i64) {
 	op.src0 = operand_op2(0);
 	x86_lower_all();
 }
+
 
 // cmp <op2_reg>, rax -- ND_SLICE's start-vs-end bounds check, the reverse
 // of the acc-vs-op2 staging form above.
@@ -3348,6 +1657,7 @@ fn ir_cmp_op2_acc_rev(pos i64) {
 	x86_lower_all();
 }
 
+
 // mov rax, <op2> -- ND_SLICE restores the start index before scaling.
 fn ir_mov_op2_acc(pos i64) {
 	var op *IrOp = ir_emit(IR_MOV, pos);
@@ -3355,6 +1665,7 @@ fn ir_mov_op2_acc(pos i64) {
 	op.src0 = operand_op2(0);
 	x86_lower_all();
 }
+
 
 // A direct local into the accumulator from its frame slot.
 fn ir_load_slot_acc(off i64, ty *Type, pos i64) {
@@ -3364,6 +1675,7 @@ fn ir_load_slot_acc(off i64, ty *Type, pos i64) {
 	op.src0 = operand_stackslot(off, ty);
 	x86_lower_all();
 }
+
 
 // cmp rax, imm32 with the accumulator's forced 32-bit form (48 3d) -- the
 // bounds checks emit it unconditionally, unlike the imm8-choosing fast path.
@@ -3375,6 +1687,7 @@ fn ir_cmp_acc_imm32(v i64, pos i64) {
 	x86_lower_all();
 }
 
+
 // cmp <op2>, imm32 -- a staged index's bounds check.
 fn ir_cmp_op2_imm32(v i64, pos i64) {
 	var op *IrOp = ir_emit(IR_CMP, pos);
@@ -3383,6 +1696,7 @@ fn ir_cmp_op2_imm32(v i64, pos i64) {
 	op.aux = 1;
 	x86_lower_all();
 }
+
 
 // cmp <direct local>, imm32 -- a promoted index's bounds check.
 fn ir_cmp_rm_imm32(n *Node, v i64, pos i64) {
@@ -3393,6 +1707,7 @@ fn ir_cmp_rm_imm32(n *Node, v i64, pos i64) {
 	x86_lower_all();
 }
 
+
 // store [op2_reg], rax at ty's width (the value is in the accumulator).
 fn ir_store_op2_acc(ty *Type, pos i64) {
 	var op *IrOp = ir_emit(IR_STORE, pos);
@@ -3401,6 +1716,7 @@ fn ir_store_op2_acc(ty *Type, pos i64) {
 	op.src0 = operand_acc();
 	x86_lower_all();
 }
+
 
 fn gen_expr(n *Node) {
 	var k int = n.kind;
@@ -3624,6 +1940,7 @@ fn gen_expr(n *Node) {
 	}
 }
 
+
 fn run_defers(ds *DeferScope) {
 	var d *Node = ds.list;
 	while (d as i64 != 0) {
@@ -3631,6 +1948,7 @@ fn run_defers(ds *DeferScope) {
 		d = d.els;
 	}
 }
+
 
 fn any_defers() bool {
 	var ds *DeferScope = cur_defers;
@@ -3641,6 +1959,7 @@ fn any_defers() bool {
 	return false;
 }
 
+
 fn unwind_to(target int) {
 	var ds *DeferScope = cur_defers;
 	while (ds as i64 != 0 && ds.depth > target) {
@@ -3648,6 +1967,7 @@ fn unwind_to(target int) {
 		ds = ds.prev;
 	}
 }
+
 
 fn gen_match(n *Node) {
 	var soff i64 = n.tmp.offset as i64;
@@ -3694,6 +2014,7 @@ fn gen_match(n *Node) {
 	ir_label(end, n.pos);
 }
 
+
 fn gen_block(n *Node) {
 	var ds DeferScope;
 	defer_depth = defer_depth + 1;
@@ -3708,6 +2029,7 @@ fn gen_block(n *Node) {
 	cur_defers = ds.prev;
 	defer_depth = defer_depth - 1;
 }
+
 
 fn gen_ret(n *Node) {
 	if (n.lhs as i64 != 0) {
@@ -3735,6 +2057,7 @@ fn gen_ret(n *Node) {
 	}
 	gen_epilogue(n.pos);
 }
+
 
 fn gen_for(n *Node) {
 	// The init may be a chain (the for-in desugar hoists the collection
@@ -3771,12 +2094,17 @@ fn gen_for(n *Node) {
 	cur_loop = lp.prev;
 }
 
+
 struct LineRow;
 struct LineRow { next *LineRow, addr i64, file int, line int, }
 
+
 var lines_head *LineRow;
+
 var lines_tail *LineRow;
+
 var opt_debug bool = false;
+
 
 // One row per statement start. Consecutive statements on the same line, and
 // statements that emitted no code, collapse into the previous row.
@@ -3799,6 +2127,7 @@ fn line_mark(pos i64) {
 	if (lines_tail as i64 == 0) { lines_head = r; } else { lines_tail.next = r; }
 	lines_tail = r;
 }
+
 
 fn gen_stmt(n *Node) {
 	line_mark(n.pos);
@@ -3848,6 +2177,7 @@ fn gen_stmt(n *Node) {
 	gen_expr(n);
 }
 
+
 // Control cannot fall out of a block whose last statement returns, so the
 // implicit "return 0" tail is dead.
 fn always_returns(n *Node) bool {
@@ -3865,6 +2195,7 @@ fn always_returns(n *Node) bool {
 	return false;
 }
 
+
 // Promoted locals live in callee-saved registers, so each function saves the
 // ones it uses into reserved slots at the top of its own frame.
 fn reg_used(f *Func, reg int) bool {
@@ -3876,6 +2207,7 @@ fn reg_used(f *Func, reg int) bool {
 	}
 	return false;
 }
+
 
 fn saved_slot(f *Func, reg int) i64 {
 	var k i64 = 0;
@@ -3891,7 +2223,9 @@ fn saved_slot(f *Func, reg int) i64 {
 	return 0;
 }
 
+
 var gen_frameless bool;
+
 
 // Emits one asm operand chain: bytes (a value wider than a byte is a byte
 // string in hex, most significant byte first -- the order a disassembler
@@ -3916,6 +2250,7 @@ fn gen_asm_operands(a *Node) {
 	}
 }
 
+
 fn gen_epilogue(pos i64) {
 	gen_restore();
 	// An exported extern function returns a float in xmm0 (SysV), where the
@@ -3927,6 +2262,7 @@ fn gen_epilogue(pos i64) {
 	ir_ret(pos);
 }
 
+
 fn gen_restore() {
 	var i int = 0;
 	while (i < RA_NSAVED) {
@@ -3935,6 +2271,7 @@ fn gen_restore() {
 		i = i + 1;
 	}
 }
+
 
 // A C caller passes an exported extern function's arguments the SysV way:
 // the non-float words packed into the integer registers on their own count,
@@ -3986,6 +2323,7 @@ fn gen_extern_params(f *Func) {
 		i = i + 1;
 	}
 }
+
 
 fn gen_func(f *Func) {
 	// An extern declaration has no body; the symbol comes from the linker
@@ -4070,6 +2408,7 @@ fn gen_func(f *Func) {
 	gen_bounds_trampoline();
 }
 
+
 // f64 bit pattern -> f32 bit pattern, in pure integer math: the bootstrap
 // subset has no float, so this must never use one. Truncating, not
 // round-to-nearest. Subnormal doubles are below the f32 range anyway, so
@@ -4088,6 +2427,7 @@ fn f64_to_f32_bits(b i64) i64 {
 	if (e32 >= 255) { return (sign << 31) | 0x7f800000; }
 	return (sign << 31) | (e32 << 23) | ((man >> 29) & 0x7fffff);
 }
+
 
 // tvar bytes never live in .data/.bss: they're a template copied into a
 // fresh mmap'd block per thread. Offset 0 is reserved for the self-pointer
@@ -4131,6 +2471,7 @@ fn layout_tls(globals *Var) {
 	buf_bytes(&gdata, tmpl.p, tmpl.n);
 }
 
+
 fn layout_globals(globals *Var) {
 	layout_tls(globals);
 	var v *Var = globals;
@@ -4171,6 +2512,7 @@ fn layout_globals(globals *Var) {
 	bss_size = bss - gdata.n;
 }
 
+
 // The message pointer points at the string bytes, not at the {ptr, len}
 // header add_strref would hand out, so these carry their own fixup list,
 // patched with bytes_off after layout. With backtraces on, the stub jumps
@@ -4207,6 +2549,7 @@ fn gen_panic_stub(msg_id int, msg_len i64) {
 		b1(0x0f); b1(0x05);
 	}
 }
+
 
 fn reset_code() {
 	code.n = 0;
@@ -4246,6 +2589,7 @@ fn reset_code() {
 	lines_head = 0 as *LineRow;
 	lines_tail = 0 as *LineRow;
 }
+
 
 fn emit_code(u *Unit, main_fn *Func, panic_id int, hdr i64) {
 	// Top-level asm blocks are the image's first bytes; `entry name;`
@@ -4375,6 +2719,7 @@ fn emit_code(u *Unit, main_fn *Func, panic_id int, hdr i64) {
 	// end on a word boundary or every global lands misaligned.
 	while ((code.n & 7) != 0) { b1(0x90); }
 }
+
 
 fn codegen(u *Unit, img *Image) {
 	gen_unit = u;
