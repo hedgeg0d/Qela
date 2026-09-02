@@ -1,0 +1,8 @@
+// expect-compile-error
+// stage1-only
+// A struct with a slice field (other than str) cannot cross the
+// interpreted/dynamic ABI.
+struct S { a i64, b []i64 }
+
+fn interpreted bad(s S) i64 { return 0; }
+fn main() int { return 0; }
