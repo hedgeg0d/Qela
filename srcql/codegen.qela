@@ -1256,10 +1256,7 @@ fn gen_call(n *Node) {
 		xmm_to_gpr(RAX, 0, n.ty.size);
 	}
 	if (is_aggregate(n.ty) && !ret_mem) {
-		var off i64 = n.tmp.offset as i64;
-		st_local(off, RAX);
-		if (n.ty.size > 8) { st_local(off - 8, RDX); }
-		lea_local(RAX, off);
+		ir_store2(n.tmp.offset as i64, n.ty.size as i64, n.pos);
 	}
 }
 
@@ -1296,10 +1293,7 @@ fn gen_indirect_call(n *Node) {
 		depth = depth - (overflow_pushed as int);
 	}
 	if (is_aggregate(n.ty) && !ret_mem) {
-		var off i64 = n.tmp.offset as i64;
-		st_local(off, RAX);
-		if (n.ty.size > 8) { st_local(off - 8, RDX); }
-		lea_local(RAX, off);
+		ir_store2(n.tmp.offset as i64, n.ty.size as i64, n.pos);
 	}
 }
 
@@ -2680,6 +2674,21 @@ fn x86_lower_op(op *IrOp) {
 		b1(0xc3);
 		return;
 	}
+	if (op.kind == IR_LOAD2) {
+		// gen_ret's register-returned aggregate: the second word first, so
+		// the accumulator still holds the base address while it is read.
+		if (op.aux > 8) { ld_at_rax(RDX, 8); }
+		ld_at_rax(RAX, 0);
+		return;
+	}
+	if (op.kind == IR_STORE2) {
+		// gen_call's aggregate-result staging: spill both words, then hand
+		// back the slot's address as the aggregate's lvalue.
+		st_local(op.dst.off, RAX);
+		if (op.aux > 8) { st_local(op.dst.off - 8, RDX); }
+		lea_local(RAX, op.dst.off);
+		return;
+	}
 	if (op.kind == IR_SYSCALL) {
 		// The number and arguments were already staged by gen_args into the
 		// backend's syscall registers; only the trapping instruction is IR.
@@ -3006,6 +3015,23 @@ fn ir_memcpy_slot(off i64, size i64, pos i64) {
 	var op *IrOp = ir_emit(IR_MEMCPY, pos);
 	op.dst = operand_stackslot(off, 0 as *Type);
 	op.src0 = operand_acc();
+	op.aux = size;
+	x86_lower_all();
+}
+
+// gen_ret's register-returned aggregate: the address in the accumulator, the
+// two words pulled into the accumulator and the second-value register.
+fn ir_load2(size i64, pos i64) {
+	var op *IrOp = ir_emit(IR_LOAD2, pos);
+	op.aux = size;
+	x86_lower_all();
+}
+
+// gen_call's aggregate-result staging: spill the two words to the temp slot
+// at <off> and hand back its address.
+fn ir_store2(off i64, size i64, pos i64) {
+	var op *IrOp = ir_emit(IR_STORE2, pos);
+	op.dst = operand_stackslot(off, 0 as *Type);
 	op.aux = size;
 	x86_lower_all();
 }
@@ -3586,8 +3612,7 @@ fn gen_ret(n *Node) {
 			if (gen_fn.ret_slot as i64 != 0) {
 				ir_memcpy_slot(gen_fn.ret_slot.offset as i64, n.lhs.ty.size as i64, n.pos);
 			} else {
-				if (n.lhs.ty.size > 8) { ld_at_rax(RDX, 8); }
-				ld_at_rax(RAX, 0);
+				ir_load2(n.lhs.ty.size as i64, n.pos);
 			}
 		}
 	} else {
