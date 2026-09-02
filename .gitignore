@@ -2,6 +2,7 @@
 /qela
 /stage2
 /stage3
+/examples/flappy/flappy
 /tests/out/
 /build/
 *.pyc
