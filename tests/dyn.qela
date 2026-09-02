@@ -3,6 +3,7 @@
 // expect-out: 5
 // expect-out: hello
 // expect-out: 1 2
+// expect-out: 199990
 // The runtime-checked box: a `~` local can be reassigned across unrelated
 // types, and `as` reads it back out with a tag check. No arithmetic on the
 // boxed value itself -- it has to be cast out first.
@@ -20,5 +21,18 @@ fn main() int {
 	var ~p = Point{x: 1, y: 2};
 	var q Point = p as Point;
 	write_str(STDOUT, "${q.x} ${q.y}\n");
+
+	// Every reassignment (and, inside the loop, every re-execution of the
+	// same `var ~n = ...`) frees the box it replaces -- this runs enough
+	// iterations, flipping type on every one, that a leak would balloon
+	// the heap; a corrupted free list from a wrong free order would crash
+	// or hang well before it finishes.
+	var i i64 = 0;
+	while (i < 100000) {
+		var ~m = i;
+		m = "x";
+		i = i + 1;
+	}
+	write_str(STDOUT, "${i * 2 - 10}\n");
 	return 0;
 }
