@@ -42,6 +42,7 @@ let TY_TYPE    = 8;
 let TY_TYPEVAR = 9;
 let TY_GENERIC = 10;
 let TY_FLOAT   = 11;
+let TY_FUNC    = 12;
 
 struct Type;
 struct Member;

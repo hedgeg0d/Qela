@@ -458,7 +458,35 @@ fn parse_type(t **Token) *Type {
 		}
 		return type_array(base, len);
 	}
-	if ((*t).kind != TK_IDENT) { error_at((*t).pos, "expected type name"); }
+	if ((*t).kind != TK_IDENT) {
+		if (tok_eq(*t, "fn")) {
+			*t = (*t).next;
+			tok_expect(t, "(");
+			var t0 *Type = fn_type_new(ty_void);
+			var head Member;
+			var tail *Member = &head;
+			var np int = 0;
+			while (!tok_eq(*t, ")")) {
+				if (np >= 6) { error_at((*t).pos, "a function type takes at most 6 parameters"); }
+				var pp i64 = (*t).pos;
+				var pt *Type = parse_type(t);
+				if (pt.size > 8) {
+					error_at(pp, "a function type parameter must fit in one word");
+				}
+				var m *Member = member_alloc();
+				m.ty = pt;
+				tail.next = m;
+				tail = m;
+				np = np + 1;
+				if (!tok_eq(*t, ")")) { tok_expect(t, ","); }
+			}
+			*t = (*t).next;
+			t0.members = head.next;
+			t0.base = parse_type(t);
+			return t0;
+		}
+		error_at((*t).pos, "expected type name");
+	}
 	var i int = 0;
 	while (i < ntype_vars) {
 		if (str_eq(type_vars[i].name, (*t).text)) {
@@ -723,6 +751,14 @@ fn parse_primary(t **Token) *Node {
 			if (str_eq(name, "assert") || str_eq(name, "panic")) { kind = ND_ASSERT; }
 			var n *Node = new_node(kind, p);
 			n.name = name;
+			// If a variable (not a function) of that name exists, this is a
+			// call through it; type.qela checks its type and turns it into an
+			// indirect call. Functions declared later are not in the table
+			// yet, so a bare name is left alone for find_func in type_call.
+			if (kind == ND_CALL) {
+				var v *Var = find_var(name);
+				if (v as i64 != 0) { n.varp = v; }
+			}
 			call_args(t, n);
 			// panic(message) is assert(false, message): the condition is a
 			// constant zero prepended here, so the rest of the pipeline sees
@@ -736,20 +772,15 @@ fn parse_primary(t **Token) *Node {
 			return n;
 		}
 
-		// variable reference
+		// variable reference; a function name used as a value is a function
+		// address. Resolution is deferred to add_type: functions declared
+		// below this point are not in the table while we parse, so the node
+		// is always an address and type.qela decides.
 		var v *Var = find_var(name);
 		if (v as i64 == 0) {
-			// Suggest the nearest keyword if the typo is within reach.
-			// The hint prints on stderr, then the error follows — the
-			// caret/line of the error is the one the user fixes, the
-			// hint is just a nudge.
-			var sug str = did_you_mean(name);
-			if (sug.len > 0) {
-				eprint("hint: did you mean '");
-				eprint(sug);
-				eprint("'?\n");
-			}
-			error_at(p, "undefined variable");
+			var fa *Node = new_node(ND_FUNCADDR, p);
+			fa.name = name;
+			return fa;
 		}
 		var n *Node = new_node(ND_VAR, p);
 		n.varp = v;

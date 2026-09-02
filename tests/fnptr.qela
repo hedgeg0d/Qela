@@ -1,0 +1,34 @@
+// expect-exit: 42
+// stage1-only
+// First-class functions: a function name used as a value is its address, a
+// variable can carry it, and calling it goes through the value. Six
+// parameters, one call through a variable assigned twice, and a function
+// that returns a function.
+fn add(a i64, b i64) i64 { return a + b; }
+fn mul(a i64, b i64) i64 { return a * b; }
+fn negate(a i64) i64 { return -a; }
+
+fn apply_twice(f fn(i64) i64, x i64) i64 {
+	return f(f(x));
+}
+
+fn pick(which i64) fn(i64, i64) i64 {
+	if (which == 1) { return add; }
+	return mul;
+}
+
+fn main() int {
+	var cb fn(i64, i64) i64 = add;
+	if (cb(3, 4) != 7) { return 1; }
+	cb = mul;
+	if (cb(3, 4) != 12) { return 2; }
+
+	var inf fn(i64) i64 = negate;
+	if (apply_twice(inf, 5) != 5) { return 3; }
+
+	var ret fn(i64, i64) i64 = pick(1);
+	if (ret(10, 5) != 15) { return 4; }
+	ret = pick(0);
+	if (ret(10, 5) != 50) { return 5; }
+	return 42;
+}
