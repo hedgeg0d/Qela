@@ -1,0 +1,8 @@
+// stage1-only
+// expect-compile-error
+// `let` can never be dynamic -- it never changes value or type, so there
+// is nothing for `~` to mean.
+fn main() int {
+	let ~x = 5;
+	return 0;
+}
