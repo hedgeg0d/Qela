@@ -271,11 +271,26 @@ struct Unit {
 	nstrs   int,
 }
 
-let ELF_BASE  = 0x400000;
-let EHDR_SZ   = 64;
-let PHDR_SZ   = 56;
-let SEG_GAP   = 0x1000;
-let EM_X86_64 = 0x3e;
+let ELF_BASE   = 0x400000;
+let EHDR_SZ    = 64;
+let PHDR_SZ    = 56;
+let SEG_GAP    = 0x1000;
+let EM_X86_64  = 0x3e;
+let EM_AARCH64 = 0xb7;
+
+// Which backend codegen.qela/regalloc.qela/elf.qela emit for. Set once from
+// -target=, read everywhere; no per-target struct or dispatch table, just
+// this global and if/else at the handful of real target-dependent points.
+let TARGET_X86_64 = 0;
+let TARGET_ARM64  = 1;
+var opt_target int = 0;
+
+// SysV AMD64 and AAPCS64 both pass an aggregate by reference once it is
+// bigger than two registers' worth (16 bytes); a future target with a
+// different cutoff (e.g. Windows x64's 8) only has to change this function.
+fn abi_by_ref(size int) bool {
+	return size > 16;
+}
 
 // GPR encodings, shared between codegen.qela (which also defines its own
 // RAX..R11 for its own use) and regalloc.qela (which does not import
