@@ -1,0 +1,132 @@
+import "comp.qela";
+import "type.qela";
+
+// A target-neutral linearization of what gen_expr/gen_stmt already compute:
+// one accumulator (OP_ACC, the RAX-equivalent) that most ops read and/or
+// write, plus values that live in a promoted register (OP_VREG, carrying
+// exactly what regalloc.qela already put in Var.reg) or a frame slot
+// (OP_STACKSLOT, carrying Var.offset). This is not SSA and there is no
+// basic-block graph: control flow is IR_BR/IR_LABEL records patched the
+// same way codegen.qela's br_at/patch_here already work today, just one
+// indirection later. A backend (x86_emit.qela, arm64_emit.qela) walks the
+// list once and turns each IrOp into machine bytes.
+
+let IR_MOV   = 0;  // dst = src0
+let IR_LOAD  = 1;  // dst = *src0 (width/signedness from dst.ty)
+let IR_STORE = 2;  // *dst = src0
+let IR_ALU   = 3;  // dst = src0 <aux: alu op> src1
+let IR_CMP   = 4;  // compare src0, src1; aux is unused, a following IR_BR/IR_SETCC reads the flags
+let IR_BR    = 5;  // aux: condition code (CC_ALWAYS for unconditional); dst.off is the target IR_LABEL id
+let IR_LABEL = 6;  // dst.off is this label's id
+let IR_SETCC = 7;  // dst = (flags satisfy <aux: condition code>) ? 1 : 0
+let IR_CALL  = 8;  // aux selects a CallFixup-style target; args already classified into OP_VREG call-arg slots
+let IR_RET   = 9;
+
+// IrOperand.kind
+let OP_NONE      = 0;
+let OP_ACC       = 1;
+let OP_VREG      = 2;  // reg is a concrete backend register number (from Var.reg or a call-arg rank)
+let OP_STACKSLOT = 3;  // off is a frame offset (from Var.offset)
+let OP_IMM       = 4;  // off is the immediate value
+let OP_GLOBAL    = 5;  // off is the *Var, reinterpreted as an address
+let OP_STR       = 6;  // off is a string-literal id
+
+// Condition codes, neutral: each backend maps these to its own flags/field
+// encoding (x86's Jcc/SETcc table, ARM64's 4-bit condition field).
+let CC_ALWAYS = 0;
+let CC_EQ     = 1;
+let CC_NE     = 2;
+let CC_LT     = 3;
+let CC_LE     = 4;
+let CC_GT     = 5;
+let CC_GE     = 6;
+let CC_ULT    = 7;
+let CC_ULE    = 8;
+let CC_UGT    = 9;
+let CC_UGE    = 10;
+
+struct IrOperand;
+struct IrOperand {
+	kind int,
+	reg  int,
+	off  i64,
+	ty   *Type,
+}
+
+struct IrOp;
+struct IrOp {
+	kind int,
+	next *IrOp,
+	dst  IrOperand,
+	src0 IrOperand,
+	src1 IrOperand,
+	aux  i64,
+	pos  i64,
+}
+
+var ir_head *IrOp;
+var ir_tail *IrOp;
+var ir_next_label i64;
+
+// Called once per function, before that function's lowering starts; the
+// list is walked and discarded by the backend before the next function
+// begins, so nothing here needs to survive across gen_func calls.
+fn ir_reset() {
+	ir_head = 0 as *IrOp;
+	ir_tail = 0 as *IrOp;
+	ir_next_label = 0;
+}
+
+fn operand_none() IrOperand {
+	var o IrOperand;
+	o.kind = OP_NONE;
+	return o;
+}
+
+fn operand_acc() IrOperand {
+	var o IrOperand;
+	o.kind = OP_ACC;
+	return o;
+}
+
+fn operand_imm(v i64) IrOperand {
+	var o IrOperand;
+	o.kind = OP_IMM;
+	o.off = v;
+	return o;
+}
+
+fn operand_vreg(reg int, ty *Type) IrOperand {
+	var o IrOperand;
+	o.kind = OP_VREG;
+	o.reg = reg;
+	o.ty = ty;
+	return o;
+}
+
+fn operand_stackslot(off i64, ty *Type) IrOperand {
+	var o IrOperand;
+	o.kind = OP_STACKSLOT;
+	o.off = off;
+	o.ty = ty;
+	return o;
+}
+
+// Appends a new op to the current function's list and returns it so callers
+// can fill in dst/src0/src1/aux after the shape is fixed.
+fn ir_emit(kind int, pos i64) *IrOp {
+	var op *IrOp = arena_alloc(sizeof(IrOp), 8) as *IrOp;
+	op.kind = kind;
+	op.pos = pos;
+	if (ir_tail as i64 == 0) { ir_head = op; } else { ir_tail.next = op; }
+	ir_tail = op;
+	return op;
+}
+
+// A fresh label id; the caller emits a matching IR_LABEL op at the point
+// the label should resolve to, and IR_BR ops reference it by id in dst.off.
+fn ir_new_label() i64 {
+	var id i64 = ir_next_label;
+	ir_next_label = ir_next_label + 1;
+	return id;
+}
