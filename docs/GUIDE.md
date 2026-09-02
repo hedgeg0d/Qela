@@ -1330,9 +1330,11 @@ The ABI is SysV, no marshalling: `i64` is `long long`, `bool` is `_Bool`,
 `struct`'s layout is natural field order — the same as C's — so structs
 alias across the boundary; aggregates over 16 bytes pass by pointer.
 `extern var` imports (`extern var x i64;`) and exports (`extern var x i64
-= K;`) globals; imports and exports link statically (extern data is resolved
-with PC-relative relocations, no GOT, so it does not link against shared
-libraries). Bounds checks and `assert` work in object mode too.
+= K;`) globals. Calls into a shared library go through the PLT; data that
+resolves from a `.so` uses a COPY relocation (the executable's copy wins —
+the library's own references to it still point at its own copy, so shared
+mutable data can diverge). Bounds checks and `assert` work in object mode
+too.
 
 ## 21. Raw machine code
 

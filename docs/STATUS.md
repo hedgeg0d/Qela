@@ -7,7 +7,7 @@ Updated 2026-08-05. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **286 528 B** |
+| **S2 — the shipped compiler, Qela compiled by itself** | **286 544 B** |
 | S2 under `upx --lzma` (measured 2026-08-04) | 61 996 B, ~6% of the 1 MiB budget |
 | S2 under xz -9 (proxy for upx) | 65 376 B |
 | stage1 sources | 10 869 lines of Qela |
@@ -49,7 +49,13 @@ so the object links under plain `gcc` as a PIE as well as with `-no-pie`; a
 mov of an absolute 32-bit address (`R_32S`) is what forces `DT_TEXTREL`.
 GOTPCREL was tried and dropped: binutils 2.46.1 dies with a BFD internal
 error (`elf64-x86-64.c:3727`) on any object that uses it, so all references
-stay PC-relative and extern data links statically only. The string headers
+stay PC-relative. Shared libraries work anyway: calls go through the PLT
+(`R_X86_64_PLT32` becomes a PLT stub), and data the linker resolves from a
+`.so` gets a COPY relocation into the executable — with the usual GNU caveat
+that the library's own references to that variable still point at its own
+copy, so shared mutable data can diverge. The object's `.text` carries
+`SHF_ALLOC` (a missing flag made binutils refuse to create the PLT/COPY
+entries; it was caught by the first `.so` link). The string headers
 live in `.data.rel.ro` (with a `.rela.data.rel.ro`) rather than `.rodata`,
 for the same reason: a relocation inside `.rodata` marks the whole load
 text-relative. The string bytes keep a `.Lstrd<N>` symbol, the header a
