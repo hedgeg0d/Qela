@@ -1066,11 +1066,6 @@ let ABI_REQ_CALL = 2;
 let ABI_RESP_OK = 1;
 let ABI_RESP_ERR = 2;
 
-fn abi_decode_u64(p *u8) i64 {
-	return (p[0] as i64) | ((p[1] as i64) << 8) | ((p[2] as i64) << 16) | ((p[3] as i64) << 24) |
-	       ((p[4] as i64) << 32) | ((p[5] as i64) << 40) | ((p[6] as i64) << 48) | ((p[7] as i64) << 56);
-}
-
 fn abi_build_call_args(vals *i64, n int) *Node {
 	var head Node;
 	var tail *Node = &head;
@@ -1121,6 +1116,7 @@ fn abi_try_run(src str, name str, path_a bool) bool {
 
 fn cmd_abi_server(argc int, argv **u8) int {
 	repl_init();
+	type_abi_mode = true;
 	repl_run_source("var __abi_result i64 = 0;\n", "<abi:init>", false);
 	var result_var *Var = repl_fn.locals;
 
@@ -1128,7 +1124,7 @@ fn cmd_abi_server(argc int, argv **u8) int {
 	var seq int = 0;
 	while (true) {
 		var kind u8 = 0;
-		var n i64 = abi_recv_frame(0, &kind, buf, ABI_MAX_MSG);
+		var n i64 = abi_recv_frame(ABI_FD_HOST_TO_CHILD, &kind, buf, ABI_MAX_MSG);
 		if (n < 0) { return 0; }
 
 		if (kind == ABI_REQ_CALL as u8) {
@@ -1142,7 +1138,7 @@ fn cmd_abi_server(argc int, argv **u8) int {
 			var f *Func = find_func(fname);
 			if (f as i64 == 0) {
 				var msg str = "interpreted: unknown function";
-				abi_send_frame(1, ABI_RESP_ERR as u8, msg.ptr, msg.len);
+				abi_send_frame(ABI_FD_CHILD_TO_HOST, ABI_RESP_ERR as u8, msg.ptr, msg.len);
 				continue;
 			}
 			var vals [6]i64;
@@ -1154,13 +1150,13 @@ fn cmd_abi_server(argc int, argv **u8) int {
 			}
 			if (!abi_try_call(f, &vals[0], f.nparams)) {
 				var msg str = "interpreted: runtime error";
-				abi_send_frame(1, ABI_RESP_ERR as u8, msg.ptr, msg.len);
+				abi_send_frame(ABI_FD_CHILD_TO_HOST, ABI_RESP_ERR as u8, msg.ptr, msg.len);
 				continue;
 			}
 			var cval i64 = ip_call(f, abi_build_call_args(&vals[0], f.nparams), 0, f.pos);
 			var cvb [8]u8;
 			*(&cvb[0] as *i64) = cval;
-			abi_send_frame(1, ABI_RESP_OK as u8, &cvb[0], 8);
+			abi_send_frame(ABI_FD_CHILD_TO_HOST, ABI_RESP_OK as u8, &cvb[0], 8);
 			continue;
 		}
 		if (kind != ABI_REQ_RUN as u8) { return 0; }
@@ -1189,14 +1185,14 @@ fn cmd_abi_server(argc int, argv **u8) int {
 
 		if (!abi_try_run(to_run, name, path_a)) {
 			var msg str = "eval: compile or runtime error";
-			abi_send_frame(1, ABI_RESP_ERR as u8, msg.ptr, msg.len);
+			abi_send_frame(ABI_FD_CHILD_TO_HOST, ABI_RESP_ERR as u8, msg.ptr, msg.len);
 			continue;
 		}
 		repl_run_source(to_run, name, path_a);
 		var val i64 = ip_load(ip_var_addr(result_var), result_var.ty);
 		var vb [8]u8;
 		*(&vb[0] as *i64) = val;
-		abi_send_frame(1, ABI_RESP_OK as u8, &vb[0], 8);
+		abi_send_frame(ABI_FD_CHILD_TO_HOST, ABI_RESP_OK as u8, &vb[0], 8);
 	}
 	return 0;
 }
