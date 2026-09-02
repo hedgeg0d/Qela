@@ -91,7 +91,7 @@ fn write_elf(path str, img *Image) {
 	}
 
 	buf_u16(&f, 2);
-	buf_u16(&f, EM_X86_64);
+	if (opt_target == TARGET_ARM64) { buf_u16(&f, EM_AARCH64); } else { buf_u16(&f, EM_X86_64); }
 	buf_u32(&f, 1);
 	buf_u64(&f, ELF_BASE + hdr + img.entry);
 	buf_u64(&f, EHDR_SZ);
@@ -459,7 +459,7 @@ fn write_object(path str, img *Image) {
 	var k i64 = 7;
 	while (k < 16) { buf_u8(&f, 0); k = k + 1; }
 	buf_u16(&f, 1);
-	buf_u16(&f, EM_X86_64);
+	if (opt_target == TARGET_ARM64) { buf_u16(&f, EM_AARCH64); } else { buf_u16(&f, EM_X86_64); }
 	buf_u32(&f, 1);
 	buf_u64(&f, 0);
 	buf_u64(&f, 0);
