@@ -606,16 +606,82 @@ does not exist — deliberately out of scope, same reasoning the original
 design gave: "its own real sub-effort — a stable, ergonomic AST API is
 more design work than the ABI plumbing itself."
 
+**Struct/string marshalling over the ABI — done** (2026-08-09). The
+scalar-only ceiling is gone: `interpreted`/`dynamic` functions and `eval
+fn` host calls now carry `str`, floats, structs and arrays across the
+wire, and `dynamic` functions with such signatures are JIT'd through a
+rewritten out-parameter form instead of silently degrading. `eval var`
+globals are still scalar-only (their types are invisible to the child,
+see below). The convention, shared by both sides and generated from the
+same parsed types so it cannot drift: a scalar is one 8-byte slot (the
+reader takes its own width); a `str` is `u64 len` + bytes; a POD struct
+or array (every field a scalar, float or array of those) is its raw
+size-byte image; any other struct is its fields in member order, scalars
+as 8-byte slots and nested structs recursively. Pointer fields, fn-ptr
+types, non-str slices and payload enums are still rejected at parse time
+with a real error (a host address means nothing in the child process).
+
+The interpreted path (`interp_synthesize_trampoline` in `srcql/parse.qela`)
+emits a real top-level `__tramp<N>` function whose tokens are injected
+into the main stream right after the function being synthesized — the
+marshalled body needs the `Buf` type, which only exists after
+std/interpcall.qela and its imports are spliced in, and the splice
+happens at the next top-level loop iteration, not synchronously. The
+child decodes each argument into a hidden global (`__mm<seq>_<i>`,
+declared on first call per function, cached) and passes plain `ND_VAR`
+argument nodes to `ip_call`; the return value is marshalled back from the
+call's destination slot.
+
+The `dynamic` JIT path compiles the function with a **rewritten
+signature**: a hidden `__dynret *u8` out-parameter is appended and every
+`return <expr>;` in the body becomes `*(__dynret as *<ret>) = <expr>;
+return 0;` (a token-level rewrite — `abi_jit_rewrite` in
+`srcql/main.qela` — that copies lambda bodies whole and degrades to the
+interpreted path on any failure, never to a wrong answer). The result is
+a self-contained scalar function the host calls through its six-slot
+function-pointer shape; the host packs each parameter per the compiled
+ABI (a `str` in two slots, an aggregate up to 16 bytes raw, a bigger one
+as its pointer) and reads the return from the out-parameter's buffer.
+Signatures wider than six register words skip the jit path entirely at
+parse time.
+
+The child types calls to `eval fn` functions correctly because the
+registration bundle now carries every type the functions can mention
+(plain structs/enums from `named_types`, templates from `tmpls`, generic
+instances skipped — their `Name(Args)` names are not source) and an
+`extern fn` declaration per `eval fn`, so a call from eval'd or
+interpreted code resolves with the real signature and routes to the host
+through `ip_call_node`'s extern+abi-mode branch instead of erroring.
+`ip_foreign_call` marshals the typed arguments, receives the marshalled
+return into an arena buffer, and decodes it into the call's destination
+slot for aggregate results. On the host, `__eval_call_dispatch` (now
+`(name str, args *u8, __b *Buf) bool`) decodes each argument per the
+function's own signature and marshals the return value into `__b`, which
+the serve loop sends back; an unknown name answers a plain zero, which
+the caller decodes per its own expected type (an empty `str` for a
+str-typed call). The child's fork-validate-then-commit safety net had to
+learn one thing: a validating `ip_foreign_call` returns the destination
+address rather than 0, because the validation run's aggregate result gets
+dereferenced (a member read) and must point at valid memory.
+
+Pinned by `tests/interp_marshal.qela` (str/float/struct both ways, 7+
+parameters), `tests/evalfn_marshal.qela` (eval fn with str/struct/float
+signatures, called from both eval'd and interpreted code), the two
+reject tests, and bootstrap.sh's "interpreted/dynamic str and struct
+marshalling over the abi" and "eval fn" steps, each asserting concrete
+values. S2 535 064 -> 562 392 B.
+
 What's left, precisely — edges, not missing mechanisms: the self-copy is
 not embedded at compile time, `abi_spawn()` still resolves the child via
 `$QELAPATH`/`$PATH` (the correction earlier in this document); `eval
-var`/`eval fn`/`dynamic` are all restricted to non-aggregate, non-float,
-≤8-byte scalars (checked at parse time with a real error, not a silent
-truncation); a self-recursive `dynamic` function always falls back to
-`interpreted` (a call to itself is a relocation like any other call);
-`parse_ast` is expression-only; and there is no AST inspection/mutation
-API. None of these are safety gaps — every one of them is a clean,
-reported rejection or fallback, never silent wrong behavior.
+var` globals are still scalar-only (the child has no way to learn a
+global's type at parse time — the `ND_FUNCADDR` foreign fallback types
+everything as `i64` — so a str global stays out of reach); a
+self-recursive `dynamic` function always falls back to `interpreted` (a
+call to itself is a relocation like any other call); `parse_ast` is
+expression-only; and there is no AST inspection/mutation API. None of
+these are safety gaps — every one of them is a clean, reported rejection
+or fallback, never silent wrong behavior.
 
 ## Size measurements (real numbers, not estimates)
 
