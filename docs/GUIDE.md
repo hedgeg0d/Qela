@@ -722,6 +722,8 @@ fn sum(xs []int) int {
 Passing a slice is the idiomatic way to hand an array (or a piece of one) to
 a function.
 
+> **Note:** A slice `[]T` is a fixed-size view (`{ptr, len}`) over contiguous memory, so elements cannot be directly appended to a raw slice. For a growable collection where elements can be added dynamically, use `Vec(T)` from `import "std/vec.qela";` with `vec_push(&v, elem)`. You can convert a vector to a slice at any time using `vec_view(&v)` (see section 19).
+
 ## 12. Structs
 
 ```qela
