@@ -3,11 +3,19 @@ import "coro.qela";
 import "chan.qela";
 
 // A fixed pool of OS threads, each running its own cooperative coroutine
-// scheduler -- goroutines multiplexed over real parallelism, without a
-// work-stealing scheduler. go() round-robins a spawn request onto one
-// pool thread's queue; that thread's own loop drains it into a local
-// coro_spawn the next time it polls. Channels (chan.qela) are the
-// supported way to hand results back across threads.
+// scheduler -- goroutines multiplexed over real parallelism. go() round-
+// robins a spawn request onto one pool thread's queue; that thread's own
+// loop drains it into a local coro_spawn the next time it polls. Channels
+// (chan.qela) are the supported way to hand results back across threads.
+//
+// Work-stealing only covers requests that have not started running yet:
+// an idle thread with nothing of its own to drain tries its neighbors'
+// queues before spinning. A coroutine already coro_spawn'd is pinned to
+// its thread's tvar-scoped coros[] for good -- migrating a *running*
+// coroutine's stack/registers to another OS thread mid-flight is real
+// extra work (a safe migration point that isn't inside a lock or a GC
+// safepoint, plus re-homing it into the target's own coros[] slot) that
+// nothing here has needed yet; this is the cheap win, not that one.
 //
 // A pool thread never calls gc_thread_enter itself -- that would force
 // every user of thread.qela to also pull in gc.qela. A program that wants
@@ -36,22 +44,65 @@ var pool_head [32]i64;
 var pool_tail [32]i64;
 var pool_lock [32]i64;
 
+// Pops at most one entry per call, not the whole backlog: holding the
+// lock (or even just re-acquiring it back to back in a tight loop) across
+// every pending coro_spawn starves pool_steal's try-lock for as long as
+// this thread's own backlog lasts, which defeats stealing entirely
+// whenever a queue gets a real burst pushed onto it. pool_worker calls
+// this every iteration, so the backlog still drains, just interleaved
+// with give-someone-else-a-turn spacing instead of all at once.
 fn pool_drain(id i64) {
-	while (!atomic_cas(&pool_lock[id], 0, 1)) { }
-	while (pool_head[id] != pool_tail[id]) {
-		var slot i64 = pool_head[id] % POOL_QUEUE;
-		var r SpawnReq = pool_queue[id][slot];
-		pool_head[id] = pool_head[id] + 1;
-		coro_spawn(r.fn_ptr, r.a0, r.a1, r.a2, r.a3, r.a4);
+	if (pool_head[id] == pool_tail[id]) { return; }
+	if (!atomic_cas(&pool_lock[id], 0, 1)) { return; }
+	if (pool_head[id] == pool_tail[id]) {
+		atomic_store(&pool_lock[id], 0);
+		return;
 	}
+	var slot i64 = pool_head[id] % POOL_QUEUE;
+	var r SpawnReq = pool_queue[id][slot];
+	pool_head[id] = pool_head[id] + 1;
 	atomic_store(&pool_lock[id], 0);
+	coro_spawn(r.fn_ptr, r.a0, r.a1, r.a2, r.a3, r.a4);
 }
+
+// Tries every other pool thread's queue once, starting just past its own
+// id (so threads don't all pile onto neighbor 0 first). A try-lock, not a
+// blocking one: a busy victim is skipped rather than waited on, since the
+// whole point is to not stall while there might be idle work elsewhere.
+fn pool_steal(id i64) bool {
+	var i i64 = 1;
+	while (i < pool_n) {
+		var victim i64 = (id + i) % pool_n;
+		if (pool_head[victim] != pool_tail[victim] && atomic_cas(&pool_lock[victim], 0, 1)) {
+			if (pool_head[victim] != pool_tail[victim]) {
+				var slot i64 = pool_head[victim] % POOL_QUEUE;
+				var r SpawnReq = pool_queue[victim][slot];
+				pool_head[victim] = pool_head[victim] + 1;
+				atomic_store(&pool_lock[victim], 0);
+				coro_spawn(r.fn_ptr, r.a0, r.a1, r.a2, r.a3, r.a4);
+				return true;
+			}
+			atomic_store(&pool_lock[victim], 0);
+		}
+		i = i + 1;
+	}
+	return false;
+}
+
+// Which pool thread the calling coroutine is actually running on right
+// now -- set once per thread, read by any coroutine scheduled on it.
+tvar pool_worker_id i64 = -1;
 
 fn pool_worker(id i64) i64 {
 	tls_init();
+	pool_worker_id = id;
 	while (true) {
 		pool_drain(id);
-		if (!coro_yield()) { fence(); }
+		if (coro_pending()) {
+			coro_yield();
+		} else if (!pool_steal(id)) {
+			fence();
+		}
 	}
 	return 0;
 }
