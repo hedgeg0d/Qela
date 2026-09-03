@@ -276,6 +276,19 @@ let EHDR_SZ  = 64;
 let PHDR_SZ  = 56;
 let SEG_GAP  = 0x1000;
 
+// GPR encodings, shared between codegen.qela (which also defines its own
+// RAX..R11 for its own use) and regalloc.qela (which does not import
+// codegen.qela and needs these for its free/callee-saved register pools).
+let RBX = 3;
+let R8  = 8;
+let R9  = 9;
+let R10 = 10;
+let R11 = 11;
+let R12 = 12;
+let R13 = 13;
+let R14 = 14;
+let R15 = 15;
+
 // Forward: Image below carries the object-mode relocation lists.
 struct Reloc;
 
