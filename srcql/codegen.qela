@@ -337,6 +337,19 @@ fn jump(opcode2 i64) i64 {
 	return id;
 }
 
+// A backward branch to a target already emitted: unlike jump()/patch_here(),
+// which patch a placeholder once the far end is known, both ends are known
+// up front here, so the short-vs-near choice is made in one pass.
+fn jump_back(target i64) {
+	var back i64 = target - (code.n + 2);
+	if (back >= -128 && back <= 127) {
+		b1(0xeb); b1(back);
+	} else {
+		b1(0xe9);
+		b4(target - (code.n + 4));
+	}
+}
+
 fn patch_here(id i64) {
 	var at i64 = br_at.p[id];
 	if (br_is_short(id)) {
@@ -2407,13 +2420,7 @@ fn gen_for(n *Node) {
 	var i i64 = 0;
 	while (i < lp.cont.n) { patch_here(lp.cont.p[i]); i = i + 1; }
 	if (n.step as i64 != 0) { gen_expr(n.step); }
-	var back i64 = top - (code.n + 2);
-	if (back >= -128 && back <= 127) {
-		b1(0xeb); b1(back);
-	} else {
-		b1(0xe9);
-		b4(top - (code.n + 4));
-	}
+	jump_back(top);
 
 	i = 0;
 	while (i < lp.brk.n) { patch_here(lp.brk.p[i]); i = i + 1; }
