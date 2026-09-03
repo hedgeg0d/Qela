@@ -1812,6 +1812,9 @@ fn parse_function(t **Token, is_extern bool) *Func {
 			if (is2word) {
 				error_at(pp, "a str or struct parameter here would not fit in the argument registers (pass it earlier, or by pointer)");
 			}
+			if (f.extern) {
+				error_at(pp, "an extern function takes at most six register words (SysV marshalling is register-only for now)");
+			}
 			v.arg_stack = true;
 			v.no_reg = true;
 			v.offset = (16 + 8 * stack_slot) as int;
