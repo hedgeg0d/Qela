@@ -1,0 +1,40 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: [1, 2, 3]
+// expect-out: [65, 66, 67]
+// expect-out: 60
+// expect-out: [alice, bob]
+// expect-out: [[1, 2], [3, 4]]
+// expect-out: [0, 1]
+// expect-out: [1, 2]
+// expect-out: [2, 3]
+// expect-out: 6
+// expect-out: [9, 2, 3] [1, 2, 3]
+import "std/io.qela";
+
+fn sum3(a [3]i64) i64 { return a[0] + a[1] + a[2]; }
+
+fn main() int {
+	var a = [1, 2, 3];
+	println("${a}");
+	var b [3]u8 = [65, 66, 67];
+	println("${b}");
+	println("${sum3([10, 20, 30])}");
+	var names = ["alice", "bob"];
+	println("${names}");
+	var m = [[1, 2], [3, 4]];
+	println("${m}");
+	var i i64 = 0;
+	while (i < 3) {
+		var loop = [i, i + 1];
+		println("${loop}");
+		i = i + 1;
+	}
+	var t i64 = 0;
+	for x in [1, 2, 3] { t = t + x; }
+	println("${t}");
+	var c [3]i64 = a;
+	c[0] = 9;
+	println("${c} ${a}");
+	return 0;
+}
