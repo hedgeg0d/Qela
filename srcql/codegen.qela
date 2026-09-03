@@ -1475,17 +1475,20 @@ fn stmt_update(v *Node, k int, e *Node) bool {
 	if (k != ND_ADD && k != ND_SUB && k != ND_BITAND && k != ND_BITOR && k != ND_BITXOR) {
 		return false;
 	}
+	var dst IrOperand;
+	if (v.varp.has_reg) { dst = operand_vreg(v.varp.reg, v.ty); }
+	else { dst = operand_stackslot(v.varp.offset as i64, v.ty); }
 	if (e.kind == ND_NUM && fits_imm32(e.val)) {
-		alu_rm_imm(alu_ext_for(k), v, e.val);
+		ir_alu_rm_imm(alu_ir_for(k), dst, e.val, e.pos);
 		return true;
 	}
 	if (direct_local(e) && e.varp.has_reg) {
-		alu_rm_reg(alu_op_for(k), v, e.varp.reg);
+		ir_alu_rm_reg(alu_ir_for(k), dst, operand_vreg(e.varp.reg, e.ty), e.pos);
 		return true;
 	}
 	if (!v.varp.has_reg) { return false; }
 	gen_expr(e);
-	alu_rm_reg(alu_op_for(k), v, RAX);
+	ir_alu_vreg_acc(alu_ir_for(k), v.varp.reg, e.pos);
 	return true;
 }
 
@@ -1582,6 +1585,30 @@ fn alu_ir_for(kind int) int {
 	if (kind == ND_BITAND) { return ALU_AND; }
 	if (kind == ND_BITOR) { return ALU_OR; }
 	return ALU_XOR;
+}
+
+// The /digit in the 83/81 immediate form, for an ALU_* enum.
+fn alu_ext_code(aop int) int {
+	if (aop == ALU_ADD) { return 0; }
+	if (aop == ALU_OR)  { return 1; }
+	if (aop == ALU_AND) { return 4; }
+	if (aop == ALU_SUB) { return 5; }
+	return 6;
+}
+
+// The single-byte opcode of the "r/m op= reg" form, for an ALU_* enum.
+fn alu_op_code(aop int) i64 {
+	if (aop == ALU_ADD) { return 0x01; }
+	if (aop == ALU_SUB) { return 0x29; }
+	if (aop == ALU_AND) { return 0x21; }
+	if (aop == ALU_OR)  { return 0x09; }
+	return 0x31;
+}
+
+// modrm for [rbp-disp], the frame-slot r/m path of rm_modrm.
+fn slot_modrm(reg int, disp i64) {
+	if (disp >= -128 && disp <= 127) { modrm(1, reg, RBP); b1(disp); }
+	else { modrm(2, reg, RBP); b4(disp); }
 }
 
 // Folds a constant right operand into the instruction, which removes the
@@ -2349,6 +2376,50 @@ fn x86_lower_op(op *IrOp) {
 			return;
 		}
 	}
+	// stmt_update: v op= e folded into v's own slot or register (dst), the
+	// other side being an immediate or a promoted local. The promoted-register
+	// forms replay alu_reg_imm/alu_rm_reg byte for byte; the frame-slot forms
+	// replay alu_rm_imm's r/m-imm encoding and alu_rm_reg's [rbp-disp] path.
+	if (op.kind == IR_ALU && op.dst.kind == OP_VREG && op.src0.kind == OP_VREG && op.src1.kind == OP_IMM) {
+		alu_reg_imm(alu_ext_code(op.aux as int), op.dst.reg, op.src1.off);
+		return;
+	}
+	if (op.kind == IR_ALU && op.dst.kind == OP_STACKSLOT && op.src0.kind == OP_STACKSLOT && op.src1.kind == OP_IMM) {
+		rex_w(0, RBP);
+		var v i64 = op.src1.off;
+		var disp i64 = -(op.dst.off);
+		if (v >= -128 && v <= 127) {
+			b1(0x83);
+			slot_modrm(alu_ext_code(op.aux as int), disp);
+			b1(v);
+		} else {
+			b1(0x81);
+			slot_modrm(alu_ext_code(op.aux as int), disp);
+			b4(v);
+		}
+		return;
+	}
+	if (op.kind == IR_ALU && op.dst.kind == OP_VREG && op.src0.kind == OP_VREG && op.src1.kind == OP_VREG) {
+		var opc i64 = alu_op_code(op.aux as int);
+		rex_w(op.src1.reg, op.dst.reg);
+		b1(opc);
+		modrm(3, op.src1.reg, op.dst.reg);
+		return;
+	}
+	if (op.kind == IR_ALU && op.dst.kind == OP_STACKSLOT && op.src0.kind == OP_STACKSLOT && op.src1.kind == OP_VREG) {
+		var opc i64 = alu_op_code(op.aux as int);
+		rex_w(op.src1.reg, RBP);
+		b1(opc);
+		slot_modrm(op.src1.reg, -(op.dst.off));
+		return;
+	}
+	if (op.kind == IR_ALU && op.dst.kind == OP_VREG && op.src0.kind == OP_VREG && op.src1.kind == OP_ACC) {
+		var opc i64 = alu_op_code(op.aux as int);
+		rex_w(RAX, op.dst.reg);
+		b1(opc);
+		modrm(3, RAX, op.dst.reg);
+		return;
+	}
 	if (op.kind == IR_ALU && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC &&
 	    (op.src1.kind == OP_VREG || op.src1.kind == OP_STACKSLOT)) {
 		if (op.aux == ALU_ADD) { x86_alu_acc_rm(0, 0x03, op.src1); return; }
@@ -2827,6 +2898,37 @@ fn ir_alu_acc_rm(aop int, ty *Type, src IrOperand, pos i64) {
 	op.dst.ty = ty;
 	op.src0 = operand_acc();
 	op.src1 = src;
+	op.aux = aop as i64;
+	x86_lower_all();
+}
+
+// stmt_update: dst op= imm folded into dst's own slot or register.
+fn ir_alu_rm_imm(aop int, dst IrOperand, v i64, pos i64) {
+	var op *IrOp = ir_emit(IR_ALU, pos);
+	op.dst = dst;
+	op.src0 = dst;
+	op.src1 = operand_imm(v);
+	op.aux = aop as i64;
+	x86_lower_all();
+}
+
+// stmt_update: dst op= a promoted local's register.
+fn ir_alu_rm_reg(aop int, dst IrOperand, src IrOperand, pos i64) {
+	var op *IrOp = ir_emit(IR_ALU, pos);
+	op.dst = dst;
+	op.src0 = dst;
+	op.src1 = src;
+	op.aux = aop as i64;
+	x86_lower_all();
+}
+
+// stmt_update: <v.reg> op= rax, after gen_expr left the right side in the
+// accumulator.
+fn ir_alu_vreg_acc(aop int, reg int, pos i64) {
+	var op *IrOp = ir_emit(IR_ALU, pos);
+	op.dst = operand_vreg(reg, 0 as *Type);
+	op.src0 = op.dst;
+	op.src1 = operand_acc();
 	op.aux = aop as i64;
 	x86_lower_all();
 }
