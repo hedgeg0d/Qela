@@ -12,7 +12,13 @@ let RBP = 5;
 let RSI = 6;
 let RDI = 7;
 
+// The integer argument register for rank i on the current target -- the
+// register-mapping half of the ABI, mirrored by abi_n_arg_regs() in
+// comp.qela. SysV AMD64 order is rdi, rsi, rdx, rcx, r8, r9; AAPCS64 is
+// simply x0..x7, whose encodings are 0..7. A rank past the target's register
+// count is unreachable: parse.qela spills parameters beyond abi_n_arg_regs().
 fn call_reg(i int) int {
+	if (opt_target == TARGET_ARM64) { return i; }
 	if (i == 0) { return RDI; }
 	if (i == 1) { return RSI; }
 	if (i == 2) { return RDX; }
@@ -22,6 +28,7 @@ fn call_reg(i int) int {
 }
 
 fn sys_reg(i int) int {
+	if (opt_target == TARGET_ARM64) { return call_reg(i); }
 	if (i == 3) { return R10; }
 	return call_reg(i);
 }
@@ -1258,7 +1265,7 @@ fn gen_call(n *Node) {
 	var cf *Func = find_func(n.name);
 	var marshall bool = false;
 	if (cf as i64 != 0) { marshall = cf.extern; }
-	var ret_mem bool = is_aggregate(n.ty) && abi_by_ref(n.ty.size);
+	var ret_mem bool = is_aggregate(n.ty) && abi_sret(n.ty.size);
 	var hidden i64 = -1;
 	if (ret_mem) { hidden = n.tmp.offset as i64; }
 	gen_args(n, false, false, hidden, marshall);
@@ -1295,7 +1302,7 @@ fn gen_call(n *Node) {
 // target can only live in a callee-saved register (an indirect call makes
 // the function non-leaf, so the free caller-saved pool is out).
 fn gen_indirect_call(n *Node) {
-	var ret_mem bool = is_aggregate(n.ty) && abi_by_ref(n.ty.size);
+	var ret_mem bool = is_aggregate(n.ty) && abi_sret(n.ty.size);
 	var hidden i64 = -1;
 	if (ret_mem) { hidden = n.tmp.offset as i64; }
 	gen_args(n, false, false, hidden, false);
