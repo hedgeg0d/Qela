@@ -1,0 +1,12 @@
+// expect-exit: 42
+// stage1-only
+// extern var with an initializer is an export and links in every mode; a bare
+// extern var is an import that only resolves under -c with the linker.
+// Declaring either without using it compiles anywhere - a reference to an
+// import without -c is the error (externvar.qela).
+extern var shared i64 = 7;
+extern var cvar i64;
+fn main() int {
+	var x i64 = shared;
+	return x + 35;
+}
