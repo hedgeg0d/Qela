@@ -1,0 +1,46 @@
+// expect-exit: 0
+// expect-out: cond compile ok
+// stage1-only
+// $if blocks are evaluated at compile time against a comptime variable
+// (TARGET here); only the taken branch's statements are emitted, and the
+// untaken branch may even be invalid (it never parses into the program).
+import "std/io.qela";
+
+$if (TARGET == "x86_64") {
+	let ARCH = 64;
+} $else {
+	let ARCH = 1;
+}
+
+$if (TARGET != "x86_64") {
+	this never parses for real
+}
+
+$if (TARGET == "arm64") {
+	let OTHER = 0;
+} $else {
+	let OTHER = 2;
+}
+
+fn main() int {
+	var fails i64 = 0;
+	if (ARCH != 64) { fails = fails + 1; }
+	if (OTHER != 2) { fails = fails + 1; }
+	var w i64 = 0;
+	$if (TARGET == "x86_64") {
+		w = w + 1;
+	}
+	if (w != 1) { fails = fails + 1; }
+	var v i64 = 0;
+	$if (TARGET == "arm64") {
+		v = 100;
+	} $else {
+		v = 7;
+	}
+	if (v != 7) { fails = fails + 1; }
+	$if (!TARGET) {
+		fails = 99;
+	}
+	if (fails == 0) { write_str(STDOUT, "cond compile ok\n"); }
+	return fails as int;
+}
