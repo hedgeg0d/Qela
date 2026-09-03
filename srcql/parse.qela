@@ -2077,8 +2077,11 @@ fn interp_gen_eval_decode(b *Buf, idx int, ty *Type) {
 	fmt_str(b, " = *(__cur as *");
 	fmt_str(b, type_name(ty));
 	fmt_str(b, "); __cur = __cur + ");
-	if (ty.kind == TY_STRUCT || ty.kind == TY_ARRAY) { fmt_i64(b, ty.size as i64); }
-	else { fmt_str(b, "8"); }
+	// An enum is an aggregate like a struct: the wire carries its whole
+	// raw image, so the cursor advances by its size, not one word.
+	if (ty.kind == TY_STRUCT || ty.kind == TY_ARRAY || ty.kind == TY_ENUM) {
+		fmt_i64(b, ty.size as i64);
+	} else { fmt_str(b, "8"); }
 	fmt_str(b, ";");
 }
 
@@ -2136,7 +2139,7 @@ fn interp_gen_eval_body(b *Buf, ef *Func) {
 		interp_gen_marshal_fields(b, "__r0", ef.ret);
 		return;
 	}
-	if (ef.ret.kind == TY_STRUCT || ef.ret.kind == TY_ARRAY) {
+	if (ef.ret.kind == TY_STRUCT || ef.ret.kind == TY_ARRAY || ef.ret.kind == TY_ENUM) {
 		fmt_str(b, "var __r0 ");
 		fmt_str(b, type_name(ef.ret));
 		fmt_str(b, " = ");
