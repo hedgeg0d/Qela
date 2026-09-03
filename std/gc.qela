@@ -1,4 +1,5 @@
 import "sys.qela";
+import "coro.qela";
 
 // A conservative mark-sweep collector, written in Qela like everything else
 // the compiler ships. Arenas stay the default; this is for programs whose
@@ -164,6 +165,17 @@ fn gc_collect() {
 	var sp i64 = &here as i64;
 	gc_mark_range(sp, gc_stack_base + 8);
 	gc_mark_range(gc_data_base(), gc_data_end());
+
+	// The scan above only covers the coroutine gc_collect runs on; every
+	// other live coroutine keeps roots parked on its own stack, between its
+	// saved sp and the top recorded at spawn.
+	var i int = 1;
+	while (i <= coro_slots()) {
+		if (i != cur_coro && coros[i].alive && !coros[i].done) {
+			gc_mark_range(coros[i].sp, coros[i].top);
+		}
+		i = i + 1;
+	}
 
 	gc_sweep();
 }

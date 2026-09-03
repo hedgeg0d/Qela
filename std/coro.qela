@@ -12,6 +12,7 @@ let CORO_SLOTS = 256;
 
 struct Coro {
 	sp    i64,
+	top   i64,
 	done  bool,
 	alive bool,
 }
@@ -46,6 +47,7 @@ fn coro_spawn(target i64, a0 i64, a1 i64, a2 i64, a3 i64, a4 i64) {
 	p[12] = target;
 
 	coros[id].sp = sp0;
+	coros[id].top = top;
 	coros[id].done = false;
 	coros[id].alive = true;
 }
