@@ -101,6 +101,7 @@ is larger — see `STATUS.md`.
 | global aggregates with an initializer | stage0 cannot emit them; fill tables at startup |
 | more than 6 parameters | pass a context struct by pointer |
  | `extern fn` / `extern var` / `-c` | a user-facing C-interop path; stage1 does not lean on it and the bootstrap gate cannot drive the external linker |
+| `atomic_*`, `fence`, `thread_clone`, `tls_init`, `tvar` | stage0's C implementation has never heard of them — a bootstrap-subset file (`std/arena.qela` and below) calling `atomic_cas` fails stage0 compilation with "undefined function", not a subtler bug. Hit for real: `coro_spawn`'s stack allocation needs a lock around its one `arena_alloc` call now that coroutines run on real OS threads, and that lock lives in `coro.qela` (stage1-only) rather than in `arena.qela` for exactly this reason |
 
 `tools/check-subset.sh` enforces this over `srcql/` and the `std/` modules
 stage1 imports; it works that set out from the imports, so a new `std/` module
@@ -140,7 +141,8 @@ std/list.qela      growable pointer array
 std/map.qela       str -> pointer hash table, deterministic iteration
 std/coro.qela      coroutines on their own stacks
 std/chan.qela      Chan(T), buffered channels of any element type
-std/gc.qela        conservative mark-sweep collector
+std/gc.qela        conservative mark-sweep collector, cross-thread stop-the-world
+std/thread.qela    a pool of real OS threads, go()/thread_pool_init
 std/heap.qela      K&R malloc/free/realloc on its own mmap regions
 std/math.qela      abs, min, max
 std/rand.qela      deterministic xorshift64*
