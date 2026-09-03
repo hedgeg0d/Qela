@@ -1177,46 +1177,32 @@ fn gen_cast_float(n *Node) {
 	if (dt.size < 8) { truncate_to(dt); }
 }
 
+fn cc_for_compare(n *Node) i64 {
+	var uns bool = n.lhs.ty.is_unsigned || n.lhs.ty.kind == TY_PTR;
+	if (n.kind == ND_EQ) { return CC_EQ; }
+	if (n.kind == ND_NE) { return CC_NE; }
+	if (n.kind == ND_LT) { if (uns) { return CC_ULT; } return CC_LT; }
+	if (uns) { return CC_ULE; }
+	return CC_LE;
+}
+
 fn gen_binop(n *Node) {
 	var t *Type = n.ty;
 	var k int = n.kind;
 
 	if (is_float(n.lhs.ty)) { gen_binop_float(n); return; }
-	if (k == ND_ADD) { rex_w(RDI, RAX); b1(0x01); modrm(3, RDI, RAX); return; }
-	if (k == ND_SUB) { rex_w(RDI, RAX); b1(0x29); modrm(3, RDI, RAX); return; }
-	if (k == ND_MUL) { b1(0x48); b1(0x0f); b1(0xaf); modrm(3, RAX, RDI); return; }
-	if (k == ND_DIV || k == ND_MOD) {
-		if (t.is_unsigned) {
-			b1(0x31); modrm(3, RDX, RDX);
-			b1(0x48); b1(0xf7); modrm(3, 6, RDI);
-		} else {
-			b1(0x48); b1(0x99);
-			b1(0x48); b1(0xf7); modrm(3, 7, RDI);
-		}
-		if (k == ND_MOD) { mov_reg_reg(RAX, RDX); }
-		return;
-	}
-	if (k == ND_BITAND) { rex_w(RDI, RAX); b1(0x21); modrm(3, RDI, RAX); return; }
-	if (k == ND_BITOR)  { rex_w(RDI, RAX); b1(0x09); modrm(3, RDI, RAX); return; }
-	if (k == ND_BITXOR) { rex_w(RDI, RAX); b1(0x31); modrm(3, RDI, RAX); return; }
-	if (k == ND_SHL || k == ND_SHR) {
-		mov_reg_reg(RCX, RDI);
-		b1(0x48); b1(0xd3);
-		var ext int = 7;
-		if (k == ND_SHL) { ext = 4; } else if (t.is_unsigned) { ext = 5; }
-		modrm(3, ext, RAX);
-		return;
-	}
+	if (k == ND_ADD) { ir_alu_acc(ALU_ADD, t, n.pos); return; }
+	if (k == ND_SUB) { ir_alu_acc(ALU_SUB, t, n.pos); return; }
+	if (k == ND_MUL) { ir_alu_acc(ALU_MUL, t, n.pos); return; }
+	if (k == ND_DIV) { ir_alu_acc(ALU_DIV, t, n.pos); return; }
+	if (k == ND_MOD) { ir_alu_acc(ALU_MOD, t, n.pos); return; }
+	if (k == ND_BITAND) { ir_alu_acc(ALU_AND, t, n.pos); return; }
+	if (k == ND_BITOR)  { ir_alu_acc(ALU_OR, t, n.pos); return; }
+	if (k == ND_BITXOR) { ir_alu_acc(ALU_XOR, t, n.pos); return; }
+	if (k == ND_SHL) { ir_alu_acc(ALU_SHL, t, n.pos); return; }
+	if (k == ND_SHR) { ir_alu_acc(ALU_SHR, t, n.pos); return; }
 	if (k == ND_EQ || k == ND_NE || k == ND_LT || k == ND_LE) {
-		rex_w(RDI, RAX);
-		b1(0x39);
-		modrm(3, RDI, RAX);
-		var uns bool = n.lhs.ty.is_unsigned || n.lhs.ty.kind == TY_PTR;
-		var cc i64 = 0x94;
-		if (k == ND_NE) { cc = 0x95; }
-		else if (k == ND_LT) { if (uns) { cc = 0x92; } else { cc = 0x9c; } }
-		else if (k == ND_LE) { if (uns) { cc = 0x96; } else { cc = 0x9e; } }
-		setcc(cc);
+		ir_compare_acc(cc_for_compare(n), n.pos);
 		return;
 	}
 	error_at(n.pos, "invalid expression");
@@ -2073,6 +2059,21 @@ fn gen_tls_init_stub() {
 // x86_emit.qela's x86_lower walking a whole function's op list at once;
 // today it is called right after building each op, one at a time, as the
 // IR vocabulary is proven out case by case.
+fn x86_setcc_byte(cc i64) i64 {
+	if (cc == CC_EQ) { return 0x94; }
+	if (cc == CC_NE) { return 0x95; }
+	if (cc == CC_LT) { return 0x9c; }
+	if (cc == CC_LE) { return 0x9e; }
+	if (cc == CC_GT) { return 0x9f; }
+	if (cc == CC_GE) { return 0x9d; }
+	if (cc == CC_ULT) { return 0x92; }
+	if (cc == CC_ULE) { return 0x96; }
+	if (cc == CC_UGT) { return 0x97; }
+	if (cc == CC_UGE) { return 0x93; }
+	die("internal: x86_setcc_byte: unhandled cc");
+	return 0;
+}
+
 fn x86_lower_op(op *IrOp) {
 	if (op.kind == IR_MOV && op.dst.kind == OP_ACC && op.src0.kind == OP_IMM) {
 		mov_reg_imm(RAX, op.src0.off);
@@ -2082,6 +2083,44 @@ fn x86_lower_op(op *IrOp) {
 		if (op.aux == UOP_NEG) { b1(0x48); b1(0xf7); modrm(3, 3, RAX); return; }
 		if (op.aux == UOP_BITNOT) { b1(0x48); b1(0xf7); modrm(3, 2, RAX); return; }
 		if (op.aux == UOP_LNOT) { test_rax(); setcc(0x94); return; }
+	}
+	if (op.kind == IR_ALU && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC && op.src1.kind == OP_REG) {
+		var uns bool = op.dst.ty.is_unsigned;
+		if (op.aux == ALU_ADD) { rex_w(RDI, RAX); b1(0x01); modrm(3, RDI, RAX); return; }
+		if (op.aux == ALU_SUB) { rex_w(RDI, RAX); b1(0x29); modrm(3, RDI, RAX); return; }
+		if (op.aux == ALU_MUL) { b1(0x48); b1(0x0f); b1(0xaf); modrm(3, RAX, RDI); return; }
+		if (op.aux == ALU_DIV || op.aux == ALU_MOD) {
+			if (uns) {
+				b1(0x31); modrm(3, RDX, RDX);
+				b1(0x48); b1(0xf7); modrm(3, 6, RDI);
+			} else {
+				b1(0x48); b1(0x99);
+				b1(0x48); b1(0xf7); modrm(3, 7, RDI);
+			}
+			if (op.aux == ALU_MOD) { mov_reg_reg(RAX, RDX); }
+			return;
+		}
+		if (op.aux == ALU_AND) { rex_w(RDI, RAX); b1(0x21); modrm(3, RDI, RAX); return; }
+		if (op.aux == ALU_OR)  { rex_w(RDI, RAX); b1(0x09); modrm(3, RDI, RAX); return; }
+		if (op.aux == ALU_XOR) { rex_w(RDI, RAX); b1(0x31); modrm(3, RDI, RAX); return; }
+		if (op.aux == ALU_SHL || op.aux == ALU_SHR) {
+			mov_reg_reg(RCX, RDI);
+			b1(0x48); b1(0xd3);
+			var ext int = 7;
+			if (op.aux == ALU_SHL) { ext = 4; } else if (uns) { ext = 5; }
+			modrm(3, ext, RAX);
+			return;
+		}
+	}
+	if (op.kind == IR_CMP && op.src0.kind == OP_ACC && op.src1.kind == OP_REG) {
+		rex_w(RDI, RAX);
+		b1(0x39);
+		modrm(3, RDI, RAX);
+		return;
+	}
+	if (op.kind == IR_SETCC && op.dst.kind == OP_ACC) {
+		setcc(x86_setcc_byte(op.aux));
+		return;
 	}
 	die("internal: x86_lower_op: unhandled IR shape");
 }
@@ -2107,6 +2146,29 @@ fn ir_unary_acc(uop int, pos i64) {
 	op.dst = operand_acc();
 	op.src0 = operand_acc();
 	op.aux = uop as i64;
+	x86_lower_all();
+}
+
+// The left operand is already in the accumulator and the right in RDI, per
+// gen_expr's binop preamble (spine emission / gen_binop_mem's operand
+// setup) -- this just records that shape as IR and lowers it immediately.
+fn ir_alu_acc(aop int, ty *Type, pos i64) {
+	var op *IrOp = ir_emit(IR_ALU, pos);
+	op.dst = operand_acc();
+	op.dst.ty = ty;
+	op.src0 = operand_acc();
+	op.src1 = operand_reg(RDI);
+	op.aux = aop as i64;
+	x86_lower_all();
+}
+
+fn ir_compare_acc(cc i64, pos i64) {
+	var c *IrOp = ir_emit(IR_CMP, pos);
+	c.src0 = operand_acc();
+	c.src1 = operand_reg(RDI);
+	var s *IrOp = ir_emit(IR_SETCC, pos);
+	s.dst = operand_acc();
+	s.aux = cc;
 	x86_lower_all();
 }
 
