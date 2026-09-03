@@ -22,8 +22,10 @@ Qela is a compiled systems language for x86-64 Linux:
   rewind, a K&R `std/heap.qela` malloc/free/realloc for blocks that come back,
   and an optional conservative garbage collector for programs whose lifetimes
   are not stack-shaped.
-- **Concurrency is cooperative**: coroutines on their own stacks, plus typed
-  channels.
+- **Concurrency is cooperative, parallelism is real**: coroutines on their
+  own stacks, plus typed channels, and a fixed pool of real OS threads
+  (`go`/`thread_pool_init`) each running its own scheduler when you actually
+  want multiple cores, not just multiple stacks.
 
 The quickest way to read this guide is to keep a terminal open and run the
 examples as you go.
@@ -49,10 +51,11 @@ examples as you go.
 17. [assert, panic, and bounds checks](#17-assert-panic-and-bounds-checks)
 18. [Modules and the standard library](#18-modules-and-the-standard-library)
 19. [Coroutines and channels](#19-coroutines-and-channels)
-20. [The compiler as a tool](#20-the-compiler-as-a-tool)
-21. [Raw machine code](#21-raw-machine-code)
-22. [Where to look next](#22-where-to-look-next)
-23. [Compiler flags reference](#23-compiler-flags-reference)
+20. [Real OS threads](#20-real-os-threads)
+21. [The compiler as a tool](#21-the-compiler-as-a-tool)
+22. [Raw machine code](#22-raw-machine-code)
+23. [Where to look next](#23-where-to-look-next)
+24. [Compiler flags reference](#24-compiler-flags-reference)
 
 ---
 
@@ -133,7 +136,7 @@ qela run file.qela [args]   # compile to a temp file, run it, print backtraces o
 qela -                      # compile a program from stdin
 qela . [dir]                # merge every .qela in a directory into one program
 qela repl                   # one-liner REPL: type an expression, see its value
-qela test file.qela         # run file, check its // expect-* comments (section 20)
+qela test file.qela         # run file, check its // expect-* comments (section 21)
 qela fmt file.qela          # reformat over the token stream, idempotent
 qela --lsp                  # language server: diagnostics, hover, go-to-def
 qela --dump-std <module>    # print a standard module's embedded source
@@ -1182,7 +1185,9 @@ gc_live_bytes() i64         // bytes still live
 ```
 
 Arenas remain the default; reach for `gc` only when object lifetimes are
-genuinely graph-shaped.
+genuinely graph-shaped. Across real OS threads (section 20) a thread only
+becomes a root the collector looks at once it calls `gc_thread_enter()`;
+call `gc_thread_exit()` before it ends.
 
 ## 19. Coroutines and channels
 
@@ -1260,13 +1265,104 @@ returns a zeroed element (pair it with `chan_is_closed` when zero is also a
 valid value).
 
 **Deadlock** — every coroutine parked and no channel changed for long enough
-that everyone had its turn — is detected and reported rather than spun on:
+that everyone had its turn — is detected and reported rather than spun on,
+*as long as there is only one scheduler running*: see the next section for
+what changes once real OS threads enter the picture.
 
 ```sh
 qela: deadlock, every coroutine is blocked on a channel receive
 ```
 
-## 20. The compiler as a tool
+## 20. Real OS threads
+
+Everything in the previous section is concurrency, not parallelism: one
+process, one scheduler, no multi-core speedup. `std/thread.qela` adds a
+fixed pool of real OS threads, each running its own coroutine scheduler —
+goroutines multiplexed over actual cores, with channels as the supported way
+to move values between them.
+
+```qela
+import "std/thread.qela";
+import "std/chan.qela";
+
+var results Chan(i64);
+
+fn worker(n i64) i64 {
+	chan_send(&results, n * n);
+	return 0;
+}
+
+fn main() int {
+	chan_init(&results, 16);
+	thread_pool_init(4);        // 4 OS threads, each its own scheduler
+
+	var i i64 = 0;
+	while (i < 100) { go worker(i); i = i + 1; }   // same shape as spawn
+
+	var sum i64 = 0;
+	var got i64 = 0;
+	while (got < 100) { sum = sum + chan_recv(&results); got = got + 1; }
+	return 0;
+}
+```
+
+`go f(args)` is sugar identical to `spawn` (up to 5 arguments, desugars
+through the same code path) — the difference is where the work ends up:
+`spawn` always runs on the calling thread's own scheduler, `go` round-robins
+onto one of the pool's threads, stealing an unstarted request from a
+neighbor's queue if a thread would otherwise sit idle. A coroutine already
+handed to a thread stays there — there is no work-stealing for something
+already running, only for requests that have not started yet.
+
+### tvar — thread-local storage
+
+`tvar` declares a global that is per-OS-thread instead of shared:
+
+```qela
+tvar counter i64 = 0;
+
+fn worker(n i64) i64 {
+	counter = counter + 1;   // this thread's own counter, not any other's
+	return 0;
+}
+```
+
+The main thread gets its `tvar`s initialized automatically before `main()`
+runs. Any thread started outside `thread_pool_init` — a raw `thread_clone`
+— has to call `tls_init()` itself first, before touching any `tvar`; a pool
+worker does this for you.
+
+### Atomics
+
+`atomic_add`/`atomic_cas`/`atomic_load`/`atomic_store`/`fence` are the
+primitives everything above is built on, usable directly for your own
+shared counters and flags:
+
+```qela
+var flag i64 = 0;
+atomic_store(&flag, 1);
+if (atomic_cas(&flag, 1, 2)) { /* flag was 1, is now 2 */ }
+var old i64 = atomic_add(&flag, 5);   // returns the value before adding
+```
+
+### Known limits
+
+- **No cross-thread deadlock detection.** The single-scheduler heuristic
+  from the previous section turns itself off the moment `thread_pool_init`
+  runs — it cannot tell a sibling thread that is merely slow to get
+  scheduled from a real deadlock, so rather than produce false positives it
+  produces none. A channel-based deadlock across real threads just hangs.
+- **The pool scheduler is round-robin plus queue-level stealing**, not a
+  full work-stealing scheduler: only unstarted `go` requests move between
+  threads, not coroutines already running.
+- **The garbage collector can only pause a thread that allocates.** GC
+  stop-the-world uses cooperative safepoints checked at `gc_alloc`'s own
+  entry; a thread doing a long computation with no allocation in it cannot
+  be paused mid-flight. A thread that wants to be a GC root has to call
+  `gc_thread_enter()` itself (`std/gc.qela`) — `thread_pool_init` does not
+  do this automatically, so it stays usable without pulling `gc.qela` in.
+
+## 21. The compiler as a tool
 
 ### qela test — the built-in test runner
 
@@ -1351,7 +1447,7 @@ the library's own references to it still point at its own copy, so shared
 mutable data can diverge). Bounds checks and `assert` work in object mode
 too.
 
-## 21. Raw machine code
+## 22. Raw machine code
 
 Qela's low-level escape hatches, for kernels, bootloaders and bare-metal.
 
@@ -1405,12 +1501,12 @@ fn naked start() {
 }
 ```
 
-## 22. Where to look next
+## 23. Where to look next
 
 - **`tests/`** — one file per feature, with the expected behavior in the
   leading comments. The best reference: `tests/structlit.qela`,
   `tests/enum.qela`, `tests/generictype.qela`, `tests/chan.qela`,
-  `tests/vec.qela`, `tests/topasm.qela`.
+  `tests/vec.qela`, `tests/topasm.qela`, `tests/thread_pool.qela`.
 - **`examples/lisp/`** — a complete Lisp interpreter in Qela: lexer, reader,
   evaluator with closures and macros, REPL. Runs `qela test . tests.lisp`.
 - **`examples/fizzbuzz.qela`** — the annotated tour of a small real program.
@@ -1418,10 +1514,10 @@ fn naked start() {
 - **`docs/STATUS.md`** — what works and what is left, with measurements.
 - **`docs/BOOTSTRAP.md`** — the subset the compiler's own sources must stay
   inside. Relevant only if you start hacking on the compiler.
-- The standard library itself, `std/` (or `qela --dump-std`): 15 small
+- The standard library itself, `std/` (or `qela --dump-std`): 19 small
   files, all of it readable Qela.
 
-## 23. Compiler flags reference
+## 24. Compiler flags reference
 
 The compiler is one binary; the subcommands (`run`, `test`, `fmt`, `repl`,
 `.`), `--lsp` and `--dump-std` are described in sections 3 and 20. This is
