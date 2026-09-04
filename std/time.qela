@@ -1,0 +1,46 @@
+import "sys.qela";
+
+$if (TARGET != "x86_64") {
+let SYS_CLOCK_GETTIME_T = 113;
+let SYS_NANOSLEEP_T = 101;
+}
+$else {
+let SYS_CLOCK_GETTIME_T = 228;
+let SYS_NANOSLEEP_T = 35;
+}
+
+let CLOCK_REALTIME = 0;
+let CLOCK_MONOTONIC = 1;
+
+struct TimeSpec {
+	sec  i64,
+	nsec i64,
+}
+
+fn time_get(clock i64) TimeSpec {
+	var ts TimeSpec;
+	syscall(SYS_CLOCK_GETTIME_T, clock, &ts as i64, 0);
+	return ts;
+}
+
+fn time_ns() i64 {
+	var ts TimeSpec = time_get(CLOCK_MONOTONIC);
+	return ts.sec * 1000000000 + ts.nsec;
+}
+
+fn time_ms() i64 {
+	return time_ns() / 1000000;
+}
+
+fn time_unix() i64 {
+	var ts TimeSpec = time_get(CLOCK_REALTIME);
+	return ts.sec;
+}
+
+fn sleep_ms(ms i64) {
+	if (ms <= 0) { return; }
+	var ts TimeSpec;
+	ts.sec = ms / 1000;
+	ts.nsec = (ms % 1000) * 1000000;
+	syscall(SYS_NANOSLEEP_T, &ts as i64, 0, 0);
+}
