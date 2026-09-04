@@ -803,7 +803,7 @@ fn gen_addr(n *Node) {
 			st_local(off - 8, RDI);
 		}
 
-		if (n.rhs as i64 != 0) { gen_expr(n.rhs); } else { mov_reg_imm(RAX, 0); }
+		if (n.rhs as i64 != 0) { gen_expr(n.rhs); } else { ir_mov_acc_imm(0, n.pos); }
 		push_reg(RAX);
 
 		if (n.then as i64 != 0) { gen_expr(n.then); } else { ld_local(RAX, off - 8); }
@@ -1338,11 +1338,11 @@ fn gen_logical(n *Node) {
 	gen_expr(n.rhs);
 	test_rax();
 	var skip2 i64 = jump(cc);
-	if (n.kind == ND_AND) { mov_reg_imm(RAX, 1); } else { mov_reg_imm(RAX, 0); }
+	if (n.kind == ND_AND) { ir_mov_acc_imm(1, n.pos); } else { ir_mov_acc_imm(0, n.pos); }
 	var end i64 = jump(0);
 	patch_here(skip);
 	patch_here(skip2);
-	if (n.kind == ND_AND) { mov_reg_imm(RAX, 0); } else { mov_reg_imm(RAX, 1); }
+	if (n.kind == ND_AND) { ir_mov_acc_imm(0, n.pos); } else { ir_mov_acc_imm(1, n.pos); }
 	patch_here(end);
 }
 
@@ -2522,7 +2522,7 @@ fn gen_ret(n *Node) {
 			}
 		}
 	} else {
-		mov_reg_imm(RAX, 0);
+		ir_mov_acc_imm(0, n.pos);
 	}
 	if (any_defers()) {
 		var wide bool = false;
