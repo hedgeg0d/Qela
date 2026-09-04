@@ -623,6 +623,12 @@ var strlist_head *StrLit;
 var strlist_tail *StrLit;
 var nstrs int = 0;
 
+fn add_str_null() int {
+	var id int = add_str("");
+	strlist_tail.nullhdr = true;
+	return id;
+}
+
 fn add_str(s str) int {
 	var lit *StrLit = arena_alloc(sizeof(StrLit), 8) as *StrLit;
 	lit.s = s;
@@ -769,6 +775,28 @@ fn call_args(t **Token, n *Node) *Node {
 	return n;
 }
 
+fn parse_bytes(raw str, pos i64) *Node {
+	var path str = raw;
+	if (raw.len > 0 && raw.ptr[0] != '/') {
+		var pb Buf;
+		fmt_str(&pb, diag_file_dir(diag_file_of(pos)));
+		fmt_str(&pb, raw);
+		path = buf_str(&pb);
+	}
+	var n *Node = new_node(ND_STRLIT, pos);
+	if (!file_exists(path)) {
+		var wb Buf;
+		fmt_str(&wb, "$bytes cannot read '");
+		fmt_str(&wb, path);
+		fmt_str(&wb, "', embedding an empty slice");
+		warn_at(pos, buf_str(&wb));
+		n.val = add_str_null() as i64;
+		return n;
+	}
+	n.val = add_str(read_file(path)) as i64;
+	return n;
+}
+
 fn parse_primary(t **Token) *Node {
 	if (tok_eq(*t, "[")) {
 		var p i64 = (*t).pos;
@@ -808,6 +836,15 @@ fn parse_primary(t **Token) *Node {
 	}
 	// A symbol reference for asm operands: `$name` embeds the absolute
 	// address, `$rel name` a rel32 slot, patched when addresses are known.
+	if (tok_eq(*t, "$") && tok_eq((*t).next, "bytes") && tok_eq((*t).next.next, "(")) {
+		var bp i64 = (*t).pos;
+		*t = (*t).next.next.next;
+		if ((*t).kind != TK_STR) { error_at((*t).pos, "$bytes needs a path in quotes"); }
+		var raw str = (*t).sval;
+		*t = (*t).next;
+		tok_expect(t, ")");
+		return parse_bytes(raw, bp);
+	}
 	if (tok_consume(t, "$")) {
 		var p i64 = (*t).pos;
 		if ((*t).kind != TK_IDENT) { error_at((*t).pos, "expected a symbol after '$'"); }

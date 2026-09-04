@@ -1,0 +1,25 @@
+// stage1-only
+// expect-exit: 0
+// expect-warn: $bytes cannot read
+// expect-out: len 24
+// expect-out: sum 2295
+// expect-out: qela embed test
+// expect-out: 0 0
+import "std/io.qela";
+import "std/str.qela";
+
+fn main() int {
+	var d str = $bytes("embed.bin");
+	println("len ${d.len}");
+	var i i64 = 0;
+	var sum i64 = 0;
+	while (i < d.len) {
+		sum = sum + (d.ptr[i] as i64);
+		i = i + 1;
+	}
+	println("sum ${sum}");
+	println(str_slice(d, 0, 15));
+	var missing str = $bytes("no-such-file.bin");
+	println("${missing.ptr as i64} ${missing.len}");
+	return 0;
+}
