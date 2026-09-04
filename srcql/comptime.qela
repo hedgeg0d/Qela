@@ -82,6 +82,8 @@ fn ct_call(f *Func, args *Node) ComptimeVal {
 		else if (i == 3) { pv = f.p3; }
 		else if (i == 4) { pv = f.p4; }
 		else if (i == 5) { pv = f.p5; }
+		else if (i == 6) { pv = f.p6; }
+		else if (i == 7) { pv = f.p7; }
 		ct_declare(pv.name, ct_eval_expr(a));
 		a = a.next;
 		i = i + 1;

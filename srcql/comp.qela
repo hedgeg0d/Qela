@@ -233,6 +233,8 @@ struct Func {
 	p3         *Var,
 	p4         *Var,
 	p5         *Var,
+	p6         *Var,
+	p7         *Var,
 	pextra     *Var,
 	n_stack_args int,
 }
@@ -390,6 +392,13 @@ let REL_ABS64        = 0;
 let REL_PCREL32      = 1;
 let REL_PCREL32_PLT  = 2;
 let REL_ABS32S       = 3;
+// ARM64 object-mode kinds: elf.qela maps REL_ABS64 to R_AARCH64_ABS64 (a
+// plain 8-byte data-pointer patch, same purpose as the x86 kind, different
+// architecture number) and these three to the CALL26/ADRP/ADD_LO12 triple
+// every address reference and call site here uses.
+let REL_ARM64_CALL26   = 4;
+let REL_ARM64_ADRP     = 5;
+let REL_ARM64_ADD_LO12 = 6;
 
 struct ComptimeVal {
 	kind int,
