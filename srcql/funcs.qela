@@ -15,5 +15,5 @@ fn find_func(name str) *Func {
 		if (str_eq(f.name, name)) { return f; }
 		f = f.next;
 	}
-	return 0 as *Func;
+	return null;
 }

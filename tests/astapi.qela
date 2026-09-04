@@ -42,7 +42,7 @@ fn main() int {
 	var r2 i64 = run_ast(a);
 	if (r2 != 22) { fails = fails + 1; }
 	if (ast_set(a, 9, two_expr)) { fails = fails + 1; }
-	var ni AstInfo = ast_info(0 as *Ast);
+	var ni AstInfo = ast_info(null);
 	if (ni.count != 0) { fails = fails + 1; }
 	if (fails == 0) { write_str(STDOUT, "all ast api paths ok\n"); }
 	return fails as int;

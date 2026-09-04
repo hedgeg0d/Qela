@@ -192,7 +192,7 @@ fn gen_addr(n *Node) {
 		ir_pop_op2(n.pos);
 
 		if (!opt_no_bounds) {
-			ir_cmp_acc_rm(operand_stackslot(off - 8, 0 as *Type), n.pos);
+			ir_cmp_acc_rm(operand_stackslot(off - 8, null), n.pos);
 			ir_bounds(CC_UGT, n.pos);
 			ir_cmp_op2_acc_rev(n.pos);
 			ir_bounds(CC_UGT, n.pos);
@@ -203,7 +203,7 @@ fn gen_addr(n *Node) {
 
 		ir_mov_op2_acc(n.pos);
 		ir_alu_acc_imm(ALU_SCALE, type_ptr(ty_i64), elem as i64, n.pos);
-		ir_alu_acc_rm(ALU_ADD, n.ty, operand_stackslot(off, 0 as *Type), n.pos);
+		ir_alu_acc_rm(ALU_ADD, n.ty, operand_stackslot(off, null), n.pos);
 		ir_store_stackslot_acc(off, n.ty, n.pos);
 
 		ir_lea_slot_acc(off, n.pos);
@@ -420,7 +420,7 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) int
 				gen_expr(sn);
 				// Same bytes as mov_reg_reg(dest[nd], RAX) on x86 (IR_STORE
 				// dst=VREG src0=ACC), routed through IR so ARM64 gets it too.
-				ir_store_vreg_acc(dest[nd], 0 as *Type, n.pos);
+				ir_store_vreg_acc(dest[nd], null, n.pos);
 			}
 		}
 	}
@@ -1310,7 +1310,7 @@ fn ir_lea_acc(base IrOperand, index IrOperand, scale int, disp i64, pos i64) {
 // local that can be the lea index directly.
 fn operand_index(reg int) IrOperand {
 	if (reg == op2_reg(0)) { return operand_op2(0); }
-	return operand_vreg(reg, 0 as *Type);
+	return operand_vreg(reg, null);
 }
 
 
@@ -1358,7 +1358,7 @@ fn ir_compare_acc(cc i64, pos i64) {
 
 fn ir_mov_vreg_imm(reg int, v i64, pos i64) {
 	var op *IrOp = ir_emit(IR_MOV, pos);
-	op.dst = operand_vreg(reg, 0 as *Type);
+	op.dst = operand_vreg(reg, null);
 	op.src0 = operand_imm(v);
 }
 
@@ -1376,8 +1376,8 @@ fn ir_load_vreg_var(dst int, v *Var, ty *Type, pos i64) {
 // reg op= imm, gen_into's immediate arm.
 fn ir_alu_vreg_imm(aop int, reg int, v i64, pos i64) {
 	var op *IrOp = ir_emit(IR_ALU, pos);
-	op.dst = operand_vreg(reg, 0 as *Type);
-	op.src0 = operand_vreg(reg, 0 as *Type);
+	op.dst = operand_vreg(reg, null);
+	op.src0 = operand_vreg(reg, null);
 	op.src1 = operand_imm(v);
 	op.aux = aop;
 }
@@ -1386,8 +1386,8 @@ fn ir_alu_vreg_imm(aop int, reg int, v i64, pos i64) {
 // reg op= <rhs as r/m>, gen_into's register-rm arm; rhs is a direct local.
 fn ir_alu_vreg_rm(aop int, reg int, n *Node, pos i64) {
 	var op *IrOp = ir_emit(IR_ALU, pos);
-	op.dst = operand_vreg(reg, 0 as *Type);
-	op.src0 = operand_vreg(reg, 0 as *Type);
+	op.dst = operand_vreg(reg, null);
+	op.src0 = operand_vreg(reg, null);
 	if (n.varp.has_reg) { op.src1 = operand_vreg(n.varp.reg, n.ty); }
 	else { op.src1 = operand_stackslot(n.varp.offset as i64, n.ty); }
 	op.aux = aop;
@@ -1421,7 +1421,7 @@ fn ir_store_vreg_acc(reg int, ty *Type, pos i64) {
 // Zero <size> bytes at a frame slot (ND_ZERO's aggregate path).
 fn ir_memset_stackslot(off i64, size i64, pos i64) {
 	var op *IrOp = ir_emit(IR_MEMSET, pos);
-	op.dst = operand_stackslot(off, 0 as *Type);
+	op.dst = operand_stackslot(off, null);
 	op.aux = size;
 }
 
@@ -1456,7 +1456,7 @@ fn ir_pop_acc(pos i64) {
 fn ir_lea_op2_slot(off i64, pos i64) {
 	var op *IrOp = ir_emit(IR_LEA, pos);
 	op.dst = operand_op2(0);
-	op.src0 = operand_stackslot(off, 0 as *Type);
+	op.src0 = operand_stackslot(off, null);
 	op.src1 = operand_none();
 	op.aux = 1;
 }
@@ -1466,7 +1466,7 @@ fn ir_lea_op2_slot(off i64, pos i64) {
 fn ir_lea_slot_acc(off i64, pos i64) {
 	var op *IrOp = ir_emit(IR_LEA, pos);
 	op.dst = operand_acc();
-	op.src0 = operand_stackslot(off, 0 as *Type);
+	op.src0 = operand_stackslot(off, null);
 	op.src1 = operand_none();
 	op.aux = 1;
 }
@@ -1484,7 +1484,7 @@ fn ir_tlsaddr(v *Var, pos i64) {
 fn ir_lea_arg_acc(off i64, pos i64) {
 	var op *IrOp = ir_emit(IR_LEA, pos);
 	op.dst = operand_acc();
-	op.src0 = operand_stackslot(-off, 0 as *Type);
+	op.src0 = operand_stackslot(-off, null);
 	op.src1 = operand_none();
 	op.aux = 0;
 }
@@ -1495,7 +1495,7 @@ fn ir_load_arg_acc(off i64, pos i64) {
 	var op *IrOp = ir_emit(IR_LOAD, pos);
 	op.dst = operand_acc();
 	op.dst.ty = type_ptr(ty_i64);
-	op.src0 = operand_stackslot(-off, 0 as *Type);
+	op.src0 = operand_stackslot(-off, null);
 }
 
 
@@ -1509,7 +1509,7 @@ fn ir_push_op2(pos i64) {
 // push [rax + off] -- a two-word aggregate argument's word, staged whole.
 fn ir_push_at_acc(off i64, pos i64) {
 	var op *IrOp = ir_emit(IR_PUSH, pos);
-	op.src0 = operand_mem(off, 0 as *Type);
+	op.src0 = operand_mem(off, null);
 	depth = depth + 1;
 }
 
@@ -1519,7 +1519,7 @@ fn ir_push_at_acc(off i64, pos i64) {
 // accumulator (the by-value pointer argument).
 fn ir_memcpy_dst(off i64, size i64, pos i64) {
 	var op *IrOp = ir_emit(IR_MEMCPYDST, pos);
-	op.dst = operand_stackslot(off, 0 as *Type);
+	op.dst = operand_stackslot(off, null);
 	op.src0 = operand_acc();
 	op.aux = size;
 }
@@ -1541,7 +1541,7 @@ fn ir_memcpy_stage(size i64, pos i64) {
 // in the accumulator. No staging traffic.
 fn ir_memcpy_slot(off i64, size i64, pos i64) {
 	var op *IrOp = ir_emit(IR_MEMCPY, pos);
-	op.dst = operand_stackslot(off, 0 as *Type);
+	op.dst = operand_stackslot(off, null);
 	op.src0 = operand_acc();
 	op.aux = size;
 }
@@ -1559,7 +1559,7 @@ fn ir_load2(size i64, pos i64) {
 // at <off> and hand back its address.
 fn ir_store2(off i64, size i64, pos i64) {
 	var op *IrOp = ir_emit(IR_STORE2, pos);
-	op.dst = operand_stackslot(off, 0 as *Type);
+	op.dst = operand_stackslot(off, null);
 	op.aux = size;
 }
 
@@ -1755,7 +1755,7 @@ fn ir_load_op2_var(v *Var, ty *Type, pos i64) {
 // mov [rbp - off], <op2> -- a slice's field landed in the staging register.
 fn ir_store_op2_slot(off i64, pos i64) {
 	var op *IrOp = ir_emit(IR_STORE, pos);
-	op.dst = operand_stackslot(off, 0 as *Type);
+	op.dst = operand_stackslot(off, null);
 	op.src0 = operand_op2(0);
 }
 
@@ -2156,7 +2156,7 @@ fn gen_match(n *Node) {
 			ir_branch(CC_NE, miss, arm.pos);
 		}
 
-		var f *Member = 0 as *Member;
+		var f *Member = null;
 		if (arm.variant as i64 != 0) { f = arm.variant.fields; }
 		var b *Node = arm.args;
 		while (b as i64 != 0) {
@@ -2356,7 +2356,7 @@ fn always_returns(n *Node) bool {
 	if (n as i64 == 0) { return false; }
 	if (n.kind == ND_RET) { return true; }
 	if (n.kind == ND_BLOCK) {
-		var last *Node = 0 as *Node;
+		var last *Node = null;
 		var s *Node = n.body;
 		while (s as i64 != 0) { last = s; s = s.next; }
 		return always_returns(last);
@@ -2838,8 +2838,8 @@ fn gen_func(f *Func) {
 	}
 	depth = 0;
 	gen_fn = f;
-	cur_loop = 0 as *Loop;
-	cur_defers = 0 as *DeferScope;
+	cur_loop = null;
+	cur_defers = null;
 	defer_depth = 0;
 	// Label ids restart for every function so an IR_BR from one function can
 	// never reference another's IR_LABEL; the chain lists re-grow from empty.
@@ -3035,7 +3035,7 @@ fn find_global_var(name str) *Var {
 		if (str_eq(v.name, name)) { return v; }
 		v = v.next;
 	}
-	return 0 as *Var;
+	return null;
 }
 
 fn embed_prepare() {
@@ -3194,22 +3194,22 @@ fn reset_code() {
 	tls_stub_at = -1;
 	tls_stub_src_at = -1;
 	tls_src_refs.n = 0;
-	calls_head = 0 as *CallFixup;
-	calls_tail = 0 as *CallFixup;
-	asmrefs_head = 0 as *CallFixup;
-	asmrefs_tail = 0 as *CallFixup;
-	strrefs_head = 0 as *StrFixup;
-	strrefs_tail = 0 as *StrFixup;
-	datarefs_head = 0 as *DataFixup;
-	datarefs_tail = 0 as *DataFixup;
-	funcaddrs_head = 0 as *CallFixup;
-	funcaddrs_tail = 0 as *CallFixup;
-	relocs_head = 0 as *Reloc;
-	relocs_tail = 0 as *Reloc;
-	rodata_relocs_head = 0 as *Reloc;
-	rodata_relocs_tail = 0 as *Reloc;
-	lines_head = 0 as *LineRow;
-	lines_tail = 0 as *LineRow;
+	calls_head = null;
+	calls_tail = null;
+	asmrefs_head = null;
+	asmrefs_tail = null;
+	strrefs_head = null;
+	strrefs_tail = null;
+	datarefs_head = null;
+	datarefs_tail = null;
+	funcaddrs_head = null;
+	funcaddrs_tail = null;
+	relocs_head = null;
+	relocs_tail = null;
+	rodata_relocs_head = null;
+	rodata_relocs_tail = null;
+	lines_head = null;
+	lines_tail = null;
 }
 
 

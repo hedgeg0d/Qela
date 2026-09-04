@@ -44,7 +44,7 @@ fn main() int {
 	var c Node(i64);
 	var b Node(i64);
 	var a Node(i64);
-	c.v = 3; c.next = 0 as *Node(i64);
+	c.v = 3; c.next = null;
 	b.v = 2; b.next = &c;
 	a.v = 1; a.next = &b;
 	if (total(&a) != 6) { return 7; }
