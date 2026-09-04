@@ -5,14 +5,17 @@ import "regalloc.qela";
 import "ir.qela";
 import "x86_emit.qela";
 import "arm64_emit.qela";
+import "riscv_emit.qela";
 
 
 // The integer argument register for rank i on the current target -- the
 // register-mapping half of the ABI, mirrored by abi_n_arg_regs() in
 // comp.qela. SysV AMD64 order is rdi, rsi, rdx, rcx, r8, r9; AAPCS64 is
-// simply x0..x7, whose encodings are 0..7. A rank past the target's register
-// count is unreachable: parse.qela spills parameters beyond abi_n_arg_regs().
+// simply x0..x7; RISC-V's LP64 is a0..a7, whose encodings are 10..17. A
+// rank past the target's register count is unreachable: parse.qela spills
+// parameters beyond abi_n_arg_regs().
 fn call_reg(i int) int {
+	if (opt_target == TARGET_RISCV64) { return A0 + i; }
 	if (opt_target == TARGET_ARM64) { return i; }
 	if (i == 0) { return RDI; }
 	if (i == 1) { return RSI; }
@@ -24,6 +27,7 @@ fn call_reg(i int) int {
 
 
 fn sys_reg(i int) int {
+	if (opt_target == TARGET_RISCV64) { return call_reg(i); }
 	if (opt_target == TARGET_ARM64) { return call_reg(i); }
 	if (i == 3) { return R10; }
 	return call_reg(i);
@@ -33,8 +37,10 @@ fn sys_reg(i int) int {
 // The frontend stages a binop's right operand into one fixed register per
 // target (gen_expr's two-operand preamble). The IR carries the rank, not the
 // register; this is the rank->register map, the mirror of call_reg. x86 uses
-// rdi (rank 0); ARM64 will use x1 so it never collides with the accumulator.
+// rdi (rank 0); ARM64 uses x1 and RISC-V a1, so neither collides with the
+// accumulator (x0/a0).
 fn op2_reg(rank int) int {
+	if (opt_target == TARGET_RISCV64) { return A1; }
 	if (opt_target == TARGET_ARM64) { return 1; }
 	return RDI;
 }
@@ -285,6 +291,11 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) {
 			// AAPCS64 carries the sret pointer in x8, off the integer
 			// argument sequence, so it does not consume an x-register.
 			dest[nd] = X8;
+		} else if (marshall && opt_target == TARGET_RISCV64) {
+			// RISC-V's LP64D puts the sret pointer in a0, the first
+			// argument register.
+			dest[nd] = call_reg(ri);
+			ri = ri + 1;
 		} else {
 			if (sys) { dest[nd] = sys_reg(ri); } else { dest[nd] = call_reg(ri); }
 			ri = ri + 1;
@@ -298,10 +309,12 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) {
 		if (ai >= direct_from) {
 			if (first_in_rax && nd == 0) {
 				// A syscall's number is x86's rax, but ARM64's SVC reads it
-				// from x8 -- unlike x86, ARM64's accumulator (x0) is also
-				// the first real argument register, so the number can't
-				// share it the way rax does.
-				if (opt_target == TARGET_ARM64) { dest[nd] = X8; } else { dest[nd] = RAX; }
+				// from x8 and RISC-V's ecall from a7 -- unlike x86, neither
+				// accumulator (x0/a0) is also the first real argument
+				// register, so the number can't share it the way rax does.
+				if (opt_target == TARGET_ARM64) { dest[nd] = X8; }
+				else if (opt_target == TARGET_RISCV64) { dest[nd] = A7; }
+				else { dest[nd] = RAX; }
 			} else {
 				if (sys) { dest[nd] = sys_reg(ri); } else { dest[nd] = call_reg(ri); }
 				ri = ri + 1;
@@ -337,6 +350,12 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) {
 					a = a.next;
 					continue;
 				}
+				if (opt_target == TARGET_RISCV64) {
+					riscv_ld_at(T0, A0, 0);
+					riscv_st_local(a.stack_tmp.offset as i64, T0);
+					a = a.next;
+					continue;
+				}
 				ld_at_rax(RCX, 0);
 				st_local(a.stack_tmp.offset as i64, RCX);
 				a = a.next;
@@ -344,7 +363,9 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) {
 			}
 			ir_push_at_acc(0, a.pos);
 			if (first_in_rax && nd == 0) {
-				if (opt_target == TARGET_ARM64) { dest[nd] = X8; } else { dest[nd] = RAX; }
+				if (opt_target == TARGET_ARM64) { dest[nd] = X8; }
+				else if (opt_target == TARGET_RISCV64) { dest[nd] = A7; }
+				else { dest[nd] = RAX; }
 			} else {
 				if (sys) { dest[nd] = sys_reg(ri); } else { dest[nd] = call_reg(ri); }
 				ri = ri + 1;
@@ -371,7 +392,9 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) {
 				xi = xi + 1;
 				dest[nd] = RAX;
 			} else if (first_in_rax && nd == 0) {
-				if (opt_target == TARGET_ARM64) { dest[nd] = X8; } else { dest[nd] = RAX; }
+				if (opt_target == TARGET_ARM64) { dest[nd] = X8; }
+				else if (opt_target == TARGET_RISCV64) { dest[nd] = A7; }
+				else { dest[nd] = RAX; }
 			} else {
 				if (sys) { dest[nd] = sys_reg(ri); } else { dest[nd] = call_reg(ri); }
 				ri = ri + 1;
@@ -386,6 +409,7 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) {
 		if (fmm[nd] >= 0) {
 			ir_pop_acc(n.pos);
 			if (opt_target == TARGET_ARM64) { arm64_fmov_from_gpr(fmm[nd], X0, fsz[nd]); }
+			else if (opt_target == TARGET_RISCV64) { riscv_fmv_wx_to_f(fmm[nd], A0, fsz[nd]); }
 			else { gpr_to_xmm(fmm[nd], RAX, fsz[nd]); }
 		} else if (src[nd] == 0) {
 			ir_pop_reg(dest[nd], n.pos);
@@ -417,7 +441,30 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) {
 	// looks, so its own check stays a no-op for this call.
 	var pad i64 = 0;
 	if (m > 0) {
-		if (opt_target == TARGET_ARM64) {
+		if (opt_target == TARGET_RISCV64) {
+			// LP64 hands stack arguments to the callee as [sp, #0], [sp,
+			// #8], ... at the call instruction, the same block allocation
+			// as AAPCS64. The callee's s0 = entry-SP - 16, so its read of
+			// parameter slot i at s0 + 16 + 8i resolves back to exactly
+			// [entry-SP + 8i].
+			var alloc i64 = m * 8;
+			if ((alloc & 15) != 0) { alloc = alloc + 8; }
+			riscv_sub_imm(STK, STK, alloc);
+			var si2 i64 = 0;
+			var oi int = 0;
+			while (oi < an) {
+				var oa *Node = av[oi] as *Node;
+				if (oa.stack_tmp as i64 != 0) {
+					// The accumulator is a0 here, already holding the first
+					// argument -- never touch it. T0 is scratch and safe
+					// until the JAL.
+					riscv_ld_local(T0, oa.stack_tmp.offset as i64);
+					riscv_str_off(T0, STK, 8 * si2);
+					si2 = si2 + 1;
+				}
+				oi = oi + 1;
+			}
+		} else if (opt_target == TARGET_ARM64) {
 			// AAPCS64 hands stack arguments to the callee as [SP, #0], [SP,
 			// #8], ... at the call instruction. Allocate the words in one
 			// 16-byte-aligned block (SP must stay aligned at the BL), store
@@ -608,9 +655,10 @@ fn gen_call(n *Node) {
 
 	// The 16-byte-alignment pad below is an x86 concern only: its push is
 	// 8 bytes, so an odd depth needs 8 more before a call. ARM64's push
-	// (arm64_push in arm64_emit.qela) always moves SP by 16, so SP never
-	// drifts out of alignment and no padding is ever needed.
-	var odd bool = opt_target != TARGET_ARM64 && (depth & 1) != 0;
+	// (arm64_push in arm64_emit.qela) and RISC-V's (riscv_push) always move
+	// SP by 16, so SP never drifts out of alignment and no padding is ever
+	// needed.
+	var odd bool = opt_target == TARGET_X86_64 && (depth & 1) != 0;
 	if (odd) {
 		b1(0x48); b1(0x83); modrm(3, 5, RSP); b1(8);
 	}
@@ -619,7 +667,11 @@ fn gen_call(n *Node) {
 		b1(0x48); b1(0x83); modrm(3, 0, RSP); b1(8);
 	}
 	if (overflow_pushed > 0) {
-		if (opt_target == TARGET_ARM64) {
+		if (opt_target == TARGET_RISCV64) {
+			var alloc i64 = overflow_pushed * 8;
+			if ((alloc & 15) != 0) { alloc = alloc + 8; }
+			riscv_add_imm(STK, STK, alloc);
+		} else if (opt_target == TARGET_ARM64) {
 			var alloc i64 = overflow_pushed * 8;
 			if ((alloc & 15) != 0) { alloc = alloc + 8; }
 			arm64_add_imm(SP, SP, alloc);
@@ -629,17 +681,23 @@ fn gen_call(n *Node) {
 		}
 	}
 	// A marshalled call's float result comes back in xmm0 (SysV) / d0 or s0
-	// (AAPCS64), but Qela reads its own results from the accumulator.
+	// (AAPCS64) / fa0 (LP64D), but Qela reads its own results from the
+	// accumulator.
 	if (marshall && is_float(n.ty)) {
 		if (opt_target == TARGET_ARM64) { arm64_fmov_to_gpr(X0, 0, n.ty.size); }
+		else if (opt_target == TARGET_RISCV64) { riscv_fmv_f_to_wx(A0, 0, n.ty.size); }
 		else { xmm_to_gpr(RAX, 0, n.ty.size); }
 	}
-	// A marshalled sret callee writes through x8 and leaves the accumulator
-	// dead; Qela's own ABI hands the buffer address back in the accumulator,
-	// and the consumer reads it from there. Reload the hidden buffer's
-	// address so that consumer stays unchanged.
+	// A marshalled sret callee writes through the hidden pointer and leaves
+	// the accumulator dead; Qela's own ABI hands the buffer address back in
+	// the accumulator, and the consumer reads it from there. Reload the
+	// hidden buffer's address so that consumer stays unchanged.
 	if (marshall && ret_mem && opt_target == TARGET_ARM64) {
 		ir_lea_slot_acc(hidden, n.pos);
+	}
+	if (marshall && ret_mem && opt_target == TARGET_RISCV64) {
+		// LP64D's sret pointer is a0 itself, which the call's result also
+		// travels in -- it survives the call untouched, so no reload.
 	}
 	if (is_aggregate(n.ty) && !ret_mem) {
 		ir_store2(n.tmp.offset as i64, n.ty.size as i64, n.pos);
@@ -659,7 +717,7 @@ fn gen_indirect_call(n *Node) {
 	if (ret_mem) { hidden = n.tmp.offset as i64; }
 	gen_args(n, false, false, hidden, false);
 
-	var odd bool = opt_target != TARGET_ARM64 && (depth & 1) != 0;
+	var odd bool = opt_target == TARGET_X86_64 && (depth & 1) != 0;
 	if (odd) {
 		b1(0x48); b1(0x83); modrm(3, 5, RSP); b1(8);
 	}
@@ -676,7 +734,11 @@ fn gen_indirect_call(n *Node) {
 		b1(0x48); b1(0x83); modrm(3, 0, RSP); b1(8);
 	}
 	if (overflow_pushed > 0) {
-		if (opt_target == TARGET_ARM64) {
+		if (opt_target == TARGET_RISCV64) {
+			var alloc i64 = overflow_pushed * 8;
+			if ((alloc & 15) != 0) { alloc = alloc + 8; }
+			riscv_add_imm(STK, STK, alloc);
+		} else if (opt_target == TARGET_ARM64) {
 			var alloc i64 = overflow_pushed * 8;
 			if ((alloc & 15) != 0) { alloc = alloc + 8; }
 			arm64_add_imm(SP, SP, alloc);
@@ -693,7 +755,7 @@ fn gen_indirect_call(n *Node) {
 
 fn gen_logical(n *Node) {
 	gen_expr(n.lhs);
-	if (opt_target == TARGET_ARM64) { ir_cmp_acc_imm(0, n.pos); } else { test_rax(); }
+	if (opt_target == TARGET_ARM64 || opt_target == TARGET_RISCV64) { ir_cmp_acc_imm(0, n.pos); } else { test_rax(); }
 	// Skip the whole materialised value when one side decides the result:
 	// an OR is 1 as soon as either side is true, an AND is 0 as soon as
 	// either side is false.
@@ -702,7 +764,7 @@ fn gen_logical(n *Node) {
 	var mid i64 = ir_new_label();
 	ir_branch(skip_cc, mid, n.pos);
 	gen_expr(n.rhs);
-	if (opt_target == TARGET_ARM64) { ir_cmp_acc_imm(0, n.pos); } else { test_rax(); }
+	if (opt_target == TARGET_ARM64 || opt_target == TARGET_RISCV64) { ir_cmp_acc_imm(0, n.pos); } else { test_rax(); }
 	ir_branch(skip_cc, mid, n.pos);
 	if (n.kind == ND_AND) { ir_mov_acc_imm(1, n.pos); } else { ir_mov_acc_imm(0, n.pos); }
 	var end i64 = ir_new_label();
@@ -787,10 +849,10 @@ fn stmt_assign(n *Node) bool {
 		if (stmt_update(n.lhs, r.kind, r.rhs)) { return true; }
 	}
 	// Below this point every path is a native x86 instruction issued straight
-	// from the frontend, not through IR (mov_reg_imm/rbp_mem+b4) -- ARM64
-	// falls through to the general codegen path instead, which does go
+	// from the frontend, not through IR (mov_reg_imm/rbp_mem+b4) -- ARM64 and
+	// RISC-V fall through to the general codegen path instead, which does go
 	// through IR_MOV/IR_STORE.
-	if (opt_target == TARGET_ARM64) { return false; }
+	if (opt_target == TARGET_ARM64 || opt_target == TARGET_RISCV64) { return false; }
 	if (n.rhs.kind != ND_NUM || !fits_imm32(n.rhs.val)) { return false; }
 	if (n.rhs.val == 0 && !n.lhs.varp.has_reg) { return false; }
 	if (n.lhs.varp.has_reg) {
@@ -1088,6 +1150,11 @@ fn gen_compare(n *Node) i64 {
 // which is exactly how control lands back where a coroutine left off.
 fn gen_coro_switch(n *Node) {
 	gen_args(n, false, false, -1, false);
+	if (opt_target == TARGET_RISCV64) {
+		b4(0x6f | (RA << 7));  // jal ra placeholder, patched in finalize like a direct call
+		ilist_push(&coro_switch_refs, code.n - 4);
+		return;
+	}
 	if (opt_target == TARGET_ARM64) {
 		b4(0x94000000);  // bl placeholder, patched in finalize like a direct call
 		ilist_push(&coro_switch_refs, code.n - 4);
@@ -1835,6 +1902,7 @@ fn gen_expr(n *Node) {
 	if (k == ND_CALL) {
 		if (str_eq(n.name, "coro_switch")) { gen_coro_switch(n); return; }
 		if (str_eq(n.name, "gc_data_base") || str_eq(n.name, "gc_data_end")) {
+			if (opt_target == TARGET_RISCV64) { riscv_gen_gc_bound(n, str_eq(n.name, "gc_data_base")); return; }
 			if (opt_target == TARGET_ARM64) { gen_gc_bound(n, str_eq(n.name, "gc_data_base")); return; }
 			rex_w(0, RAX);
 			b1(0xb8);
@@ -1844,6 +1912,7 @@ fn gen_expr(n *Node) {
 			return;
 		}
 		if (str_eq(n.name, "gc_save_regs")) {
+			if (opt_target == TARGET_RISCV64) { riscv_gen_gc_save_regs(n); return; }
 			if (opt_target == TARGET_ARM64) { gen_gc_save_regs(n); return; }
 			gen_args(n, false, false, -1, false);
 			b1(0x48); b1(0x89); b1(0x1f);            // mov [rdi], rbx
@@ -1855,6 +1924,7 @@ fn gen_expr(n *Node) {
 			return;
 		}
 		if (str_eq(n.name, "coro_entry_addr")) {
+			if (opt_target == TARGET_RISCV64) { riscv_gen_coro_entry_addr(); return; }
 			if (opt_target == TARGET_ARM64) { gen_coro_entry_addr(); return; }
 			rex_w(0, RAX);
 			b1(0xb8);
@@ -1863,6 +1933,7 @@ fn gen_expr(n *Node) {
 			return;
 		}
 		if (str_eq(n.name, "atomic_cas")) {
+			if (opt_target == TARGET_RISCV64) { riscv_gen_atomic_cas(n); return; }
 			if (opt_target == TARGET_ARM64) { gen_atomic_cas(n); return; }
 			gen_args(n, false, false, -1, false);
 			mov_reg_reg(RAX, RSI);       // rax = expected
@@ -1874,6 +1945,7 @@ fn gen_expr(n *Node) {
 			return;
 		}
 		if (str_eq(n.name, "atomic_add")) {
+			if (opt_target == TARGET_RISCV64) { riscv_gen_atomic_add(n); return; }
 			if (opt_target == TARGET_ARM64) { gen_atomic_add(n); return; }
 			gen_args(n, false, false, -1, false);
 			b1(0xf0);                    // lock
@@ -1884,6 +1956,11 @@ fn gen_expr(n *Node) {
 			return;
 		}
 		if (str_eq(n.name, "atomic_load")) {
+			if (opt_target == TARGET_RISCV64) {
+				gen_args(n, false, false, -1, false);
+				riscv_ld_at(A0, A0, 0);      // ld a0, 0(a0)
+				return;
+			}
 			if (opt_target == TARGET_ARM64) {
 				gen_args(n, false, false, -1, false);
 				arm64_ldar(X0, X0);      // ldar x0, [x0]
@@ -1896,6 +1973,11 @@ fn gen_expr(n *Node) {
 			return;
 		}
 		if (str_eq(n.name, "atomic_store")) {
+			if (opt_target == TARGET_RISCV64) {
+				gen_args(n, false, false, -1, false);
+				riscv_str_off(A1, A0, 0);    // sd a1, 0(a0)
+				return;
+			}
 			if (opt_target == TARGET_ARM64) {
 				gen_args(n, false, false, -1, false);
 				arm64_stlr(X1, X0);      // stlr x1, [x0]
@@ -1908,16 +1990,23 @@ fn gen_expr(n *Node) {
 			return;
 		}
 		if (str_eq(n.name, "fence")) {
+			if (opt_target == TARGET_RISCV64) { riscv_fence(); return; }
 			if (opt_target == TARGET_ARM64) { arm64_dmb(); return; }
 			b1(0x0f); b1(0xae); b1(0xf0); // mfence
 			return;
 		}
 		if (str_eq(n.name, "thread_clone")) {
+			if (opt_target == TARGET_RISCV64) { gen_thread_clone_riscv(n); return; }
 			if (opt_target == TARGET_ARM64) { gen_thread_clone_arm64(n); return; }
 			gen_thread_clone(n);
 			return;
 		}
 		if (str_eq(n.name, "tls_init")) {
+			if (opt_target == TARGET_RISCV64) {
+				ilist_push(&tls_init_refs, code.n);
+				b4(0x6f | (RA << 7));        // jal ra, <tls init stub>
+				return;
+			}
 			if (opt_target == TARGET_ARM64) {
 				ilist_push(&tls_init_refs, code.n);
 				b4(0x94000000);          // bl <tls init stub>
@@ -2007,7 +2096,7 @@ fn gen_match(n *Node) {
 	while (arm as i64 != 0) {
 		var miss i64 = -1;
 		if (arm.name.len != 0) {
-			if (opt_target == TARGET_ARM64) {
+			if (opt_target == TARGET_ARM64 || opt_target == TARGET_RISCV64) {
 				ir_load_slot_acc(soff, type_ptr(ty_i64), arm.pos);
 				ir_load_acc(ty_i64, arm.pos);
 				ir_cmp_acc_imm(arm.variant.tag as i64, arm.pos);
@@ -2409,10 +2498,12 @@ fn gen_asm_operands(a *Node) {
 	while (a as i64 != 0) {
 		if (a.kind == ND_ASMREF) {
 			if (a.val != 0) {
-				if (opt_target == TARGET_ARM64) { add_callref_arm64(a.name, a.pos); }
+				if (opt_target == TARGET_RISCV64) { add_callref_riscv(a.name, a.pos); }
+				else if (opt_target == TARGET_ARM64) { add_callref_arm64(a.name, a.pos); }
 				else { add_callref(a.name, a.pos); }
 			} else {
-				if (opt_target == TARGET_ARM64) { add_absref_arm64(a.name, a.pos); }
+				if (opt_target == TARGET_RISCV64) { add_absref_riscv(a.name, a.pos); }
+				else if (opt_target == TARGET_ARM64) { add_absref_arm64(a.name, a.pos); }
 				else { add_absref(a.name, a.pos); }
 			}
 		} else {
@@ -2472,12 +2563,14 @@ fn add_absref_arm64(name str, pos i64) {
 fn gen_epilogue(pos i64) {
 	gen_restore();
 	// An exported extern function returns a float in xmm0 (SysV) / d0 or s0
-	// (AAPCS64), where the body left it in the accumulator.
+	// (AAPCS64) / fa0 (LP64D), where the body left it in the accumulator.
 	if (gen_fn.extern && gen_fn.ret as i64 != 0 && is_float(gen_fn.ret)) {
-		if (opt_target == TARGET_ARM64) { arm64_fmov_from_gpr(0, X0, gen_fn.ret.size); }
+		if (opt_target == TARGET_RISCV64) { riscv_fmv_wx_to_f(0, A0, gen_fn.ret.size); }
+		else if (opt_target == TARGET_ARM64) { arm64_fmov_from_gpr(0, X0, gen_fn.ret.size); }
 		else { gpr_to_xmm(0, RAX, gen_fn.ret.size); }
 	}
-	if (!gen_frameless && opt_target == TARGET_ARM64) { arm64_leave_frame(); }
+	if (!gen_frameless && opt_target == TARGET_RISCV64) { riscv_leave_frame(); }
+	else if (!gen_frameless && opt_target == TARGET_ARM64) { arm64_leave_frame(); }
 	else if (!gen_frameless) { b1(0xc9); }
 	ir_ret(pos);
 }
@@ -2488,7 +2581,8 @@ fn gen_restore() {
 	while (i < ra_nsaved()) {
 		var r int = ra_saved(i);
 		if (reg_used(gen_fn, r)) {
-			if (opt_target == TARGET_ARM64) { arm64_ld_local(r, saved_slot(gen_fn, r)); }
+			if (opt_target == TARGET_RISCV64) { riscv_ld_local(r, saved_slot(gen_fn, r)); }
+			else if (opt_target == TARGET_ARM64) { arm64_ld_local(r, saved_slot(gen_fn, r)); }
 			else { ld_local(r, saved_slot(gen_fn, r)); }
 		}
 		i = i + 1;
@@ -2617,7 +2711,9 @@ fn gen_func(f *Func) {
 	// A naked function has no frame by definition, and its body ends with
 	// its own ret or iretq: nothing may be emitted before or after it.
 	gen_frameless = f.naked || (f.leaf && f.stack_size == 0 && f.n_stack_args == 0);
-	if (!gen_frameless && opt_target == TARGET_ARM64) {
+	if (!gen_frameless && opt_target == TARGET_RISCV64) {
+		riscv_enter_frame(f.stack_size as i64);
+	} else if (!gen_frameless && opt_target == TARGET_ARM64) {
 		arm64_enter_frame(f.stack_size as i64);
 	} else if (!gen_frameless) {
 		push_reg(RBP);
@@ -2633,7 +2729,8 @@ fn gen_func(f *Func) {
 		while (si < ra_nsaved()) {
 			var sr int = ra_saved(si);
 			if (reg_used(f, sr)) {
-				if (opt_target == TARGET_ARM64) { arm64_st_local(saved_slot(f, sr), sr); }
+				if (opt_target == TARGET_RISCV64) { riscv_st_local(saved_slot(f, sr), sr); }
+				else if (opt_target == TARGET_ARM64) { arm64_st_local(saved_slot(f, sr), sr); }
 				else { st_local(saved_slot(f, sr), sr); }
 			}
 			si = si + 1;
@@ -2641,11 +2738,13 @@ fn gen_func(f *Func) {
 
 		var ri int = 0;
 		if (f.extern) {
-			if (opt_target == TARGET_ARM64) { gen_extern_params_arm64(f); }
+			if (opt_target == TARGET_RISCV64) { gen_extern_params_riscv(f); }
+			else if (opt_target == TARGET_ARM64) { gen_extern_params_arm64(f); }
 			else { gen_extern_params(f); }
 		} else {
 			if (f.ret_slot as i64 != 0) {
-				if (opt_target == TARGET_ARM64) { arm64_st_local(f.ret_slot.offset as i64, call_reg(ri)); }
+				if (opt_target == TARGET_RISCV64) { riscv_st_local(f.ret_slot.offset as i64, call_reg(ri)); }
+				else if (opt_target == TARGET_ARM64) { arm64_st_local(f.ret_slot.offset as i64, call_reg(ri)); }
 				else { st_local(f.ret_slot.offset as i64, call_reg(ri)); }
 				ri = ri + 1;
 			}
@@ -2653,20 +2752,23 @@ fn gen_func(f *Func) {
 			while (i < f.nparams) {
 				var v *Var = func_param(f, i);
 				if (v.arg_stack) {
-					// Already sitting at the right rbp-relative offset from the
+					// Already sitting at the right s0-relative offset from the
 					// caller's pushes -- nothing to move, and ri must not advance.
 					i = i + 1;
 					continue;
 				}
 				if (v.has_reg) {
-					if (opt_target == TARGET_ARM64) { arm64_mov_reg(v.reg, call_reg(ri)); }
+					if (opt_target == TARGET_RISCV64) { riscv_mov_reg(v.reg, call_reg(ri)); }
+					else if (opt_target == TARGET_ARM64) { arm64_mov_reg(v.reg, call_reg(ri)); }
 					else { mov_reg_reg(v.reg, call_reg(ri)); }
 				}
+				else if (opt_target == TARGET_RISCV64) { riscv_st_local(v.offset as i64, call_reg(ri)); }
 				else if (opt_target == TARGET_ARM64) { arm64_st_local(v.offset as i64, call_reg(ri)); }
 				else { st_local(v.offset as i64, call_reg(ri)); }
 				ri = ri + 1;
 				if (is_aggregate(v.ty) && !v.by_ref && v.ty.size > 8) {
-					if (opt_target == TARGET_ARM64) { arm64_st_local((v.offset as i64) - 8, call_reg(ri)); }
+					if (opt_target == TARGET_RISCV64) { riscv_st_local((v.offset as i64) - 8, call_reg(ri)); }
+					else if (opt_target == TARGET_ARM64) { arm64_st_local((v.offset as i64) - 8, call_reg(ri)); }
 					else { st_local((v.offset as i64) - 8, call_reg(ri)); }
 					ri = ri + 1;
 				}
@@ -2808,6 +2910,10 @@ fn layout_globals(globals *Var) {
 // to the walker instead of exiting, so the caller of the trampoline call
 // below is still on the stack when the walker reads it.
 fn gen_panic_stub(msg_id int, msg_len i64) {
+	if (opt_target == TARGET_RISCV64) {
+		riscv_gen_panic_stub(msg_id, msg_len);
+		return;
+	}
 	if (opt_target == TARGET_ARM64) {
 		arm64_gen_panic_stub(msg_id, msg_len);
 		return;
@@ -2851,6 +2957,8 @@ fn reset_code() {
 	br_grew = false;
 	arm64_br_n = 0;
 	arm64_br_at.n = 0;
+	riscv_br_n = 0;
+	riscv_br_at.n = 0;
 	bounds_checks.n = 0;
 	assert_sites.n = 0;
 	assert_msgs.n = 0;
@@ -2891,7 +2999,27 @@ fn emit_code(u *Unit, main_fn *Func, panic_id int, hdr i64) {
 	// Top-level asm blocks are the image's first bytes; `entry name;`
 	// suppresses the default stub too, so the entry function (usually
 	// naked) does its own setup and its own exit.
-	if (top_asm_head as i64 == 0 && entry_name.len == 0 && opt_target == TARGET_ARM64) {
+	if (top_asm_head as i64 == 0 && entry_name.len == 0 && opt_target == TARGET_RISCV64) {
+		// Minimal RISC-V entry stub: no backtrace sentinel, no TLS init.
+		// main's return value is already in a0, which is also exit_group's
+		// first argument on LP64, so unlike x86 no move is needed before
+		// the syscall. SP is 16-aligned at process entry and the kernel
+		// leaves argc/argv at [sp]/[sp+8].
+		if (opt_backtrace) { die("error: --target riscv64 does not support --backtrace yet"); }
+		if (tls_block_size > 8) {
+			// The stub clobbers a0-a7, so argc/argv load after the JAL,
+			// not before; SP still holds the argument vector untouched.
+			ilist_push(&tls_init_refs, code.n);
+			b4(0x6f | (RA << 7));                 // jal ra, <tls init stub>
+		}
+		if (main_fn as i64 != 0 && main_fn.nparams == 2) {
+			riscv_ld_at(A0, STK, 0);
+			riscv_add_imm(A1, STK, 8);
+		}
+		riscv_add_call("main", 0);
+		riscv_li64(A7, SYS_RISCV_EXIT_GROUP);
+		riscv_ecall();
+	} else if (top_asm_head as i64 == 0 && entry_name.len == 0 && opt_target == TARGET_ARM64) {
 		// Minimal ARM64 entry stub (M9): no backtrace sentinel, no TLS init.
 		// main's return value is already in X0, which is also exit_group's
 		// first argument on AAPCS64, so unlike x86 no move is needed before
@@ -2948,7 +3076,8 @@ fn emit_code(u *Unit, main_fn *Func, panic_id int, hdr i64) {
 		gen_panic_stub(panic_id, 20);
 		var i i64 = 0;
 		while (i < bounds_checks.n) {
-			if (opt_target == TARGET_ARM64) { arm64_patch_call(&code, bounds_checks.p[i], panic_addr - bounds_checks.p[i]); }
+			if (opt_target == TARGET_RISCV64) { riscv_patch_jal(&code, bounds_checks.p[i], panic_addr - bounds_checks.p[i]); }
+			else if (opt_target == TARGET_ARM64) { arm64_patch_call(&code, bounds_checks.p[i], panic_addr - bounds_checks.p[i]); }
 			else { buf_patch32(&code, bounds_checks.p[i], panic_addr - (bounds_checks.p[i] + 4)); }
 			i = i + 1;
 		}
@@ -2978,7 +3107,8 @@ fn emit_code(u *Unit, main_fn *Func, panic_id int, hdr i64) {
 				var ci i64 = 0;
 				while (ci < assert_sites.n) {
 					if (assert_msgs.p[ci] == msg) {
-						if (opt_target == TARGET_ARM64) { arm64_patch_call(&code, assert_sites.p[ci], sa - assert_sites.p[ci]); }
+						if (opt_target == TARGET_RISCV64) { riscv_patch_jal(&code, assert_sites.p[ci], sa - assert_sites.p[ci]); }
+						else if (opt_target == TARGET_ARM64) { arm64_patch_call(&code, assert_sites.p[ci], sa - assert_sites.p[ci]); }
 						else { buf_patch32(&code, assert_sites.p[ci], sa - (assert_sites.p[ci] + 4)); }
 					}
 					ci = ci + 1;
@@ -2999,24 +3129,28 @@ fn emit_code(u *Unit, main_fn *Func, panic_id int, hdr i64) {
 	}
 
 	if (coro_switch_refs.n != 0) {
-		if (opt_target == TARGET_ARM64) { gen_coro_switch_stub_arm64(); }
+		if (opt_target == TARGET_RISCV64) { gen_coro_switch_stub_riscv(); }
+		else if (opt_target == TARGET_ARM64) { gen_coro_switch_stub_arm64(); }
 		else { gen_coro_switch_stub(); }
 		var wi i64 = 0;
 		while (wi < coro_switch_refs.n) {
 			var site i64 = coro_switch_refs.p[wi];
-			if (opt_target == TARGET_ARM64) { arm64_patch_call(&code, site, coro_switch_at - site); }
+			if (opt_target == TARGET_RISCV64) { riscv_patch_jal(&code, site, coro_switch_at - site); }
+			else if (opt_target == TARGET_ARM64) { arm64_patch_call(&code, site, coro_switch_at - site); }
 			else { buf_patch32(&code, site, coro_switch_at - (site + 4)); }
 			wi = wi + 1;
 		}
 	}
 
 	if (coro_stub_refs.n != 0) {
-		if (opt_target == TARGET_ARM64) { gen_coro_stub_arm64(); }
+		if (opt_target == TARGET_RISCV64) { gen_coro_stub_riscv(); }
+		else if (opt_target == TARGET_ARM64) { gen_coro_stub_arm64(); }
 		else { gen_coro_stub(); }
 		var si i64 = 0;
 		while (si < coro_stub_refs.n) {
 			var abs i64 = ELF_BASE + hdr + coro_stub_at;
-			if (opt_target == TARGET_ARM64) { arm64_patch_movz_movk_addr(coro_stub_refs.p[si], abs); }
+			if (opt_target == TARGET_RISCV64) { riscv_patch_auipc_addi(coro_stub_refs.p[si], abs); }
+			else if (opt_target == TARGET_ARM64) { arm64_patch_movz_movk_addr(coro_stub_refs.p[si], abs); }
 			else {
 				var kk i64 = 0;
 				while (kk < 8) {
@@ -3029,20 +3163,29 @@ fn emit_code(u *Unit, main_fn *Func, panic_id int, hdr i64) {
 	}
 
 	if (tls_init_refs.n != 0) {
-		if (opt_target == TARGET_ARM64) { gen_tls_init_stub_arm64(); }
+		if (opt_target == TARGET_RISCV64) { gen_tls_init_stub_riscv(); }
+		else if (opt_target == TARGET_ARM64) { gen_tls_init_stub_arm64(); }
 		else { gen_tls_init_stub(); }
 		var ti i64 = 0;
 		while (ti < tls_init_refs.n) {
 			var site i64 = tls_init_refs.p[ti];
-			if (opt_target == TARGET_ARM64) { arm64_patch_call(&code, site, tls_stub_at - site); }
+			if (opt_target == TARGET_RISCV64) { riscv_patch_jal(&code, site, tls_stub_at - site); }
+			else if (opt_target == TARGET_ARM64) { arm64_patch_call(&code, site, tls_stub_at - site); }
 			else { buf_patch32(&code, site, tls_stub_at - (site + 4)); }
 			ti = ti + 1;
 		}
 	}
 
 	// The data segment sits right after code and rodata, so the code has to
-	// end on a word boundary or every global lands misaligned.
-	while ((code.n & 7) != 0) { b1(0x90); }
+	// end on a word boundary or every global lands misaligned. RISC-V words
+	// are 4 bytes; the data segment needs 8, so a 4-mod-8 code length pads
+	// one more instruction.
+	if (opt_target == TARGET_RISCV64) {
+		while ((code.n & 3) != 0) { b4(0x13); }
+		if ((code.n & 7) == 4) { b4(0x13); }
+	} else {
+		while ((code.n & 7) != 0) { b1(0x90); }
+	}
 }
 
 
@@ -3104,7 +3247,8 @@ fn codegen(u *Unit, img *Image) {
 			gen_panic_stub(panic_id, 20);
 			var i i64 = 0;
 			while (i < bounds_checks.n) {
-				if (opt_target == TARGET_ARM64) { arm64_patch_call(&code, bounds_checks.p[i], panic_addr - bounds_checks.p[i]); }
+				if (opt_target == TARGET_RISCV64) { riscv_patch_jal(&code, bounds_checks.p[i], panic_addr - bounds_checks.p[i]); }
+				else if (opt_target == TARGET_ARM64) { arm64_patch_call(&code, bounds_checks.p[i], panic_addr - bounds_checks.p[i]); }
 			else { buf_patch32(&code, bounds_checks.p[i], panic_addr - (bounds_checks.p[i] + 4)); }
 				i = i + 1;
 			}
@@ -3131,7 +3275,8 @@ fn codegen(u *Unit, img *Image) {
 					var ci i64 = 0;
 					while (ci < assert_sites.n) {
 						if (assert_msgs.p[ci] == msg) {
-							if (opt_target == TARGET_ARM64) { arm64_patch_call(&code, assert_sites.p[ci], sa - assert_sites.p[ci]); }
+							if (opt_target == TARGET_RISCV64) { riscv_patch_jal(&code, assert_sites.p[ci], sa - assert_sites.p[ci]); }
+							else if (opt_target == TARGET_ARM64) { arm64_patch_call(&code, assert_sites.p[ci], sa - assert_sites.p[ci]); }
 							else { buf_patch32(&code, assert_sites.p[ci], sa - (assert_sites.p[ci] + 4)); }
 						}
 						ci = ci + 1;
@@ -3172,6 +3317,7 @@ fn codegen(u *Unit, img *Image) {
 	var nph int = 1;
 	if (gdata.n + bss_size > 0) { nph = 2; }
 	var hdr i64 = EHDR_SZ + PHDR_SZ * (nph as i64);
+	riscv_image_hdr = hdr;
 
 	var main_fn *Func = find_func("main");
 	if (main_fn as i64 == 0 && top_asm_head as i64 == 0 && entry_name.len == 0) {
@@ -3240,7 +3386,18 @@ fn codegen(u *Unit, img *Image) {
 	while ((rodata.n & 7) != 0) { buf_u8(&rodata, 0); }
 
 	var dbase i64 = ELF_BASE + SEG_GAP + hdr + code.n + rodata.n;
-	if (opt_target == TARGET_ARM64) {
+	if (opt_target == TARGET_RISCV64) {
+		var bi i64 = 0;
+		while (bi < gc_base_refs.n) {
+			riscv_patch_auipc_addi(gc_base_refs.p[bi], dbase);
+			bi = bi + 1;
+		}
+		var ei i64 = 0;
+		while (ei < gc_end_refs.n) {
+			riscv_patch_auipc_addi(gc_end_refs.p[ei], dbase + gdata.n + bss_size);
+			ei = ei + 1;
+		}
+	} else if (opt_target == TARGET_ARM64) {
 		var bi i64 = 0;
 		while (bi < gc_base_refs.n) {
 			arm64_patch_movz_movk_addr(gc_base_refs.p[bi], dbase);
@@ -3255,7 +3412,14 @@ fn codegen(u *Unit, img *Image) {
 		patch_abs(&gc_base_refs, dbase);
 		patch_abs(&gc_end_refs, dbase + gdata.n + bss_size);
 	}
-	if (tls_stub_at != -1 && opt_target == TARGET_ARM64) {
+	if (tls_stub_at != -1 && opt_target == TARGET_RISCV64) {
+		var tabs2 i64 = dbase + tls_template_off;
+		var tsk i64 = 0;
+		while (tsk < tls_src_refs.n) {
+			riscv_patch_auipc_addi(tls_src_refs.p[tsk], tabs2);
+			tsk = tsk + 1;
+		}
+	} else if (tls_stub_at != -1 && opt_target == TARGET_ARM64) {
 		var tabs2 i64 = dbase + tls_template_off;
 		var tsk i64 = 0;
 		while (tsk < tls_src_refs.n) {
@@ -3282,7 +3446,8 @@ fn codegen(u *Unit, img *Image) {
 			emsg("' is not linked (extern needs -c and the linker)"); efail(af.pos);
 		}
 		var abs2 i64 = ELF_BASE + hdr + at.addr;
-		if (opt_target == TARGET_ARM64) { arm64_patch_movz_movk_addr(af.at, abs2); }
+		if (opt_target == TARGET_RISCV64) { riscv_patch_auipc_addi(af.at, abs2); }
+		else if (opt_target == TARGET_ARM64) { arm64_patch_movz_movk_addr(af.at, abs2); }
 		else {
 			var j i64 = 0;
 			while (j < 8) {
@@ -3303,7 +3468,8 @@ fn codegen(u *Unit, img *Image) {
 			emsg("extern '"); emsg(cf.name);
 			emsg("' is not linked (extern needs -c and the linker)"); efail(cf.pos);
 		}
-		if (opt_target == TARGET_ARM64) { arm64_patch_call(&code, cf.at, target.addr - cf.at); }
+		if (opt_target == TARGET_RISCV64) { riscv_patch_jal(&code, cf.at, target.addr - cf.at); }
+		else if (opt_target == TARGET_ARM64) { arm64_patch_call(&code, cf.at, target.addr - cf.at); }
 		else { buf_patch32(&code, cf.at, target.addr - (cf.at + 4)); }
 		cf = cf.next;
 	}
@@ -3321,7 +3487,8 @@ fn codegen(u *Unit, img *Image) {
 			}
 			aval = dbase + gv.data_off;
 		}
-		if (opt_target == TARGET_ARM64) { arm64_patch_movz_movk_addr(ar.at, aval); }
+		if (opt_target == TARGET_RISCV64) { riscv_patch_auipc_addi(ar.at, aval); }
+		else if (opt_target == TARGET_ARM64) { arm64_patch_movz_movk_addr(ar.at, aval); }
 		else {
 			var j5 i64 = 0;
 			while (j5 < 8) {
@@ -3335,7 +3502,8 @@ fn codegen(u *Unit, img *Image) {
 	var sf *StrFixup = strrefs_head;
 	while (sf as i64 != 0) {
 		var sf_addr i64 = ELF_BASE + hdr + code.n + str_off[sf.id];
-		if (opt_target == TARGET_ARM64) { arm64_patch_movz_movk_addr(sf.at, sf_addr); }
+		if (opt_target == TARGET_RISCV64) { riscv_patch_auipc_addi(sf.at, sf_addr); }
+		else if (opt_target == TARGET_ARM64) { arm64_patch_movz_movk_addr(sf.at, sf_addr); }
 		else { buf_patch32(&code, sf.at, sf_addr); }
 		sf = sf.next;
 	}
@@ -3344,7 +3512,8 @@ fn codegen(u *Unit, img *Image) {
 	var pm i64 = 0;
 	while (pm < panic_msg_at.n) {
 		var pm_addr i64 = rodata_vaddr + bytes_off[panic_msg_ids.p[pm]];
-		if (opt_target == TARGET_ARM64) { arm64_patch_movz_movk_addr(panic_msg_at.p[pm], pm_addr); }
+		if (opt_target == TARGET_RISCV64) { riscv_patch_auipc_addi(panic_msg_at.p[pm], pm_addr); }
+		else if (opt_target == TARGET_ARM64) { arm64_patch_movz_movk_addr(panic_msg_at.p[pm], pm_addr); }
 		else { buf_patch32(&code, panic_msg_at.p[pm], pm_addr); }
 		pm = pm + 1;
 	}
@@ -3368,7 +3537,10 @@ fn codegen(u *Unit, img *Image) {
 
 	var df *DataFixup = datarefs_head;
 	while (df as i64 != 0) {
-		if (opt_target == TARGET_ARM64) { arm64_patch_movz_movk_addr(df.at, dbase + df.varp.data_off); }
+		if (opt_target == TARGET_RISCV64) {
+			riscv_patch_auipc_addi(df.at, dbase + df.varp.data_off);
+		}
+		else if (opt_target == TARGET_ARM64) { arm64_patch_movz_movk_addr(df.at, dbase + df.varp.data_off); }
 		else { buf_patch32(&code, df.at, dbase + df.varp.data_off); }
 		df = df.next;
 	}
