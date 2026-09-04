@@ -154,7 +154,7 @@ fn capture_get_or_add(v *Var, p i64) *Var {
 	var is2word bool = is_aggregate(v.ty) && v.ty.size > 8 && v.ty.size <= 16;
 	if (is2word) { cap_rwords = cap_rwords + 2; } else { cap_rwords = cap_rwords + 1; }
 	hv.by_ref = is_aggregate(v.ty) && abi_by_ref(v.ty.size);
-	if (cap_rwords > 6 || cap_n >= 6) {
+	if (cap_rwords > abi_n_arg_regs() || cap_n >= abi_n_arg_regs()) {
 		if (is2word) { error_at(p, "a captured str or struct here would not fit in the argument registers"); }
 		hv.arg_stack = true;
 		hv.no_reg = true;
@@ -1822,7 +1822,7 @@ fn parse_function(t **Token, is_extern bool) *Func {
 		// six of them (f.nct == 6, allowed) leaves no register slot for
 		// any regular parameter that follows even if its own word cost is
 		// small -- treat that the same as a register-word overflow.
-		if (rwords > 6 || nparams >= 6) {
+		if (rwords > abi_n_arg_regs() || nparams >= abi_n_arg_regs()) {
 			if (is2word) {
 				error_at(pp, "a str or struct parameter here would not fit in the argument registers (pass it earlier, or by pointer)");
 			}
@@ -1904,7 +1904,7 @@ fn parse_lambda(t **Token, p i64) *Node {
 		if (is2word) { rwords = rwords + 2; } else { rwords = rwords + 1; }
 		var v *Var = declare_var(pn, pty, pp);
 		v.by_ref = is_aggregate(pty) && abi_by_ref(pty.size);
-		if (rwords > 6 || nparams >= 6) {
+		if (rwords > abi_n_arg_regs() || nparams >= abi_n_arg_regs()) {
 			error_at(pp, "a lambda takes at most six one-word parameters");
 		}
 		set_func_param(f, nparams, v);
