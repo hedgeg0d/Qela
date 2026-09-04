@@ -1,0 +1,36 @@
+enum Opt(T) {
+	Some(T),
+	None,
+}
+
+fn opt_some(comptime T: type, v T) Opt(T) {
+	return Opt(T).Some(v);
+}
+
+fn opt_none(comptime T: type) Opt(T) {
+	return Opt(T).None;
+}
+
+fn opt_is_some(comptime T: type, o Opt(T)) bool {
+	match (o) {
+		Some(_v) => { return true; }
+		None => { return false; }
+	}
+}
+
+fn opt_val(comptime T: type, o Opt(T)) T {
+	match (o) {
+		Some(v) => { return v; }
+		None => {
+			var z T;
+			return z;
+		}
+	}
+}
+
+fn opt_or(comptime T: type, o Opt(T), alt T) T {
+	match (o) {
+		Some(v) => { return v; }
+		None => { return alt; }
+	}
+}
