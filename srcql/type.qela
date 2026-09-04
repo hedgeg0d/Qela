@@ -1087,6 +1087,11 @@ fn type_cast_from_dyn(n *Node) {
 }
 
 fn type_assign(n *Node) {
+	var bf *Member = bitfield_of(n.lhs);
+	if (bf as i64 != 0) {
+		type_bitfield_write(n, bf);
+		return;
+	}
 	if (n.lhs.kind == ND_CALL && n.lhs.idxget) {
 		if (index_put(n)) { return; }
 		error_at(n.pos, "this type has no put or set function for indexed assignment");
@@ -1328,6 +1333,53 @@ fn type_intrinsic(n *Node) bool {
 	}
 	if (str_eq(n.name, "fence")) {
 		if (n.nargs != 0) { error_at(n.pos, "fence takes no arguments"); }
+		n.ty = ty_void;
+		return true;
+	}
+	if (str_eq(n.name, "cli") || str_eq(n.name, "sti") || str_eq(n.name, "hlt")) {
+		if (n.nargs != 0) { error_at(n.pos, "this instruction takes no arguments"); }
+		n.ty = ty_void;
+		return true;
+	}
+	if (str_eq(n.name, "outb") || str_eq(n.name, "outw") || str_eq(n.name, "outl")) {
+		if (n.nargs != 2) { error_at(n.pos, "an out takes a port and a value"); }
+		var op0 *Node = intrinsic_i64_arg(n.args);
+		var op1 *Node = intrinsic_i64_arg(n.args.next);
+		op0.next = op1; op1.next = 0 as *Node;
+		n.args = op0;
+		n.ty = ty_void;
+		return true;
+	}
+	if (str_eq(n.name, "inb") || str_eq(n.name, "inw") || str_eq(n.name, "inl")) {
+		if (n.nargs != 1) { error_at(n.pos, "an in takes a port"); }
+		n.args = intrinsic_i64_arg(n.args);
+		n.ty = ty_i64;
+		return true;
+	}
+	if (str_eq(n.name, "lgdt") || str_eq(n.name, "lidt") || str_eq(n.name, "invlpg") ||
+	    str_eq(n.name, "write_cr3")) {
+		if (n.nargs != 1) { error_at(n.pos, "this instruction takes one address"); }
+		n.args = intrinsic_i64_arg(n.args);
+		n.ty = ty_void;
+		return true;
+	}
+	if (str_eq(n.name, "read_cr2") || str_eq(n.name, "read_cr3")) {
+		if (n.nargs != 0) { error_at(n.pos, "this instruction takes no arguments"); }
+		n.ty = ty_i64;
+		return true;
+	}
+	if (str_eq(n.name, "rdmsr")) {
+		if (n.nargs != 1) { error_at(n.pos, "rdmsr takes a register number"); }
+		n.args = intrinsic_i64_arg(n.args);
+		n.ty = ty_i64;
+		return true;
+	}
+	if (str_eq(n.name, "wrmsr")) {
+		if (n.nargs != 2) { error_at(n.pos, "wrmsr takes a register number and a value"); }
+		var w0 *Node = intrinsic_i64_arg(n.args);
+		var w1 *Node = intrinsic_i64_arg(n.args.next);
+		w0.next = w1; w1.next = 0 as *Node;
+		n.args = w0;
 		n.ty = ty_void;
 		return true;
 	}
@@ -1822,6 +1874,7 @@ fn add_type(n *Node) {
 			if (str_eq(m.name, n.name)) {
 				n.member = m;
 				n.ty = m.ty;
+				if (m.bitw > 0) { type_bitfield_read(n, m); }
 				return;
 			}
 			m = m.next;
@@ -1929,6 +1982,101 @@ fn mk_call2(name str, a0 *Node, a1 *Node) *Node {
 	a0.next = a1;
 	n.nargs = 2;
 	return n;
+}
+
+fn bitfield_unit(m *Member) *Member {
+	var u *Member = member_alloc();
+	u.name = m.name;
+	u.ty = m.ty;
+	u.offset = m.offset;
+	return u;
+}
+
+fn bitfield_mask(m *Member) i64 {
+	if (m.bitw >= 64) { return -1; }
+	return (1 << (m.bitw as i64)) - 1;
+}
+
+fn type_bitfield_read(n *Node, m *Member) {
+	var cont *Node = node_alloc();
+	cont.kind = ND_MEMBER;
+	cont.lhs = n.lhs;
+	cont.member = bitfield_unit(m);
+	cont.ty = m.ty;
+	cont.name = n.name;
+	cont.typed = true;
+	cont.pos = n.pos;
+
+	var sh *Node = node_alloc();
+	sh.kind = ND_SHR;
+	sh.lhs = cont;
+	sh.rhs = node_alloc();
+	sh.rhs.kind = ND_NUM;
+	sh.rhs.val = m.bitoff as i64;
+	sh.rhs.ty = ty_i64;
+	sh.rhs.typed = true;
+	sh.rhs.pos = n.pos;
+	sh.ty = ty_i64;
+	sh.typed = true;
+	sh.pos = n.pos;
+
+	var msk *Node = node_alloc();
+	msk.kind = ND_NUM;
+	msk.val = bitfield_mask(m);
+	msk.ty = ty_i64;
+	msk.typed = true;
+	msk.pos = n.pos;
+
+	var nxt *Node = n.next;
+	n.kind = ND_BITAND;
+	n.lhs = sh;
+	n.rhs = msk;
+	n.ty = ty_i64;
+	n.member = m;
+	n.next = nxt;
+}
+
+fn bitfield_of(n *Node) *Member {
+	if (n.kind != ND_BITAND) { return 0 as *Member; }
+	if (n.member as i64 == 0) { return 0 as *Member; }
+	if (n.member.bitw == 0) { return 0 as *Member; }
+	return n.member;
+}
+
+fn type_bitfield_write(n *Node, m *Member) {
+	var cont *Node = n.lhs.lhs.lhs;
+	var cont2 *Node = node_alloc();
+	*cont2 = *cont;
+
+	var mask i64 = bitfield_mask(m);
+	var shifted i64 = mask << (m.bitoff as i64);
+
+	var clrv *Node = node_alloc();
+	clrv.kind = ND_NUM; clrv.val = ~shifted; clrv.ty = ty_i64; clrv.typed = true; clrv.pos = n.pos;
+	var clr *Node = node_alloc();
+	clr.kind = ND_OPASSIGN; clr.val = ND_BITAND as i64;
+	clr.lhs = cont; clr.rhs = clrv; clr.ty = cont.ty; clr.typed = true; clr.pos = n.pos;
+
+	var mv *Node = node_alloc();
+	mv.kind = ND_NUM; mv.val = mask; mv.ty = ty_i64; mv.typed = true; mv.pos = n.pos;
+	var and *Node = node_alloc();
+	and.kind = ND_BITAND; and.lhs = to_value(n.rhs); and.rhs = mv; and.ty = ty_i64;
+	and.typed = true; and.pos = n.pos;
+	var sv *Node = node_alloc();
+	sv.kind = ND_NUM; sv.val = m.bitoff as i64; sv.ty = ty_i64; sv.typed = true; sv.pos = n.pos;
+	var shl *Node = node_alloc();
+	shl.kind = ND_SHL; shl.lhs = and; shl.rhs = sv; shl.ty = ty_i64;
+	shl.typed = true; shl.pos = n.pos;
+	var set *Node = node_alloc();
+	set.kind = ND_OPASSIGN; set.val = ND_BITOR as i64;
+	set.lhs = cont2; set.rhs = shl; set.ty = cont2.ty; set.typed = true; set.pos = n.pos;
+
+	var nxt *Node = n.next;
+	n.kind = ND_COMMA;
+	n.lhs = clr;
+	n.rhs = set;
+	n.ty = cont.ty;
+	n.next = nxt;
 }
 
 fn index_call_name(ty *Type, suffix str) str {

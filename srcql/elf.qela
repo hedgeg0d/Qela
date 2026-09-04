@@ -22,7 +22,7 @@ fn shdr_raw(f *Buf, name i64, kind i64, flags i64, off i64, size i64) {
 	buf_u32(f, name);
 	buf_u32(f, kind);
 	buf_u64(f, flags);
-	if (flags == 0) { buf_u64(f, 0); } else { buf_u64(f, ELF_BASE + shdr_addr); }
+	if (flags == 0) { buf_u64(f, 0); } else { buf_u64(f, opt_base + shdr_addr); }
 	buf_u64(f, off);
 	buf_u64(f, size);
 	buf_u32(f, 0);
@@ -51,7 +51,7 @@ fn write_elf(path str, img *Image) {
 	var hdr i64 = EHDR_SZ + PHDR_SZ * (nph as i64);
 
 	var data_off i64 = hdr + text;
-	var data_vaddr i64 = ELF_BASE + SEG_GAP + data_off;
+	var data_vaddr i64 = opt_base + SEG_GAP + data_off;
 
 	var f Buf;
 	buf_grow(&f, data_off + img.data.n);
@@ -77,7 +77,7 @@ fn write_elf(path str, img *Image) {
 	var n_str i64 = 0;
 	var n_shstr i64 = 0;
 	if (opt_debug) {
-		dwarf_build(ELF_BASE + hdr, img.code.n);
+		dwarf_build(opt_base + hdr, img.code.n);
 		buf_u8(&names, 0);
 		n_text = names.n;   dw_str(&names, ".text");
 		n_line = names.n;   dw_str(&names, ".debug_line");
@@ -86,7 +86,7 @@ fn write_elf(path str, img *Image) {
 		n_sym = names.n;    dw_str(&names, ".symtab");
 		n_str = names.n;    dw_str(&names, ".strtab");
 		n_shstr = names.n;  dw_str(&names, ".shstrtab");
-		dwarf_symbols(ELF_BASE + hdr, img.code.n);
+		dwarf_symbols(opt_base + hdr, img.code.n);
 		nsh = 8;
 	}
 
@@ -95,7 +95,7 @@ fn write_elf(path str, img *Image) {
 	else if (opt_target == TARGET_ARM64) { buf_u16(&f, EM_AARCH64); }
 	else { buf_u16(&f, EM_X86_64); }
 	buf_u32(&f, 1);
-	buf_u64(&f, ELF_BASE + hdr + img.entry);
+	buf_u64(&f, opt_base + hdr + img.entry);
 	buf_u64(&f, EHDR_SZ);
 	var shoff_at i64 = f.n;
 	buf_u64(&f, 0);
@@ -116,7 +116,7 @@ fn write_elf(path str, img *Image) {
 		buf_u16(&f, 7);
 	}
 
-	elf_phdr(&f, 5, 0, ELF_BASE, hdr + text, hdr + text);
+	elf_phdr(&f, 5, 0, opt_base, hdr + text, hdr + text);
 	if (nph == 2) {
 		elf_phdr(&f, 6, data_off, data_vaddr, img.data.n, rw);
 	}
