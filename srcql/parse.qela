@@ -140,6 +140,10 @@ fn parse_leave() {
 // std/fmt.qela at the next top-level splice point.
 var need_fmt bool = false;
 
+// Set when a `~` dynamic local is parsed; parse() imports std/dyn.qela at
+// the next top-level splice point, same as need_fmt.
+var need_dyn bool = false;
+
 // ── top-level asm and the entry point ──
 
 // `asm { ... }` bytes land at the start of the code segment, before any
@@ -1049,11 +1053,24 @@ fn parse_decl(t **Token) *Node {
 	var kw str = (*t).text;
 	var typed bool = str_eq(kw, "var");
 	*t = (*t).next;
+	// `~` marks a dynamic local: `var ~n = expr;`. Only `var` may carry it
+	// -- a `let` binding never changes type or value, so "dynamic" would be
+	// meaningless -- and it needs no declared type of its own; its slot
+	// always holds the compiler's DynVal.
+	var is_dyn bool = false;
+	if (tok_eq(*t, "~")) {
+		if (!typed) { error_at((*t).pos, "'let' cannot be dynamic; use 'var ~name'"); }
+		is_dyn = true;
+		*t = (*t).next;
+		type_dynval();
+		need_dyn = true;
+	}
 	var name str = (*t).text;
 	var p i64 = (*t).pos;
 	*t = (*t).next;
 	var ty *Type = 0 as *Type;
-	if (typed && !tok_eq(*t, "=")) { ty = parse_type(t); }
+	if (is_dyn) { ty = type_dynval(); }
+	else if (typed && !tok_eq(*t, "=")) { ty = parse_type(t); }
 	var n *Node = new_node(ND_EXPRSTMT, p);
 	if (tok_consume(t, "=")) {
 		var rhs *Node = parse_assign(t);
@@ -1071,6 +1088,7 @@ fn parse_decl(t **Token) *Node {
 		lhs.varp = v;
 		n.lhs = bin_node(ND_ASSIGN, lhs, rhs, p);
 	} else {
+		if (is_dyn) { error_at(p, "a dynamic variable needs an initializer"); }
 		var z *Node = new_node(ND_ZERO, p);
 		z.varp = declare_var(name, ty, p);
 		n.lhs = z;
@@ -1851,6 +1869,10 @@ fn parse(tok *Token) *Unit {
 		if (need_fmt) {
 			need_fmt = false;
 			tok = splice_import(tok, "std/fmt.qela", tok.pos);
+		}
+		if (need_dyn) {
+			need_dyn = false;
+			tok = splice_import(tok, "std/dyn.qela", tok.pos);
 		}
 		if (tok.kind == TK_EOF) { break; }
 		if (tok_eq(tok, "asm") && tok.next.kind == TK_PUNCT && tok_eq(tok.next, "{")) {

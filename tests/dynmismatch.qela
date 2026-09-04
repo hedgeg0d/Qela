@@ -1,0 +1,11 @@
+// stage1-only
+// expect-exit: 134
+// expect-out: dynamic cast: type mismatch
+// `as` on a dynamic value checks the runtime tag; a mismatch panics rather
+// than reinterpreting the boxed bytes.
+fn main() int {
+	var ~n = 5;
+	var s str = n as str;
+	syscall(1, 1, s.ptr, s.len);
+	return 0;
+}
