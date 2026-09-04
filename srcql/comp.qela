@@ -160,6 +160,8 @@ struct Var {
 	next      *Var,
 	offset    int,
 	is_global bool,
+	is_tls    bool,
+	tls_off   i64,
 	extern    bool,
 	has_init  bool,
 	by_ref    bool,
