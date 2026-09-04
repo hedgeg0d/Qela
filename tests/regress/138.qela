@@ -1,0 +1,77 @@
+// expect-exit: 0
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = 45;
+fn diff4(a int, b int, c int, d int) int { return a - b - c - d; }
+fn twice(n int) int { return n + n; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn wide_make(a int, b int, c int) Wide { return Wide{a: a, b: b, c: c}; }
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 3;
+    var v1 int = 1;
+    var v2 int = 7;
+    var sv0 str = "foobar";
+    var sv1 str = "hello";
+    var fv double = 2.5;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    v0 = ((-((212 as u32) < (463 as u16))) >> false);
+    p = Pair{x: (387 as i32), y: ((true - pair_sum(Pair{x: (3 as i16), y: 42})) as i8)};
+    match (e) {
+        A => {
+            return ((a[((v0 % ((3 & 15) + 1)) & 3)] as u8) != (((gv <= true) == (v2 as u16)) == ((("qwerty")[3..6])[0..2]).len));
+        }
+        B(mb0) => {
+            return (twice(v0) * mb0);
+        }
+        C(mb0, mb1) => {
+            return (gv | mb1);
+        }
+    }
+    a[(a[((p.y == (('2' + v2) as i8)) & 3)] & 3)] = ((-((-127) > (!-819))) as u8);
+    match (e) {
+        A => {
+            return (opt_d(D.None) * ((255 != (3 as i32)) * (0.1 >= (1.5 - fv))));
+        }
+        B(mb0) => {
+            return (twice(((0.25 == 0.3) as i16)) ^ ((-(false <= 'f')) as u8));
+        }
+        C(mb0, mb1) => {
+            return (a[((!(('c' >= false) * 'b')) & 3)] | mb1);
+        }
+    }
+    a[((gv ^ (-(-('\t' == -788)))) & 3)] = (!(sv0)[1]);
+    gv = '\n';
+    v2 = (twice((-('3' >= v2))) + (((127 as i32) < (true != v0)) % ((((true ^ '1') < ('c' & v1)) & 15) + 1)));
+    p = pair_swap(p);
+    var ob Buf;
+    fmt_i64(&ob, v0);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return p.x;
+}

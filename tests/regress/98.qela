@@ -1,0 +1,92 @@
+// expect-exit: 1
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = 40;
+fn mix5(a int, b int, c int, d int, e int) int { return a + b - c + d - e; }
+fn add2(a int, b int) int { return a + b; }
+fn sum3(a int, b int, c int) int { return a + b + c; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn nest_sum(n Nest) int { return n.tag + n.p.x + n.p.y; }
+fn wide_sum(w Wide) int { return w.a + w.b + w.c; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 5;
+    var v1 int = 0;
+    var v2 int = 0;
+    var sv0 str = "xyzzy";
+    var sv1 str = "qwerty";
+    var fv double = 0.125;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    n.p.x = (((wide_sum(w) <= 255) ^ ((3 as i32) ^ (10 as i32))) as u8);
+    match (e) {
+        A => {
+            return ((((gv + gv) as i16) as u8) >= str_eq(("xyz")[0..2], "no"));
+        }
+        B(mb0) => {
+            return (((!((819 + false) <= a[(true & 3)])) - ("no").len) & mb0);
+        }
+        C(mb0, mb1) => {
+            return ((a[((-(-'3')) & 3)] <= gv) & mb1);
+        }
+    }
+    if (((!tag_e(e)) == ((-391 >= '0') << ((str_eq(sv1, "xyz") / ((str_eq("qwerty", "42") & 15) + 1)) | (-('b' % ((true & 15) + 1))))))) {
+        n = Nest{tag: ((false >= p.x) + (-(2.5 as i64))), p: Pair{x: (((p.y & (gv ^ true)) as u16) as i8), y: p.x}};
+        v1 = a[(gv & 3)];
+        return ((gv & 689) as i32);
+    } else {
+        n.p.x = (!(str_eq(sv0, "no") as u8));
+        return str_eq(("abcd")[0..4], sv1);
+    }
+    v1 = (gv <= (v1 as i16));
+    v0 = (("abc")[0..3])[0];
+    v1 >>= ((("xyzzy")[0..3])[1] + (((-752 + true) <= ('2' << false)) as u8));
+    n.tag = (-a[((('a' != -1) >> ('f' - gv)) & 3)]);
+    match (e) {
+        A => {
+            return ((((2 < '0') ^ ('d' as u32)) & ((0.5 < fv) | (-557 > gv))) * (((10 == true) <= ('e' * 'a')) << (fv < (fv / -1.5))));
+        }
+        B(mb0) => {
+            return ("aa")[0];
+        }
+        C(mb0, mb1) => {
+            return ('e' + mb1);
+        }
+    }
+    var ob Buf;
+    fmt_i64(&ob, v1);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return (-(fv as i64));
+}

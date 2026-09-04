@@ -1,0 +1,12 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: a-b
+import "std/fmt.qela";
+import "std/sys.qela";
+
+fn main() int {
+	var s str = str_replace("a b", " ", "-");
+	sys_write(1, s.ptr, s.len);
+	sys_write(1, "\n".ptr, 1);
+	return 0;
+}

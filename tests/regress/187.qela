@@ -1,0 +1,79 @@
+// expect-exit: 0
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+fn twice(n int) int { return n + n; }
+fn mix5(a int, b int, c int, d int, e int) int { return a + b - c + d - e; }
+fn mul2(a int, b int) int { return a * b; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn bag_sum(b Bag) int { return b.p + b.q + b.r + b.s; }
+fn wide_make(a int, b int, c int) Wide { return Wide{a: a, b: b, c: c}; }
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn main() int {
+    var v0 int = 3;
+    var v1 int = 4;
+    var v2 int = 9;
+    var sv0 str = "zz";
+    var sv1 str = "42";
+    var fv double = 0.125;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    if ((((((-184 * '2') ^ (-332 % ((921 & 15) + 1))) <= bag_sum(b)) > -45) > str_eq(("xyzzy")[1..4], ("abcd")[0..4]))) {
+        p.y = (-bag_sum(b));
+    } else {
+        p.y = (true * str_eq(("abc")[0..3], (("xyz")[0..2])[0..2]));
+    }
+    v2 /= ((((((969 as i16) as i16) == 430) & (true as i8)) & 15) + 1);
+    p.x = ((((2.5 as i64) / ((a[('e' & 3)] & 15) + 1)) % ((((v2 - '0') - (-688 <= 255)) & 15) + 1)) as i16);
+    v1 = (-(-(!-306)));
+    if (((-(p.x as u8)) < v0)) {
+        w = wide_make((mix5(((!false) > -706), ((false + 1) as i32), (('0' + 127) ^ (255 > false)), v2, ((false >> -1) as i32)) > true), p.x, twice(((--1) | ((v0 >> 10) & (2.0 > fv)))));
+    } else {
+        v2 = ((10 * 539) ^ ("zz").len);
+        return twice((((!1) & (255 as i32)) > v2));
+    }
+    e = E.B((!(v1 == 2)));
+    v1 = (v1 > (((-'f') & ('a' % ((10 & 15) + 1))) % ((((-47 + 784) % (((-1 < false) & 15) + 1)) & 15) + 1)));
+    e = E.C((((str_eq((("hello")[1..5])[0..2], ((("abc")[0..2])[0..2])[0..2]) as i32) | ((v0 * '\n') % (((-325 >> 571) & 15) + 1))) as u8), v1);
+    i0 = 0;
+    while ((i0 < 2)) {
+        i0 = (i0 + 1);
+        v1 ^= ((("abcd").len & ('0' != (v1 >> '0'))) < (v1 ^ v0));
+    }
+    p.x = ((((-'d') % (((true % (('c' & 15) + 1)) & 15) + 1)) <= p.y) < ((-338 * (81 ^ v0)) << (fv as i64)));
+    v0 = twice((0 < str_eq(sv1, ("qwerty")[0..2])));
+    var ob Buf;
+    fmt_i64(&ob, v0);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return (255 * (((!-735) > (1.7 == 0.5)) as i16));
+}

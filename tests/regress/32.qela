@@ -1,0 +1,101 @@
+// expect-exit: 1
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = -43;
+fn max2(a int, b int) int { if (a > b) { return a; } else { return b; } }
+fn mul2(a int, b int) int { return a * b; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn wide_sum(w Wide) int { return w.a + w.b + w.c; }
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 8;
+    var v1 int = 7;
+    var v2 int = 5;
+    var sv0 str = "42";
+    var sv1 str = "abc";
+    var fv double = 2.5;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    a[((max2((-gv), mul2((255 as u32), (true * 202))) % (((gv > p.x) & 15) + 1)) & 3)] = ((((-1 as u32) >> (true < '2')) - ((-1 != '0') - (32 as i32))) * (gv < (false <= (3.75 >= 1.5))));
+    match (e) {
+        A => {
+            return ((0 as i32) != (sv0).len);
+        }
+        B(mb0) => {
+            return (((fv / 100.0) > (0.125 / 1.7)) * mb0);
+        }
+        C(mb0, mb1) => {
+            return ((((0.25 as i64) | (244 >= true)) as double) as i64);
+        }
+    }
+    if (((sv0).len == opt_d(D.Some(((false / (((!gv) & 15) + 1)) - (a[('2' & 3)] << (10.5 as i64))))))) {
+        w = Wide{a: ((-(-mul2(124, -736))) << '2'), b: ((((gv + 149) != ("42").len) * ('f' ^ (1000 * -622))) * gv), c: 1};
+        n.p.x = ((87 << ((false | gv) * ('1' >> -341))) < ((sv1)[1] as u32));
+    } else {
+        if ((((((fv as i64) as u8) << (str_eq(("hello")[0..2], sv0) > (!'d'))) >> ((!(-114 + 'e')) as i16)) >= v0)) {
+            gv = ((((true != gv) >= (("abcd")[1..3]).len) as u8) % ((((gv <= (v1 * v2)) + (-610)) & 15) + 1));
+            if ((((p.y >= gv) == v0) == 'c')) {
+                n.p.x = (("foobar")[0..2])[1];
+                return opt_d(D.None);
+            } else {
+                gv = (!(-(("foobar")[2..6])[0]));
+                v0 = ((!true) <= ((true * wide_sum(w)) ^ ("foobar")[0]));
+            }
+            return (10 as i8);
+        } else {
+            gv, v0 = (989 > (((-'\t') as u8) == (p.x / (('g' & 15) + 1)))), ((max2(a[(3 & 3)], gv) % ((((-2.0 - -0.5) == (-0.5 + fv)) & 15) + 1)) != (-(-max2('0', 'a'))));
+            p.x = 0;
+        }
+        if ((((("abcd")[0..2])[1] as u8) == ((sv1)[1] / (((-556 as u16) & 15) + 1)))) {
+            v0 = true;
+        } else {
+            i2 = 0;
+            while ((i2 < 2)) {
+                i2 = (i2 + 1);
+                fv = fv;
+                w = Wide{a: (!(!('1' as i16))), b: (1.7 >= fv), c: (-v0)};
+            }
+            v1 = (!v0);
+        }
+    }
+    n.tag = ((fv / 0.125) as i64);
+    p = pair_swap(p);
+    e = E.B((!(opt_d(D.Some((-gv))) == (pair_sum(Pair{x: false, y: 255}) as i16))));
+    a[((((!(false as u32)) <= ((!'a') ^ (440 - 2))) >> (-(((("xyzzy")[2..4])[0..2])[0] >> gv))) & 3)] = (-(fv != fv));
+    i0 = 0;
+    while ((i0 < 4)) {
+        w = Wide{a: (3 >= (((!378) != (("abc")[0..2])[1]) as i32)), b: str_eq(sv0, "abcd"), c: ((-v0) as i32)};
+        gv = ((((42 & 1) & (sv1).len) != v0) as u8);
+        a[i0] = ((-261 > ((0.1 as i64) >= 'b')) >> (!(!(v2 / ((116 & 15) + 1)))));
+        i0 = (i0 + 1);
+    }
+    var ob Buf;
+    fmt_i64(&ob, v1);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return (((("hello").len == (v0 % ((v0 & 15) + 1))) >> (('3' * true) * (!634))) & (str_eq("hi", ("foobar")[0..2]) / (((("qwerty")[2..4])[1] & 15) + 1)));
+}

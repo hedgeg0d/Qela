@@ -1,0 +1,72 @@
+// expect-exit: 0
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+fn sum3(a int, b int, c int) int { return a + b + c; }
+fn diff4(a int, b int, c int, d int) int { return a - b - c - d; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn wide_sum(w Wide) int { return w.a + w.b + w.c; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn main() int {
+    var v0 int = 8;
+    var v1 int = 3;
+    var v2 int = 6;
+    var sv0 str = "aa";
+    var sv1 str = "abc";
+    var fv double = 100.0;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    a[((sum3(wide_sum(w), (!(-1 != 'c')), v2) >= (("foobar").len < sum3(str_eq((("abcd")[1..3])[0..2], ("hello")[0..2]), (-307 < 353), (v0 * '3')))) & 3)] = ((((true != 0) as double) == ((10.5 / 1.7) + fv)) != (((v1 % ((42 & 15) + 1)) as i32) as u32));
+    n.tag = (0.25 as i64);
+    if ((((-'2') != (p.y != (("hello")[0..2])[0])) < ((-(-(v1 as i16))) >= (a[(-1 & 3)] as u32)))) {
+        v0 += ((!(-v2)) == (("hello")[0..5]).len);
+    } else {
+        v0 = ((('a' | ('\n' as u8)) as double) == fv);
+    }
+    a[(((((false % ((522 & 15) + 1)) >> (0 < v2)) as u16) - (str_eq("aa", (("qwerty")[0..6])[0..2]) - (-'\n'))) & 3)] = ((((false as i32) < ('3' << true)) == ((-600 != false) as u16)) % ((v1 & 15) + 1));
+    sv1 = sv1;
+    match (e) {
+        A => {
+            return ((v0 as i8) as u16);
+        }
+        B(mb0) => {
+            return ((((-249) > ((3.75 < fv) >> (42 as u16))) <= ((((((("hello")[1..3])[0..2])[0..2])[0..2])[0..2])[0..2]).len) + mb0);
+        }
+        C(mb0, mb1) => {
+            return (diff4((tag_e(e) * (("hi")[0..2]).len), (("abcd")[0..2])[0], (((false * false) | (-94)) >> ((-10) != (v1 * v0))), -883) - mb1);
+        }
+    }
+    e = E.C(((((false as i32) <= (!v2)) == ((-'2') <= true)) >> ((("xyz").len as u32) as u8)), v1);
+    n.p.x = pair_sum(Pair{x: (((fv + 2.5) == (fv / 2.0)) as i16), y: (2 - pair_sum(Pair{x: (272 != '\n'), y: wide_sum(w)}))});
+    a[(((p.x as double) >= (((3 as u16) != p.x) as double)) & 3)] = ((p.y > ((!-1) % (((22 >= '3') & 15) + 1))) != (((false + '\n') >= (true >= v0)) <= ((255 - 964) - (fv as i64))));
+    p.y = (((255 as double) <= (fv + (0.25 / 2.0))) << v2);
+    v0 = (-(str_eq(sv1, ("abc")[0..2]) == 507));
+    var ob Buf;
+    fmt_i64(&ob, v1);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return (2 == a[((('1' >= 'b') + v2) & 3)]);
+}
