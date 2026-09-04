@@ -1257,6 +1257,63 @@ fn type_intrinsic(n *Node) bool {
 		n.ty = ty_void;
 		return true;
 	}
+	if (str_eq(n.name, "atomic_cas")) {
+		if (n.nargs != 3) {
+			error_at(n.pos, "atomic_cas takes a pointer, an expected value and a new value");
+		}
+		var p *Node = to_value(n.args);
+		if (p.ty.kind != TY_PTR) {
+			error_at(p.pos, "atomic_cas's first argument must be a pointer");
+		}
+		var a *Node = n.args.next;
+		while (a as i64 != 0) {
+			var v *Node = to_value(a);
+			if (!is_integer(v.ty) || v.ty.size != 8) {
+				error_at(v.pos, "atomic_cas's value arguments must be i64");
+			}
+			a = a.next;
+		}
+		n.ty = ty_bool;
+		return true;
+	}
+	if (str_eq(n.name, "atomic_add")) {
+		if (n.nargs != 2) { error_at(n.pos, "atomic_add takes a pointer and a delta"); }
+		var p *Node = to_value(n.args);
+		if (p.ty.kind != TY_PTR) {
+			error_at(p.pos, "atomic_add's first argument must be a pointer");
+		}
+		var v *Node = to_value(n.args.next);
+		if (!is_integer(v.ty) || v.ty.size != 8) {
+			error_at(v.pos, "atomic_add's delta must be i64");
+		}
+		n.ty = ty_i64;
+		return true;
+	}
+	if (str_eq(n.name, "atomic_load")) {
+		if (n.nargs != 1) { error_at(n.pos, "atomic_load takes one pointer"); }
+		var p *Node = to_value(n.args);
+		if (p.ty.kind != TY_PTR) { error_at(p.pos, "atomic_load takes a pointer"); }
+		n.ty = ty_i64;
+		return true;
+	}
+	if (str_eq(n.name, "atomic_store")) {
+		if (n.nargs != 2) { error_at(n.pos, "atomic_store takes a pointer and a value"); }
+		var p *Node = to_value(n.args);
+		if (p.ty.kind != TY_PTR) {
+			error_at(p.pos, "atomic_store's first argument must be a pointer");
+		}
+		var v *Node = to_value(n.args.next);
+		if (!is_integer(v.ty) || v.ty.size != 8) {
+			error_at(v.pos, "atomic_store's value must be i64");
+		}
+		n.ty = ty_void;
+		return true;
+	}
+	if (str_eq(n.name, "fence")) {
+		if (n.nargs != 0) { error_at(n.pos, "fence takes no arguments"); }
+		n.ty = ty_void;
+		return true;
+	}
 	return false;
 }
 
