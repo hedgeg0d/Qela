@@ -1,0 +1,37 @@
+// expect-exit: 0
+// expect-out: eval fn marshalling ok
+// stage1-only
+// eval fn host functions with str, float and struct signatures, called
+// from eval'd and interpreted code.
+import "std/eval.qela";
+import "std/io.qela";
+
+struct Pair { a i64, b i64 }
+
+eval fn ulen(s str) i64 {
+	return s.len;
+}
+eval fn ucat(a str, b str) str {
+	var r str;
+	if (a.len == 0) { return b; }
+	r.ptr = a.ptr;
+	r.len = a.len + b.len;
+	return r;
+}
+eval fn usum(p Pair, x f64) f64 {
+	return (p.a + p.b) as f64 + x;
+}
+
+fn interpreted from_interp(s str) i64 {
+	return ulen(s) + ucat("x", s).len;
+}
+
+fn main() int {
+	var fails i64 = 0;
+	if (eval("ulen(\"hello\")") != 5) { fails = fails + 1; }
+	if (eval("ucat(\"ab\", \"cd\").len") != 4) { fails = fails + 1; }
+	if (eval("(usum(Pair{a: 3, b: 4}, 0.5) as i64)") != 7) { fails = fails + 1; }
+	if (from_interp("abc") != 7) { fails = fails + 1; }
+	if (fails == 0) { write_str(STDOUT, "eval fn marshalling ok\n"); }
+	return fails as int;
+}
