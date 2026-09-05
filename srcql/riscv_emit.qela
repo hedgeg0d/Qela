@@ -115,12 +115,15 @@ fn c_ldst16(rt int, rn int, off i64, is_store bool) bool {
 // in [11:7], the offset split as uimm5[4:2] into [6:2] and uimm5[5] into
 // [12].
 fn c_ldstsp16(rt int, off i64, is_store bool) bool {
+	// c.ldsp: 011 imm[5] rd imm[4:2] 00; c.sdsp: 110 imm[5:3] rs2 imm[2] 10.
 	if (rt == 0) { return false; }
 	if (off < 0 || off > 40 || (off & 7) != 0) { return false; }
-	var u i64 = off / 8;
 	var w i64 = 0x6002;
-	if (is_store) { w = 0xe002; }
-	w = w | (rt << 7) | ((u >> 2) << 12) | ((u & 3) << 3);
+	if (is_store) {
+		w = 0xe002 | (((off >> 3) & 7) << 10) | (((off >> 2) & 1) << 7) | (rt << 2);
+	} else {
+		w = 0x6002 | (((off >> 5) & 1) << 12) | (rt << 7) | (((off >> 2) & 7) << 4);
+	}
 	c16(w);
 	return true;
 }
@@ -142,9 +145,31 @@ fn c_lwst16(rt int, rn int, off i64, is_store bool) bool {
 // c.addi rd, imm (rd == rs1, nonzero, not sp): 000 [12]=imm[5] [11:7]=rd
 // [6:2]=imm[4:0] 01.
 fn c_addi16(rd int, rs1 int, imm i64) bool {
-	if (rd == 0 || rd == 2 || rd != rs1) { return false; }
+	if (rd == 0 || rd != rs1) { return false; }
 	if (imm == 0 || imm < -32 || imm > 31) { return false; }
 	c16(0x0001 | (rd << 7) | ((imm & 0x1f) << 2) | (((imm >> 5) & 1) << 12));
+	return true;
+}
+
+// c.addi16sp, sp-relative addi for multiples of 16 in [48, 512]: 011 0
+// imm[9] imm[8:4] 2 imm[3] imm[2..3] 01 -- field order verified bit-for-bit
+// against llvm-mc (the [12]/[6]/[5:2] split carries the sign bit and a
+// bit-permuted pair of the magnitude, not the obvious layout).
+fn c_addi16sp16(imm i64) bool {
+	if (imm == 0 || (imm & 15) != 0) { return false; }
+	var q i64 = imm;
+	if (q < 0) { q = -q; }
+	q = q >> 4;
+	if (q < 2 || q > 32) { return false; }
+	var r i64 = 0;
+	if (imm > 0) { r = q >> 1; } else { r = (q - 1) >> 1; }
+	var p i64 = (((r >> 1) & 1) << 3) | (((r >> 3) & 1) << 2) | (((r >> 2) & 1) << 1) | (r & 1);
+	var w i64 = 0x6001 | (2 << 7) | ((q & 1) << 6) | (p << 2);
+	if (imm < 0) {
+		w = (w | (1 << 12)) & ~(15 << 2);
+		w = w | ((~p & 15) << 2);
+	}
+	c16(w);
 	return true;
 }
 
@@ -242,6 +267,9 @@ fn riscv_mov_reg(rd int, rn int) {
 
 fn riscv_addi(rd int, rn int, imm i64) {
 	if (c_addi16(rd, rn, imm)) { return; }
+	if (rd == 2 && rn == 2) {
+		if (c_addi16sp16(imm)) { return; }
+	}
 	riscv_i(imm, rn, 0, rd, 0x13);
 }
 
@@ -398,8 +426,8 @@ var riscv_framesz i64;
 fn riscv_enter_frame(stack_size i64) {
 	riscv_framesz = stack_size;
 	riscv_addi(STK, STK, -16);
-	riscv_s(8, RA, STK, 3, 0x23);           // sd ra, 8(sp)
-	riscv_s(0, S0, STK, 3, 0x23);           // sd s0, 0(sp)
+	c_ldstsp16(RA, 8, true);                // c.sdsp ra, 8(sp)
+	c_ldstsp16(S0, 0, true);                // c.sdsp s0, 0(sp)
 	if (stack_size != 0) { riscv_add_imm(STK, STK, -stack_size); }
 	riscv_mov_reg(S0, STK);
 }
@@ -407,8 +435,8 @@ fn riscv_enter_frame(stack_size i64) {
 fn riscv_leave_frame() {
 	riscv_mov_reg(STK, S0);
 	if (riscv_framesz != 0) { riscv_add_imm(STK, STK, riscv_framesz); }
-	riscv_i(0, STK, 3, S0, 0x03);           // ld s0, 0(sp)
-	riscv_i(8, STK, 3, RA, 0x03);           // ld ra, 8(sp)
+	c_ldstsp16(S0, 0, false);               // c.ldsp s0, 0(sp)
+	c_ldstsp16(RA, 8, false);               // c.ldsp ra, 8(sp)
 	riscv_addi(STK, STK, 16);
 }
 
@@ -565,11 +593,11 @@ fn riscv_memcpy(dst int, src int, size i64) {
 // bytes, exactly like arm64_push.
 fn riscv_push(reg int) {
 	riscv_addi(STK, STK, -16);
-	riscv_s(0, reg, STK, 3, 0x23);          // sd reg, 0(sp)
+	c_ldstsp16(reg, 0, true);               // c.sdsp reg, 0(sp)
 }
 
 fn riscv_pop(reg int) {
-	riscv_i(0, STK, 3, reg, 0x03);          // ld reg, 0(sp)
+	c_ldstsp16(reg, 0, false);              // c.ldsp reg, 0(sp)
 	riscv_addi(STK, STK, 16);
 }
 
@@ -1715,7 +1743,7 @@ fn riscv_lower_op(op *IrOp) {
 		return;
 	}
 	if (op.kind == IR_ALU && op.dst.kind == OP_VREG && op.src0.kind == OP_VREG && op.src1.kind == OP_ACC) {
-		riscv_alu_full(op.aux, op.dst.reg, op.src0.reg, A0, op.dst.ty.is_unsigned);
+		riscv_alu_full(op.aux, op.dst.reg, op.src0.reg, A0, op.dst.ty as i64 != 0 && op.dst.ty.is_unsigned);
 		return;
 	}
 	if (op.kind == IR_ALU && op.dst.kind == OP_STACKSLOT && op.src0.kind == OP_STACKSLOT && op.src1.kind == OP_VREG) {
