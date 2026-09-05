@@ -25,22 +25,32 @@ fn sys_read(fd i64, buf u64, len i64) i64 {
 	if (fd != 0) {
 		return -9;
 	}
-	kb_poll();
-	if (kb_head_get() == kb_t2_get()) {
-		return -11;
-	}
 	var n i64 = 0;
 	while (true) {
-		if (n >= len) {
-			break;
-		}
 		kb_poll();
-		if (kb_head_get() == kb_t2_get()) {
+		if (kb_head != kb_t2) {
 			break;
 		}
-		var t i64 = kb_t2_get();
-		var c i64 = kb_q_get(t % 128);
-		kb_t2_set(t + 1);
+		if (n != 0) {
+			break;
+		}
+		// A blocking wait, and the first place the kernel enables IF
+		// in ring 0: the timer IRQ lands on the ring-0 entry frame and
+		// its handler iretq's back to the hlt. The interrupt frame
+		// padding for ring-0 entries lives in the compiler's
+		// gen_isr_save.
+		sti();
+		hlt();
+		cli();
+	}
+	while (n < len) {
+		kb_poll();
+		if (kb_head == kb_t2) {
+			break;
+		}
+		var t i64 = kb_t2;
+		var c i64 = kb_q[t % 128];
+		kb_t2 = t + 1;
 		(buf as *u8)[n] = c as u8;
 		n = n + 1;
 	}

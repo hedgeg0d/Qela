@@ -1,21 +1,71 @@
 # Where the project stands
 
-Updated 2026-08-11. Read `BOOTSTRAP.md` first; it constrains everything below.
+Updated 2026-08-12. Read `BOOTSTRAP.md` first; it constrains everything below.
 
 ## Numbers
 
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **605 728 B** (57.8% of the 1 MiB budget) |
+| **S2 — the shipped compiler, Qela compiled by itself** | **605 528 B** (57.8% of the 1 MiB budget) |
 | stage1 sources | ~21 500 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
 
-Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 158-test corpus under S2, the embedded stdlib resolving outside the source tree,
+Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 169-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
 backtrace, interpolation and the repl, the compiler flags (`-g`,
 `--backtrace`, `--no-bounds-checks`, `--dump-std`), and a scripted language
 server conversation.
+
+## Done
+
+**The minios kernel batch (2026-08-12).** Five items that fell out of
+writing a real x86_64 kernel in Qela (`examples/minios`, boots in QEMU,
+user programs at ring 3 over Linux-numbered syscalls). S2 603 616 ->
+605 528 B (+1 912), corpus 158 -> 169, gate green, torture 200/200.
+
+- **Globals now lay out in declaration order.** The global chain was
+  built by prepending, so `layout_globals` assigned .data/.bss slots
+  backwards — a kernel that declared `kb_head` then `kb_tail` found
+  `kb_tail`'s address sitting on top of `kb_head`'s slot. Everything
+  was internally consistent (addresses, values and initializers all
+  used the same `Var.data_off`), but the layout contradicted the
+  source order BOOTSTRAP.md promises, and any code that assumed
+  declaration order read its neighbour's variable. `declare_var` now
+  appends (both compilers; the repl's incremental global layout keys
+  off a tail marker instead of the old head marker). Pinned by
+  `tests/globaddr.qela` (address deltas, through-pointer writes, bss)
+  and `tests/initkeep.qela` (a `var n = 0` followed by a `while`
+  whose condition is several calls no longer lets the first call's
+  result overwrite n).
+- **`fn interrupt` handlers work from ring 0.** A ring-3 interrupt
+  arrives with a five-word frame (RIP/CS/RFLAGS/RSP/SS); a ring-0
+  entry pushes only three, and iretq would pop the interrupted stack's
+  garbage as RSP/SS — the kernel therefore never enabled IF at ring 0
+  and `sys_read` polled the PS/2 controller instead of blocking.
+  `gen_isr_save` now tests the CPL of the CS on the entry stack and,
+  for ring 0, pads the frame up to five words (shifts the three words
+  up 16 bytes and stores the real RSP and SS below them). Two real
+  bugs found on the way: `jump()` was handed a short-form opcode, so
+  the CPL branch emitted `GS; DAS` (#UD), and the segment-store modrm
+  used the FS encoding instead of SS's (#GP(0x20) on iretq) — both
+  fixed. Verified in QEMU: `sti; hlt` in ring 0, the timer IRQ ticks,
+  `sys_read` blocks on `hlt` and wakes on a key.
+- **`$le N v` in asm operands.** A bare multi-byte constant is a byte
+  string in print order with leading zeros truncated — `0x00010000`
+  came out as three bytes and broke the multiboot header alignment.
+  `$le N v` emits exactly N bytes (2/4/8), little-endian:
+  `asm(0xb8, $le 4 0x00010000)` is `b8 00 00 01 00`.
+  `tests/asmle.qela`.
+- **`$abs name` in asm operands.** `$name` is an 8-byte absolute slot
+  (too wide for 32-bit code) and `$rel name` is rel32 (a far jump
+  needs an absolute target), so a 32-bit boot stub had to compute its
+  jump target by hand. `$abs name` embeds the symbol's address in a
+  4-byte slot, patched at link time like `$name`; under `-c` it
+  becomes R_X86_64_32S. `tests/asmabs.qela`.
+- **The minios example dropped every workaround**: `kb2.qela`
+  (accessor-per-global) is gone, `sys_read` blocks instead of polling,
+  and the boot stub could now use `$abs` if it ever needs a far jump.
 
 ## Done
 

@@ -83,6 +83,7 @@ fn reset_compile() {
 	strlist_tail = null;
 	o_nsyms = 0;
 	global_vars = null;
+	global_vars_tail = null;
 	scope_root = null;
 	cur_func = null;
 	ntype_vars = 0;
@@ -810,8 +811,10 @@ fn repl_sync() {
 	repl_assign_offsets(repl_fn.locals, repl_locals_done);
 	repl_locals_done = repl_fn.locals;
 
-	ip_repl_layout_globals(global_vars, repl_globals_done);
-	repl_globals_done = global_vars;
+	var gstart *Var = global_vars;
+	if (repl_globals_done as i64 != 0) { gstart = repl_globals_done.next; }
+	ip_repl_layout_globals(gstart, null);
+	repl_globals_done = global_vars_tail;
 
 	var s *StrLit = strlist_head;
 	if (repl_strs_done as i64 != 0) { s = repl_strs_done.next; }
@@ -1292,6 +1295,7 @@ fn ast_kind_name(kind int) str {
 	if (kind == ND_INTERP) { return "interp"; }
 	if (kind == ND_STRPART) { return "strpart"; }
 	if (kind == ND_ASMREF) { return "asmref"; }
+	if (kind == ND_ASMLE) { return "asmle"; }
 	return "?";
 }
 
