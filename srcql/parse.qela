@@ -852,10 +852,31 @@ fn parse_postfix(t **Token) *Node {
 			continue;
 		}
 		if (tok_consume(t, ".")) {
-			var m *Node = new_node(ND_MEMBER, (*t).pos);
-			m.lhs = n;
-			m.name = (*t).text;
+			var mpos i64 = (*t).pos;
+			var mname str = (*t).text;
 			*t = (*t).next;
+			// x.foo(args) is call sugar: foo(x, args). No overloading exists
+			// (find_func is a plain name lookup), so this is a pure AST
+			// rewrite at parse time -- the ordinary call path (type_call)
+			// resolves and type-checks it exactly like foo(x, args) would.
+			if (tok_eq(*t, "(")) {
+				if (cur_func as i64 != 0 && cur_func.naked) {
+					error_at(mpos, "naked functions cannot call other functions");
+				}
+				var c *Node = new_node(ND_CALL, mpos);
+				c.name = mname;
+				var v *Var = find_var(mname);
+				if (v as i64 != 0) { c.varp = v; }
+				call_args(t, c);
+				n.next = c.args;
+				c.args = n;
+				c.nargs = c.nargs + 1;
+				n = c;
+				continue;
+			}
+			var m *Node = new_node(ND_MEMBER, mpos);
+			m.lhs = n;
+			m.name = mname;
 			n = m;
 			continue;
 		}
