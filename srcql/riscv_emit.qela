@@ -83,6 +83,121 @@ let SYS_RISCV_EXIT_GROUP = 94;
 let SYS_RISCV_MMAP  = 222;
 let SYS_RISCV_CLONE = 220;
 
+// ── compressed instructions (RV64C) ──
+//
+// Every emitted instruction is first tried as a 16-bit compressed form;
+// only the common shapes are encoded (each formula verified against
+// as+objdump), everything else stays a 32-bit word. The compression
+// happens at emission time, so every fixup and branch target is recorded
+// in the final layout -- the compressed bytes shift code.n before the next
+// fixup is recorded, and no patch ever rewrites a compressed word (calls,
+// branches and AUIPC+ADDI pairs are never compressed).
+fn c16(w i64) {
+	if (!ir_flushing && ir_head as i64 != 0) { ir_flush(); }
+	buf_u16(&code, w & 0xffff);
+}
+
+// ld/sd with an x8-x15 base (s0/s1/a0..a7) and uimm = 0..248 in steps of 8:
+// c.ld = 011 [12:10]=uimm5[2:0] [9:7]=rs1' [6:5]=uimm5[4:3] [4:2]=rd' 00,
+// c.sd the same with funct3 111 and rs2' in [4:2].
+fn c_ldst16(rt int, rn int, off i64, is_store bool) bool {
+	if (rn < 8 || rn > 15 || rt < 8 || rt > 15) { return false; }
+	if (off < 0 || off > 248 || (off & 7) != 0) { return false; }
+	var u i64 = off / 8;
+	var w i64 = 0x6000;
+	if (is_store) { w = 0xe000; }
+	w = w | ((u & 7) << 10) | ((u >> 3) << 5) | ((rn - 8) << 7) | ((rt - 8) << 2);
+	c16(w);
+	return true;
+}
+
+// ld/sd sp-relative with uimm = 0..40 in steps of 8: c.ldsp/c.sdsp, rd/rs2
+// in [11:7], the offset split as uimm5[4:2] into [6:2] and uimm5[5] into
+// [12].
+fn c_ldstsp16(rt int, off i64, is_store bool) bool {
+	if (rt == 0) { return false; }
+	if (off < 0 || off > 40 || (off & 7) != 0) { return false; }
+	var u i64 = off / 8;
+	var w i64 = 0x6002;
+	if (is_store) { w = 0xe002; }
+	w = w | (rt << 7) | ((u >> 2) << 12) | ((u & 3) << 3);
+	c16(w);
+	return true;
+}
+
+// c.lw/c.sw with an x8-x15 base and uimm = 0..124 in steps of 4: c.lw =
+// 010 [12:10]=uimm5[2:0] [9:7]=rs1' [6:5]=uimm5[4:3] [4:2]=rd' 00, c.sw
+// the same with funct3 110 and rs2' in [4:2].
+fn c_lwst16(rt int, rn int, off i64, is_store bool) bool {
+	if (rn < 8 || rn > 15 || rt < 8 || rt > 15) { return false; }
+	if (off < 0 || off > 124 || (off & 3) != 0) { return false; }
+	var u i64 = off / 4;
+	var w i64 = 0x4000;
+	if (is_store) { w = 0xc000; }
+	w = w | ((u & 7) << 10) | ((u >> 3) << 5) | ((rn - 8) << 7) | ((rt - 8) << 2);
+	c16(w);
+	return true;
+}
+
+// c.addi rd, imm (rd == rs1, nonzero, not sp): 000 [12]=imm[5] [11:7]=rd
+// [6:2]=imm[4:0] 01.
+fn c_addi16(rd int, rs1 int, imm i64) bool {
+	if (rd == 0 || rd == 2 || rd != rs1) { return false; }
+	if (imm == 0 || imm < -32 || imm > 31) { return false; }
+	c16(0x0001 | (rd << 7) | ((imm & 0x1f) << 2) | (((imm >> 5) & 1) << 12));
+	return true;
+}
+
+// c.jr rs1 (a jalr x0, rs1, 0 -- every ret): 100 [11:7]=rs1 [6:2]=0 10.
+fn c_jr16(rs1 int) bool {
+	if (rs1 == 0) { return false; }
+	c16(0x8002 | (rs1 << 7));
+	return true;
+}
+
+// c.mv rd, rs2: 100 [11:7]=rd [6:2]=rs2 10, both nonzero.
+fn c_mv16(rd int, rn int) bool {
+	if (rd == 0 || rn == 0 || rd == 2 || rn == 2) { return false; }
+	c16(0x8002 | (rd << 7) | (rn << 2));
+	return true;
+}
+
+// c.li rd, imm: 010 [12]=imm[5] [11:7]=rd [6:2]=imm[4:0] 01, rd nonzero.
+fn c_li16(rd int, imm i64) bool {
+	if (rd == 0 || rd == 2) { return false; }
+	if (imm < -32 || imm > 31) { return false; }
+	c16(0x4001 | (rd << 7) | ((imm & 0x1f) << 2) | (((imm >> 5) & 1) << 12));
+	return true;
+}
+
+// c.slli rd, shamt: 000 [12]=shamt[5] [11:7]=rd [6:2]=shamt[4:0] 10.
+fn c_slli16(rd int, sh i64) bool {
+	if (rd == 0 || rd == 2) { return false; }
+	if (sh < 1 || sh > 31) { return false; }
+	c16(0x0002 | (rd << 7) | (sh << 2));
+	return true;
+}
+
+// c.srli/c.srai/c.andi on an x8-x15 register: 100 [11:10]=kind [12]=u[5]
+// [11:7]=rd' [6:2]=u[4:0] 01.
+fn c_shift16(kind i64, rd int, u i64) bool {
+	if (rd < 8 || rd > 15) { return false; }
+	if (u < 1 || u > 31) { return false; }
+	c16(0x8001 | (kind << 10) | ((rd - 8) << 7) | (u << 2));
+	return true;
+}
+
+// c.addiw rd', imm on an x8-x15 register: 001 [12]=imm[5] [11:7]=rd'
+// [6:2]=imm[4:0] 01.
+fn c_addiw16(rd int, imm i64) bool {
+	// Unlike c.addi, the immediate sits in [6:2] WITHOUT the 2-bit shift:
+	// addiw a0, a0, 1 = 0x2505 (verified against gas), not 0x2509.
+	if (rd < 8 || rd > 15) { return false; }
+	if (imm < -32 || imm > 31) { return false; }
+	c16(0x2001 | (rd << 7) | (imm & 0x1f) | (((imm >> 5) & 1) << 12));
+	return true;
+}
+
 // ── raw encodings ──
 //
 // Every base form below was verified against riscv64-linux-gnu-as +
@@ -126,6 +241,7 @@ fn riscv_mov_reg(rd int, rn int) {
 }
 
 fn riscv_addi(rd int, rn int, imm i64) {
+	if (c_addi16(rd, rn, imm)) { return; }
 	riscv_i(imm, rn, 0, rd, 0x13);
 }
 
@@ -168,7 +284,10 @@ fn riscv_srai(rd int, rn int, shamt i64) {
 // shifted into place, OR'd together. Verified against gas for
 // 0x123456789abcdef0-shaped constants.
 fn riscv_li64(rd int, imm i64) {
-	if (imm >= -2048 && imm <= 2047) { riscv_addi(rd, ZERO, imm); return; }
+	if (imm >= -2048 && imm <= 2047) {
+		riscv_addi(rd, ZERO, imm);
+		return;
+	}
 	var hi i64 = (imm + 0x800) >> 12;
 	var lo i64 = imm - (hi << 12);
 	if (hi >= -524288 && hi <= 524287) {
@@ -294,6 +413,7 @@ fn riscv_leave_frame() {
 }
 
 fn riscv_ret() {
+	if (c_jr16(RA)) { return; }
 	riscv_i(0, RA, 0, ZERO, 0x67);          // jalr x0, ra, 0
 }
 
@@ -307,7 +427,11 @@ fn riscv_local_off(off i64) i64 {
 
 fn riscv_st_local(off i64, reg int) {
 	var imm i64 = riscv_local_off(off);
-	if (imm >= 0 && imm <= 32760) { riscv_s(imm, reg, S0, 3, 0x23); return; }
+	if (imm >= 0 && imm <= 32760) {
+		if (c_ldst16(reg, S0, imm, true)) { return; }
+		riscv_s(imm, reg, S0, 3, 0x23);
+		return;
+	}
 	var scr int = T1;
 	if (reg == T1) { scr = T2; }
 	riscv_add_imm(scr, S0, imm);
@@ -316,7 +440,11 @@ fn riscv_st_local(off i64, reg int) {
 
 fn riscv_ld_local(reg int, off i64) {
 	var imm i64 = riscv_local_off(off);
-	if (imm >= 0 && imm <= 32760) { riscv_i(imm, S0, 3, reg, 0x03); return; }
+	if (imm >= 0 && imm <= 32760) {
+		if (c_ldst16(reg, S0, imm, false)) { return; }
+		riscv_i(imm, S0, 3, reg, 0x03);
+		return;
+	}
 	var scr int = T1;
 	if (reg == T1) { scr = T2; }
 	riscv_add_imm(scr, S0, imm);
@@ -382,10 +510,14 @@ fn riscv_load(ty *Type) {
 // Load rt from [rn + off] (off assumed a small multiple of the element
 // size -- the two-word aggregate protocol only ever uses 0 or 8).
 fn riscv_ld_at(rt int, rn int, off i64) {
+	if (rn >= 8 && rn <= 15 && c_ldst16(rt, rn, off, false)) { return; }
+	if (rn == STK) { riscv_i(off, rn, 3, rt, 0x03); return; }
 	riscv_i(off, rn, 3, rt, 0x03);
 }
 
 fn riscv_str_off(rt int, rn int, off i64) {
+	if (rn >= 8 && rn <= 15 && c_ldst16(rt, rn, off, true)) { return; }
+	if (rn == STK) { riscv_s(off, rt, rn, 3, 0x23); return; }
 	riscv_s(off, rt, rn, 3, 0x23);
 }
 
@@ -393,7 +525,11 @@ fn riscv_str_off(rt int, rn int, off i64) {
 fn riscv_store_at(rn int, rt int, ty *Type) {
 	if (ty.size == 1) { riscv_s(0, rt, rn, 0, 0x23); return; }
 	if (ty.size == 2) { riscv_s(0, rt, rn, 1, 0x23); return; }
-	if (ty.size == 4) { riscv_s(0, rt, rn, 2, 0x23); return; }
+	if (ty.size == 4) {
+		if (c_lwst16(rt, rn, 0, true)) { return; }
+		riscv_s(0, rt, rn, 2, 0x23);
+		return;
+	}
 	riscv_s(0, rt, rn, 3, 0x23);
 }
 
@@ -869,7 +1005,10 @@ fn riscv_truncate_to(ty *Type) {
 	}
 	if (ty.size == 4) {
 		if (ty.is_unsigned || ty.kind == TY_FLOAT) { riscv_slli(A0, A0, 32); riscv_srli(A0, A0, 32); }
-		else { riscv_i(0, A0, 0, A0, 0x1b); }   // addiw a0, a0, 0 sign-extends W
+		else {
+			if (c_addiw16(A0, 0)) { return; }
+			riscv_i(0, A0, 0, A0, 0x1b);   // addiw a0, a0, 0 sign-extends W
+		}
 	}
 }
 
