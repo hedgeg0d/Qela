@@ -3213,6 +3213,67 @@ fn reset_code() {
 }
 
 
+// Reachability: only functions reachable from the entry point are emitted.
+// Roots are main (or `entry name;`), naked/interrupt handlers (they do
+// their own setup and are entered from outside the program), and whatever
+// top-level asm references by symbol. A function's call graph is walked
+// through direct calls (ND_CALL with a name), function addresses
+// (ND_FUNCADDR) and asm symbol references (ND_ASMREF). Everything else is
+// dead code and is skipped by codegen, DWARF and the backtrace table.
+fn mark_reachable(u *Unit) {
+	var f *Func = u.funcs;
+	while (f as i64 != 0) {
+		f.reachable = false;
+		f = f.next;
+	}
+	if (entry_name.len != 0) { reach_name(entry_name); }
+	else { reach_name("main"); }
+	f = u.funcs;
+	while (f as i64 != 0) {
+		if (f.naked || f.interrupt) { reach_mark(f); }
+		f = f.next;
+	}
+	reach_node(top_asm_head);
+}
+
+fn reach_name(name str) {
+	if (name.len == 0) { return; }
+	var f *Func = find_func(name);
+	if (f as i64 != 0) { reach_mark(f); }
+}
+
+fn reach_mark(f *Func) {
+	if (f as i64 == 0 || f.reachable) { return; }
+	f.reachable = true;
+	reach_node(f.body);
+}
+
+fn reach_node(n *Node) {
+	while (n as i64 != 0) {
+		if (n.kind == ND_CALL && n.name.len != 0) {
+			reach_name(n.name);
+			// The coroutine trampoline (emitted machine code, no AST
+			// caller) returns into coro_finish whenever any coroutine
+			// switches, so a program with coroutines needs it even though
+			// no reachable body calls it.
+			if (str_eq(n.name, "coro_switch")) { reach_name("coro_finish"); }
+		}
+		else if (n.kind == ND_FUNCADDR && n.name.len != 0) { reach_name(n.name); }
+		else if (n.kind == ND_ASMREF && n.name.len != 0) { reach_name(n.name); }
+		reach_node(n.lhs);
+		reach_node(n.rhs);
+		reach_node(n.cond);
+		reach_node(n.then);
+		reach_node(n.els);
+		reach_node(n.init);
+		reach_node(n.step);
+		reach_node(n.args);
+		reach_node(n.body);
+		n = n.next;
+	}
+}
+
+
 fn emit_code(u *Unit, main_fn *Func, panic_id int, hdr i64) {
 	// Top-level asm blocks are the image's first bytes; `entry name;`
 	// suppresses the default stub too, so the entry function (usually
@@ -3286,7 +3347,7 @@ fn emit_code(u *Unit, main_fn *Func, panic_id int, hdr i64) {
 
 	var f *Func = u.funcs;
 	while (f as i64 != 0) {
-		if (f.nct == 0) { gen_func(f); }
+		if (f.nct == 0 && f.reachable) { gen_func(f); }
 		f = f.next;
 	}
 
@@ -3552,6 +3613,7 @@ fn codegen(u *Unit, img *Image) {
 	if (main_fn as i64 != 0 && main_fn.nparams != 0 && main_fn.nparams != 2) {
 		die("error: 'main' takes no parameters or (argc, argv)");
 	}
+	mark_reachable(u);
 	var pass int = 0;
 	while (true) {
 		reset_code();
@@ -3569,7 +3631,7 @@ fn codegen(u *Unit, img *Image) {
 		var cnt i64 = 0;
 		var ft *Func = u.funcs;
 		while (ft as i64 != 0) {
-			if (ft.nct == 0) { cnt = cnt + 1; }
+			if (ft.nct == 0 && ft.reachable) { cnt = cnt + 1; }
 			ft = ft.next;
 		}
 		bt_table_off = rodata.n;
@@ -3581,7 +3643,7 @@ fn codegen(u *Unit, img *Image) {
 		var ei i64 = 0;
 		ft = u.funcs;
 		while (ft as i64 != 0) {
-			if (ft.nct == 0) {
+			if (ft.nct == 0 && ft.reachable) {
 				var eo i64 = entries_off + ei * 8;
 				var delta i64 = hdr + ft.addr;
 				var k3 i64 = 0;
