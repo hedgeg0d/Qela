@@ -896,10 +896,17 @@ not necessarily how valuable it is:
    fresh per-site temp of the return type. A call to *another* `dynamic`
    function is still the harder problem (needs the other function's
    address, which may not be JIT'd yet) and stays a clean fallback.
-4. **`parse_ast` beyond a single expression.** Statements and multi-line
-   blocks would need deciding what "run it again" even means for a `var`
-   declaration (redeclaration the second time?) or a sequence with a
-   `return` partway through — genuine semantic design, not just wiring.
+4. ~~**`parse_ast` beyond a single expression.**~~ **Done (2026-08-09).**
+   Statement sequences and blocks are cached as one statement chain and
+   re-run in full on every `run_ast`; the design decisions the doc asked
+   for are recorded above. A `var` is not redeclared (the same
+   local is re-initialised); the value is the last expression
+   statement's, cut out of the chain so a trailing call's side effect
+   runs once; a `return` stops the sequence and its value becomes the
+   sequence's value. An enum-to-int cast turned out to hand over the
+   value's address (enums are aggregates), which the marshaller works
+   around by sending enums as raw images; the cast itself is a known
+   compiler-wide gap.
 5. **AST inspection/mutation API** (`*Ast` accessors/mutators — kind,
    children, replace-a-node). Explicitly out of scope for v1 on purpose;
    still "its own real sub-effort," per the original framing.
