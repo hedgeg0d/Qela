@@ -1378,7 +1378,7 @@ fn gen_opassign(n *Node) {
 		rop.pos = n.pos;
 		gen_binop(&rop);
 
-		truncate_to(n.lhs.ty);
+		ir_cast_acc(CAST_TRUNC, n.lhs.ty, n.pos);
 		st_rm(n.lhs, RAX);
 		return;
 	}
@@ -1398,7 +1398,7 @@ fn gen_opassign(n *Node) {
 	op.pos = n.pos;
 	gen_binop(&op);
 
-	truncate_to(n.lhs.ty);
+	ir_cast_acc(CAST_TRUNC, n.lhs.ty, n.pos);
 	store(n.lhs.ty);
 }
 
@@ -2130,6 +2130,10 @@ fn x86_lower_op(op *IrOp) {
 		load(op.dst.ty);
 		return;
 	}
+	if (op.kind == IR_CAST && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC) {
+		if (op.aux == CAST_BOOL) { test_rax(); setcc(0x95); return; }
+		if (op.aux == CAST_TRUNC) { truncate_to(op.dst.ty); return; }
+	}
 	if (op.kind == IR_STORE && op.dst.kind == OP_ACC && op.src0.kind == OP_IMM) {
 		store_imm(op.dst.ty, op.src0.off);
 		return;
@@ -2245,6 +2249,16 @@ fn ir_unary_acc(uop int, pos i64) {
 	x86_lower_all();
 }
 
+// A cast applied to the value already sitting in the accumulator, in place.
+fn ir_cast_acc(ck int, ty *Type, pos i64) {
+	var op *IrOp = ir_emit(IR_CAST, pos);
+	op.dst = operand_acc();
+	op.dst.ty = ty;
+	op.src0 = operand_acc();
+	op.aux = ck as i64;
+	x86_lower_all();
+}
+
 // The left operand is already in the accumulator and the right in the
 // target's OP2 staging register (x86: rdi), per gen_expr's binop preamble
 // (spine emission / gen_binop_mem's operand setup) -- this just records that
@@ -2321,12 +2335,11 @@ fn gen_expr(n *Node) {
 			// A bit-reinterpret, not a numeric conversion: the raw bits
 			// already sit in RAX exactly as they should (see type_interp).
 		} else if (n.ty.kind == TY_BOOL) {
-			test_rax();
-			setcc(0x95);
+			ir_cast_acc(CAST_BOOL, n.ty, n.pos);
 		} else if (is_float(n.ty) || is_float(n.lhs.ty)) {
 			gen_cast_float(n);
 		} else {
-			truncate_to(n.ty);
+			ir_cast_acc(CAST_TRUNC, n.ty, n.pos);
 		}
 		return;
 	}
