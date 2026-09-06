@@ -103,7 +103,7 @@ fn push_reloc_id(at i64, id i64, kind int) {
 }
 
 struct Loop;
-struct Loop { prev *Loop, brk I64List, cont I64List, depth int, }
+struct Loop { prev *Loop, brk i64, cont i64, depth int, }
 
 struct DeferScope;
 struct DeferScope { prev *DeferScope, list *Node, depth int, }
@@ -2771,30 +2771,27 @@ fn gen_for(n *Node) {
 	var lp Loop;
 	lp.prev = cur_loop;
 	lp.depth = defer_depth;
+	lp.cont = ir_new_label();
+	lp.brk = ir_new_label();
 	cur_loop = &lp;
 
 	// The back edge is a backward branch: ir_label(top) records the loop
 	// head's address, and the IR_BR to it at the bottom lowers straight to
-	// jump_back. The cond-exit is a forward branch to `brk`, patched when
-	// ir_label(brk) lands below the loop.
+	// jump_back. The cond-exit is a forward branch to lp.brk, patched when
+	// ir_label(lp.brk) lands below the loop.
 	var top i64 = ir_new_label();
 	ir_label(top, n.pos);
-	var brk i64 = ir_new_label();
 	if (n.cond as i64 != 0) {
-		branch_false(n.cond, brk);
+		branch_false(n.cond, lp.brk);
 	}
 	gen_stmt(n.body);
 
-	// A `continue` lands here (before the step), a `break` below the loop;
-	// both are still native jump() placeholders patched at those points.
-	var i i64 = 0;
-	while (i < lp.cont.n) { patch_here(lp.cont.p[i]); i = i + 1; }
+	// A `continue` lands here (before the step), a `break` below the loop.
+	ir_label(lp.cont, n.pos);
 	if (n.step as i64 != 0) { gen_expr(n.step); }
 	ir_branch(CC_ALWAYS, top, n.pos);
 
-	i = 0;
-	while (i < lp.brk.n) { patch_here(lp.brk.p[i]); i = i + 1; }
-	ir_label(brk, n.pos);
+	ir_label(lp.brk, n.pos);
 	cur_loop = lp.prev;
 }
 
@@ -2863,13 +2860,13 @@ fn gen_stmt(n *Node) {
 	if (k == ND_BREAK) {
 		if (cur_loop as i64 == 0) { error_at(n.pos, "'break' outside of a loop"); }
 		unwind_to(cur_loop.depth);
-		ilist_push(&cur_loop.brk, jump(0));
+		ir_branch(CC_ALWAYS, cur_loop.brk, n.pos);
 		return;
 	}
 	if (k == ND_CONT) {
 		if (cur_loop as i64 == 0) { error_at(n.pos, "'continue' outside of a loop"); }
 		unwind_to(cur_loop.depth);
-		ilist_push(&cur_loop.cont, jump(0));
+		ir_branch(CC_ALWAYS, cur_loop.cont, n.pos);
 		return;
 	}
 	gen_expr(n);
