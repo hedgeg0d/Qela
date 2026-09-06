@@ -907,20 +907,21 @@ not necessarily how valuable it is:
    value's address (enums are aggregates), which the marshaller works
    around by sending enums as raw images; the cast itself is a known
    compiler-wide gap.
-5. **AST inspection/mutation API** (`*Ast` accessors/mutators — kind,
-   children, replace-a-node). Explicitly out of scope for v1 on purpose;
-   still "its own real sub-effort," per the original framing.
-6. **W^X fallback.** A denied `mprotect(RW→RX)` is a reported error today
-   (`std/interpcall.qela`), not a silent failure — but it's a hard error,
-   not the same clean fallback-to-`interpreted` a self-containment
-   rejection gets. Making it fall back instead is a small, mechanical
-   change once someone actually hits it on a hardened kernel; not done
-   preemptively because it's untested without one.
-7. **Respawn-on-crash policy.** Currently: if the child dies, the caller
-   reports an error and exits — chosen because a dead child loses the
-   whole session (every registered `interpreted`/`dynamic` function,
-   every cached `*Ast`). Once JIT'd `dynamic` functions stop needing the
-   child at all after their first call, "the child died" stops being
-   fatal for *those* — only for anything still routing through
-   `interpreted`/`eval`/foreign calls. Worth revisiting once real
-   programs give a sense of how often this actually matters.
+5. ~~**AST inspection/mutation API**~~ **Done (2026-08-09).** `ast_info`
+   (kind name, payload value, child count), `ast_child`, `ast_next` and
+   the type-checked `ast_set` over four new request kinds, with the
+   statement chain exposed through `ast_next`. Full detail: `docs/STATUS.md`.
+6. ~~**W^X fallback.**~~ **Done (2026-08-09).** A denied
+   `mmap`/`mprotect(RW→RX)` is now the same clean
+   fallback-to-`interpreted` a self-containment rejection gets (`-1` up
+   the existing path), not a hard error. Untriggerable on this machine —
+   the fallback path is the one every rejection already exercises.
+7. ~~**Respawn-on-crash policy.**~~ **Done (2026-08-09).** A dead child is
+   respawned once: the registration bundle re-registers every
+   interpreted/dynamic function and eval var, and every cached ast's
+   source is replayed in creation order so the handles stay valid; the
+   in-flight request is re-sent (at-least-once). JIT'd `dynamic`
+   functions never needed the child anyway. A second death still reports
+   the old error. Known edge: handles for *child nodes* obtained through
+   `ast_child` are not replayed (only the top-level handles are); the
+   replay can't know how a program traversed the tree.

@@ -521,6 +521,79 @@ EOF
 	fail "parse_ast/run_ast does not cache and re-run against live state, or mis-handles statements, blocks, returns or side effects"
 printf '    ok\n'
 
+step "ast inspection and mutation: kinds, children, type-checked replacement"
+cat > "$tmp2/astapi.qela" <<'EOF'
+import "std/eval.qela";
+import "std/io.qela";
+eval var price i64 = 10;
+fn main() int {
+	var fails i64 = 0;
+	// the top-level handle of an expression parse is the value-capture
+	// wrapper: exprstmt(lhs = assign(rhs = cast(lhs = <the expression>)))
+	var a *Ast = parse_ast("price * 2 + 1");
+	var w AstInfo = ast_info(a);
+	if (!str_eq(w.kind, "exprstmt")) { fails = fails + 1; }
+	var asg *Ast = ast_child(a, 0);
+	var cst *Ast = ast_child(asg, 1);
+	var expr *Ast = ast_child(cst, 0);
+	var ei AstInfo = ast_info(expr);
+	if (!str_eq(ei.kind, "add") || ei.count != 2) { fails = fails + 1; }
+	var l *Ast = ast_child(expr, 0);
+	if (!str_eq(ast_info(l).kind, "mul")) { fails = fails + 1; }
+	var lv *Ast = ast_child(l, 0);
+	if (!str_eq(ast_info(lv).kind, "var")) { fails = fails + 1; }
+	var one *Ast = ast_child(expr, 1);
+	if (!str_eq(ast_info(one).kind, "num") || ast_value(one) != 1) { fails = fails + 1; }
+	var two *Ast = parse_ast("2");
+	var two_expr *Ast = ast_child(ast_child(ast_child(two, 0), 1), 0);
+	if (!ast_set(expr, 1, two_expr)) { fails = fails + 1; }
+	if (run_ast(a) != 22) { fails = fails + 1; }
+	var s *Ast = parse_ast("var x = 1; x + 1;");
+	if (!str_eq(ast_info(ast_next(s)).kind, "exprstmt")) { fails = fails + 1; }
+	var bad *Ast = parse_ast("true");
+	if (ast_set(expr, 1, bad)) { fails = fails + 1; }
+	if (run_ast(a) != 22) { fails = fails + 1; }
+	if (ast_set(a, 9, two_expr)) { fails = fails + 1; }
+	if (ast_info(0 as *Ast).count != 0) { fails = fails + 1; }
+	if (fails == 0) { write_str(STDOUT, "ast api ok\n"); }
+	return fails as int;
+}
+EOF
+( cd "$tmp2" &&
+  "$root/$OUT/s2" astapi.qela -o astapi &&
+  [ "$(QELAPATH="$root/$OUT/s2" ./astapi)" = "ast api ok" ] ) ||
+	fail "ast inspection/mutation does not expose kinds and children, or mis-handles type-checked replacement"
+printf '    ok\n'
+
+step "respawn: the session survives the abi child dying once"
+cat > "$tmp2/respawn.qela" <<'EOF'
+import "std/eval.qela";
+import "std/io.qela";
+eval var cnt i64;
+fn main() int {
+	cnt = 5;
+	write_str(STDOUT, "ready\n");
+	var i i64 = 0;
+	while (i < 300000000) { i = i + 1; }
+	var v i64 = eval("cnt + 1");
+	write_str(STDOUT, "v=${v}\n");
+	return 0;
+}
+EOF
+( cd "$tmp2";
+  "$root/$OUT/s2" respawn.qela -o respawn &&
+  QELAPATH="$root/$OUT/s2" ./respawn > respawn.out &
+  rpid=$!
+  for k in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    [ -s respawn.out ] && break
+    sleep 0.1
+  done
+  kill -9 "$(pgrep -f 'qela --abi-server' | head -1)" 2>/dev/null
+  wait "$rpid"
+  [ "$(cat respawn.out)" = "$(printf 'ready\nv=6')" ] ) ||
+	fail "the abi session does not survive the child dying once (got '$(cat "$tmp2/respawn.out" 2>/dev/null)')"
+printf '    ok\n'
+
 
 step "stdin compile and shebang"
 cat > "$tmp2/btcrash.qela" <<'EOF'
