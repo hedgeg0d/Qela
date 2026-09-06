@@ -1661,7 +1661,11 @@ fn abi_wrap_expr(src str) str {
 	var b Buf;
 	fmt_str(&b, "__abi_result = (");
 	fmt_str(&b, repl_strip_trailing_semi(src));
-	fmt_str(&b, ");\n");
+	// The result channel is the `__abi_result` i64; a float expression
+	// would fail the implicit assignment, so cast explicitly (int- and
+	// pointer-typed expressions make the cast a no-op, a float truncates,
+	// and anything unmarshallable stays a type error as before).
+	fmt_str(&b, ") as i64;\n");
 	return buf_str(&b);
 }
 

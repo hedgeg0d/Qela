@@ -2150,6 +2150,57 @@ fn interp_gen_eval_body(b *Buf, ef *Func) {
 	fmt_str(b, " as i64);");
 }
 
+// Decodes one marshalled value into the named global of the generated set
+// dispatcher, advancing the `__cur` cursor. The mirror of
+// interp_gen_marshal: scalars as 8-byte slots, strs length-prefixed and
+// duplicated (the payload lives in the host's receive buffer, which is
+// reused), POD aggregates as raw images, everything else field by field.
+fn interp_gen_global_decode(b *Buf, name str, ty *Type) {
+	if (ty.kind == TY_SLICE) {
+		fmt_str(b, " { var __t str; __t.len = *(__cur as *i64); __t.ptr = __cur + 8; ");
+		fmt_str(b, name);
+		fmt_str(b, " = str_dup(__t); __cur = __cur + 8 + __t.len; }");
+		return;
+	}
+	if (ty.kind == TY_STRUCT && !interp_struct_pod(ty)) {
+		var m *Member = ty.members;
+		while (m as i64 != 0) {
+			var mb Buf;
+			fmt_str(&mb, name);
+			fmt_str(&mb, ".");
+			fmt_str(&mb, m.name);
+			interp_gen_global_decode(b, buf_str(&mb), m.ty);
+			m = m.next;
+		}
+		return;
+	}
+	if (is_float(ty)) {
+		fmt_str(b, " { var __st [8]u8; *(&__st[0] as *i64) = *(__cur as *i64); ");
+		fmt_str(b, name);
+		fmt_str(b, " = *(&__st[0] as *");
+		fmt_str(b, type_name(ty));
+		fmt_str(b, "); __cur = __cur + 8; }");
+		return;
+	}
+	if (ty.kind == TY_STRUCT || ty.kind == TY_ARRAY) {
+		fmt_str(b, " { var __t ");
+		fmt_str(b, type_name(ty));
+		fmt_str(b, " = *(__cur as *");
+		fmt_str(b, type_name(ty));
+		fmt_str(b, "); ");
+		fmt_str(b, name);
+		fmt_str(b, " = __t; __cur = __cur + ");
+		fmt_i64(b, ty.size as i64);
+		fmt_str(b, "; }");
+		return;
+	}
+	fmt_str(b, " ");
+	fmt_str(b, name);
+	fmt_str(b, " = *(__cur as *");
+	fmt_str(b, type_name(ty));
+	fmt_str(b, "); __cur = __cur + 8;");
+}
+
 fn interp_gen_marshal_fields(b *Buf, expr str, ty *Type) {
 	var m *Member = ty.members;
 	while (m as i64 != 0) {
@@ -3309,20 +3360,20 @@ fn parse(tok *Token) *Unit {
 
 	if (find_func("abi_spawn") as i64 != 0 && find_func("__eval_get_dispatch") as i64 == 0) {
 		var gb Buf;
-		fmt_str(&gb, "fn __eval_get_dispatch(name str) i64 { if (name.len < 0) { return 0; }");
+		fmt_str(&gb, "fn __eval_get_dispatch(__name str) str { if (__name.len < 0) { var e str; return e; }");
 		var gv *Var = global_vars;
 		while (gv as i64 != 0) {
 			if (gv.eval_export) {
-				interp_check_scalar(gv.ty, gv.pos, "global types");
-				fmt_str(&gb, " if (str_eq(name, \"");
+				interp_sig_reject(gv.ty, gv.pos, "global type");
+				fmt_str(&gb, " if (str_eq(__name, \"");
 				fmt_str(&gb, gv.name);
-				fmt_str(&gb, "\")) { return ");
-				fmt_str(&gb, gv.name);
-				fmt_str(&gb, " as i64; }");
+				fmt_str(&gb, "\")) { var __b Buf;");
+				interp_gen_marshal(&gb, gv.name, gv.ty);
+				fmt_str(&gb, " return buf_str(&__b); }");
 			}
 			gv = gv.next;
 		}
-		fmt_str(&gb, " return 0; }");
+		fmt_str(&gb, " var e str; return e; }");
 
 		var gfile int = diag_add_file("<eval-get-dispatch>", buf_str(&gb));
 		var gtoks *Token = lex(buf_str(&gb), (gfile as i64) << FILE_SHIFT);
@@ -3336,18 +3387,16 @@ fn parse(tok *Token) *Unit {
 
 	if (find_func("abi_spawn") as i64 != 0 && find_func("__eval_set_dispatch") as i64 == 0) {
 		var sb Buf;
-		fmt_str(&sb, "fn __eval_set_dispatch(name str, v i64) { if (name.ptr as i64 == v) { return; }");
+		fmt_str(&sb, "fn __eval_set_dispatch(__name str, __p *u8) { if (__name.ptr as i64 == __p as i64) { return; }");
 		var sv *Var = global_vars;
 		while (sv as i64 != 0) {
 			if (sv.eval_export) {
-				interp_check_scalar(sv.ty, sv.pos, "global types");
-				fmt_str(&sb, " if (str_eq(name, \"");
+				interp_sig_reject(sv.ty, sv.pos, "global type");
+				fmt_str(&sb, " if (str_eq(__name, \"");
 				fmt_str(&sb, sv.name);
-				fmt_str(&sb, "\")) { ");
-				fmt_str(&sb, sv.name);
-				fmt_str(&sb, " = v as ");
-				fmt_str(&sb, type_name(sv.ty));
-				fmt_str(&sb, "; return; }");
+				fmt_str(&sb, "\")) { var __cur *u8 = __p;");
+				interp_gen_global_decode(&sb, sv.name, sv.ty);
+				fmt_str(&sb, " return; }");
 			}
 			sv = sv.next;
 		}
@@ -3393,6 +3442,21 @@ fn parse(tok *Token) *Unit {
 				fmt_str(&cb, ";\n");
 			}
 			ed = ed.next;
+		}
+		// eval vars are host globals; the child gets their declarations as
+		// bodyless extern vars so an eval'd read or write types correctly,
+		// then routes to the host (see ip_ev_var/ip_assign's extern+abi-mode
+		// branches).
+		var eg *Var = global_vars;
+		while (eg as i64 != 0) {
+			if (eg.eval_export) {
+				fmt_str(&cb, "extern var ");
+				fmt_str(&cb, eg.name);
+				fmt_str(&cb, " ");
+				fmt_str(&cb, type_name(eg.ty));
+				fmt_str(&cb, ";\n");
+			}
+			eg = eg.next;
 		}
 		var cf *Func = all_funcs;
 		while (cf as i64 != 0) {
