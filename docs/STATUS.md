@@ -7,17 +7,55 @@ Updated 2026-08-05. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **294 944 B** |
-| stage1 sources | 11 886 lines of Qela |
+| **S2 — the shipped compiler, Qela compiled by itself** | **298 712 B** |
+| stage1 sources | 12 237 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
 
-Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 109-test corpus under S2, the embedded stdlib resolving outside the source tree,
+Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 112-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
 backtrace, interpolation and the repl, the compiler flags (`-g`,
 `--backtrace`, `--no-bounds-checks`, `--dump-std`), and a scripted language
 server conversation.
 
 ## Done
+
+**Default and named arguments (2026-08-05).** `fn sum(a=0 i64, b=0 i64) i64`
+declares defaults; `sum(1,2)` still takes the unchanged positional path.
+Naming any argument requires naming all of them -- `sum(a=1, c=3)` -- decided
+purely from the shape of the *first* argument (`ident '=' expr` naming a real
+parameter of an already-resolved, non-generic function): once a call commits
+to named mode every further argument must match it, or it's a parse-time
+"cannot mix positional and named arguments" error. A default may name a
+global freely, or an earlier *required* (non-defaulted) parameter of the same
+function -- substituted at the call site with whatever the caller actually
+passed for it -- but never another defaulted parameter (no dependency order
+between defaults, enforced when the default is parsed). The whole feature is
+a parse-time-only AST rewrite (`call_args_named`, `default_expand`,
+`expr_refs_default_param` in `srcql/parse.qela`, plus a `default *Node` field
+on `Var` in `srcql/comp.qela`): a named call reorders into the function's
+declared parameter order and clones in any missing defaults (the same
+clone-and-substitute shape `macro_expand` already uses for `macro`, keyed by
+`Func` parameters instead), producing an ordinary positional `ND_CALL` before
+`type.qela` or `codegen.qela` ever see it -- zero changes to either. Inherits
+the macro system's evaluation contract: a required parameter with a side
+effect, named by more than one default, runs once per default that names it.
+
+Known v1 limits: a call can only use named/default arguments against a
+function already resolved at parse time (declared earlier in the file, or
+via an already-parsed import) -- a genuine forward reference silently falls
+back to requiring a full positional list, same as before this feature
+existed. Indirect calls through a function-typed variable don't participate
+either (no fixed parameter names to match against).
+
+Backward compatible by construction: `sink(x = 5)` (assignment used as a
+call argument, `tests/assignval.qela`) still means what it always meant,
+because the named-argument shape check requires the name to match one of the
+callee's actual parameters -- `sink`'s only parameter is `a`, not `x`, so it
+never leaves the pre-existing parse path. `tests/defaultargs.qela` covers the
+positive shapes (defaults, named calls in any order, an all-defaulted `f()`,
+substitution from both a required parameter and a global);
+`tests/defaultargs_reject.qela` and `tests/defaultargs_reject_chain.qela`
+pin the two rejections. Costs +3768 B in S2 (294 944 -> 298 712).
 
 **Typed block expressions (2026-08-05).** `T { stmts...; super v; }` in
 expression position: an inline, value-producing block. It desugars at parse

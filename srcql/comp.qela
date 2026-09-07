@@ -175,6 +175,9 @@ struct Var {
 	arg_stack bool,
 	pnext     *Var,
 	reads     i64,
+	// A parameter's default value expression, `fn f(a=0 i32)`. Null for
+	// every non-parameter Var and for a parameter with no default.
+	default   *Node,
 }
 
 struct Node {
