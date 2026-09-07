@@ -2196,6 +2196,15 @@ fn x86_lower_op(op *IrOp) {
 		b1(0x58 + ((r as i64) & 7));
 		return;
 	}
+	if (op.kind == IR_MEMSET && op.dst.kind == OP_STACKSLOT) {
+		// lea rdi, [rbp-off]; xor eax, eax; mov rcx, size; rep stosb --
+		// ND_ZERO's aggregate path, replayed with the same bytes.
+		lea_local(RDI, op.dst.off);
+		mov_reg_imm(RAX, 0);
+		mov_reg_imm(RCX, op.aux);
+		b1(0xf3); b1(0xaa);
+		return;
+	}
 	if (op.kind == IR_ALU && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC && op.src1.kind == OP_OP2) {
 		var uns bool = op.dst.ty.is_unsigned;
 		var op2 int = op2_reg(op.src1.reg);
@@ -2250,6 +2259,25 @@ fn x86_lower_op(op *IrOp) {
 				modrm(3, RAX, RAX);
 				b4(v);
 			}
+			return;
+		}
+		if (op.aux == ALU_SCALE) {
+			// scale_by: mov rcx, size; imul rax, rcx -- a distinct byte
+			// sequence from the folded imul-by-imm above.
+			mov_reg_imm(RCX, v);
+			b1(0x48); b1(0x0f); b1(0xaf);
+			modrm(3, RAX, RCX);
+			return;
+		}
+		if (op.aux == ALU_DIV || op.aux == ALU_MOD) {
+			// ptr_diff: materialise the divisor in the OP2 staging register,
+			// then cqo; idiv (signed). Clobbers OP2, which the frontend
+			// guarantees is dead at this point.
+			var d int = op2_reg(0);
+			mov_reg_imm(d, v);
+			b1(0x48); b1(0x99);
+			b1(0x48); b1(0xf7); modrm(3, 7, d);
+			if (op.aux == ALU_MOD) { mov_reg_reg(RAX, RDX); }
 			return;
 		}
 		if (op.aux == ALU_SHL || op.aux == ALU_SHR) {
@@ -2594,6 +2622,14 @@ fn ir_store_vreg_acc(reg int, ty *Type, pos i64) {
 	x86_lower_all();
 }
 
+// Zero <size> bytes at a frame slot (ND_ZERO's aggregate path).
+fn ir_memset_stackslot(off i64, size i64, pos i64) {
+	var op *IrOp = ir_emit(IR_MEMSET, pos);
+	op.dst = operand_stackslot(off, 0 as *Type);
+	op.aux = size;
+	x86_lower_all();
+}
+
 // The stack-machine staging: push the accumulator, pop into the OP2 register
 // (a binop's right side). depth tracks the 16-byte call alignment exactly as
 // push_reg/pop_reg did, so gen_call's odd-depth fixup is unaffected while the
@@ -2670,7 +2706,7 @@ fn gen_expr(n *Node) {
 	if (k == ND_ADDR) { gen_addr(n.lhs); return; }
 	if (k == ND_DEREF) {
 		gen_expr(n.lhs);
-		if (!is_aggregate(n.ty)) { load(n.ty); }
+		if (!is_aggregate(n.ty)) { ir_load_acc(n.ty, n.pos); }
 		return;
 	}
 	if (k == ND_CAST) {
@@ -2718,10 +2754,7 @@ fn gen_expr(n *Node) {
 			ir_mov_acc_imm(0, n.pos);
 			ir_store_stackslot_acc(off, n.varp.ty, n.pos);
 		} else {
-			lea_local(RDI, off);
-			mov_reg_imm(RAX, 0);
-			mov_reg_imm(RCX, size as i64);
-			b1(0xf3); b1(0xaa);
+			ir_memset_stackslot(off, size as i64, n.pos);
 		}
 		return;
 	}
@@ -2863,7 +2896,7 @@ fn gen_expr(n *Node) {
 
 	gen_expr(n.rhs);
 	if (!ptr_diff && lt.kind == TY_PTR && rt.kind != TY_PTR) {
-		scale_by(lt.base.size);
+		if (lt.base.size != 1) { ir_alu_acc_imm(ALU_SCALE, n.ty, lt.base.size as i64, n.pos); }
 	}
 	ir_push_acc(n.pos);
 	gen_expr(n.lhs);
@@ -2871,9 +2904,7 @@ fn gen_expr(n *Node) {
 	gen_binop(n);
 
 	if (ptr_diff) {
-		mov_reg_imm(RDI, lt.base.size as i64);
-		b1(0x48); b1(0x99);
-		b1(0x48); b1(0xf7); modrm(3, 7, RDI);
+		ir_alu_acc_imm(ALU_DIV, n.ty, lt.base.size as i64, n.pos);
 	}
 }
 
