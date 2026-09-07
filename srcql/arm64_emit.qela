@@ -357,7 +357,7 @@ fn arm64_cmp_imm(rn int, imm i64) {
 // not the flags, so a retry loop branches on it with CBNZ.
 fn arm64_ldxr(rt int, rn int) { b4(0xc85f7c00 | (rn << 5) | rt); }
 
-fn arm64_stxr(rs int, rt int, rn int) { b4(0xc800fc00 | (rs << 16) | (rn << 5) | rt); }
+fn arm64_stxr(rs int, rt int, rn int) { b4(0xc8007c00 | (rs << 16) | (rn << 5) | rt); }
 
 // CBNZ Wt, target -- a backward-only retry jump (atomic loops), where the
 // target is already emitted. Imm19 is negative, counted in words.
@@ -370,7 +370,7 @@ fn arm64_cbnz_back(rt int, target i64) {
 // primitives: a reader that LDARs a location written by STLR sees the
 // writer's earlier stores (the C11 acquire/release of atomic_load/
 // atomic_store), and DMB ISH orders everything around it.
-fn arm64_ldar(rt int, rn int) { b4(0xc8df7c00 | (rn << 5) | rt); }
+fn arm64_ldar(rt int, rn int) { b4(0xc8dffc00 | (rn << 5) | rt); }
 
 fn arm64_stlr(rt int, rn int) { b4(0xc89ffc00 | (rn << 5) | rt); }
 
@@ -419,14 +419,18 @@ fn gen_tls_init_stub_arm64() {
 	arm64_ret();
 }
 
-// coro_switch's stub on ARM64. The caller's bl leaves SP%16 == 8 (a call
-// pushes its return address), so the stub realigns before its STP pairs and
-// cancels that adjustment after the LDPs on the new stack. Switching to a
+// coro_switch's stub on ARM64. Unlike x86's call (which pushes an 8-byte
+// return address), BL leaves SP untouched -- AAPCS64 keeps SP 16-byte
+// aligned at every call boundary, always, so no realignment is needed
+// before the STP pairs. (An earlier version copied x86's "SP%16==8 after a
+// call" assumption here; real hardware enforces SP alignment on every
+// STP/LDP that uses SP as the base register and faults with SIGBUS the
+// instant it's wrong -- qemu-aarch64's user-mode emulation does not check
+// this, so the bug only showed up running on real silicon.) Switching to a
 // fresh coroutine pops the trampoline address from the X30 slot and rets
 // into it; the stack image is laid out by coro_spawn in std/coro.qela.
 fn gen_coro_switch_stub_arm64() {
 	coro_switch_at = code.n;
-	arm64_sub_imm(SP, SP, 8);
 	arm64_stp_pre_sp(X19, X20, -16);
 	arm64_stp_pre_sp(X21, X22, -16);
 	arm64_stp_pre_sp(X23, X24, -16);
@@ -443,21 +447,23 @@ fn gen_coro_switch_stub_arm64() {
 	arm64_ldp_post_sp(X23, X24, 16);
 	arm64_ldp_post_sp(X21, X22, 16);
 	arm64_ldp_post_sp(X19, X20, 16);
-	arm64_add_imm(SP, SP, 8);
 	arm64_ret();
 }
 
 // The coroutine trampoline: a fresh stack holds five arguments and the
 // target above the X30 slot that ret popped, so it drains them into
-// X0-X4 and X9, calls the target and finishes when it returns.
+// X0-X4 and X9, calls the target and finishes when it returns. Popped as
+// three LDP pairs, not six single-register post-indexed LDRs: real
+// hardware faults with SIGBUS the instant SP itself (not just the accessed
+// address) drops off a 16-byte boundary, which a lone `ldr xN, [sp], #8`
+// does after its first use -- qemu-aarch64's user-mode emulation never
+// enforces this SP alignment check, so six single-word pops ran fine there
+// and only faulted on real silicon.
 fn gen_coro_stub_arm64() {
 	coro_stub_at = code.n;
-	b4(0xf84087e0);                  // ldr x0, [sp], #8
-	b4(0xf84087e1);                  // ldr x1, [sp], #8
-	b4(0xf84087e2);                  // ldr x2, [sp], #8
-	b4(0xf84087e3);                  // ldr x3, [sp], #8
-	b4(0xf84087e4);                  // ldr x4, [sp], #8
-	b4(0xf84087e9);                  // ldr x9, [sp], #8  (target)
+	arm64_ldp_post_sp(X0, X1, 16);
+	arm64_ldp_post_sp(X2, X3, 16);
+	arm64_ldp_post_sp(X4, X9, 16);
 	b4(0xd63f0120);                  // blr x9
 	add_callref_arm64("coro_finish", 0);
 	b4(0xd4a00000);                  // brk #0: coro_finish never returns
