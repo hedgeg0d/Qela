@@ -1309,6 +1309,48 @@ fn parse_stmt(t **Token) *Node {
 	return n;
 }
 
+// Shared by `spawn f(...)` and `go f(...)`: both desugar to a call taking
+// a function address plus up to five i64-cast arguments, padded to five
+// with zeros -- coro_spawn's and go's signatures match exactly.
+fn parse_spawn_like(t **Token, p i64, callee str, kw str) *Node {
+	*t = (*t).next;
+	var fname str = (*t).text;
+	var fpos i64 = (*t).pos;
+	*t = (*t).next;
+	var call *Node = new_node(ND_CALL, p);
+	call.name = callee;
+	var fa *Node = new_node(ND_FUNCADDR, fpos);
+	fa.name = fname;
+	call.args = fa;
+	var tail *Node = fa;
+	var given int = 0;
+	tok_expect(t, "(");
+	while (!tok_eq(*t, ")")) {
+		if (given > 0) { tok_expect(t, ","); }
+		var a *Node = new_node(ND_CAST, (*t).pos);
+		a.ty = type_lookup("i64");
+		a.lhs = parse_assign(t);
+		tail.next = a;
+		tail = a;
+		given = given + 1;
+	}
+	tok_expect(t, ")");
+	if (given > 5) {
+		if (str_eq(kw, "go")) { error_at(p, "go takes at most 5 arguments"); }
+		error_at(p, "spawn takes at most 5 arguments");
+	}
+	while (given < 5) {
+		tail.next = num_node(0, p);
+		tail = tail.next;
+		given = given + 1;
+	}
+	call.nargs = 6;
+	var st *Node = new_node(ND_EXPRSTMT, p);
+	st.lhs = call;
+	tok_expect(t, ";");
+	return st;
+}
+
 fn parse_stmt_inner(t **Token) *Node {
 	var p i64 = (*t).pos;
 
@@ -1323,39 +1365,11 @@ fn parse_stmt_inner(t **Token) *Node {
 	if (tok_eq(*t, "{")) { return parse_block(t); }
 
 	if (tok_eq(*t, "spawn") && (*t).next.kind == TK_IDENT) {
-		*t = (*t).next;
-		var fname str = (*t).text;
-		var fpos i64 = (*t).pos;
-		*t = (*t).next;
-		var call *Node = new_node(ND_CALL, p);
-		call.name = "coro_spawn";
-		var fa *Node = new_node(ND_FUNCADDR, fpos);
-		fa.name = fname;
-		call.args = fa;
-		var tail *Node = fa;
-		var given int = 0;
-		tok_expect(t, "(");
-		while (!tok_eq(*t, ")")) {
-			if (given > 0) { tok_expect(t, ","); }
-			var a *Node = new_node(ND_CAST, (*t).pos);
-			a.ty = type_lookup("i64");
-			a.lhs = parse_assign(t);
-			tail.next = a;
-			tail = a;
-			given = given + 1;
-		}
-		tok_expect(t, ")");
-		if (given > 5) { error_at(p, "spawn takes at most 5 arguments"); }
-		while (given < 5) {
-			tail.next = num_node(0, p);
-			tail = tail.next;
-			given = given + 1;
-		}
-		call.nargs = 6;
-		var st *Node = new_node(ND_EXPRSTMT, p);
-		st.lhs = call;
-		tok_expect(t, ";");
-		return st;
+		return parse_spawn_like(t, p, "coro_spawn", "spawn");
+	}
+
+	if (tok_eq(*t, "go") && (*t).next.kind == TK_IDENT) {
+		return parse_spawn_like(t, p, "go", "go");
 	}
 
 	if (tok_consume(t, "return")) {
