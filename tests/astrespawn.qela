@@ -1,0 +1,30 @@
+// expect-exit: 0
+// expect-out: respawn keeps ast handles and mutations
+// stage1-only
+// After the abi child dies, the respawn replays every cached ast handle
+// (top-level parses and ast_child/ast_next traversals, in creation
+// order) and re-applies every recorded ast_set, so the same handles
+// still work and a mutated tree comes back mutated.
+import "std/eval.qela";
+import "std/io.qela";
+eval var price i64 = 10;
+fn main() int {
+	var fails i64 = 0;
+	var a *Ast = parse_ast("price * 2 + 1");
+	var asg *Ast = ast_child(a, 0);
+	var cst *Ast = ast_child(asg, 1);
+	var expr *Ast = ast_child(cst, 0);
+	var two *Ast = parse_ast("2");
+	var two_expr *Ast = ast_child(ast_child(ast_child(two, 0), 1), 0);
+	if (!ast_set(expr, 1, two_expr)) { fails = fails + 1; }
+	syscall(37, abi_pid, 9, 0);
+	var r i64 = run_ast(a);
+	if (r != 22) { fails = fails + 1; }
+	var l *Ast = ast_child(expr, 0);
+	if (!str_eq(ast_info(l).kind, "mul")) { fails = fails + 1; }
+	var s *Ast = parse_ast("var x = 1; x + 1;");
+	var s2 *Ast = ast_next(s);
+	if (!str_eq(ast_info(s2).kind, "exprstmt")) { fails = fails + 1; }
+	if (fails == 0) { write_str(STDOUT, "respawn keeps ast handles and mutations\n"); }
+	return fails as int;
+}

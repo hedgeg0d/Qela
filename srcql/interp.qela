@@ -466,6 +466,10 @@ fn ip_cast(n *Node) i64 {
 	var dt *Type = n.ty;
 	// n.val == 1 marks a bit reinterpret, not a numeric conversion.
 	if (n.val == 1) { return v; }
+	// An enum expression is its address (it is an aggregate); a numeric
+	// or boolean cast means the tag, the first word of its memory. A
+	// pointer target keeps the address.
+	if (st.kind == TY_ENUM && dt.kind != TY_PTR) { v = ip_ld64(v); }
 	if (dt.kind == TY_BOOL) { return (v != 0) as i64; }
 	if (is_float(st) && is_float(dt)) {
 		if (st.size == dt.size) { return v; }
