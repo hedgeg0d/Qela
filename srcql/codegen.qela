@@ -2067,6 +2067,29 @@ fn gen_expr(n *Node) {
 		return;
 	}
 	if (k == ND_AND || k == ND_OR) { gen_logical(n); return; }
+	if (k == ND_IN || k == ND_ARRCOMP) {
+		// The hidden chain (hoisted collection, scan or collection loop)
+		// runs first; `.lhs` is the value expression that follows it.
+		if (n.init as i64 != 0) {
+			var si *Node = n.init;
+			while (si as i64 != 0) { gen_stmt(si); si = si.next; }
+		}
+		gen_expr(n.lhs);
+		return;
+	}
+	if (k == ND_IFEXPR) {
+		// `a if c else b`: a branch in expression position, both sides
+		// one machine word.
+		var els i64 = ir_new_label();
+		branch_false(n.cond, els);
+		gen_expr(n.then);
+		var end i64 = ir_new_label();
+		ir_branch(CC_ALWAYS, end, n.pos);
+		ir_label(els, n.pos);
+		gen_expr(n.els);
+		ir_label(end, n.pos);
+		return;
+	}
 
 	var lt *Type = n.lhs.ty;
 	var rt *Type = n.rhs.ty;

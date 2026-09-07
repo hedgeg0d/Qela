@@ -94,6 +94,57 @@ fn read_escape(src str, i *i64) i64 {
 	return c as i64;
 }
 
+// Splits an interpolation body at the first top-level ':' or '!r' marker:
+// "x:08x" becomes the expression "x" plus the spec ":08x". Strings,
+// comments and bracketed groups are skipped so their colons do not count;
+// the marker must be at the interpolation's own depth.
+fn interp_spec_split(src str, spec *str) i64 {
+	var depth i64 = 0;
+	var i i64 = 0;
+	while (i < src.len) {
+		var c u8 = src.ptr[i];
+		if (c == '\\' && i + 1 < src.len) { i = i + 2; continue; }
+		if (c == '"' || c == '\'') {
+			i = i + 1;
+			while (i < src.len && src.ptr[i] != c) {
+				if (src.ptr[i] == '\\') { i = i + 2; }
+				else { i = i + 1; }
+			}
+			i = i + 1;
+			continue;
+		}
+		if (c == '/' && i + 1 < src.len && src.ptr[i + 1] == '/') {
+			while (i < src.len && src.ptr[i] != '\n') { i = i + 1; }
+			continue;
+		}
+		if (c == '/' && i + 1 < src.len && src.ptr[i + 1] == '*') {
+			i = i + 2;
+			while (i + 1 < src.len && !(src.ptr[i] == '*' && src.ptr[i + 1] == '/')) { i = i + 1; }
+			i = i + 2;
+			continue;
+		}
+		if (c == '(' || c == '[' || c == '{') { depth = depth + 1; i = i + 1; continue; }
+		if (c == ')' || c == ']' || c == '}') { depth = depth - 1; i = i + 1; continue; }
+		if (depth == 0) {
+			if (c == ':') {
+				spec.ptr = src.ptr + i;
+				spec.len = src.len - i;
+				return i;
+			}
+			if (c == '!' && i + 1 < src.len && src.ptr[i + 1] == 'r' &&
+			    (i + 2 >= src.len || src.ptr[i + 2] == ':')) {
+				spec.ptr = src.ptr + i;
+				spec.len = src.len - i;
+				return i;
+			}
+		}
+		i = i + 1;
+	}
+	spec.ptr = null;
+	spec.len = 0;
+	return -1;
+}
+
 // Scans from just past "${" to the matching "}". Strings, char literals
 // and comments inside the expression are skipped so their braces do not
 // count. Returns the offset of the closing brace and leaves *i past it.
@@ -575,6 +626,12 @@ fn lex(src str, base i64) *Token {
 					var inner str;
 					inner.ptr = src.ptr + open;
 					inner.len = end - open;
+					// A format spec ("x:08x") splits off at the first
+					// top-level ':' / '!r' and becomes its own token, so
+					// the expression lexes without the colon's digits.
+					var spec str;
+					var spl i64 = interp_spec_split(inner, &spec);
+					if (spl > 0) { inner.len = spl; }
 					// The expression inside lexes with its own head and is
 					// spliced after the opening braces; the globals are the
 					// outer list's state and must survive the recursion.
@@ -586,6 +643,11 @@ fn lex(src str, base i64) *Token {
 					saved_tail.next = ih;
 					lex_tail = it;
 					lex_base = saved_base;
+					if (spec.len > 0) {
+						var ft *Token = push_token(TK_FMTSPEC, open + spl);
+						ft.text = spec;
+						lex_tail = ft;
+					}
 					var cb *Token = push_token(TK_PUNCT, i - 1);
 					var cs str;
 					cs.ptr = src.ptr + i - 1;
