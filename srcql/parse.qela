@@ -640,13 +640,27 @@ var strlist_tail *StrLit;
 var nstrs int = 0;
 
 fn add_str_null() int {
-	var id int = add_str("");
-	strlist_tail.nullhdr = true;
-	return id;
+	var lit *StrLit = arena_alloc(sizeof(StrLit), 8) as *StrLit;
+	lit.id = nstrs;
+	nstrs = nstrs + 1;
+	if (strlist_tail as i64 == 0) { strlist_head = lit; }
+	else { strlist_tail.next = lit; }
+	strlist_tail = lit;
+	lit.nullhdr = true;
+	return lit.id;
 }
 
 fn add_str(s str) int {
-	var lit *StrLit = arena_alloc(sizeof(StrLit), 8) as *StrLit;
+	// Identical literals share one pool entry: the bytes and their
+	// {ptr, len} header are emitted once and every site references the
+	// same id. A missing-$bytes entry never dedups (its null header is
+	// site-specific), which is why add_str_null above is its own path.
+	var lit *StrLit = strlist_head;
+	while (lit as i64 != 0) {
+		if (!lit.nullhdr && lit.s.len == s.len && str_eq(lit.s, s)) { return lit.id; }
+		lit = lit.next;
+	}
+	lit = arena_alloc(sizeof(StrLit), 8) as *StrLit;
 	lit.s = s;
 	lit.id = nstrs;
 	nstrs = nstrs + 1;
