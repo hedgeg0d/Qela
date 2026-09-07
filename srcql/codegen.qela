@@ -1375,7 +1375,7 @@ fn gen_opassign(n *Node) {
 		gen_binop(&rop);
 
 		ir_cast_acc(CAST_TRUNC, n.lhs.ty, n.pos);
-		st_rm(n.lhs, RAX);
+		ir_store_vreg_acc(n.lhs.varp.reg, n.lhs.ty, n.pos);
 		return;
 	}
 	gen_addr(n.lhs);
@@ -2150,6 +2150,14 @@ fn x86_lower_op(op *IrOp) {
 		st_local(op.dst.off, RAX);
 		return;
 	}
+	if (op.kind == IR_STORE && op.dst.kind == OP_VREG && op.src0.kind == OP_ACC) {
+		// mov <dst.reg>, rax -- st_rm's promoted-local path, replayed with
+		// the same reg/rm roles so the REX.B/REX.R bits match.
+		rex_w(RAX, op.dst.reg);
+		b1(0x89);
+		modrm(3, RAX, op.dst.reg);
+		return;
+	}
 	if (op.kind == IR_UNARY && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC) {
 		if (op.aux == UOP_NEG) { b1(0x48); b1(0xf7); modrm(3, 3, RAX); return; }
 		if (op.aux == UOP_BITNOT) { b1(0x48); b1(0xf7); modrm(3, 2, RAX); return; }
@@ -2492,6 +2500,13 @@ fn ir_store_stackslot_acc(off i64, ty *Type, pos i64) {
 	x86_lower_all();
 }
 
+fn ir_store_vreg_acc(reg int, ty *Type, pos i64) {
+	var op *IrOp = ir_emit(IR_STORE, pos);
+	op.dst = operand_vreg(reg, ty);
+	op.src0 = operand_acc();
+	x86_lower_all();
+}
+
 fn gen_expr(n *Node) {
 	var k int = n.kind;
 
@@ -2531,7 +2546,11 @@ fn gen_expr(n *Node) {
 	if (k == ND_ASSIGN) {
 		if (direct_local(n.lhs)) {
 			gen_expr(n.rhs);
-			st_rm(n.lhs, RAX);
+			if (n.lhs.varp.has_reg) {
+				ir_store_vreg_acc(n.lhs.varp.reg, n.lhs.ty, n.pos);
+			} else {
+				ir_store_stackslot_acc(n.lhs.varp.offset as i64, n.lhs.ty, n.pos);
+			}
 			return;
 		}
 		gen_addr(n.lhs);
