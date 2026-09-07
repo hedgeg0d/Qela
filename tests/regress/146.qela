@@ -1,4 +1,4 @@
-// expect-exit: 0
+// expect-exit: 4
 // got: CRASH
 struct Pair { x int, y int, }
 struct Wide { a int, b int, c int, }
@@ -25,10 +25,11 @@ fn tag_e(e E) int {
 fn main() int {
     var v0 int = 6;
     var v1 int = 4;
-    var v2 int = 8;
+    var v2 int = 0x8;
     var sv0 str = "zz";
-    var sv1 str = "xyzzy";
-    var fv double = 2.5;
+    var sv1 str = """x
+yz""";
+    var fv double = 1.7;
     var p Pair = Pair{};
     var w Wide = Wide{};
     var b Bag = Bag{};
@@ -41,24 +42,22 @@ fn main() int {
     var i3 int = 0;
     var i4 int = 0;
     var i5 int = 0;
-    p.x = 869;
-    a[(a[(str_eq(("foobar")[1..6], sv1) & 3)] & 3)] = ('c' == (!((false >= v0) as i32)));
-    v0 = ((10 as i8) > (((false > v2) <= ('3' * -733)) >= (("xyz")[0..2]).len));
-    n.p.x = ((!pair_sum(Pair{x: ('a' as i16), y: (true | 'b')})) as u32);
-    e = E.B(((false > (('g' as u8) >> (!-584))) as i8));
-    i0 = 0;
-    while ((i0 < 4)) {
-        v2 = (((-v0) as i8) as u8);
-        a[i0] = ('0' ^ (-977 - true));
-        i0 = (i0 + 1);
-    }
+    v1 -= 869;
+    a[(a[(str_eq((("abcd")[1..3] + ((((((((("xyz")[0..2] + sv0))[0..2] + "xyz") + ((((sv1 + ("xyz")[0..2]))[0..2] + ((("hello")[0..2] + sv1))[0..2]))[0..2]) + ((("xyzzy")[2..5] + "hello"))[0..2]))[0..2] + ("aa")[0..2]) + (((sv1 + ("""x
+yz""")[1..3]) + (sv0)[0..2]) + ("hi" + (("""x
+yz""")[0..4])[0..2])))), sv1) & 3)] & 0x3)] = (((('a' as u8) as i32) <= (210 & (fv <= 1.0))) >> (!'0'));
+    v0 = (true >> p.x);
+    v0 = (("hello")[0..5]).len;
     w = wide_swap(w);
-    e = E.C((((-v0) as i32) as u16), a[(((-(v2 | '0')) as i32) & 3)]);
-    e = E.C((((255 + (844 as i8)) - ((v2 % ((v1 & 15) + 1)) << (120 as i8))) > ((-(v2 < v1)) ^ (false | pair_sum(Pair{x: -883, y: 'e'})))), ((((v1 == 0) - (!255)) < ((v1 as double) > (fv + fv))) > (!(v0 >= ('c' + 2)))));
-    v1, v0 = v0, v1;
+    e = E.C((((-v0) as i32) in 0..(((a[(('2' in 0..((100 & 15) + 1)) & 3)] as u8) & 15) + 1)), ((((127 in 0..((true & 0xf) + 1)) as u8) as i32) as i16));
+    v0 = -187;
+    v2 *= ('g' in 0..(((((v0 if (((((-255) < ('a' in 0..((2 & 15) + 1))) + (((v2 % ((v1 & 15) + 0x1)) < (-790 + v0)) && ((-790 + v0) >= ('2' in a)))) if (((((-'1') == 0x6a) as u32) < (((false as i8) as double) > (('d' << -148) as double))) <= a[((!((v2 & true) > ("hi").len)) & 3)]) else a[(((v1 + 2) / (((v1 >= true) & 0xf) + 1)) & 0x3)]) == (((("""ab
+cd""")[1..3]).len != (("""x
+yz""")[1] in a)) | ((((('2' as u32) >= v1) && (v1 <= ('a' & -902))) <= (mix5(v0, 'g', false, 127, true) >= (255 in a))) && ((mix5(v0, 'g', false, 127, true) >= (255 in a)) < v0)))) else 695) as i8) in 0..(((91 - (-206 << -292)) & 15) + 0x1)) & 15) + 1));
+    sv0 += (("foobar")[1..5])[0..2];
     var ob Buf;
     fmt_i64(&ob, v2);
     write_str(STDOUT, buf_str(&ob));
     write_str(STDOUT, "\n");
-    return (((mix5(0, 78, '2', 33, false) == 'c') & ((-860 / ((true & 15) + 1)) ^ (v0 as u16))) > ("hi").len);
+    return (((sv0).len - (((v2 << v2) >= tag_e(e)) && (tag_e(e) >= (fv as i64)))) >> a[(((0.3 as i64) - (42 * 'b')) & 3)]);
 }

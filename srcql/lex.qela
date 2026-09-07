@@ -528,16 +528,33 @@ fn lex(src str, base i64) *Token {
 			var is_float bool = has_dot || has_suffix || (has_exp && exp_val < 0);
 
 			if (is_float) {
+				// The digit spans include any '_' separators; the float
+				// conversion wants digits only, and the point counts
+				// digits, not source bytes.
 				var intlen i64 = intpart_end - start;
 				var ndigits i64 = intlen + frac_len;
 				var digits *u8 = arena_alloc(ndigits, 1);
 				var k i64 = 0;
-				while (k < intlen) { digits[k] = src.ptr[start + k]; k = k + 1; }
+				var n i64 = 0;
+				while (k < intlen) {
+					if (src.ptr[start + k] != '_') {
+						digits[n] = src.ptr[start + k];
+						n = n + 1;
+					}
+					k = k + 1;
+				}
+				var intdigits i64 = n;
 				k = 0;
-				while (k < frac_len) { digits[intlen + k] = src.ptr[frac_start + k]; k = k + 1; }
-				var point i64 = intlen + exp_val;
+				while (k < frac_len) {
+					if (src.ptr[frac_start + k] != '_') {
+						digits[n] = src.ptr[frac_start + k];
+						n = n + 1;
+					}
+					k = k + 1;
+				}
+				var point i64 = intdigits + exp_val;
 				var ft *Token = push_token(TK_FLOAT, start);
-				ft.val = dec_to_f64_bits(digits, ndigits, point);
+				ft.val = dec_to_f64_bits(digits, n, point);
 				var fs str;
 				fs.ptr = src.ptr + start;
 				fs.len = i - start;

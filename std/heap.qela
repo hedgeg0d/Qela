@@ -10,6 +10,7 @@ struct Header {
 var heap_base Header;
 var heap_freep *Header;
 
+/// Extends the heap by requesting fresh memory.
 fn heap_morecore(nu i64) *Header {
 	var n i64 = nu;
 	if (n < 4096) { n = 4096; }
@@ -27,6 +28,7 @@ fn heap_morecore(nu i64) *Header {
 	return heap_freep;
 }
 
+/// Allocates a block of the requested size.
 fn heap_alloc(nbytes i64) *u8 {
 	if (nbytes <= 0) { return null; }
 	var nunits i64 = (nbytes + sizeof(Header) - 1) / sizeof(Header) + 1;
@@ -62,6 +64,7 @@ fn heap_alloc(nbytes i64) *u8 {
 	return null;
 }
 
+/// Returns a block to the allocator's free list.
 fn heap_free(ap *u8) {
 	if (ap == (null)) { return; }
 	var bp *Header = (ap as *Header) - 1;
@@ -86,6 +89,7 @@ fn heap_free(ap *u8) {
 	heap_freep = p;
 }
 
+/// Resizes an existing allocation to a new size.
 fn heap_realloc(ap *u8, nbytes i64) *u8 {
 	if (ap == (null)) { return heap_alloc(nbytes); }
 	if (nbytes <= 0) { heap_free(ap); return null; }

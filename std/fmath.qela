@@ -1,5 +1,6 @@
 // Float math, stage1-only: f64 needs floats, which stage0 does not have.
 
+/// Returns the square root of a float.
 fn sqrt(x f64) f64 {
 	if (x <= 0.0) { return 0.0; }
 	// A magic-constant initial guess (the same trick fast inverse square
@@ -21,6 +22,7 @@ let HALFPI = 1.5707963267948966;
 
 // sin(x) for any finite x: fold into [-2pi, 2pi] by integer division,
 // then into [-pi/2, pi/2] by symmetry, then a five-term Taylor series.
+/// Returns the sine of an angle in radians.
 fn sin(x f64) f64 {
 	var r f64 = x - (x / TWOPI) as i64 as f64 * TWOPI;
 	if (r > PI) { r = r - TWOPI; }
@@ -33,6 +35,7 @@ fn sin(x f64) f64 {
 	return r * p;
 }
 
+/// Returns the cosine of an angle in radians.
 fn cos(x f64) f64 {
 	return sin(x + HALFPI);
 }

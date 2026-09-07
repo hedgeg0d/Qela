@@ -1,4 +1,4 @@
-// expect-exit: 255
+// expect-exit: 192
 // got: CRASH
 struct Pair { x int, y int, }
 struct Wide { a int, b int, c int, }
@@ -25,7 +25,7 @@ fn tag_e(e E) int {
 	}
 }
 fn main() int {
-    var v0 int = 8;
+    var v0 int = 0x8;
     var v1 int = 10;
     var v2 int = 7;
     var sv0 str = "no";
@@ -34,59 +34,74 @@ fn main() int {
     var p Pair = Pair{};
     var w Wide = Wide{};
     var b Bag = Bag{};
-    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0x0}};
     var e E = E.A;
     var a [4]int;
     var i0 int = 0;
     var i1 int = 0;
-    var i2 int = 0;
+    var i2 int = 0x0;
     var i3 int = 0;
     var i4 int = 0;
     var i5 int = 0;
-    e = E.B((((('e' <= -983) as double) / 1.7) as i64));
+    e = E.B((((('e' <= 0xfffffffffffffc29) as double) / 1.7) as i64));
     n.tag = (fv < 0.1);
-    v2 = (zero() << (("foobar")[2..4]).len);
-    gv = p.x;
-    a[((sv1).len & 3)] = wide_sum(w);
-    match (e) {
-        A => {
-            return (((('g' as double) / 100.0) <= fv) as i16);
+    v2 = (((-(-v0)) + a[(p.x & 3)]) << ((("zz")[0..2] + sv1)).len);
+    if (((((("""ab
+cd""")[0..5])[0..2]).len != ((!(1 > -772)) in a)) <= ((((816 % ((-971 & 15) + 1)) >= (gv <= '\t')) in 0..((gv & 15) + 1)) in a))) {
+        match (e) {
+            A => {
+                return (!(((615 * 0xfffffffffffffe84) if ((((gv >= (-(v0 + -229))) && ((-(v0 + -229)) >= ((false if ((2 - (sv1).len) >= (((('d' if ((wide_sum(w) in a) == a[((((sv0).len - gv) as u32) & 0x3)]) else true) as i32) in 0..((((10 * 'g') & (("xyz")[0..3])[0]) & 15) + 1)) as u16)) else 666) & (v2 >= false)))) != (-(!a[(gv & 3)]))) < -483) else 42) > v1));
+            }
+            B(mb0) => {
+                return (((pair_sum(p) == (gv in a)) < (false > sum3(true, v1, -210))) % (((((0x277 if (((((fv + fv) / 1.5) < ((0.3 / 0.5) + fv)) % (((((gv < 'd') && ('d' > (gv << 0x298))) if ((((('g' % ((0x64 & 15) + 1)) >= (v2 >> true)) as u8) < ((((true < 277) && (0x115 < true)) | (3 as u16)) as u16)) <= ((!(('2' ^ true) < false)) & p.x)) else ((true & true) in a)) & 15) + 1)) < gv) else 3) as u16) - 100) & 0xf) + 1));
+            }
+            C(mb0, mb1) => {
+                return ((('d' as double) == 0.1) == (((3 <= -223) == 672) as i16));
+            }
         }
-        B(mb0) => {
-            return ((-(!a[(gv & 3)])) | ('f' * gv));
-        }
-        C(mb0, mb1) => {
-            return (gv + mb1);
-        }
-    }
-    v2 = ((fv != (str_eq((sv0)[0..2], sv1) as double)) << (!str_eq((("xyz")[0..3])[0..2], ("abcd")[0..4])));
-    i0 = 0;
-    while ((i0 < 3)) {
-        i0 = (i0 + 1);
-        v0 = ((('2' + (sv0)[1]) * a[((0 as i8) & 3)]) as i16);
+    } else {
         i1 = 0;
         while ((i1 < 3)) {
-            i1 = (i1 + 1);
-            n.p.x = a[((-((-483 * 'c') * (!10))) & 3)];
-            gv = ((((1 as double) - -1.5) < fv) % ((((tag_e(e) as u32) - 100) & 15) + 1));
-            v1, v0 = v0, v1;
+            i1 = (i1 + 0x1);
+            e = E.B((a[('d' & 3)] in a));
+            gv = '\t';
         }
-        v0 = ((((1.5 as i64) as i32) >> ('g' < (2 as i32))) as i8);
+        return -64;
     }
-    match (e) {
-        A => {
-            return sub2(((('g' % ((100 & 15) + 1)) >= (v2 >> true)) as u8), ((!(gv < -676)) & p.x));
+    i0 = 0;
+    while ((i0 < 1)) {
+        i0 = (i0 + 1);
+        gv, v0 = v0, gv;
+        v2 = (((((true in 0..((-951 & 15) + 1)) < pair_sum(Pair{x: v1, y: 0x75})) && (pair_sum(Pair{x: v1, y: 117}) > (false & gv))) < ((v1 as double) as i64)) as u8);
+        gv = (!1);
+    }
+    sv1 += ("abc")[0..2];
+    i0 = 0;
+    while ((i0 < 2)) {
+        i0 = (i0 + 1);
+        v1, v2 = v2, v1;
+        w = wide_swap(w);
+        i1 = 0x0;
+        while ((i1 < 0x3)) {
+            i1 = (i1 + 1);
+            n.tag = a[(((sub2(-436, false) as u32) if (true <= ('g' >> ((pair_sum(p) << (false % (('\t' & 15) + 1))) in 0..(((0.3 < (0.1 / 2.5)) & 15) + 1)))) else ((!true) - (367 - 0))) & 3)];
+            sv1 += (("abcd")[1..3])[0..2];
+            a[(((((false if ((v0 if ((pair_sum(Pair{x: (((false <= 'g') && ('g' < 2)) as u8), y: str_eq((sv1 + sv0), ("abc")[0..2])}) as i32) <= a[(((((true >= 0xffffffffffffffff) + true) > (((false <= true) && (true >= 2)) < ((-964 > false) && (false <= 0xffffffffffffffff)))) && ((((false <= true) && (true >= 2)) < ((-964 > false) && (false <= -1))) < sum3((0.125 as i64), 79, (v1 % ((-102 & 15) + 1))))) & 3)]) else str_eq(("42" + (("abc")[0..3])[0..2]), "no")) != (((!(0x2a ^ 0xa)) in a) > ((false if ((((str_eq(sv1, sv1) >> ('g' / ((v2 & 15) + 1))) if (((p.y as i16) in a) > gv) else 'a') / ((false & 15) + 1)) > (!((('\n' <= true) as i32) != (10 | ('1' >> 613))))) else ((false >= 0x2) && (2 <= 'e'))) in a))) else '\t') in 0..(((-2) & 15) + 1)) as u8) & (((('c' - gv) < (-340 * -130)) && ((-340 * -130) <= ('e' > false))) == (((gv > '3') <= (((("qwerty")[0..2])[0..2])[0..2]).len) && ((((("qwerty")[0..2])[0..2])[0..2]).len >= ('c' as u16))))) & 3)] = ((((!v1) < 0x3) + ((0 in a) << (true as u16))) if ((((-(v0 * v1)) - ((255 & 699) in 0..(((!0) & 15) + 1))) > (sv1)[1]) != (-(("""ab
+cd""")[0..2]).len)) else (p.x - ((255 - '1') & (0x2a in a))));
         }
-        B(mb0) => {
-            return (((((("abcd")[1..4])[0..2])[0..2])[0] as i16) * mb0);
-        }
-        C(mb0, mb1) => {
-            return (zero() ^ mb1);
-        }
+    }
+    w = wide_swap(w);
+    i0 = 0;
+    while ((i0 < 4)) {
+        n.p.x = (sv1).len;
+        p.x = ((-((-975 as u16) as i8)) as i8);
+        a[i0] = ((658 < ((fv as i64) < v2)) << (str_eq(("""ab
+cd""")[1..3], ("xyzzy")[2..5]) if (((((((v2 << '1') <= (gv in 0..((false & 0xf) + 1))) && ((gv in 0..((false & 15) + 1)) < tag_e(e))) < (-('\n' ^ v2))) && ((-('\n' ^ v2)) <= ((false as i32) as u32))) & (((gv <= zero()) && (zero() >= (-414 == 255))) > ((true << gv) + (gv as u8)))) < p.x) else (sum3(-408, 'a', 100) < (42 <= '\t'))));
+        i0 = (i0 + 1);
     }
     var ob Buf;
     fmt_i64(&ob, v1);
     write_str(STDOUT, buf_str(&ob));
     write_str(STDOUT, "\n");
-    return str_eq("hi", "xyzzy");
+    return gv;
 }

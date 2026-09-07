@@ -1,26 +1,31 @@
 // Integer helpers, bootstrap-subset-safe.
 
+/// Returns the absolute value of an integer.
 fn abs(v i64) i64 {
 	if (v < 0) { return -v; }
 	return v;
 }
 
+/// Returns the smaller of two integers.
 fn min(a i64, b i64) i64 {
 	if (a < b) { return a; }
 	return b;
 }
 
+/// Returns the larger of two integers.
 fn max(a i64, b i64) i64 {
 	if (a > b) { return a; }
 	return b;
 }
 
+/// Clamps an integer into the given range.
 fn clamp(v i64, lo i64, hi i64) i64 {
 	if (v < lo) { return lo; }
 	if (v > hi) { return hi; }
 	return v;
 }
 
+/// Returns the greatest common divisor of two integers.
 fn gcd(a i64, b i64) i64 {
 	var x i64 = a;
 	var y i64 = b;

@@ -1,0 +1,81 @@
+// expect-exit: 0
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/str.qela";
+fn add2(a int, b int) int { return a + b; }
+fn mix6(a int, b int, c int, d int, e int, f int) int { return a - b + c - d + e - f; }
+fn min2(a int, b int) int { if (a < b) { return a; } else { return b; } }
+fn zero() int { return 3; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn wide_swap(w Wide) Wide { return Wide{a: w.b, b: w.a, c: w.c}; }
+fn bag_sum(b Bag) int { return b.p + b.q + b.r + b.s; }
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn main() int {
+    var v0 int = 0x1;
+    var v1 int = 9;
+    var v2 int = 4;
+    var sv0 str = "aa";
+    var sv1 str = "no";
+    var fv double = 1.5;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0x0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0x0;
+    var i3 int = 0;
+    var i4 int = 0x0;
+    var i5 int = 0;
+    v1 = ((((v0 > (0x1 >> v2)) >= false) && (false >= (-1 ^ (true as u8)))) / ((((p.y <= str_eq(("abcd")[1..3], "xyzzy")) && (str_eq(("abcd")[1..3], "xyzzy") <= 0x68)) & 15) + 1));
+    v0 = (("zz" + (sv0)[0..2]))[1];
+    sv1 = "xyz";
+    match (e) {
+        A => {
+            return (-((((-201 <= 'f') && ('f' >= v0)) <= (2 in a)) % ((p.y & 15) + 1)));
+        }
+        B(mb0) => {
+            return v0;
+        }
+        C(mb0, mb1) => {
+            return (0xb9 + mb1);
+        }
+    }
+    sv0 += sv1;
+    v2 -= 1;
+    v0 = ((((fv != 0.1) != (v2 in a)) - (((-103 <= '1') && ('1' >= v1)) in a)) if ((((('e' in a) if ((((((("abcd")[0..3] + ("aa" + ("xyzzy")[0..5])) + ("""ab
+cd""")[2..4]) + (("hello")[1..4])[0..2]))[0] == true) != v0) else (("xyz")[0..3]).len) as u32) > min2((('\t' - v0) if ((((str_eq(("hello")[1..3], ("abcd")[1..3]) in 0..(((false in a) & 15) + 1)) == (!(61 - 44))) | ((-('d' * true)) in a)) == v1) else (false as u32)), (((0 < true) && (true < 'c')) >= (true in 0..((v0 & 15) + 0x1))))) <= p.y) else ((("aa" + (("foobar")[0..2])[0..2]) + "foobar")).len);
+    v0 = v0;
+    v1 = (!(((false << false) as i8) > 'g'));
+    i0 = 0;
+    while ((i0 < 3)) {
+        i0 = (i0 + 1);
+        n = Nest{tag: (("""x
+yz""")[0..3])[0], p: Pair{x: a[((((2.5 / 10.5) + (fv / -0.5)) as i64) & 3)], y: ((fv != ((true as double) + (1.0 / 0.5))) if ((((-(127 if ((!a[(mix6((0xffffffffffffffff + 3), true, a[(true & 3)], (-1 as u32), (-v1), opt_d(D.None)) & 3)]) >= p.x) else 10)) >= (true >> (false <= 71))) << 'c') <= v1) else (-((0.125 / 2.0) as i64)))}};
+        n.p.x = ((((-42) < ('b' in a)) in 0..((((v0 as double) as i64) & 15) + 1)) in 0..(((tag_e(e) in 0..((42 & 15) + 1)) & 0xf) + 1));
+        if ((i0 != 0)) {
+            continue;
+        } else {
+        }
+    }
+    return (0x30 & ((((sv1 + sv0))[1] in 0..(((0.25 as i64) & 15) + 0x1)) as u32));
+}

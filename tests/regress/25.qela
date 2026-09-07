@@ -1,0 +1,71 @@
+// expect-exit: 0
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/str.qela";
+var gv int = 43;
+fn gcd2(a int, b int) int { while (b != 0) { var t int = a % b; a = b; b = t; } return a; }
+fn add2(a int, b int) int { return a + b; }
+fn max2(a int, b int) int { if (a > b) { return a; } else { return b; } }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn wide_sum(w Wide) int { return w.a + w.b + w.c; }
+fn wide_swap(w Wide) Wide { return Wide{a: w.b, b: w.a, c: w.c}; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 3;
+    var v1 int = 8;
+    var v2 int = 9;
+    var sv0 str = "hi";
+    var sv1 str = """x
+yz""";
+    var fv double = 3.75;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    e = E.C(((0.1 as i64) as u16), (100 << false));
+    sv0 = "foobar";
+    gv = ((!(!('a' in 0..(('e' & 15) + 1)))) if (a[((((10 in a) ^ (0x2 if ((false ^ (((!'f') % ((('3' >= '0') & 15) + 0x1)) in 0..(((pair_sum(Pair{x: 450, y: v0}) as i32) & 15) + 0x1))) > ((100 in a) & (v0 - v2))) else v0)) > gcd2(((!0x2cf) & 15), (1 & 0xf))) & 3)] <= ("zz").len) else ((-1 if ((opt_d(D.None) ^ ((max2(false, true) / ((str_eq("zz", "qwerty") & 15) + 1)) as i16)) < (-(((gv >= 'f') + ('a' * v1)) as u16))) else ('b' % ((42 & 15) + 1))) if (("xyz")[1] <= (false as u8)) else 42));
+    v0 -= (str_eq(("""ab
+cd""" + """ab
+cd"""), "abcd") & tag_e(e));
+    v0 = ((((1 if ((((-v1) <= (!('0' - 786))) & (-((0xa ^ 255) if ((-wide_sum(w)) >= (255 | (((49 in 0..((405 & 15) + 1)) <= (true in 0..((42 & 15) + 1))) >> ((3 as i16) ^ a[(-338 & 3)])))) else (935 / ((gv & 15) + 1))))) != a[(42 & 3)]) else 1) as i8) & 10) / ((true & 15) + 1));
+    if (((((true as i16) in a) != (-(("xyz").len as u8))) != ((("aa")[0] <= (((("""x
+yz""")[0..3] + "xyz"))[1] in 0..((((42 >= false) && (false > false)) & 15) + 1))) in a))) {
+        gv = ("hello").len;
+    } else {
+        v1 = ((((255 as double) == (-459 as double)) as i8) in 0..((((-2.0 as i64) <= gv) & 15) + 1));
+        p.y = -465;
+    }
+    v1 = (((gv if ((((((true > gv) && (gv <= false)) as u16) % ((((!v1) % (('a' & 15) + 0x1)) & 0xf) + 1)) in 0..((972 & 15) + 1)) < (((pair_sum(Pair{x: 2, y: gv}) in a) in a) ^ ((p.x in 0..(((0xfffffffffffffff4 as u8) & 15) + 1)) - ((-811 == v0) in 0..((tag_e(e) & 15) + 1))))) else (!3)) if (((((((("""x
+yz""")[1..3])[0..2])[0] - ('g' * 1)) & (((false <= '3') && ('3' < 0)) < (!'2'))) <= (fv as i64)) && ((fv as i64) <= (gv == ("abcd")[1]))) == (("abcd")[1..4]).len) else ((('c' | '0') < (v1 if (a[('c' & 3)] > ((((-596 != '2') as i8) >> 'c') as i8)) else false)) && ((v1 if (a[('c' & 3)] > ((((-596 != '2') as i8) >> 'c') as i8)) else false) <= str_eq(sv0, "abc")))) as i16);
+    n.tag = gv;
+    sv1 = (sv1 + (("xyz")[0..3])[0..2]);
+    fv = (fv + (((255 as double) - fv) * (('g' as double) / -0.5)));
+    return 0x0;
+}
