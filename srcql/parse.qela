@@ -217,6 +217,11 @@ var in_defer_body bool = false;
 // swallow `[f(x) for x in xs if cond]`'s condition filter.
 var in_comp_clause bool = false;
 
+// Set while parsing an interpolation's expression: a `${x=}` debug part
+// lexes a TK_FMTSPEC("=") token after the expression, and parse_assign
+// must not consume it as an assignment operator (tok_eq compares text).
+var in_interp bool = false;
+
 // The parser recurses on nested parentheses, unary prefixes, assignments
 // and blocks; each recursion is counted here and capped, so a hostile
 // input overflows the C stack instead of the compiler's heap.
@@ -892,6 +897,13 @@ fn parse_comprehension(t **Token, p i64, first *Token, ft *Token) *Node {
 	// function declared below this point cannot be typed here.
 	*t = first;
 	var elem_expr *Node = parse_assign(t);
+	// `[k: v for ...]`: a map comprehension. The key is a str, the value
+	// expression follows the colon; the hidden Map is built instead of a
+	// Vec and the expression's value is the Map itself.
+	var val_expr *Node = null;
+	if (tok_consume(t, ":")) {
+		val_expr = parse_assign(t);
+	}
 	add_type(elem_expr);
 	if (elem_expr.ty.kind == TY_VOID) { error_at(np, "a comprehension element cannot be void"); }
 	// The for-clause was consumed before the element; re-walk the token
@@ -901,10 +913,21 @@ fn parse_comprehension(t **Token, p i64, first *Token, ft *Token) *Node {
 	while (!tok_eq(*t, "]")) { *t = (*t).next; }
 	tok_expect(t, "]");
 
-	// The hidden Vec carries the element type.
+	// The hidden Vec (or Map) carries the element type.
 	var tm *Tmpl = tmpl_find("Vec");
 	if (tm as i64 == 0) { error_at(p, "a comprehension needs 'import std/vec.qela'"); }
-	var vty *Type = generic_instance(tm, elem_expr.ty, null);
+	var vty *Type = null;
+	if (val_expr as i64 == 0) {
+		vty = generic_instance(tm, elem_expr.ty, null);
+	} else {
+		add_type(val_expr);
+		if (elem_expr.ty as i64 != type_str() as i64) {
+			error_at(np, "a map comprehension's key must be a string");
+		}
+		var mt *Tmpl = tmpl_find("Map");
+		if (mt as i64 == 0) { error_at(p, "a map comprehension needs 'import std/map.qela'"); }
+		vty = generic_instance(mt, val_expr.ty, null);
+	}
 	var vv *Var = declare_var(hidden_name("v"), vty, np);
 
 	var chain_head Node;
@@ -935,16 +958,24 @@ fn parse_comprehension(t **Token, p i64, first *Token, ft *Token) *Node {
 		collref = cr;
 	}
 
-	// The push call: vec_push(&_$v, elem_expr).
+	// The push call: vec_push(&_$v, elem_expr), or map_put(&_$m, k, v)
+	// for a map comprehension.
 	var pv *Node = new_node(ND_ADDR, np);
 	var pvv *Node = new_node(ND_VAR, np);
 	pvv.varp = vv;
 	pv.lhs = pvv;
 	var pc *Node = new_node(ND_CALL, np);
-	pc.name = "vec_push";
 	pc.args = pv;
-	pv.next = elem_expr;
-	pc.nargs = 2;
+	if (val_expr as i64 == 0) {
+		pc.name = "vec_push";
+		pv.next = elem_expr;
+		pc.nargs = 2;
+	} else {
+		pc.name = "map_put";
+		pv.next = elem_expr;
+		elem_expr.next = val_expr;
+		pc.nargs = 3;
+	}
 	var pstmt *Node = new_node(ND_EXPRSTMT, np);
 	pstmt.lhs = pc;
 
@@ -1012,8 +1043,25 @@ fn parse_comprehension(t **Token, p i64, first *Token, ft *Token) *Node {
 
 	var n *Node = new_node(ND_ARRCOMP, p);
 	n.init = chain_head.next;
-	n.lhs = vc;
-	n.ty = type_slice(elem);
+	if (val_expr as i64 == 0) {
+		var vv2 *Node = new_node(ND_VAR, np);
+		vv2.varp = vv;
+		var av *Node = new_node(ND_ADDR, np);
+		av.lhs = vv2;
+		var vc *Node = new_node(ND_CALL, np);
+		vc.name = "vec_view";
+		vc.args = av;
+		vc.nargs = 1;
+		n.lhs = vc;
+		n.ty = type_slice(elem_expr.ty);
+	} else {
+		// A map comprehension's value is the Map itself (24 bytes, one
+		// struct copy).
+		var mv *Node = new_node(ND_VAR, np);
+		mv.varp = vv;
+		n.lhs = mv;
+		n.ty = vty;
+	}
 	return n;
 }
 
@@ -1160,9 +1208,40 @@ fn parse_primary(t **Token) *Node {
 			tok_expect(t, "{");
 			var ep *Node = new_node(ND_STRPART, (*t).pos);
 			ep.val = 0;
+			var es i64 = (*t).pos;
+			in_interp = true;
 			ep.lhs = parse_assign(t);
+			in_interp = false;
 			if ((*t).kind == TK_FMTSPEC) {
-				ep.name = (*t).text;
+				if (str_eq((*t).text, "=")) {
+					// `${x=}`: the expression's source text becomes a
+					// literal part before the value, so the output reads
+					// "x=5". The span runs from the expression's first
+					// token to the '=' token, trimmed of surrounding
+					// whitespace.
+					var eqpos i64 = (*t).pos;
+					var fid int = diag_file_of(es);
+					var src str = diag_src_of(fid);
+					var a i64 = diag_offset_of(es);
+					var b i64 = diag_offset_of(eqpos);
+					while (a < b && src.ptr[a] == ' ') { a = a + 1; }
+					while (b > a && src.ptr[b - 1] == ' ') { b = b - 1; }
+					var nm str;
+					nm.ptr = src.ptr + a;
+					nm.len = b - a;
+					var nb Buf;
+					fmt_str(&nb, nm);
+					fmt_str(&nb, "=");
+					var name_part *Node = new_node(ND_STRPART, (*t).pos);
+					name_part.val = 1;
+					var nl *Node = new_node(ND_STRLIT, (*t).pos);
+					nl.val = add_str(buf_str(&nb)) as i64;
+					name_part.lhs = nl;
+					ftail.next = name_part;
+					ftail = name_part;
+				} else {
+					ep.name = (*t).text;
+				}
 				*t = (*t).next;
 			}
 			ftail.next = ep;
@@ -1619,7 +1698,23 @@ fn parse_chain(t **Token, pos i64, n *Node, op1 int, mid *Node) *Node {
 // slice scan becomes a hidden loop on an ND_IN node: the chain in `.init`
 // zeroes the result, hoists the collection and runs the scan, `.lhs` is
 // the result variable.
-fn parse_in_expr(lhs *Node, coll *Node, pos i64, neg bool) *Node {
+fn parse_in_expr(t **Token, lhs *Node, coll *Node, pos i64, neg bool) *Node {
+	// `x in lo..hi`: range membership, lo <= x < hi. The lhs is hoisted
+	// like a chained-comparison middle, so it evaluates exactly once.
+	if (tok_consume(t, "..")) {
+		var hi *Node = parse_add(t);
+		var rd *Node = null;
+		var xref *Node = chain_hoist_mid(lhs, pos, &rd);
+		var lo_cmp *Node = rel_cmp_node(ND_LE, coll, xref, pos);
+		var hi_cmp *Node = rel_cmp_node(ND_LT, rd, hi, pos);
+		var and *Node = bin_node(ND_AND, lo_cmp, hi_cmp, pos);
+		if (neg) {
+			var nn *Node = new_node(ND_NOT, pos);
+			nn.lhs = and;
+			return nn;
+		}
+		return and;
+	}
 	add_type(coll);
 	var cty *Type = coll.ty;
 	if (cty.kind == TY_PTR) { cty = cty.base; }
@@ -1734,7 +1829,21 @@ fn parse_in_expr(lhs *Node, coll *Node, pos i64, neg bool) *Node {
 		var i3 *Node = new_node(ND_VAR, pos);
 		i3.varp = iv;
 		var idx *Node = bin_node(ND_INDEX, collref, i3, pos);
-		var eq *Node = bin_node(ND_EQ, lref, idx, pos);
+		var eq *Node = null;
+		if (cty.base.kind == TY_SLICE && cty.base.base as i64 == ty_u8 as i64) {
+			// A []str element: strings cannot compare with ==, so the
+			// scan uses str_eq.
+			var c *Node = new_node(ND_CALL, pos);
+			c.name = "str_eq";
+			c.args = lref;
+			lref.next = idx;
+			c.nargs = 2;
+			eq = c;
+		} else if (is_aggregate(cty.base)) {
+			error_at(pos, "'in' cannot test membership of aggregate elements");
+		} else {
+			eq = bin_node(ND_EQ, lref, idx, pos);
+		}
 		var ifn *Node = new_node(ND_IF, pos);
 		ifn.cond = eq;
 		var bhead Node;
@@ -1779,10 +1888,10 @@ fn parse_rel(t **Token) *Node {
 	var p i64 = (*t).pos;
 	var op int = rel_op_take(t);
 	if (op == 0) {
-		if (tok_consume(t, "in")) { return parse_in_expr(n, parse_add(t), p, false); }
+		if (tok_consume(t, "in")) { return parse_in_expr(t, n, parse_add(t), p, false); }
 		if (tok_eq(*t, "not") && tok_eq((*t).next, "in")) {
 			*t = (*t).next.next;
-			return parse_in_expr(n, parse_add(t), p, true);
+			return parse_in_expr(t, n, parse_add(t), p, true);
 		}
 		return n;
 	}
@@ -1835,7 +1944,7 @@ fn parse_assign(t **Token) *Node {
 fn parse_assign_inner(t **Token) *Node {
 	var n *Node = parse_logor(t);
 	var p i64 = (*t).pos;
-	if (tok_consume(t, "=")) {
+	if (!in_interp && tok_consume(t, "=")) {
 		return bin_node(ND_ASSIGN, n, parse_assign(t), p);
 	}
 	if (tok_eq(*t, "<-")) {

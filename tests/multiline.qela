@@ -1,0 +1,25 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: a
+// expect-out: b
+// expect-out: c-5-2
+// """...""" is a raw multi-line string: newlines verbatim, no escapes,
+// no interpolation; the length counts the newlines.
+import "std/fmt.qela";
+
+fn main() int {
+	var s str = """a
+b
+c""";
+	var o = fmt_begin();
+	o = fmt_put_str(o, s);
+	o = fmt_put_str(o, "-");
+	o = fmt_put_i64(o, s.len);
+	o = fmt_put_str(o, "-");
+	var t i64 = 0;
+	for ch in s { if (ch == '\n') { t = t + 1; } }
+	o = fmt_put_i64(o, t);
+	var r = fmt_result(o);
+	sys_write(1, r.ptr, r.len);
+	return 0;
+}
