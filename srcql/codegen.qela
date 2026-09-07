@@ -909,8 +909,8 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) {
 	var ai int = 0;
 
 	if (hidden >= 0) {
-		lea_local(RAX, hidden);
-		push_reg(RAX);
+		ir_lea_slot_acc(hidden, n.pos);
+		ir_push_acc(n.pos);
 		if (sys) { dest[nd] = sys_reg(ri); } else { dest[nd] = call_reg(ri); }
 		src[nd] = 0;
 		nd = nd + 1;
@@ -935,16 +935,13 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) {
 		ai = ai + 1;
 		gen_expr(a);
 		if (by_ref_ty(a.ty)) {
-			mov_reg_reg(RSI, RAX);
-			lea_local(RDI, a.tmp.offset as i64);
-			copy_rsi_rdi(a.ty.size);
-			lea_local(RAX, a.tmp.offset as i64);
+			ir_memcpy_dst(a.tmp.offset as i64, a.ty.size as i64, a.pos);
 			if (a.stack_tmp as i64 != 0) {
-				st_local(a.stack_tmp.offset as i64, RAX);
+				ir_store_stackslot_acc(a.stack_tmp.offset as i64, type_ptr(ty_i64), a.pos);
 				a = a.next;
 				continue;
 			}
-			push_reg(RAX);
+			ir_push_acc(a.pos);
 			if (sys) { dest[nd] = sys_reg(ri); } else { dest[nd] = call_reg(ri); }
 			src[nd] = 0;
 			nd = nd + 1;
@@ -959,7 +956,7 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) {
 				a = a.next;
 				continue;
 			}
-			push_at_rax(0);
+			ir_push_at_acc(0, a.pos);
 			if (first_in_rax && nd == 0) {
 				dest[nd] = RAX;
 			} else {
@@ -969,7 +966,7 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) {
 			src[nd] = 0;
 			nd = nd + 1;
 			if (a.ty.size > 8) {
-				push_at_rax(8);
+				ir_push_at_acc(8, a.pos);
 				if (sys) { dest[nd] = sys_reg(ri); } else { dest[nd] = call_reg(ri); }
 				src[nd] = 0;
 				nd = nd + 1;
@@ -977,11 +974,11 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) {
 			}
 		} else {
 			if (a.stack_tmp as i64 != 0) {
-				st_local(a.stack_tmp.offset as i64, RAX);
+				ir_store_stackslot_acc(a.stack_tmp.offset as i64, a.ty, a.pos);
 				a = a.next;
 				continue;
 			}
-			push_reg(RAX);
+			ir_push_acc(a.pos);
 			if (marshall && is_float(a.ty)) {
 				fmm[nd] = xi;
 				fsz[nd] = a.ty.size;
@@ -1001,10 +998,10 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) {
 	while (nd > 0) {
 		nd = nd - 1;
 		if (fmm[nd] >= 0) {
-			pop_reg(RAX);
+			ir_pop_acc(n.pos);
 			gpr_to_xmm(fmm[nd], RAX, fsz[nd]);
 		} else if (src[nd] == 0) {
-			pop_reg(dest[nd]);
+			ir_pop_reg(dest[nd], n.pos);
 		} else {
 			var sn *Node = src[nd] as *Node;
 			if (!gen_into(sn, dest[nd])) {
@@ -1041,8 +1038,8 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) {
 			oi = oi - 1;
 			var oa *Node = av[oi] as *Node;
 			if (oa.stack_tmp as i64 != 0) {
-				ld_local(RAX, oa.stack_tmp.offset as i64);
-				push_reg(RAX);
+				ir_load_var(oa.stack_tmp, type_ptr(ty_i64), oa.pos);
+				ir_push_acc(oa.pos);
 			}
 		}
 	}
@@ -2244,6 +2241,25 @@ fn x86_lower_op(op *IrOp) {
 		b1(0x50 + ((r as i64) & 7));
 		return;
 	}
+	if (op.kind == IR_PUSH && op.src0.kind == OP_MEM) {
+		// push [rax + off] -- gen_args' two-word aggregate staging,
+		// push_at_rax replayed. The base is always the accumulator.
+		b1(0xff);
+		if (op.src0.off == 0) { modrm(0, 6, RAX); }
+		else { modrm(1, 6, RAX); b1(op.src0.off); }
+		return;
+	}
+	if (op.kind == IR_MEMCPYDST) {
+		// gen_args' by-ref argument copy: mov rsi,rax; lea rdi,[rbp-off];
+		// mov rcx,aux; rep movsb; lea rax,[rbp-off]. The dst slot is the
+		// destination buffer itself, not a pointer to one.
+		mov_reg_reg(RSI, RAX);
+		lea_local(RDI, op.dst.off);
+		mov_reg_imm(RCX, op.aux);
+		b1(0xf3); b1(0xa4);
+		lea_local(RAX, op.dst.off);
+		return;
+	}
 	if (op.kind == IR_MEMCPY && op.dst.kind == OP_NONE) {
 		// copy_aggregate's protocol, replayed byte for byte: pop the
 		// destination from the staging stack, copy aux bytes from [rax] to
@@ -2851,6 +2867,25 @@ fn ir_push_op2(pos i64) {
 	var op *IrOp = ir_emit(IR_PUSH, pos);
 	op.src0 = operand_op2(0);
 	depth = depth + 1;
+	x86_lower_all();
+}
+
+// push [rax + off] -- a two-word aggregate argument's word, staged whole.
+fn ir_push_at_acc(off i64, pos i64) {
+	var op *IrOp = ir_emit(IR_PUSH, pos);
+	op.src0 = operand_mem(off, 0 as *Type);
+	depth = depth + 1;
+	x86_lower_all();
+}
+
+// gen_args' by-ref argument staging: copy <size> bytes from the address in the
+// accumulator to the frame slot at <off>, leaving the slot's address in the
+// accumulator (the by-value pointer argument).
+fn ir_memcpy_dst(off i64, size i64, pos i64) {
+	var op *IrOp = ir_emit(IR_MEMCPYDST, pos);
+	op.dst = operand_stackslot(off, 0 as *Type);
+	op.src0 = operand_acc();
+	op.aux = size;
 	x86_lower_all();
 }
 
