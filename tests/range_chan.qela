@@ -1,0 +1,84 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: 0,10,20,30,40,
+// expect-out: rc-ok
+// `for x in ch` over a channel: receive until the channel is closed and
+// drained -- Go's `for v := range ch`. A closed empty channel iterates
+// zero times, zero values are real values, break stops the range early,
+// continue skips to the next value, and a rendezvous (cap 0) channel
+// blocks per handoff. Works over a Chan(T) value, a *Chan(T) variable and
+// a function returning one.
+import "std/chan.qela";
+import "std/io.qela";
+import "std/fmt.qela";
+
+var ch Chan(i64);
+var rv Chan(i64);
+var empty Chan(i64);
+
+fn get_chan() *Chan(i64) { return &ch; }
+
+fn producer() {
+	var i i64 = 0;
+	while (i < 5) { ch <- i * 10; i = i + 1; }
+	chan_close(&ch);
+}
+
+fn rv_sender() { rv <- 7; rv <- 8; chan_close(&rv); }
+
+fn main() int {
+	// Empty closed channel: the body never runs.
+	chan_init(&empty, 1);
+	chan_close(&empty);
+	var n i64 = 0;
+	for x in empty { n = n + 1; }
+	if (n != 0) { return 1; }
+	// Producer coroutine fills the channel; the range drains it. The
+	// first value is a real zero, not the drained marker.
+	chan_init(&ch, 2);
+	spawn producer();
+	var s Buf;
+	for x in ch {
+		fmt_i64(&s, x);
+		fmt_str(&s, ",");
+	}
+	if (!str_eq(buf_str(&s), "0,10,20,30,40,")) { return 2; }
+	// Channel from a function returning *Chan(T); zero is a real value.
+	chan_init(&ch, 2);
+	ch <- 0; ch <- 1; chan_close(&ch);
+	var sum i64 = 0;
+	for x in get_chan() { sum = sum + x; }
+	if (sum != 1) { return 3; }
+	// break stops the range early.
+	chan_init(&ch, 3);
+	ch <- 0; ch <- 1; ch <- 2; chan_close(&ch);
+	var got i64 = 0;
+	for x in &ch {
+		if (x == 1) { break; }
+		got = got + 1;
+	}
+	if (got != 1) { return 4; }
+	// continue skips to the next value.
+	chan_init(&ch, 3);
+	ch <- 1; ch <- 2; ch <- 3; chan_close(&ch);
+	var sum2 i64 = 0;
+	for x in ch {
+		if ((x & 1) != 0) { continue; }
+		sum2 = sum2 + x;
+	}
+	if (sum2 != 2) { return 5; }
+	// Rendezvous (cap 0): the range blocks per handoff.
+	chan_init(&rv, 0);
+	spawn rv_sender();
+	var rn i64 = 0;
+	var rs i64 = 0;
+	for x in rv {
+		rs = rs + x;
+		rn = rn + 1;
+	}
+	if (rn != 2 || rs != 15) { return 6; }
+	print(buf_str(&s));
+	print("\n");
+	print("rc-ok\n");
+	return 0;
+}
