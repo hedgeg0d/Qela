@@ -1,0 +1,21 @@
+// expect-exit: 0
+// expect-out: sizeof ok
+// stage1-only
+import "std/io.qela";
+struct Pair { x i64, y i64 }
+struct Big { a i64, b i64, c i64 }
+fn main() int {
+	var fails i64 = 0;
+	if (sizeof(i8) != 1) { fails = fails + 1; }
+	if (sizeof(i64) != 8) { fails = fails + 1; }
+	if (sizeof(int) != 8) { fails = fails + 1; }
+	if (sizeof(bool) != 1) { fails = fails + 1; }
+	if (sizeof(f64) != 8) { fails = fails + 1; }
+	if (sizeof(Pair) != 16) { fails = fails + 1; }
+	if (sizeof(Big) != 24) { fails = fails + 1; }
+	if (sizeof(*u8) != 8) { fails = fails + 1; }
+	if (sizeof([4]i64) != 32) { fails = fails + 1; }
+	if (sizeof([3]i8) != 3) { fails = fails + 1; }
+	if (fails == 0) { write_str(STDOUT, "sizeof ok\n"); }
+	return fails as int;
+}

@@ -1,0 +1,30 @@
+// expect-exit: 0
+// expect-out: comma ok
+// stage1-only
+// The comma operator evaluates left to right and yields the right side's
+// value; it chains, and it nests inside call arguments and conditions.
+import "std/io.qela";
+
+fn sink(a i64) i64 { return a; }
+
+fn main() int {
+	var fails i64 = 0;
+	var x i64 = 0;
+	var y i64 = (x = 3, x + 1);
+	if (x != 3 || y != 4) { fails = fails + 1; }
+	var z i64 = (1, 2, 3, 4);
+	if (z != 4) { fails = fails + 1; }
+	if (sink((x = 7, x * 2)) != 14) { fails = fails + 1; }
+	var w i64 = 0;
+	if ((w = 5, w > 3, w == 5)) { fails = fails + 0; } else { fails = fails + 1; }
+	if ((w = 1, false)) { fails = fails + 1; }
+	var a i64 = 0;
+	var b i64 = (a = 2, (a = a + 1, a * 10));
+	if (a != 3 || b != 30) { fails = fails + 1; }
+	var t i64 = 0;
+	var i i64 = 0;
+	while ((t = t + 1, t < 5)) { i = i + 1; }
+	if (i != 4 || t != 5) { fails = fails + 1; }
+	if (fails == 0) { write_str(STDOUT, "comma ok\n"); }
+	return fails as int;
+}
