@@ -424,6 +424,48 @@ fn arm64_gen_panic_stub(msg_id int, msg_len i64) {
 }
 
 
+// LDR Xt, [Xn, #off] -- unsigned scaled offset, off assumed a small
+// non-negative multiple of 8 (the two-word aggregate protocol only ever
+// uses 0 or 8).
+fn arm64_ld_at(rt int, rn int, off i64) {
+	b4(0xf9400000 | ((off / 8) << 10) | (rn << 5) | rt);
+}
+
+
+fn arm64_str_off(rt int, rn int, off i64) {
+	b4(0xf9000000 | ((off / 8) << 10) | (rn << 5) | rt);
+}
+
+fn arm64_ldrb_off(rt int, rn int, off i64) {
+	b4(0x39400000 | (off << 10) | (rn << 5) | rt);
+}
+
+fn arm64_strb_off(rt int, rn int, off i64) {
+	b4(0x39000000 | (off << 10) | (rn << 5) | rt);
+}
+
+// Copy a compile-time-constant number of bytes from [src] to [dst], both
+// plain address registers (never X9, the scratch this uses to move each
+// chunk). x86 has `rep movsb` for this; A64 doesn't, but every aggregate
+// copy here has a size known at compile time, so unrolling into straight
+// LDR/STR (8 bytes at a time, then a byte tail) is simpler than emitting a
+// runtime loop and never worse for the small struct/array sizes qela's
+// aggregates actually have.
+fn arm64_memcpy(dst int, src int, size i64) {
+	var i i64 = 0;
+	while (i + 8 <= size) {
+		arm64_ld_at(X9, src, i);
+		arm64_str_off(X9, dst, i);
+		i = i + 8;
+	}
+	while (i < size) {
+		arm64_ldrb_off(X9, src, i);
+		arm64_strb_off(X9, dst, i);
+		i = i + 1;
+	}
+}
+
+
 fn arm64_lower_op(op *IrOp) {
 	if (op.kind == IR_MOV && op.dst.kind == OP_ACC && op.src0.kind == OP_IMM) {
 		arm64_mov_imm64(X0, op.src0.off);
@@ -460,6 +502,48 @@ fn arm64_lower_op(op *IrOp) {
 		// `f(n - 1)`), in place in its call-arg register.
 		arm64_mov_imm64(X9, op.src1.off);
 		arm64_alu_reg(op.aux, op.dst.reg, op.src0.reg, X9);
+		return;
+	}
+	if (op.kind == IR_MEMCPY && op.dst.kind == OP_NONE) {
+		// copy_aggregate's protocol: pop the destination from the staging
+		// stack, copy aux bytes from [X0] to it, leave the destination
+		// address in X0 as the result.
+		arm64_pop(X2);
+		arm64_memcpy(X2, X0, op.aux);
+		arm64_mov_reg(X0, X2);
+		return;
+	}
+	if (op.kind == IR_MEMCPY && op.dst.kind == OP_STACKSLOT) {
+		// gen_ret's ret_slot copy: copy aux bytes from [X0] to the pointer
+		// *stored in* the slot (not the slot's own address), then leave
+		// that pointer as the return value.
+		arm64_mov_reg(X2, X0);
+		arm64_ld_local(X0, op.dst.off);
+		arm64_memcpy(X0, X2, op.aux);
+		return;
+	}
+	if (op.kind == IR_MEMCPYDST) {
+		// gen_args' by-ref argument copy: copy aux bytes from [X0] into the
+		// local slot at dst.off, leave that slot's address in X0.
+		arm64_mov_reg(X2, X0);
+		arm64_sub_imm(X0, X29, op.dst.off);
+		arm64_memcpy(X0, X2, op.aux);
+		return;
+	}
+	if (op.kind == IR_LOAD2) {
+		// gen_ret's register-returned aggregate: word 1 first (into X1, the
+		// second-value register), so X0 still holds the base address while
+		// it's read; word 0 last, into X0 itself.
+		if (op.aux > 8) { arm64_ld_at(X1, X0, 8); }
+		arm64_ld_at(X0, X0, 0);
+		return;
+	}
+	if (op.kind == IR_STORE2) {
+		// gen_call/gen_indirect_call's result staging: spill both words to
+		// the temp slot, hand back its address as the aggregate's lvalue.
+		arm64_st_local(op.dst.off, X0);
+		if (op.aux > 8) { arm64_st_local(op.dst.off - 8, X1); }
+		arm64_sub_imm(X0, X29, op.dst.off);
 		return;
 	}
 	if (op.kind == IR_RET) {
@@ -547,12 +631,26 @@ fn arm64_lower_op(op *IrOp) {
 		arm64_push(op2_reg(op.src0.reg));
 		return;
 	}
+	if (op.kind == IR_PUSH && op.src0.kind == OP_MEM) {
+		// gen_args' two-word aggregate staging: push [X0 + off].
+		arm64_ld_at(X9, X0, op.src0.off);
+		arm64_push(X9);
+		return;
+	}
 	if (op.kind == IR_POP && op.dst.kind == OP_ACC) {
 		arm64_pop(X0);
 		return;
 	}
 	if (op.kind == IR_POP && op.dst.kind == OP_OP2) {
 		arm64_pop(op2_reg(op.dst.reg));
+		return;
+	}
+	if (op.kind == IR_POP && op.dst.kind == OP_REG) {
+		arm64_pop(op.dst.reg);
+		return;
+	}
+	if (op.kind == IR_PUSH && op.src0.kind == OP_REG) {
+		arm64_push(op.src0.reg);
 		return;
 	}
 	if (op.kind == IR_ALU && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC && op.src1.kind == OP_OP2) {
