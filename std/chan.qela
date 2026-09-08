@@ -23,10 +23,18 @@ struct Chan(T) {
 	lock    i64,
 }
 
-var chan_nblocked int = 0;
+// The stall/deadlock heuristic below only means anything measured against
+// a single scheduler: coro_live() counts one thread's own coroutines, so
+// the blocked-count and stall counter comparing against it have to be
+// per-thread too, or one pool thread's blocked coroutines look like
+// deadlock through the lens of another thread's much smaller coro_live().
+// The epoch stays global and shared: progress made by any thread on any
+// channel is real progress, and every field it is compared against here
+// is scoped to the same thread that reads it.
+tvar chan_nblocked int = 0;
 var chan_epoch i64 = 0;
-var chan_stall int = 0;
-var chan_stall_epoch i64 = -1;
+tvar chan_stall int = 0;
+tvar chan_stall_epoch i64 = -1;
 
 fn chan_init(comptime T: type, c *Chan(T), cap i64) {
 	if (cap < 1) { cap = 0; }
@@ -60,6 +68,16 @@ fn chan_close(comptime T: type, c *Chan(T)) {
 	atomic_add(&chan_epoch, 1);
 }
 
+// Set to false once a real thread pool exists (thread_pool_init does
+// this). The epoch-stall heuristic below assumes that if nothing on this
+// thread's own scheduler can make progress, nothing anywhere can -- true
+// for one cooperative scheduler, false the moment other OS threads are
+// also running coroutines against the same channel: another thread being
+// slow to get scheduled looks identical to real deadlock from here, and
+// unlike the coro_live()==0 case there is no way to tell them apart
+// without the scheduler knowing about other threads, which it doesn't.
+var chan_deadlock_check bool = true;
+
 fn chan_die(what str) {
 	eprint("qela: deadlock, every coroutine is blocked on a channel ");
 	eprint(what);
@@ -75,7 +93,10 @@ fn chan_die(what str) {
 // deadlock detection needs the scheduler to know about other threads,
 // which it does not yet (that lands with the per-thread scheduler work).
 fn chan_block(what str) {
-	if (coro_live() == 0) { fence(); return; }
+	if (!chan_deadlock_check || coro_live() == 0) {
+		if (!coro_yield()) { fence(); }
+		return;
+	}
 	chan_nblocked = chan_nblocked + 1;
 	if (chan_nblocked >= coro_live()) {
 		if (chan_epoch == chan_stall_epoch) {
