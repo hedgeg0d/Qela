@@ -1,0 +1,36 @@
+// stage1-only
+// expect-exit: 42
+// A parked coroutine keeps roots on its own stack: gc_collect must scan
+// every live coroutine, not just the one currently running.
+import "std/coro.qela";
+import "std/gc.qela";
+
+struct Node { val i64, }
+
+var ok bool = false;
+
+fn worker() {
+	var n *Node = gc_alloc(sizeof(Node)) as *Node;
+	n.val = 77;
+	coro_yield();
+	// Resumed after main forced a collection while this stack was parked.
+	if (n.val == 77) { ok = true; }
+}
+
+fn main() int {
+	spawn worker();
+	coro_yield();
+
+	var i i64 = 0;
+	while (i < 4000) { var junk *u8 = gc_alloc(64); junk[0] = 1; i = i + 1; }
+	gc_collect();
+
+	// If the node's block wasn't kept live, it landed on the freelist and
+	// this reuses it, overwriting the bytes worker still points at.
+	var reuse *Node = gc_alloc(sizeof(Node)) as *Node;
+	reuse.val = 99;
+
+	coro_run_all();
+	if (!ok) { return 1; }
+	return 42;
+}
