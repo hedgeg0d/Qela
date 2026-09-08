@@ -1122,31 +1122,24 @@ fn float_cc_neutral(n *Node) i64 {
 }
 
 fn gen_binop_float(n *Node) {
-	var sz int = n.lhs.ty.size;
-	var dprefix i64 = 0xf2;
-	if (sz == 4) { dprefix = 0xf3; }
-	xmm_from_gpr(XMM0, RAX, sz);
-	xmm_from_gpr(XMM1, RDI, sz);
 	var k int = n.kind;
-	if (k == ND_ADD) { sse2(dprefix, 0x58, XMM0, XMM1); gpr_from_xmm(RAX, XMM0, sz); return; }
-	if (k == ND_SUB) { sse2(dprefix, 0x5c, XMM0, XMM1); gpr_from_xmm(RAX, XMM0, sz); return; }
-	if (k == ND_MUL) { sse2(dprefix, 0x59, XMM0, XMM1); gpr_from_xmm(RAX, XMM0, sz); return; }
-	if (k == ND_DIV) { sse2(dprefix, 0x5e, XMM0, XMM1); gpr_from_xmm(RAX, XMM0, sz); return; }
+	if (k == ND_ADD) { ir_alu_acc(ALU_FADD, n.ty, n.pos); return; }
+	if (k == ND_SUB) { ir_alu_acc(ALU_FSUB, n.ty, n.pos); return; }
+	if (k == ND_MUL) { ir_alu_acc(ALU_FMUL, n.ty, n.pos); return; }
+	if (k == ND_DIV) { ir_alu_acc(ALU_FDIV, n.ty, n.pos); return; }
 	if (k == ND_EQ || k == ND_NE || k == ND_LT || k == ND_LE) {
-		var cprefix i64 = 0x66;
-		if (sz == 4) { cprefix = 0; }
-		sse2(cprefix, 0x2e, XMM0, XMM1);
+		ir_cmp_op2_acc_float(n.lhs.ty, n.pos);
 		ir_setcc_acc(float_cc_neutral(n), n.pos);
 		return;
 	}
 	error_at(n.pos, "operator not defined for floats");
 }
 
-fn gen_neg_float(sz int) {
+fn gen_neg_float(sz int, pos i64) {
 	var mask i64 = 0x8000000000000000;
 	if (sz == 4) { mask = 0x80000000; }
-	mov_reg_imm(RDI, mask);
-	rex_w(RDI, RAX); b1(0x31); modrm(3, RDI, RAX);
+	ir_mov_op2_imm(mask, pos);
+	ir_alu_acc(ALU_XOR, type_ptr(ty_i64), pos);
 }
 
 fn cvt2(prefix i64, opcode i64, dst int, src int, w bool) {
@@ -1163,24 +1156,12 @@ fn gen_cast_float(n *Node) {
 	var dt *Type = n.ty;
 	if (is_float(st) && is_float(dt)) {
 		if (st.size == dt.size) { return; }
-		xmm_from_gpr(XMM0, RAX, st.size);
-		if (st.size == 4) { cvt2(0xf3, 0x5a, XMM0, XMM0, false); }
-		else { cvt2(0xf2, 0x5a, XMM0, XMM0, false); }
-		gpr_from_xmm(RAX, XMM0, dt.size);
+		if (st.size == 4) { ir_cast_float(CAST_FEXT, st, dt, n.pos); }
+		else { ir_cast_float(CAST_FTRUNC, st, dt, n.pos); }
 		return;
 	}
-	if (is_float(dt)) {
-		var prefix i64 = 0xf2;
-		if (dt.size == 4) { prefix = 0xf3; }
-		cvt2(prefix, 0x2a, XMM0, RAX, true);
-		gpr_from_xmm(RAX, XMM0, dt.size);
-		return;
-	}
-	var prefix2 i64 = 0xf2;
-	if (st.size == 4) { prefix2 = 0xf3; }
-	xmm_from_gpr(XMM0, RAX, st.size);
-	cvt2(prefix2, 0x2c, RAX, XMM0, true);
-	if (dt.size < 8) { truncate_to(dt); }
+	if (is_float(dt)) { ir_cast_float(CAST_ITOF, st, dt, n.pos); return; }
+	ir_cast_float(CAST_FTOI, st, dt, n.pos);
 }
 
 fn cc_for_compare(n *Node) i64 {
@@ -1852,15 +1833,10 @@ fn gen_compare(n *Node) i64 {
 	var lt *Type = n.lhs.ty;
 	if (is_float(lt)) {
 		gen_expr(n.rhs);
-		push_reg(RAX);
+		ir_push_acc(n.pos);
 		gen_expr(n.lhs);
-		pop_reg(RDI);
-		var sz int = lt.size;
-		xmm_from_gpr(XMM0, RAX, sz);
-		xmm_from_gpr(XMM1, RDI, sz);
-		var cprefix i64 = 0x66;
-		if (sz == 4) { cprefix = 0; }
-		sse2(cprefix, 0x2e, XMM0, XMM1);
+		ir_pop_op2(n.pos);
+		ir_cmp_op2_acc_float(lt, n.pos);
 		return float_cc_neutral(n);
 	}
 	// Equality survives a widening cast, so the load under it can be compared
@@ -2168,6 +2144,10 @@ fn x86_lower_op(op *IrOp) {
 		mov_reg_reg(op2_reg(op.dst.reg), RAX);
 		return;
 	}
+	if (op.kind == IR_MOV && op.dst.kind == OP_OP2 && op.src0.kind == OP_IMM) {
+		mov_reg_imm(op2_reg(op.dst.reg), op.src0.off);
+		return;
+	}
 	if (op.kind == IR_LOAD && op.dst.kind == OP_ACC && op.src0.kind == OP_STACKSLOT) {
 		// Same bytes as ld_rm's frame-slot path: an unconditional 8-byte
 		// mov from the local's home (direct_local guarantees machine width).
@@ -2192,6 +2172,31 @@ fn x86_lower_op(op *IrOp) {
 	if (op.kind == IR_CAST && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC) {
 		if (op.aux == CAST_BOOL) { test_rax(); setcc(0x95); return; }
 		if (op.aux == CAST_TRUNC) { truncate_to(op.dst.ty); return; }
+		if (op.aux == CAST_FTRUNC || op.aux == CAST_FEXT) {
+			// f32<->f64, gen_cast_float's first branch: the source size
+			// decides the cvt opcode, the destination size the move-out.
+			var stsz int = op.src0.ty.size;
+			xmm_from_gpr(XMM0, RAX, stsz);
+			if (stsz == 4) { cvt2(0xf3, 0x5a, XMM0, XMM0, false); }
+			else { cvt2(0xf2, 0x5a, XMM0, XMM0, false); }
+			gpr_from_xmm(RAX, XMM0, op.dst.ty.size);
+			return;
+		}
+		if (op.aux == CAST_ITOF) {
+			var dprefix i64 = 0xf2;
+			if (op.dst.ty.size == 4) { dprefix = 0xf3; }
+			cvt2(dprefix, 0x2a, XMM0, RAX, true);
+			gpr_from_xmm(RAX, XMM0, op.dst.ty.size);
+			return;
+		}
+		if (op.aux == CAST_FTOI) {
+			var prefix2 i64 = 0xf2;
+			if (op.src0.ty.size == 4) { prefix2 = 0xf3; }
+			xmm_from_gpr(XMM0, RAX, op.src0.ty.size);
+			cvt2(prefix2, 0x2c, RAX, XMM0, true);
+			if (op.dst.ty.size < 8) { truncate_to(op.dst.ty); }
+			return;
+		}
 	}
 	if (op.kind == IR_STORE && op.dst.kind == OP_ACC && op.src0.kind == OP_IMM) {
 		store_imm(op.dst.ty, op.src0.off);
@@ -2313,6 +2318,22 @@ fn x86_lower_op(op *IrOp) {
 	if (op.kind == IR_ALU && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC && op.src1.kind == OP_OP2) {
 		var uns bool = op.dst.ty.is_unsigned;
 		var op2 int = op2_reg(op.src1.reg);
+		if (op.aux == ALU_FADD || op.aux == ALU_FSUB || op.aux == ALU_FMUL || op.aux == ALU_FDIV) {
+			// gen_binop_float's SSE round trip: bits ride rax/op2, the op
+			// happens in xmm0, the result lands back in rax.
+			var sz int = op.dst.ty.size;
+			var dprefix i64 = 0xf2;
+			if (sz == 4) { dprefix = 0xf3; }
+			xmm_from_gpr(XMM0, RAX, sz);
+			xmm_from_gpr(XMM1, op2, sz);
+			var opcode i64 = 0x58;
+			if (op.aux == ALU_FSUB) { opcode = 0x5c; }
+			if (op.aux == ALU_FMUL) { opcode = 0x59; }
+			if (op.aux == ALU_FDIV) { opcode = 0x5e; }
+			sse2(dprefix, opcode, XMM0, XMM1);
+			gpr_from_xmm(RAX, XMM0, sz);
+			return;
+		}
 		if (op.aux == ALU_ADD) { rex_w(op2, RAX); b1(0x01); modrm(3, op2, RAX); return; }
 		if (op.aux == ALU_SUB) { rex_w(op2, RAX); b1(0x29); modrm(3, op2, RAX); return; }
 		if (op.aux == ALU_MUL) { b1(0x48); b1(0x0f); b1(0xaf); modrm(3, RAX, op2); return; }
@@ -2449,6 +2470,18 @@ fn x86_lower_op(op *IrOp) {
 	}
 	if (op.kind == IR_CMP && op.src0.kind == OP_ACC && op.src1.kind == OP_OP2) {
 		var op2 int = op2_reg(op.src1.reg);
+		if (op.src0.ty as i64 != 0 && is_float(op.src0.ty)) {
+			// gen_compare's float staging: ucomisd sets the flags exactly
+			// like an unsigned compare (NaN aside), so the neutral float
+			// condition codes are the unsigned ones.
+			var sz int = op.src0.ty.size;
+			var cprefix i64 = 0x66;
+			if (sz == 4) { cprefix = 0; }
+			xmm_from_gpr(XMM0, RAX, sz);
+			xmm_from_gpr(XMM1, op2, sz);
+			sse2(cprefix, 0x2e, XMM0, XMM1);
+			return;
+		}
 		rex_w(op2, RAX);
 		b1(0x39);
 		modrm(3, op2, RAX);
@@ -3039,6 +3072,36 @@ fn ir_cmp_op2_acc(pos i64) {
 	x86_lower_all();
 }
 
+// ucomisd's compare -- the float version of the generic staging above; the
+// operand's float type makes the lowering pick the SSE path.
+fn ir_cmp_op2_acc_float(ty *Type, pos i64) {
+	var op *IrOp = ir_emit(IR_CMP, pos);
+	op.src0 = operand_acc();
+	op.src0.ty = ty;
+	op.src1 = operand_op2(0);
+	x86_lower_all();
+}
+
+// mov <op2_reg>, v -- a float negation's sign mask, staged.
+fn ir_mov_op2_imm(v i64, pos i64) {
+	var op *IrOp = ir_emit(IR_MOV, pos);
+	op.dst = operand_op2(0);
+	op.src0 = operand_imm(v);
+	x86_lower_all();
+}
+
+// A float conversion on the accumulator's bits: st (the source type) rides in
+// op.src0.ty, dt (the destination type) in op.dst.ty.
+fn ir_cast_float(ck int, st *Type, dt *Type, pos i64) {
+	var op *IrOp = ir_emit(IR_CAST, pos);
+	op.dst = operand_acc();
+	op.dst.ty = dt;
+	op.src0 = operand_acc();
+	op.src0.ty = st;
+	op.aux = ck as i64;
+	x86_lower_all();
+}
+
 // store [op2_reg], rax at ty's width (the value is in the accumulator).
 fn ir_store_op2_acc(ty *Type, pos i64) {
 	var op *IrOp = ir_emit(IR_STORE, pos);
@@ -3123,7 +3186,7 @@ fn gen_expr(n *Node) {
 	if (k == ND_COMMA) { gen_expr(n.lhs); gen_expr(n.rhs); return; }
 	if (k == ND_NEG) {
 		gen_expr(n.lhs);
-		if (is_float(n.ty)) { gen_neg_float(n.ty.size); return; }
+		if (is_float(n.ty)) { gen_neg_float(n.ty.size, n.pos); return; }
 		ir_unary_acc(UOP_NEG, n.pos);
 		return;
 	}
