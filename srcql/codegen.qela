@@ -1219,20 +1219,21 @@ fn gen_binop(n *Node) {
 
 fn gen_enumlit(n *Node) {
 	var off i64 = n.tmp.offset as i64;
-	mov_reg_imm(RAX, n.variant.tag as i64);
-	st_local(off, RAX);
+	ir_mov_acc_imm(n.variant.tag as i64, n.pos);
+	ir_store_stackslot_acc(off, ty_i64, n.pos);
 
 	var f *Member = n.variant.fields;
 	var a *Node = n.args;
 	while (a as i64 != 0) {
-		lea_local(RDI, off - (f.offset as i64));
-		push_reg(RDI);
+		ir_lea_op2_slot(off - (f.offset as i64), n.pos);
+		ir_push_op2(n.pos);
 		gen_expr(a);
-		if (is_aggregate(f.ty)) { copy_aggregate(f.ty.size); } else { store(f.ty); }
+		if (is_aggregate(f.ty)) { ir_memcpy_stage(f.ty.size as i64, n.pos); }
+		else { ir_pop_op2(n.pos); ir_store_op2_acc(f.ty, n.pos); }
 		f = f.next;
 		a = a.next;
 	}
-	lea_local(RAX, off);
+	ir_lea_slot_acc(off, n.pos);
 }
 
 fn gen_structlit(n *Node) {
@@ -1242,24 +1243,22 @@ fn gen_structlit(n *Node) {
 	while (m as i64 != 0) { nmembers = nmembers + 1; m = m.next; }
 
 	if (n.nargs < nmembers) {
-		lea_local(RDI, off);
-		mov_reg_imm(RAX, 0);
-		mov_reg_imm(RCX, n.ty.size as i64);
-		b1(0xf3); b1(0xaa);
+		ir_memset_stackslot(off, n.ty.size as i64, n.pos);
 	}
 	var a *Node = n.args;
 	while (a as i64 != 0) {
-		lea_local(RDI, off - (a.member.offset as i64));
-		push_reg(RDI);
+		ir_lea_op2_slot(off - (a.member.offset as i64), n.pos);
+		ir_push_op2(n.pos);
 		gen_expr(a.lhs);
 		if (is_aggregate(a.member.ty)) {
-			copy_aggregate(a.member.ty.size);
+			ir_memcpy_stage(a.member.ty.size as i64, n.pos);
 		} else {
-			store(a.member.ty);
+			ir_pop_op2(n.pos);
+			ir_store_op2_acc(a.member.ty, n.pos);
 		}
 		a = a.next;
 	}
-	lea_local(RAX, off);
+	ir_lea_slot_acc(off, n.pos);
 }
 
 fn gen_call(n *Node) {
@@ -2204,6 +2203,25 @@ fn x86_lower_op(op *IrOp) {
 		b1(0x50);
 		return;
 	}
+	if (op.kind == IR_PUSH && op.src0.kind == OP_OP2) {
+		var r int = op2_reg(op.src0.reg);
+		if (r >= 8) { b1(0x41); }
+		b1(0x50 + ((r as i64) & 7));
+		return;
+	}
+	if (op.kind == IR_MEMCPY) {
+		// copy_aggregate's protocol, replayed byte for byte: pop the
+		// destination from the staging stack, copy aux bytes from [rax] to
+		// it, leave the destination address in the accumulator. Emitted raw
+		// so the staging depth stays the frontend's bookkeeping.
+		b1(0x5f);                       // pop rdi (destination)
+		mov_reg_reg(RSI, RAX);          // mov rsi, rax (source)
+		b1(0x57);                       // push rdi
+		mov_reg_imm(RCX, op.aux);
+		b1(0xf3); b1(0xa4);             // rep movsb
+		b1(0x58);                       // pop rax (result = destination)
+		return;
+	}
 	if (op.kind == IR_POP && op.dst.kind == OP_ACC) {
 		b1(0x58);
 		return;
@@ -2345,6 +2363,11 @@ fn x86_lower_op(op *IrOp) {
 			add_rax_imm(op.dst.off);
 			return;
 		}
+		if (op.src0.kind == OP_STACKSLOT && op.src1.kind == OP_NONE) {
+			// A local's address (lea_local's slot form).
+			lea_local(RAX, op.src0.off);
+			return;
+		}
 		if (op.src0.kind == OP_ACC && (op.src1.kind == OP_OP2 || op.src1.kind == OP_VREG)) {
 			// Array element: rax = base + idx*scale. base is the accumulator,
 			// the index a staging register (OP2) or a promoted local.
@@ -2376,6 +2399,10 @@ fn x86_lower_op(op *IrOp) {
 			if (op.dst.off != 0) { add_rax_imm(op.dst.off); }
 			return;
 		}
+	}
+	if (op.kind == IR_LEA && op.dst.kind == OP_OP2 && op.src0.kind == OP_STACKSLOT && op.src1.kind == OP_NONE) {
+		lea_local(op2_reg(op.dst.reg), op.src0.off);
+		return;
 	}
 	if (op.kind == IR_BR) {
 		var label i64 = op.dst.off;
@@ -2676,6 +2703,44 @@ fn ir_pop_acc(pos i64) {
 	x86_lower_all();
 }
 
+// lea <op2_reg>, [rbp - off]: a field address in the staging register.
+fn ir_lea_op2_slot(off i64, pos i64) {
+	var op *IrOp = ir_emit(IR_LEA, pos);
+	op.dst = operand_op2(0);
+	op.src0 = operand_stackslot(off, 0 as *Type);
+	op.src1 = operand_none();
+	op.aux = 1;
+	x86_lower_all();
+}
+
+// lea rax, [rbp - off]: an aggregate literal's own address.
+fn ir_lea_slot_acc(off i64, pos i64) {
+	var op *IrOp = ir_emit(IR_LEA, pos);
+	op.dst = operand_acc();
+	op.src0 = operand_stackslot(off, 0 as *Type);
+	op.src1 = operand_none();
+	op.aux = 1;
+	x86_lower_all();
+}
+
+fn ir_push_op2(pos i64) {
+	var op *IrOp = ir_emit(IR_PUSH, pos);
+	op.src0 = operand_op2(0);
+	depth = depth + 1;
+	x86_lower_all();
+}
+
+// copy <size> bytes from the address in the accumulator to the destination
+// address pushed on the staging stack; the destination address is left in the
+// accumulator. Consumes one staging entry.
+fn ir_memcpy_stage(size i64, pos i64) {
+	var op *IrOp = ir_emit(IR_MEMCPY, pos);
+	op.src0 = operand_acc();
+	op.aux = size;
+	depth = depth - 1;
+	x86_lower_all();
+}
+
 // mov <op2_reg>, rax -- the frontend's "evaluate into the staging register".
 fn ir_mov_acc_op2(pos i64) {
 	var op *IrOp = ir_emit(IR_MOV, pos);
@@ -2778,12 +2843,13 @@ fn gen_expr(n *Node) {
 			return;
 		}
 		gen_addr(n.lhs);
-		push_reg(RAX);
+		ir_push_acc(n.pos);
 		gen_expr(n.rhs);
 		if (is_aggregate(n.lhs.ty)) {
-			copy_aggregate(n.lhs.ty.size);
+			ir_memcpy_stage(n.lhs.ty.size as i64, n.pos);
 		} else {
-			store(n.lhs.ty);
+			ir_pop_op2(n.pos);
+			ir_store_op2_acc(n.lhs.ty, n.pos);
 		}
 		return;
 	}
