@@ -1,0 +1,87 @@
+import "coro.qela";
+
+// Generators. A function whose return type is *Gen(T) and whose body
+// contains `yield` is rewritten by the compiler at parse time: the visible
+// function becomes a spawner (arena-allocates the Gen, spawns the body as a
+// coroutine, advances it to the first yield) and the body moves to a hidden
+// `_$gen<N>` function that takes the same parameters plus the Gen pointer.
+//
+// Every switch here is directed (consumer <-> generator), unlike
+// coro_yield's round-robin, so a generator is only ever resumed by whoever
+// resumed it last. The body stores the yielded value in g.val and switches
+// back to g.parent; the consumer reads g.val and switches back in. When the
+// body finishes, gen_finish marks both the Gen and the coroutine slot done,
+// and the next gen_next reports false. The arena-allocated Gen is never
+// freed -- like a coroutine stack, it lives for the program.
+
+struct Gen(T) {
+	coro   int,
+	parent int,
+	done   bool,
+	val    T,
+}
+
+// Advance the generator to its next value (or completion). The value is
+// read from g.val after the switch, so the first call -- made by the
+// spawner right after coro_spawn -- delivers the first yield.
+fn gen_resume(comptime T: type, g *Gen(T)) bool {
+	if (g.done || g.coro == 0) { return false; }
+	var from int = cur_coro;
+	g.parent = from;
+	cur_coro = g.coro;
+	$if (INTERP == "1") {
+		interp_coro_switch(from, g.coro);
+		return !g.done;
+	}
+	coro_switch(&coros[from].sp as *u8, &coros[g.coro].sp as *u8);
+	return !g.done;
+}
+
+// The consumer's loop body: `while (gen_next(&g, &x))`. Delivers the value
+// currently sitting in g.val (set by the previous resume), then advances
+// the generator. Returns true whenever a value was delivered -- including
+// the last one, which the advance may end with -- and false only when the
+// generator was already finished before this call, so a consumer never
+// loses the final value.
+fn gen_next(comptime T: type, g *Gen(T), out *T) bool {
+	if (g.done || g.coro == 0) { return false; }
+	*out = g.val;
+	var from int = cur_coro;
+	g.parent = from;
+	cur_coro = g.coro;
+	$if (INTERP == "1") {
+		interp_coro_switch(from, g.coro);
+		return true;
+	}
+	coro_switch(&coros[from].sp as *u8, &coros[g.coro].sp as *u8);
+	return true;
+}
+
+// Runs on the generator's own coroutine: stores the value and hands control
+// back to the consumer. g.parent was set by the last gen_resume/gen_next.
+fn gen_yield(comptime T: type, g *Gen(T), v T) {
+	g.val = v;
+	var from int = cur_coro;
+	cur_coro = g.parent;
+	$if (INTERP == "1") {
+		interp_coro_switch(from, g.parent);
+		return;
+	}
+	coro_switch(&coros[from].sp as *u8, &coros[g.parent].sp as *u8);
+}
+
+// Ends the generator: marks both the Gen and the coroutine slot done (the
+// scheduler must forget the slot, or coro_live/coro_pending would count a
+// finished generator forever) and switches back to the consumer one last
+// time. Never returns on the generator's own coroutine.
+fn gen_finish(comptime T: type, g *Gen(T)) {
+	g.done = true;
+	coros[cur_coro].done = true;
+	var from int = cur_coro;
+	cur_coro = g.parent;
+	$if (INTERP == "1") {
+		interp_coro_switch(from, g.parent);
+		return;
+	}
+	coro_switch(&coros[from].sp as *u8, &coros[g.parent].sp as *u8);
+}
