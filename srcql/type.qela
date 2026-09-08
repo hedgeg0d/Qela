@@ -536,7 +536,9 @@ fn usual_conv(n *Node) {
 // Stack-spilled parameters are always a suffix of the parameter list (the
 // register-word budget only ever runs out, never recovers), so the p0..p5
 // / pextra split point is `nparams - n_stack_args`, not a fixed index 6:
-// a str earlier in the list can push the split below 6.
+// a str earlier in the list can push the split below 6. Six slots cover
+// x86's register count exactly; ARM64 (eight argument registers) reaches
+// p6/p7 for a run of eight register parameters.
 fn func_param(f *Func, i int) *Var {
 	var split int = f.nparams - f.n_stack_args;
 	if (i < split) {
@@ -545,7 +547,9 @@ fn func_param(f *Func, i int) *Var {
 		if (i == 2) { return f.p2; }
 		if (i == 3) { return f.p3; }
 		if (i == 4) { return f.p4; }
-		return f.p5;
+		if (i == 5) { return f.p5; }
+		if (i == 6) { return f.p6; }
+		return f.p7;
 	}
 	var v *Var = f.pextra;
 	var k int = i - split;
@@ -575,7 +579,9 @@ fn set_func_param(f *Func, i int, v *Var) {
 	if (i == 2) { f.p2 = v; return; }
 	if (i == 3) { f.p3 = v; return; }
 	if (i == 4) { f.p4 = v; return; }
-	f.p5 = v;
+	if (i == 5) { f.p5 = v; return; }
+	if (i == 6) { f.p6 = v; return; }
+	f.p7 = v;
 }
 
 // ── monomorphization ──
