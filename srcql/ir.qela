@@ -33,7 +33,8 @@ let IR_MEMCPYDST = 25; // copy <aux> bytes from the address in src0 to the
                     // address is left in the accumulator
 let IR_SYSCALL = 14; // <aux: syscall number>; arguments already staged
 let IR_ASM   = 15; // inline asm; <aux: the asm Node's address>
-let IR_ASSERT = 16; // a bounds/assert site; <aux: index into the assert-site list>
+let IR_ASSERT = 16; // an assert site; <aux: the message string-literal id>
+let IR_BOUNDS = 26; // a bounds-check trip; <aux: the condition code that trips>
 let IR_FUNCADDR = 17; // dst = address of the function in src0 (OP_FUNC)
 let IR_ATOMIC = 18; // <aux: atomic subop>; dst/src0 carry address and value
 let IR_COROSWITCH = 19; // switch coroutine context around the following call
