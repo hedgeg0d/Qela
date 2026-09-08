@@ -113,6 +113,9 @@ var global_vars *Var;
 var lambda_scope *Scope;
 var lambda_seq int;
 
+// Sequential names for the hidden temps of a multi-assignment (`_$m<N>`).
+var multi_assign_seq int = 0;
+
 // Typed block expressions (`T { ...; super v; }`) desugar to an
 // immediately-called hidden function like a lambda, but unlike a lambda
 // they may read outer locals: each one becomes a hidden by-value parameter
@@ -1700,10 +1703,151 @@ fn parse_stmt_inner(t **Token) *Node {
 
 	if (tok_eq(*t, "let") || tok_eq(*t, "var")) { return parse_decl(t); }
 
+	// `a, b = 1, 2` assigns several targets at once. Only at statement
+	// level, and only when the shape is actually present: inside an
+	// expression the comma already means the comma operator, so the
+	// detection scans the targets first (`a, b = ...`), and a bare comma
+	// expression (`a, b;`) keeps its old meaning.
+	if (multi_assign_ahead(t)) {
+		return parse_multi_assign(t, p);
+	}
+
 	var n *Node = new_node(ND_EXPRSTMT, p);
 	n.lhs = parse_expr(t);
 	tok_expect(t, ";");
 	return n;
+}
+
+// Does the statement at `t` have the shape of a multi-assignment: a
+// comma-separated list of assignable targets (identifier, member, index
+// or deref chains) followed by `=`? The scan is token-level and stops at
+// the first element that is not a target, so `a, b + 1;` stays a comma
+// expression.
+fn multi_assign_ahead(t **Token) bool {
+	var j *Token = *t;
+	var ncommas int = 0;
+	while (j as i64 != 0) {
+		if (j.kind == TK_PUNCT && str_eq(j.text, "*")) { j = j.next; }
+		if (j as i64 == 0 || j.kind != TK_IDENT) { return false; }
+		j = j.next;
+		while (j as i64 != 0) {
+			if (j.kind == TK_PUNCT && str_eq(j.text, ".")) {
+				j = j.next;
+				if (j as i64 == 0 || j.kind != TK_IDENT) { return false; }
+				j = j.next;
+				continue;
+			}
+			if (j.kind == TK_PUNCT && str_eq(j.text, "[")) {
+				var depth i64 = 1;
+				j = j.next;
+				while (j as i64 != 0 && depth > 0) {
+					if (j.kind == TK_PUNCT) {
+						if (str_eq(j.text, "[")) { depth = depth + 1; }
+						else if (str_eq(j.text, "]")) { depth = depth - 1; }
+					}
+					j = j.next;
+				}
+				if (depth != 0) { return false; }
+				continue;
+			}
+			break;
+		}
+		if (j as i64 == 0) { return false; }
+		if (j.kind == TK_PUNCT && str_eq(j.text, ",")) { j = j.next; ncommas = ncommas + 1; continue; }
+		// A single target (`a = 1;`) is an ordinary assignment; the
+		// multi form needs at least one comma.
+		if (j.kind == TK_PUNCT && str_eq(j.text, "=")) { return ncommas > 0; }
+		return false;
+	}
+	return false;
+}
+
+// `a, b = b, a` parses into a chain of plain statements: the right side
+// is evaluated into hidden temps first (so a swap reads the old values),
+// then each target is assigned from its temp. The chain is:
+// [t0 = rhs0, t1 = rhs1, a = t0, b = t1], chained through `.next` like a
+// declaration's synthetic defer. A target's temp takes the target's own
+// type when it is known at parse time (an identifier), so `var a i8; a,
+// b = 5, 6;` keeps the fitting-constant rule; otherwise the right side's
+// type is used.
+fn parse_multi_assign(t **Token, p i64) *Node {
+	var lhs_head *Node = 0 as *Node;
+	var lhs_tail *Node = 0 as *Node;
+	var nlhs int = 0;
+	while (true) {
+		var lhs *Node = parse_logor(t);
+		if (lhs.kind != ND_VAR && lhs.kind != ND_MEMBER &&
+		    lhs.kind != ND_INDEX && lhs.kind != ND_DEREF) {
+			error_at(lhs.pos, "the left side of a multi-assignment must be a variable, member, deref or index");
+		}
+		if (lhs_tail as i64 == 0) { lhs_head = lhs; }
+		else { lhs_tail.next = lhs; }
+		lhs_tail = lhs;
+		nlhs = nlhs + 1;
+		if (!tok_consume(t, ",")) { break; }
+	}
+	tok_expect(t, "=");
+
+	var rhs_head *Node = 0 as *Node;
+	var rhs_tail *Node = 0 as *Node;
+	var nrhs int = 0;
+	while (true) {
+		if (nrhs > 0) { tok_expect(t, ","); }
+		var rhs *Node = parse_assign(t);
+		add_type(rhs);
+		if (rhs_tail as i64 == 0) { rhs_head = rhs; }
+		else { rhs_tail.next = rhs; }
+		rhs_tail = rhs;
+		nrhs = nrhs + 1;
+		if (nrhs == nlhs) { break; }
+	}
+	if (tok_eq(*t, ",")) {
+		error_at(p, "a multi-assignment needs exactly one right-hand value per left-hand target");
+	}
+	tok_expect(t, ";");
+
+	var chain_head *Node = 0 as *Node;
+	var chain_tail *Node = 0 as *Node;
+	var tvars [16]*Var;
+	if (nlhs > 16) { error_at(p, "too many targets in a multi-assignment (at most 16)"); }
+	var rnode *Node = rhs_head;
+	var target *Node = lhs_head;
+	var ti int = 0;
+	while (target as i64 != 0) {
+		var tb Buf;
+		fmt_str(&tb, "_$m");
+		fmt_i64(&tb, multi_assign_seq as i64);
+		multi_assign_seq = multi_assign_seq + 1;
+		var tty *Type = rnode.ty;
+		if (target.kind == ND_VAR && target.varp.ty as i64 != 0) { tty = target.varp.ty; }
+		var tv *Var = declare_var(buf_str(&tb), tty, p);
+		tvars[ti] = tv;
+		ti = ti + 1;
+		var tvar *Node = new_node(ND_VAR, p);
+		tvar.varp = tv;
+		var tstmt *Node = new_node(ND_EXPRSTMT, p);
+		tstmt.lhs = bin_node(ND_ASSIGN, tvar, rnode, p);
+		if (chain_tail as i64 == 0) { chain_head = tstmt; }
+		else { chain_tail.next = tstmt; }
+		chain_tail = tstmt;
+		rnode = rnode.next;
+		target = target.next;
+	}
+	// All the temps are assigned before any target is: the right side of
+	// every element must read the old values, so `a, b = b, a` swaps.
+	target = lhs_head;
+	ti = 0;
+	while (target as i64 != 0) {
+		var tvn *Node = new_node(ND_VAR, p);
+		tvn.varp = tvars[ti];
+		ti = ti + 1;
+		var astmt *Node = new_node(ND_EXPRSTMT, p);
+		astmt.lhs = bin_node(ND_ASSIGN, target, tvn, p);
+		chain_tail.next = astmt;
+		chain_tail = astmt;
+		target = target.next;
+	}
+	return chain_head;
 }
 
 // ── top-level ──
