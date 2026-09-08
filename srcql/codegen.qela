@@ -1022,14 +1022,12 @@ fn ir_branch(cc i64, label i64, pos i64) {
 	var op *IrOp = ir_emit(IR_BR, pos);
 	op.dst = operand_imm(label);
 	op.aux = cc;
-	x86_lower_all();
 }
 
 
 fn ir_label(label i64, pos i64) {
 	var op *IrOp = ir_emit(IR_LABEL, pos);
 	op.dst = operand_imm(label);
-	x86_lower_all();
 }
 
 
@@ -1041,14 +1039,12 @@ fn ir_label(label i64, pos i64) {
 fn ir_call(f *Func, pos i64) {
 	var op *IrOp = ir_emit(IR_CALL, pos);
 	op.src0 = operand_func(f);
-	x86_lower_all();
 }
 
 
 fn ir_call_ind(target IrOperand, pos i64) {
 	var op *IrOp = ir_emit(IR_CALL, pos);
 	op.src0 = target;
-	x86_lower_all();
 }
 
 
@@ -1056,13 +1052,11 @@ fn ir_funcaddr(f *Func, pos i64) {
 	var op *IrOp = ir_emit(IR_FUNCADDR, pos);
 	op.dst = operand_acc();
 	op.src0 = operand_func(f);
-	x86_lower_all();
 }
 
 
 fn ir_ret(pos i64) {
 	var op *IrOp = ir_emit(IR_RET, pos);
-	x86_lower_all();
 }
 
 
@@ -1070,13 +1064,11 @@ fn ir_setcc_acc(cc i64, pos i64) {
 	var op *IrOp = ir_emit(IR_SETCC, pos);
 	op.dst = operand_acc();
 	op.aux = cc;
-	x86_lower_all();
 }
 
 
 fn ir_syscall(pos i64) {
 	var op *IrOp = ir_emit(IR_SYSCALL, pos);
-	x86_lower_all();
 }
 
 
@@ -1084,7 +1076,6 @@ fn ir_mov_acc_imm(v i64, pos i64) {
 	var op *IrOp = ir_emit(IR_MOV, pos);
 	op.dst = operand_acc();
 	op.src0 = operand_imm(v);
-	x86_lower_all();
 }
 
 
@@ -1092,7 +1083,6 @@ fn ir_mov_acc_str(id int, pos i64) {
 	var op *IrOp = ir_emit(IR_MOV, pos);
 	op.dst = operand_acc();
 	op.src0 = operand_str(id);
-	x86_lower_all();
 }
 
 
@@ -1100,7 +1090,6 @@ fn ir_mov_acc_global(v *Var, pos i64) {
 	var op *IrOp = ir_emit(IR_MOV, pos);
 	op.dst = operand_acc();
 	op.src0 = operand_global(v);
-	x86_lower_all();
 }
 
 
@@ -1111,7 +1100,6 @@ fn ir_load_acc(ty *Type, pos i64) {
 	op.dst = operand_acc();
 	op.dst.ty = ty;
 	op.src0 = operand_acc();
-	x86_lower_all();
 }
 
 
@@ -1123,7 +1111,6 @@ fn ir_load_var(v *Var, ty *Type, pos i64) {
 	op.dst.ty = ty;
 	if (v.has_reg) { op.src0 = operand_vreg(v.reg, ty); }
 	else { op.src0 = operand_stackslot(v.offset as i64, ty); }
-	x86_lower_all();
 }
 
 
@@ -1138,7 +1125,6 @@ fn ir_lea_acc(base IrOperand, index IrOperand, scale int, disp i64, pos i64) {
 	op.src0 = base;
 	op.src1 = index;
 	op.aux = scale as i64;
-	x86_lower_all();
 }
 
 
@@ -1155,7 +1141,6 @@ fn ir_unary_acc(uop int, pos i64) {
 	op.dst = operand_acc();
 	op.src0 = operand_acc();
 	op.aux = uop as i64;
-	x86_lower_all();
 }
 
 
@@ -1166,7 +1151,6 @@ fn ir_cast_acc(ck int, ty *Type, pos i64) {
 	op.dst.ty = ty;
 	op.src0 = operand_acc();
 	op.aux = ck as i64;
-	x86_lower_all();
 }
 
 
@@ -1181,7 +1165,6 @@ fn ir_alu_acc(aop int, ty *Type, pos i64) {
 	op.src0 = operand_acc();
 	op.src1 = operand_op2(0);
 	op.aux = aop as i64;
-	x86_lower_all();
 }
 
 
@@ -1192,7 +1175,6 @@ fn ir_compare_acc(cc i64, pos i64) {
 	var s *IrOp = ir_emit(IR_SETCC, pos);
 	s.dst = operand_acc();
 	s.aux = cc;
-	x86_lower_all();
 }
 
 
@@ -1200,7 +1182,6 @@ fn ir_mov_vreg_imm(reg int, v i64, pos i64) {
 	var op *IrOp = ir_emit(IR_MOV, pos);
 	op.dst = operand_vreg(reg, 0 as *Type);
 	op.src0 = operand_imm(v);
-	x86_lower_all();
 }
 
 
@@ -1211,7 +1192,6 @@ fn ir_load_vreg_var(dst int, v *Var, ty *Type, pos i64) {
 	op.dst = operand_vreg(dst, ty);
 	if (v.has_reg) { op.src0 = operand_vreg(v.reg, ty); }
 	else { op.src0 = operand_stackslot(v.offset as i64, ty); }
-	x86_lower_all();
 }
 
 
@@ -1222,7 +1202,6 @@ fn ir_alu_vreg_imm(aop int, reg int, v i64, pos i64) {
 	op.src0 = operand_vreg(reg, 0 as *Type);
 	op.src1 = operand_imm(v);
 	op.aux = aop;
-	x86_lower_all();
 }
 
 
@@ -1234,7 +1213,6 @@ fn ir_alu_vreg_rm(aop int, reg int, n *Node, pos i64) {
 	if (n.varp.has_reg) { op.src1 = operand_vreg(n.varp.reg, n.ty); }
 	else { op.src1 = operand_stackslot(n.varp.offset as i64, n.ty); }
 	op.aux = aop;
-	x86_lower_all();
 }
 
 
@@ -1245,7 +1223,6 @@ fn ir_store_acc_imm(ty *Type, v i64, pos i64) {
 	op.dst = operand_acc();
 	op.dst.ty = ty;
 	op.src0 = operand_imm(v);
-	x86_lower_all();
 }
 
 
@@ -1253,7 +1230,6 @@ fn ir_store_stackslot_acc(off i64, ty *Type, pos i64) {
 	var op *IrOp = ir_emit(IR_STORE, pos);
 	op.dst = operand_stackslot(off, ty);
 	op.src0 = operand_acc();
-	x86_lower_all();
 }
 
 
@@ -1261,7 +1237,6 @@ fn ir_store_vreg_acc(reg int, ty *Type, pos i64) {
 	var op *IrOp = ir_emit(IR_STORE, pos);
 	op.dst = operand_vreg(reg, ty);
 	op.src0 = operand_acc();
-	x86_lower_all();
 }
 
 
@@ -1270,7 +1245,6 @@ fn ir_memset_stackslot(off i64, size i64, pos i64) {
 	var op *IrOp = ir_emit(IR_MEMSET, pos);
 	op.dst = operand_stackslot(off, 0 as *Type);
 	op.aux = size;
-	x86_lower_all();
 }
 
 
@@ -1283,7 +1257,6 @@ fn ir_push_acc(pos i64) {
 	var op *IrOp = ir_emit(IR_PUSH, pos);
 	op.src0 = operand_acc();
 	depth = depth + 1;
-	x86_lower_all();
 }
 
 
@@ -1291,7 +1264,6 @@ fn ir_pop_op2(pos i64) {
 	var op *IrOp = ir_emit(IR_POP, pos);
 	op.dst = operand_op2(0);
 	depth = depth - 1;
-	x86_lower_all();
 }
 
 
@@ -1299,7 +1271,6 @@ fn ir_pop_acc(pos i64) {
 	var op *IrOp = ir_emit(IR_POP, pos);
 	op.dst = operand_acc();
 	depth = depth - 1;
-	x86_lower_all();
 }
 
 
@@ -1310,7 +1281,6 @@ fn ir_lea_op2_slot(off i64, pos i64) {
 	op.src0 = operand_stackslot(off, 0 as *Type);
 	op.src1 = operand_none();
 	op.aux = 1;
-	x86_lower_all();
 }
 
 
@@ -1321,7 +1291,6 @@ fn ir_lea_slot_acc(off i64, pos i64) {
 	op.src0 = operand_stackslot(off, 0 as *Type);
 	op.src1 = operand_none();
 	op.aux = 1;
-	x86_lower_all();
 }
 
 
@@ -1329,7 +1298,6 @@ fn ir_tlsaddr(v *Var, pos i64) {
 	var op *IrOp = ir_emit(IR_TLSADDR, pos);
 	op.dst = operand_acc();
 	op.src0 = operand_tlsvar(v);
-	x86_lower_all();
 }
 
 
@@ -1341,7 +1309,6 @@ fn ir_lea_arg_acc(off i64, pos i64) {
 	op.src0 = operand_stackslot(-off, 0 as *Type);
 	op.src1 = operand_none();
 	op.aux = 0;
-	x86_lower_all();
 }
 
 
@@ -1351,7 +1318,6 @@ fn ir_load_arg_acc(off i64, pos i64) {
 	op.dst = operand_acc();
 	op.dst.ty = type_ptr(ty_i64);
 	op.src0 = operand_stackslot(-off, 0 as *Type);
-	x86_lower_all();
 }
 
 
@@ -1359,7 +1325,6 @@ fn ir_push_op2(pos i64) {
 	var op *IrOp = ir_emit(IR_PUSH, pos);
 	op.src0 = operand_op2(0);
 	depth = depth + 1;
-	x86_lower_all();
 }
 
 
@@ -1368,7 +1333,6 @@ fn ir_push_at_acc(off i64, pos i64) {
 	var op *IrOp = ir_emit(IR_PUSH, pos);
 	op.src0 = operand_mem(off, 0 as *Type);
 	depth = depth + 1;
-	x86_lower_all();
 }
 
 
@@ -1380,7 +1344,6 @@ fn ir_memcpy_dst(off i64, size i64, pos i64) {
 	op.dst = operand_stackslot(off, 0 as *Type);
 	op.src0 = operand_acc();
 	op.aux = size;
-	x86_lower_all();
 }
 
 
@@ -1392,7 +1355,6 @@ fn ir_memcpy_stage(size i64, pos i64) {
 	op.src0 = operand_acc();
 	op.aux = size;
 	depth = depth - 1;
-	x86_lower_all();
 }
 
 
@@ -1404,7 +1366,6 @@ fn ir_memcpy_slot(off i64, size i64, pos i64) {
 	op.dst = operand_stackslot(off, 0 as *Type);
 	op.src0 = operand_acc();
 	op.aux = size;
-	x86_lower_all();
 }
 
 
@@ -1413,7 +1374,6 @@ fn ir_memcpy_slot(off i64, size i64, pos i64) {
 fn ir_load2(size i64, pos i64) {
 	var op *IrOp = ir_emit(IR_LOAD2, pos);
 	op.aux = size;
-	x86_lower_all();
 }
 
 
@@ -1423,7 +1383,6 @@ fn ir_store2(off i64, size i64, pos i64) {
 	var op *IrOp = ir_emit(IR_STORE2, pos);
 	op.dst = operand_stackslot(off, 0 as *Type);
 	op.aux = size;
-	x86_lower_all();
 }
 
 
@@ -1431,7 +1390,6 @@ fn ir_push_reg(reg int, pos i64) {
 	var op *IrOp = ir_emit(IR_PUSH, pos);
 	op.src0 = operand_reg(reg);
 	depth = depth + 1;
-	x86_lower_all();
 }
 
 
@@ -1439,7 +1397,6 @@ fn ir_pop_reg(reg int, pos i64) {
 	var op *IrOp = ir_emit(IR_POP, pos);
 	op.dst = operand_reg(reg);
 	depth = depth - 1;
-	x86_lower_all();
 }
 
 
@@ -1451,7 +1408,6 @@ fn ir_add_acc_imm(v i64, pos i64) {
 	op.src0 = operand_acc();
 	op.src1 = operand_none();
 	op.aux = 1;
-	x86_lower_all();
 }
 
 
@@ -1460,7 +1416,6 @@ fn ir_mov_acc_op2(pos i64) {
 	var op *IrOp = ir_emit(IR_MOV, pos);
 	op.dst = operand_op2(0);
 	op.src0 = operand_acc();
-	x86_lower_all();
 }
 
 
@@ -1473,7 +1428,6 @@ fn ir_alu_acc_imm(aop int, ty *Type, v i64, pos i64) {
 	op.src0 = operand_acc();
 	op.src1 = operand_imm(v);
 	op.aux = aop as i64;
-	x86_lower_all();
 }
 
 
@@ -1486,7 +1440,6 @@ fn ir_alu_acc_rm(aop int, ty *Type, src IrOperand, pos i64) {
 	op.src0 = operand_acc();
 	op.src1 = src;
 	op.aux = aop as i64;
-	x86_lower_all();
 }
 
 
@@ -1497,7 +1450,6 @@ fn ir_alu_rm_imm(aop int, dst IrOperand, v i64, pos i64) {
 	op.src0 = dst;
 	op.src1 = operand_imm(v);
 	op.aux = aop as i64;
-	x86_lower_all();
 }
 
 
@@ -1508,7 +1460,6 @@ fn ir_alu_rm_reg(aop int, dst IrOperand, src IrOperand, pos i64) {
 	op.src0 = dst;
 	op.src1 = src;
 	op.aux = aop as i64;
-	x86_lower_all();
 }
 
 
@@ -1520,7 +1471,6 @@ fn ir_alu_vreg_acc(aop int, reg int, pos i64) {
 	op.src0 = op.dst;
 	op.src1 = operand_acc();
 	op.aux = aop as i64;
-	x86_lower_all();
 }
 
 
@@ -1528,7 +1478,6 @@ fn ir_cmp_acc_imm(v i64, pos i64) {
 	var op *IrOp = ir_emit(IR_CMP, pos);
 	op.src0 = operand_acc();
 	op.src1 = operand_imm(v);
-	x86_lower_all();
 }
 
 
@@ -1536,7 +1485,6 @@ fn ir_cmp_acc_rm(src IrOperand, pos i64) {
 	var op *IrOp = ir_emit(IR_CMP, pos);
 	op.src0 = operand_acc();
 	op.src1 = src;
-	x86_lower_all();
 }
 
 
@@ -1545,7 +1493,6 @@ fn ir_cmp_rm_imm(n *Node, v i64, pos i64) {
 	var op *IrOp = ir_emit(IR_CMP, pos);
 	op.src0 = direct_operand(n);
 	op.src1 = operand_imm(v);
-	x86_lower_all();
 }
 
 
@@ -1555,7 +1502,6 @@ fn ir_cmp_at_acc_imm(ty *Type, v i64, pos i64) {
 	var op *IrOp = ir_emit(IR_CMP, pos);
 	op.src0 = operand_mem(0, ty);
 	op.src1 = operand_imm(v);
-	x86_lower_all();
 }
 
 
@@ -1565,7 +1511,6 @@ fn ir_cmp_op2_acc(pos i64) {
 	var op *IrOp = ir_emit(IR_CMP, pos);
 	op.src0 = operand_acc();
 	op.src1 = operand_op2(0);
-	x86_lower_all();
 }
 
 
@@ -1576,7 +1521,6 @@ fn ir_cmp_op2_acc_float(ty *Type, pos i64) {
 	op.src0 = operand_acc();
 	op.src0.ty = ty;
 	op.src1 = operand_op2(0);
-	x86_lower_all();
 }
 
 
@@ -1585,7 +1529,6 @@ fn ir_mov_op2_imm(v i64, pos i64) {
 	var op *IrOp = ir_emit(IR_MOV, pos);
 	op.dst = operand_op2(0);
 	op.src0 = operand_imm(v);
-	x86_lower_all();
 }
 
 
@@ -1598,7 +1541,6 @@ fn ir_cast_float(ck int, st *Type, dt *Type, pos i64) {
 	op.src0 = operand_acc();
 	op.src0.ty = st;
 	op.aux = ck as i64;
-	x86_lower_all();
 }
 
 
@@ -1607,7 +1549,6 @@ fn ir_cast_float(ck int, st *Type, dt *Type, pos i64) {
 fn ir_bounds(cc i64, pos i64) {
 	var op *IrOp = ir_emit(IR_BOUNDS, pos);
 	op.aux = cc;
-	x86_lower_all();
 }
 
 
@@ -1615,7 +1556,6 @@ fn ir_bounds(cc i64, pos i64) {
 fn ir_assert(msg i64, pos i64) {
 	var op *IrOp = ir_emit(IR_ASSERT, pos);
 	op.aux = msg;
-	x86_lower_all();
 }
 
 
@@ -1625,7 +1565,6 @@ fn ir_load_at_acc_op2(off i64, pos i64) {
 	op.dst = operand_op2(0);
 	op.src0 = operand_acc();
 	op.src0.off = off;
-	x86_lower_all();
 }
 
 
@@ -1635,7 +1574,6 @@ fn ir_load_op2_var(v *Var, ty *Type, pos i64) {
 	op.dst = operand_op2(0);
 	if (v.has_reg) { op.src0 = operand_vreg(v.reg, ty); }
 	else { op.src0 = operand_stackslot(v.offset as i64, ty); }
-	x86_lower_all();
 }
 
 
@@ -1644,7 +1582,6 @@ fn ir_store_op2_slot(off i64, pos i64) {
 	var op *IrOp = ir_emit(IR_STORE, pos);
 	op.dst = operand_stackslot(off, 0 as *Type);
 	op.src0 = operand_op2(0);
-	x86_lower_all();
 }
 
 
@@ -1654,7 +1591,6 @@ fn ir_cmp_op2_acc_rev(pos i64) {
 	var op *IrOp = ir_emit(IR_CMP, pos);
 	op.src0 = operand_op2(0);
 	op.src1 = operand_acc();
-	x86_lower_all();
 }
 
 
@@ -1663,7 +1599,6 @@ fn ir_mov_op2_acc(pos i64) {
 	var op *IrOp = ir_emit(IR_MOV, pos);
 	op.dst = operand_acc();
 	op.src0 = operand_op2(0);
-	x86_lower_all();
 }
 
 
@@ -1673,7 +1608,6 @@ fn ir_load_slot_acc(off i64, ty *Type, pos i64) {
 	op.dst = operand_acc();
 	op.dst.ty = ty;
 	op.src0 = operand_stackslot(off, ty);
-	x86_lower_all();
 }
 
 
@@ -1684,7 +1618,6 @@ fn ir_cmp_acc_imm32(v i64, pos i64) {
 	op.src0 = operand_acc();
 	op.src1 = operand_imm(v);
 	op.aux = 1;
-	x86_lower_all();
 }
 
 
@@ -1694,7 +1627,6 @@ fn ir_cmp_op2_imm32(v i64, pos i64) {
 	op.src0 = operand_op2(0);
 	op.src1 = operand_imm(v);
 	op.aux = 1;
-	x86_lower_all();
 }
 
 
@@ -1704,7 +1636,6 @@ fn ir_cmp_rm_imm32(n *Node, v i64, pos i64) {
 	op.src0 = direct_operand(n);
 	op.src1 = operand_imm(v);
 	op.aux = 1;
-	x86_lower_all();
 }
 
 
@@ -1714,7 +1645,6 @@ fn ir_store_op2_acc(ty *Type, pos i64) {
 	op.dst = operand_op2(0);
 	op.dst.ty = ty;
 	op.src0 = operand_acc();
-	x86_lower_all();
 }
 
 
@@ -2110,6 +2040,9 @@ var opt_debug bool = false;
 // statements that emitted no code, collapse into the previous row.
 fn line_mark(pos i64) {
 	if (!opt_debug) { return; }
+	// The row address must be the real byte position, so pending IR ops that
+	// belong to the previous statement are flushed first.
+	ir_flush();
 	var f int = diag_file_of(pos);
 	var l int = diag_line_for(f, diag_offset_of(pos));
 	if (lines_tail as i64 != 0) {
@@ -2405,7 +2338,16 @@ fn gen_func(f *Func) {
 		mov_reg_imm(RAX, 0);
 		gen_epilogue(f.pos);
 	}
+	// A trailing bounds check can still be sitting unlowered in the IR
+	// buffer, so fn_bounds is only complete once every op has been lowered;
+	// flush before gen_bounds_trampoline reads fn_bounds.n, or the check's
+	// jump patches to nothing and falls through into whatever comes next.
+	ir_flush();
 	gen_bounds_trampoline();
+	// Function boundary: nothing IR may leak past it. The next gen_func reads
+	// code.n for f.addr and line_mark, both of which must see every byte of
+	// this function.
+	ir_flush();
 }
 
 
