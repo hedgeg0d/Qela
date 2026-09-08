@@ -716,7 +716,7 @@ fn gen_addr(n *Node) {
 			ld_fs_self(RAX);
 			add_rax_imm(n.varp.tls_off);
 		}
-		else if (n.varp.is_global) { add_dataref(n.varp); }
+		else if (n.varp.is_global) { ir_mov_acc_global(n.varp, n.pos); }
 		else if (n.varp.arg_stack) {
 			// A stack-passed parameter's offset is a positive rbp
 			// displacement already, unlike every other local: rbp_mem is
@@ -853,7 +853,7 @@ fn gen_addr(n *Node) {
 
 fn gen_lvalue(n *Node) {
 	gen_addr(n);
-	if (!is_aggregate(n.ty)) { load(n.ty); }
+	if (!is_aggregate(n.ty)) { ir_load_acc(n.ty, n.pos); }
 }
 
 // An argument with no side effects can be loaded straight into its register
@@ -2095,8 +2095,39 @@ fn x86_lower_op(op *IrOp) {
 		mov_reg_imm(RAX, op.src0.off);
 		return;
 	}
+	if (op.kind == IR_MOV && op.dst.kind == OP_ACC && op.src0.kind == OP_STR) {
+		// The string fixup is a side effect of the lowering, not of IR
+		// emission: the byte offset it records only exists once bytes are out.
+		add_strref(RAX, op.src0.off as int);
+		return;
+	}
+	if (op.kind == IR_MOV && op.dst.kind == OP_ACC && op.src0.kind == OP_GLOBAL) {
+		add_dataref(op.src0.off as *Var);
+		return;
+	}
 	if (op.kind == IR_MOV && op.dst.kind == OP_VREG && op.src0.kind == OP_IMM) {
 		mov_reg_imm(op.dst.reg, op.src0.off);
+		return;
+	}
+	if (op.kind == IR_LOAD && op.dst.kind == OP_ACC && op.src0.kind == OP_STACKSLOT) {
+		// Same bytes as ld_rm's frame-slot path: an unconditional 8-byte
+		// mov from the local's home (direct_local guarantees machine width).
+		rbp_mem(0x8b, RAX, -(op.src0.off));
+		return;
+	}
+	if (op.kind == IR_LOAD && op.dst.kind == OP_ACC && op.src0.kind == OP_VREG) {
+		// ld_rm's register path, replayed with the same reg/rm roles --
+		// mov_reg_reg would emit the same instruction with the REX.B and
+		// REX.R bits swapped, different bytes.
+		rex_w(RAX, op.src0.reg);
+		b1(0x8b);
+		modrm(3, RAX, op.src0.reg);
+		return;
+	}
+	if (op.kind == IR_LOAD && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC) {
+		// The address is already in the accumulator (gen_addr's job);
+		// load() dereferences it in place, widening by dst.ty.
+		load(op.dst.ty);
 		return;
 	}
 	if (op.kind == IR_STORE && op.dst.kind == OP_ACC && op.src0.kind == OP_IMM) {
@@ -2171,6 +2202,41 @@ fn ir_mov_acc_imm(v i64, pos i64) {
 	x86_lower_all();
 }
 
+fn ir_mov_acc_str(id int, pos i64) {
+	var op *IrOp = ir_emit(IR_MOV, pos);
+	op.dst = operand_acc();
+	op.src0 = operand_str(id);
+	x86_lower_all();
+}
+
+fn ir_mov_acc_global(v *Var, pos i64) {
+	var op *IrOp = ir_emit(IR_MOV, pos);
+	op.dst = operand_acc();
+	op.src0 = operand_global(v);
+	x86_lower_all();
+}
+
+// The accumulator holds an address (gen_addr's job); load through it into the
+// accumulator, widening per ty.
+fn ir_load_acc(ty *Type, pos i64) {
+	var op *IrOp = ir_emit(IR_LOAD, pos);
+	op.dst = operand_acc();
+	op.dst.ty = ty;
+	op.src0 = operand_acc();
+	x86_lower_all();
+}
+
+// A direct scalar local: load its home (register or frame slot) into the
+// accumulator, exactly as ld_rm did.
+fn ir_load_var(v *Var, ty *Type, pos i64) {
+	var op *IrOp = ir_emit(IR_LOAD, pos);
+	op.dst = operand_acc();
+	op.dst.ty = ty;
+	if (v.has_reg) { op.src0 = operand_vreg(v.reg, ty); }
+	else { op.src0 = operand_stackslot(v.offset as i64, ty); }
+	x86_lower_all();
+}
+
 fn ir_unary_acc(uop int, pos i64) {
 	var op *IrOp = ir_emit(IR_UNARY, pos);
 	op.dst = operand_acc();
@@ -2231,11 +2297,11 @@ fn gen_expr(n *Node) {
 	var k int = n.kind;
 
 	if (k == ND_NUM) { ir_mov_acc_imm(n.val, n.pos); return; }
-	if (k == ND_STRLIT) { add_strref(RAX, n.val as int); return; }
+	if (k == ND_STRLIT) { ir_mov_acc_str(n.val as int, n.pos); return; }
 	if (k == ND_COMPTIME) { ir_mov_acc_imm(n.val, n.pos); return; }
-	if (k == ND_SIZEOF) { mov_reg_imm(RAX, n.typeval.size as i64); return; }
+	if (k == ND_SIZEOF) { ir_mov_acc_imm(n.typeval.size as i64, n.pos); return; }
 	if (k == ND_VAR) {
-		if (direct_local(n)) { ld_rm(RAX, n); return; }
+		if (direct_local(n)) { ir_load_var(n.varp, n.ty, n.pos); return; }
 		gen_lvalue(n);
 		return;
 	}
