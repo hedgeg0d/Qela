@@ -281,7 +281,6 @@ struct Func {
 	p7         *Var,
 	pextra     *Var,
 	n_stack_args int,
-	inlinable  int,
 }
 
 // Source order drives the output bytes; see the determinism rules.
