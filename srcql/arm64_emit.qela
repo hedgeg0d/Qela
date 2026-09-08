@@ -497,6 +497,19 @@ fn arm64_lower_op(op *IrOp) {
 		arm64_mov_reg(op.dst.reg, op.src0.reg);
 		return;
 	}
+	if (op.kind == IR_ALU && op.dst.kind == OP_VREG && op.src0.kind == OP_VREG && op.src1.kind == OP_STACKSLOT) {
+		// gen_into's register-rm arm, in place: dst.reg op= [local].
+		arm64_ld_local(X9, op.src1.off);
+		arm64_alu_reg(op.aux, op.dst.reg, op.src0.reg, X9);
+		return;
+	}
+	if (op.kind == IR_ALU && op.dst.kind == OP_VREG && op.src0.kind == OP_VREG && op.src1.kind == OP_VREG) {
+		// gen_into's/stmt_update's register-register arm, in place: dst.reg
+		// op= src1.reg. x86 picks between two opcode families here for byte
+		// size only; both are the same register-register operation.
+		arm64_alu_reg(op.aux, op.dst.reg, op.src0.reg, op.src1.reg);
+		return;
+	}
 	if (op.kind == IR_ALU && op.dst.kind == OP_VREG && op.src0.kind == OP_VREG && op.src1.kind == OP_IMM) {
 		// A call argument's value staged with a fused imm ALU op (e.g.
 		// `f(n - 1)`), in place in its call-arg register.
@@ -529,6 +542,12 @@ fn arm64_lower_op(op *IrOp) {
 		arm64_sub_imm(X0, X29, op.dst.off);
 		arm64_memcpy(X0, X2, op.aux);
 		return;
+	}
+	if (op.kind == IR_UNARY && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC) {
+		if (op.aux == UOP_NEG) { b4(0xcb0003e0 | (X0 << 16) | X0); return; }       // NEG (SUB Xd, XZR, Xm)
+		if (op.aux == UOP_BITNOT) { b4(0xaa2003e0 | (X0 << 16) | X0); return; }   // MVN (ORN Xd, XZR, Xm)
+		if (op.aux == UOP_LNOT) { arm64_cmp_imm(X0, 0); arm64_cset(X0, CC_EQ); return; }
+		die("internal: arm64_lower_op: IR_UNARY: unhandled unary op");
 	}
 	if (op.kind == IR_LOAD2) {
 		// gen_ret's register-returned aggregate: word 1 first (into X1, the
