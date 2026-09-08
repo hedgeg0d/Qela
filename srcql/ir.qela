@@ -43,6 +43,14 @@ let IR_FENCE = 21; // memory fence; <aux: ordering>
 let IR_PUSH  = 22; // push src0 onto the staging stack
 let IR_POP   = 23; // pop the staging stack into dst
 let IR_MEMSET = 24; // zero <aux> bytes at the address in dst (OP_STACKSLOT)
+let IR_LOAD2  = 27; // materialise a register-returned aggregate: word 0 into the
+                    // accumulator, word 1 (if <aux> > 8) into the backend's
+                    // second-value register (x86 RDX / ARM64 x1), from the
+                    // address in the accumulator
+let IR_STORE2 = 28; // stage a register-returned aggregate from the accumulator
+                    // and the second-value register into the frame slot at dst
+                    // (word 1 to <off> - 8 if <aux> > 8), leaving the slot's
+                    // address in the accumulator -- gen_call's result staging
 
 // IrOp.aux for IR_UNARY.
 let UOP_NEG    = 0;
