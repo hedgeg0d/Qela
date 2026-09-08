@@ -1,0 +1,21 @@
+// stage1-only
+// expect-exit: 42
+// A single-thread sanity check for tvar: read/write goes through the
+// %fs-relative TLS block instead of the ordinary data segment.
+tvar counter i64 = 10;
+tvar flag bool = false;
+
+fn bump() i64 {
+	counter = counter + 5;
+	flag = true;
+	return counter;
+}
+
+fn main() int {
+	if (counter != 10) { return 1; }
+	var r i64 = bump();
+	if (r != 15) { return 2; }
+	if (counter != 15) { return 3; }
+	if (!flag) { return 4; }
+	return 42;
+}

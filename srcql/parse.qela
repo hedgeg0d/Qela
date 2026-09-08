@@ -2197,7 +2197,8 @@ fn blob_find(name str) int {
 
 fn parse_global(t **Token, is_extern bool) {
 	var kw str = (*t).text;
-	var typed bool = str_eq(kw, "var");
+	var is_tls bool = str_eq(kw, "tvar");
+	var typed bool = str_eq(kw, "var") || is_tls;
 	*t = (*t).next;
 	var name str = (*t).text;
 	var p i64 = (*t).pos;
@@ -2216,10 +2217,12 @@ fn parse_global(t **Token, is_extern bool) {
 	if (is_extern && ty as i64 == 0) {
 		error_at(p, "extern var needs a type");
 	}
+	if (is_tls && is_extern) { error_at(p, "tvar cannot be extern"); }
 	var gv *Var = declare_var(name, ty, p);
 	gv.extern = is_extern;
 	gv.has_init = has_init;
 	gv.init = init;
+	gv.is_tls = is_tls;
 	tok_expect(t, ";");
 }
 
@@ -2315,7 +2318,7 @@ fn parse(tok *Token) *Unit {
 		if (tok_eq(tok, "macro")) { parse_macro(&tok); continue; }
 		if (tok_eq(tok, "struct")) { parse_struct(&tok); continue; }
 		if (tok_eq(tok, "enum")) { parse_enum(&tok); continue; }
-		if (tok_eq(tok, "let") || tok_eq(tok, "var")) { parse_global(&tok, false); continue; }
+		if (tok_eq(tok, "let") || tok_eq(tok, "var") || tok_eq(tok, "tvar")) { parse_global(&tok, false); continue; }
 		if (tok_eq(tok, "extern") && tok.next.kind == TK_KW && str_eq(tok.next.text, "var")) {
 			// `extern var x i64;` imports the C symbol, `extern var x i64 = K;`
 			// exports a Qela global. Same split as extern fn, keyed on the
