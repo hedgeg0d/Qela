@@ -36,6 +36,8 @@ int qmain(int argc, char **argv) {
 	const char *input = NULL;
 	const char *output = NULL;
 
+	comptime_def_set(S("TARGET"), S("x86_64"));
+
 	for (int i = 1; i < argc; i++) {
 		Str a = str_from_cstr(argv[i]);
 		if (str_eq(a, S("-o"))) {
@@ -43,6 +45,14 @@ int qmain(int argc, char **argv) {
 			output = argv[i];
 		} else if (str_eq(a, S("--no-bounds-checks"))) {
 			opt_no_bounds = true;
+		} else if (str_eq(a, S("-D"))) {
+			if (++i == argc) die("error: -D needs NAME=VALUE\n");
+			Str d = str_from_cstr(argv[i]);
+			isize eq = -1;
+			for (isize k = 0; k < d.n; k++)
+				if (d.p[k] == '=') { eq = k; break; }
+			if (eq < 0) die("error: -D needs NAME=VALUE\n");
+			comptime_def_set((Str){d.p, eq}, (Str){d.p + eq + 1, d.n - eq - 1});
 		} else if (a.n > 0 && a.p[0] == '-') {
 			die("error: unknown option %c\n", argv[i]);
 		} else if (!input) {
