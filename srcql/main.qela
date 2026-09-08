@@ -352,6 +352,27 @@ fn expect_has(src str, mark str) bool {
 	return false;
 }
 
+// Whether the file's reject expectation applies to the current target. A
+// bare `// expect-compile-error` rejects everywhere; a suffixed one --
+// `// expect-compile-error x86` or `arm64` -- only on that target, and on
+// the other the file must compile and run (carrying its own expect-exit).
+fn expect_reject_target(src str) bool {
+	var mark str = "expect-compile-error";
+	var i i64 = 0;
+	while (i + 2 < src.len) {
+		if (src.ptr[i] == '/' && src.ptr[i + 1] == '/' &&
+		    str_eq(str_slice(src, i + 3, i + 3 + mark.len), mark)) {
+			var j i64 = i + 3 + mark.len;
+			while (j < src.len && src.ptr[j] == ' ') { j = j + 1; }
+			if (j + 3 < src.len && src.ptr[j] == 'x') { return opt_target == TARGET_X86_64; }
+			if (j + 4 < src.len && src.ptr[j] == 'a') { return opt_target == TARGET_ARM64; }
+			return true;
+		}
+		i = i + 1;
+	}
+	return false;
+}
+
 // Appends the text after the marker of every matching comment line, one
 // per line, to out. Returns whether any line matched.
 fn expect_lines(src str, mark str, out *Buf, n *int) bool {
@@ -447,7 +468,7 @@ fn test_fail(name str, msg str) {
 // in src's comments. Returns the failure count (0 or 1).
 fn test_one(input str, src str, prog_argv **u8, nprog int) int {
 	// The compile itself may be the test.
-	if (expect_has(src, "expect-compile-error")) {
+	if (expect_reject_target(src)) {
 		var warn_path str = qela_mktmp("qela-test-warn-");
 		var warn_c *u8 = cstr(warn_path);
 		var warn_fd i64 = sys_open_exec(warn_c);
