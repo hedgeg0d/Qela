@@ -18,10 +18,10 @@ let RA_FOREVER = 0x7fffffffffffff;
 // parameters do not reach them, or the prologue would overwrite an incoming
 // argument before reading it.
 fn ra_free(i int) int {
-	if (i == 0) { return 10; }
-	if (i == 1) { return 11; }
-	if (i == 2) { return 9; }
-	return 8;
+	if (i == 0) { return R10; }
+	if (i == 1) { return R11; }
+	if (i == 2) { return R9; }
+	return R8;
 }
 
 fn ra_argregs(f *Func) int {
@@ -46,11 +46,11 @@ fn ra_nfree(f *Func) int {
 }
 
 fn ra_saved(i int) int {
-	if (i == 0) { return 3; }
-	if (i == 1) { return 12; }
-	if (i == 2) { return 13; }
-	if (i == 3) { return 14; }
-	return 15;
+	if (i == 0) { return RBX; }
+	if (i == 1) { return R12; }
+	if (i == 2) { return R13; }
+	if (i == 3) { return R14; }
+	return R15;
 }
 
 fn ra_nreg(f *Func) int {
