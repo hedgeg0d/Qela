@@ -10,10 +10,6 @@ let RSP = 4;
 let RBP = 5;
 let RSI = 6;
 let RDI = 7;
-let R8  = 8;
-let R9  = 9;
-let R10 = 10;
-let R11 = 11;
 
 fn call_reg(i int) int {
 	if (i == 0) { return RDI; }
