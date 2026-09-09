@@ -22,6 +22,11 @@ let SYS_CLONE = 56;
 let SYS_ARCH_PRCTL = 158;
 let SYS_FUTEX = 202;
 let SYS_SCHED_YIELD = 24;
+let SYS_READLINK = 89;
+let SYS_MEMFD_CREATE = 319;
+let SYS_EXECVEAT = 322;
+let SYS_PIPE2 = 293;
+let SYS_SOCKETPAIR = 53;
 
 $if (TARGET != "x86_64") {
 let SYS_READ_N  = 63;
@@ -43,8 +48,17 @@ let SYS_MUNMAP_N = 215;
 let SYS_CLONE_N = 220;
 let SYS_FUTEX_N = 98;
 let SYS_SCHED_YIELD_N = 124;
+let SYS_READLINKAT_N = 78;
+let SYS_MEMFD_CREATE_N = 279;
+let SYS_EXECVEAT_N = 281;
+let SYS_PIPE2_N = 59;
+let SYS_SOCKETPAIR_N = 199;
 let AT_FDCWD = -100;
 }
+
+let AT_EMPTY_PATH = 0x1000;
+let AF_UNIX = 1;
+let SOCK_STREAM = 1;
 
 let ARCH_SET_FS = 0x1002;
 let ARCH_GET_FS = 0x1003;
@@ -283,6 +297,41 @@ fn sys_isatty() i64 {
 		return syscall(SYS_IOCTL_N, 0, 0x5401, 0);
 	}
 	return syscall(SYS_IOCTL, 0, 0x5401, 0);
+}
+
+fn sys_readlink(path *u8, buf *u8, n i64) i64 {
+	$if (TARGET != "x86_64") {
+		return syscall(SYS_READLINKAT_N, AT_FDCWD, path as i64, buf as i64, n);
+	}
+	return syscall(SYS_READLINK, path as i64, buf as i64, n);
+}
+
+fn sys_memfd_create(name *u8, flags i64) i64 {
+	$if (TARGET != "x86_64") {
+		return syscall(SYS_MEMFD_CREATE_N, name as i64, flags, 0);
+	}
+	return syscall(SYS_MEMFD_CREATE, name as i64, flags, 0);
+}
+
+fn sys_fexecve(fd i64, argv *u8, envp *u8) i64 {
+	$if (TARGET != "x86_64") {
+		return syscall(SYS_EXECVEAT_N, fd, 0, argv as i64, envp as i64, AT_EMPTY_PATH, 0);
+	}
+	return syscall(SYS_EXECVEAT, fd, 0, argv as i64, envp as i64, AT_EMPTY_PATH, 0);
+}
+
+fn sys_pipe2(fds *i32, flags i64) i64 {
+	$if (TARGET != "x86_64") {
+		return syscall(SYS_PIPE2_N, fds as i64, flags, 0);
+	}
+	return syscall(SYS_PIPE2, fds as i64, flags, 0);
+}
+
+fn sys_socketpair(domain i64, kind i64, protocol i64, fds *i32) i64 {
+	$if (TARGET != "x86_64") {
+		return syscall(SYS_SOCKETPAIR_N, domain, kind, protocol, fds as i64, 0);
+	}
+	return syscall(SYS_SOCKETPAIR, domain, kind, protocol, fds as i64, 0);
 }
 
 // A syscall whose number is only known at runtime, for srcql/interp.qela:
