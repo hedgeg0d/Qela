@@ -151,6 +151,10 @@ fn compile_src(name str, src str, output str) {
 	var file int = diag_add_file(name, src);
 	set_module_dir(name);
 	var unit *Unit = parse(lex(src, (file as i64) << FILE_SHIFT));
+	// $flag directives inside the source applied during the parse above;
+	// re-validate the flag combinations now that they are final.
+	pie_check();
+	base_check();
 	var img Image;
 	codegen(unit, &img);
 	if (opt_object) { write_object(output, &img); }
@@ -2526,13 +2530,17 @@ fn main(argc int, argv **u8) int {
 			if (i == argc) { die("error: --base needs an address"); }
 			opt_base = parse_addr(str_from_cstr(argv[i]));
 			if ((opt_base & 4095) != 0) { die("error: --base must be page aligned"); }
+			flag_base_cli = true;
 			base_check();
 		} else if (str_eq(a, "--pie")) {
 			opt_pie = true;
+			flag_pie_cli = true;
 		} else if (str_eq(a, "--no-bounds-checks")) {
 			opt_no_bounds = true;
+			flag_nobc_cli = true;
 		} else if (str_eq(a, "--backtrace")) {
 			opt_backtrace = true;
+			flag_backtrace_cli = true;
 			base_check();
 		} else if (str_eq(a, "--no-warn")) {
 			opt_warn = false;

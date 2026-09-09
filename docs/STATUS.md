@@ -19,6 +19,28 @@ server conversation.
 
 ## Done
 
+**Source compile flags: `$flag` (2026-08-15).** A top-level `$flag`
+directive sets a compile flag for the whole unit — the file, its
+imports and, for `qela .`, every merged project file — the Go build
+tag / Rust `#![cfg]` shape, so a project builds correctly with no
+command line at all. Whitelist: `--pie`, `--backtrace`,
+`--no-bounds-checks`, `--base <addr>`, `-D NAME=VALUE` (comptime
+definitions); an explicit command-line flag wins over the source, and
+incompatible combinations re-validate after the parse (a `$flag --pie`
+plus `-c` is the same clean error as on the command line). `$flag`
+works inside `$if`: the branch that survives comptime splicing
+applies its flags, so `$if (TARGET == "arm64") {$flag --pie}` does
+the obvious thing. The directive reads the rest of its line (tokens
+join with a space, except a lone `-` continues the flag it started —
+`--pie` lexes as `- - pie`). `tests/flag.qela` pins `-D` feeding a
+`$if` and `--pie` without a command line (the runner compiles it with
+no flags, the binary still comes out ET_DYN); the `qela .` path was
+verified with a two-file project whose non-entry file carries the
+flag. S2 705 344 -> 707 512 B (+2 168). Corpus 197 -> 198. Full
+writeup in this file.
+
+## Done
+
 **Position-independent executables: `--pie` (2026-08-15).** An
 ET_DYN image the kernel loads at a random base, on all three targets.
 Every address the linker would normally bake in becomes
