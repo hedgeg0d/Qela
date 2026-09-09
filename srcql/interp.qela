@@ -44,7 +44,9 @@ var ip_returning bool = false;
 var ip_broke bool = false;
 var ip_continued bool = false;
 
-var ip_defers [1024]*Node;
+// The defer stack is per execution context, so it is a pointer rather than
+// an array: a coroutine parks its own alongside its frame region.
+var ip_defers **Node;
 var ip_ndefer int = 0;
 
 // ip_intrinsic reports through these: a call it handled leaves
@@ -54,6 +56,46 @@ var ip_intrinsic_val i64 = 0;
 
 var ip_asm_warned [256]i64;
 var ip_asm_nwarned int = 0;
+
+// ── execution contexts ──
+//
+// An interpreted coroutine is a suspended *interpreter*: the evaluator's
+// state is this process's own call stack, so switching coroutines means
+// switching that stack too. interp.qela is stage1-only, so it can use the
+// same `coro_switch` intrinsic the compiled runtime uses -- on itself.
+// Each context therefore owns two regions: a native stack for the
+// interpreter's recursion, and a frame region for the interpreted program's
+// locals, which is also what the collector scans for that coroutine.
+let IP_CORO_SLOTS = 256;
+let IP_CORO_NATIVE = 1024 * 1024;
+let IP_CORO_FRAMES = 4 * 1024 * 1024;
+
+struct IpCoro {
+	sp     i64,
+	top    i64,
+	live   bool,
+	target *Func,
+	a0 i64,
+	a1 i64,
+	a2 i64,
+	a3 i64,
+	a4 i64,
+	fp        i64,
+	fsp       i64,
+	fnp       *Func,
+	retdst    i64,
+	ret       i64,
+	returning bool,
+	broke     bool,
+	continued bool,
+	ndefer    int,
+	defers    **Node,
+	flo       i64,
+	fhi       i64,
+}
+
+var ip_coro [256]IpCoro;
+var ip_cur int = 0;
 
 // ── raw memory ──
 
@@ -751,6 +793,56 @@ fn ip_call(f *Func, args *Node, dst i64, pos i64) i64 {
 	return r;
 }
 
+// A call with raw values instead of an argument tree: the coroutine
+// trampoline has i64s, not nodes. `spawn` casts every argument to i64 at
+// parse time, so a scalar store is always the right shape here.
+fn ip_call_vals(f *Func, a0 i64, a1 i64, a2 i64, a3 i64, a4 i64) i64 {
+	if (f.body as i64 == 0) { die("internal: interpreted coroutine target has no body"); }
+
+	var save_fp i64 = ip_fp;
+	var save_sp i64 = ip_sp;
+	var save_fn *Func = ip_fn;
+	var save_dst i64 = ip_retdst;
+	var save_ret i64 = ip_ret;
+	var save_nd int = ip_ndefer;
+
+	ip_fp = ip_enter(f);
+	ip_fn = f;
+	ip_retdst = 0;
+	ip_returning = false;
+	ip_broke = false;
+	ip_continued = false;
+
+	var i int = 0;
+	while (i < f.nparams && i < 5) {
+		var p *Var = func_param(f, i);
+		var slot i64 = ip_fp - (p.offset as i64);
+		if (p.arg_stack) { slot = ip_fp + (p.offset as i64); }
+		var v i64 = a0;
+		if (i == 1) { v = a1; }
+		else if (i == 2) { v = a2; }
+		else if (i == 3) { v = a3; }
+		else if (i == 4) { v = a4; }
+		ip_store(slot, p.ty, v);
+		i = i + 1;
+	}
+
+	ip_block(f.body);
+	var r i64 = 0;
+	if (ip_returning) { r = ip_ret; }
+
+	ip_fp = save_fp;
+	ip_sp = save_sp;
+	ip_fn = save_fn;
+	ip_retdst = save_dst;
+	ip_ret = save_ret;
+	ip_returning = false;
+	ip_broke = false;
+	ip_continued = false;
+	ip_ndefer = save_nd;
+	return r;
+}
+
 // ── intrinsics ──
 
 fn ip_intrinsic(n *Node) *Func {
@@ -796,8 +888,31 @@ fn ip_intrinsic(n *Node) *Func {
 		if (ip_ld64(a) == want) { ip_st64(a, new); ip_intrinsic_val = 1; }
 		return 0 as *Func;
 	}
+	if (str_eq(nm, "interp_coro_spawn")) {
+		ip_coro_spawn(n);
+		ip_was_intrinsic = true;
+		return 0 as *Func;
+	}
+	if (str_eq(nm, "interp_coro_switch")) {
+		ip_coro_switch(n);
+		ip_was_intrinsic = true;
+		return 0 as *Func;
+	}
+	if (str_eq(nm, "interp_coro_sp")) {
+		var id int = ip_eval(n.args) as int;
+		ip_was_intrinsic = true;
+		if (id == ip_cur) { ip_intrinsic_val = ip_sp; }
+		else { ip_intrinsic_val = ip_coro[id].fsp; }
+		return 0 as *Func;
+	}
+	if (str_eq(nm, "interp_coro_top")) {
+		var id int = ip_eval(n.args) as int;
+		ip_was_intrinsic = true;
+		ip_intrinsic_val = ip_coro[id].fhi;
+		return 0 as *Func;
+	}
 	if (str_eq(nm, "coro_switch") || str_eq(nm, "coro_entry_addr")) {
-		error_at(n.pos, "interpreter: coroutines are not supported yet (they switch machine stacks)");
+		error_at(n.pos, "interpreter: a program cannot switch machine stacks under the interpreter");
 	}
 	if (str_eq(nm, "thread_clone")) {
 		error_at(n.pos, "interpreter: thread_clone is not supported yet");
@@ -808,6 +923,146 @@ fn ip_intrinsic(n *Node) *Func {
 		return 0 as *Func;
 	}
 	return 0 as *Func;
+}
+
+// ── coroutines ──
+
+fn ip_park(id int) {
+	ip_coro[id].fp = ip_fp;
+	ip_coro[id].fsp = ip_sp;
+	ip_coro[id].fnp = ip_fn;
+	ip_coro[id].retdst = ip_retdst;
+	ip_coro[id].ret = ip_ret;
+	ip_coro[id].returning = ip_returning;
+	ip_coro[id].broke = ip_broke;
+	ip_coro[id].continued = ip_continued;
+	ip_coro[id].ndefer = ip_ndefer;
+	ip_coro[id].defers = ip_defers;
+	ip_coro[id].flo = ip_stack_lo;
+}
+
+fn ip_unpark(id int) {
+	ip_fp = ip_coro[id].fp;
+	ip_sp = ip_coro[id].fsp;
+	ip_fn = ip_coro[id].fnp;
+	ip_retdst = ip_coro[id].retdst;
+	ip_ret = ip_coro[id].ret;
+	ip_returning = ip_coro[id].returning;
+	ip_broke = ip_coro[id].broke;
+	ip_continued = ip_coro[id].continued;
+	ip_ndefer = ip_coro[id].ndefer;
+	ip_defers = ip_coro[id].defers;
+	ip_stack_lo = ip_coro[id].flo;
+}
+
+// The compiled trampoline `coro_entry_addr()` hands out calls this after
+// its target returns. The interpreter's trampoline switches away instead of
+// returning, so reaching here means that invariant broke.
+fn coro_finish() {
+	die("internal: the interpreter's coroutine trampoline returned");
+}
+
+// Runs on the new context's native stack, with its interpreter state
+// already unparked by whoever switched here.
+fn ip_coro_trampoline(id i64, u1 i64, u2 i64, u3 i64, u4 i64) i64 {
+	var slot int = id as int;
+	ip_call_vals(ip_coro[slot].target, ip_coro[slot].a0, ip_coro[slot].a1,
+	             ip_coro[slot].a2, ip_coro[slot].a3, ip_coro[slot].a4);
+	// The interpreted coro_finish marks the slot done, picks the next
+	// runnable coroutine and switches away one-way through
+	// interp_coro_switch -- so this call never comes back.
+	var fin *Func = find_func("coro_finish");
+	if (fin as i64 == 0) { die("internal: the program has no coro_finish"); }
+	ip_call_vals(fin, 0, 0, 0, 0, 0);
+	die("internal: an interpreted coroutine ran past coro_finish");
+	return 0;
+}
+
+fn ip_coro_spawn(n *Node) {
+	var id int = ip_eval(n.args) as int;
+	var target i64 = ip_eval(n.args.next);
+	if (id <= 0 || id >= IP_CORO_SLOTS) { error_at(n.pos, "interpreter: coroutine slot out of range"); }
+	if (target == 0) { error_at(n.pos, "interpreter: spawning a null function"); }
+
+	ip_coro[id].target = target as *Func;
+	ip_coro[id].a0 = ip_eval(n.args.next.next);
+	ip_coro[id].a1 = ip_eval(n.args.next.next.next);
+	ip_coro[id].a2 = ip_eval(n.args.next.next.next.next);
+	ip_coro[id].a3 = ip_eval(n.args.next.next.next.next.next);
+	ip_coro[id].a4 = ip_eval(n.args.next.next.next.next.next.next);
+
+	var frames i64 = sys_mmap_anon(IP_CORO_FRAMES);
+	if (frames < 0 && frames > -4096) { die("error: interpreter cannot map a coroutine frame region"); }
+	ip_coro[id].flo = frames;
+	ip_coro[id].fhi = frames + IP_CORO_FRAMES;
+	ip_coro[id].fsp = frames + IP_CORO_FRAMES;
+	ip_coro[id].fp = 0;
+	ip_coro[id].fnp = 0 as *Func;
+	ip_coro[id].retdst = 0;
+	ip_coro[id].ret = 0;
+	ip_coro[id].returning = false;
+	ip_coro[id].broke = false;
+	ip_coro[id].continued = false;
+	ip_coro[id].ndefer = 0;
+	ip_coro[id].defers = arena_alloc(IP_MAX_DEFERS * 8, 8) as **Node;
+	ip_coro[id].live = true;
+
+	// The native stack image is the one gen_coro_stub expects, built the
+	// way std/coro.qela builds it: callee-saved slots, the trampoline
+	// address the switch stub's `ret` lands on, five arguments and the
+	// target the stub calls. The target is a compiled function of the
+	// interpreter, and its one real argument is the slot number.
+	var stack i64 = sys_mmap_anon(IP_CORO_NATIVE);
+	if (stack < 0 && stack > -4096) { die("error: interpreter cannot map a coroutine stack"); }
+	var top i64 = (stack + IP_CORO_NATIVE) & ~15;
+	var entry fn(i64, i64, i64, i64, i64) i64 = ip_coro_trampoline;
+
+	$if (TARGET != "x86_64") {
+		var sp0 i64 = top - 18 * 8;
+		var p *i64 = sp0 as *i64;
+		var i i64 = 0;
+		while (i < 12) { p[i] = 0; i = i + 1; }
+		$if (TARGET == "arm64") {
+			p[1] = coro_entry_addr();
+		} $else {
+			p[11] = coro_entry_addr();
+		}
+		p[12] = id as i64;
+		p[13] = 0;
+		p[14] = 0;
+		p[15] = 0;
+		p[16] = 0;
+		p[17] = entry as i64;
+		ip_coro[id].sp = sp0;
+	} $else {
+		var sp0 i64 = top - 13 * 8;
+		if ((sp0 & 15) != 8) { sp0 = sp0 - 8; }
+		var p *i64 = sp0 as *i64;
+		var i i64 = 0;
+		while (i < 6) { p[i] = 0; i = i + 1; }
+		p[6] = coro_entry_addr();
+		p[7] = id as i64;
+		p[8] = 0;
+		p[9] = 0;
+		p[10] = 0;
+		p[11] = 0;
+		p[12] = entry as i64;
+		ip_coro[id].sp = sp0;
+	}
+	ip_coro[id].top = top;
+}
+
+fn ip_coro_switch(n *Node) {
+	var from int = ip_eval(n.args) as int;
+	var to int = ip_eval(n.args.next) as int;
+	if (from == to) { return; }
+	if (to < 0 || to >= IP_CORO_SLOTS || !ip_coro[to].live) {
+		error_at(n.pos, "interpreter: switching to a coroutine that was never spawned");
+	}
+	ip_park(from);
+	ip_unpark(to);
+	ip_cur = to;
+	coro_switch(&ip_coro[from].sp as *u8, &ip_coro[to].sp as *u8);
 }
 
 // ── statements ──
@@ -954,6 +1209,14 @@ fn ip_run(u *Unit, argc int, argv **u8) int {
 	if (s < 0 && s > -4096) { die("error: interpreter cannot map the frame stack"); }
 	ip_stack_lo = s;
 	ip_sp = s + IP_STACK;
+	ip_defers = arena_alloc(IP_MAX_DEFERS * 8, 8) as **Node;
+
+	// Slot 0 is the program itself, the context every coroutine switches
+	// back to, exactly as it is in std/coro.qela.
+	ip_cur = 0;
+	ip_coro[0].live = true;
+	ip_coro[0].flo = s;
+	ip_coro[0].fhi = s + IP_STACK;
 
 	if (entry_name.len != 0) {
 		ip_warn_once(0, "interpreter: 'entry' is ignored, running main");
@@ -996,6 +1259,9 @@ fn ip_reset() {
 	ip_ndefer = 0;
 	ip_asm_nwarned = 0;
 	ip_was_intrinsic = false;
+	ip_cur = 0;
+	var i int = 0;
+	while (i < IP_CORO_SLOTS) { ip_coro[i].live = false; i = i + 1; }
 }
 
 fn cmd_irun(argc int, argv **u8) int {
@@ -1047,6 +1313,10 @@ fn cmd_irun(argc int, argv **u8) int {
 	ip_reset();
 	reset_compile();
 	opt_interp = true;
+	// std/coro.qela and std/gc.qela branch on this: the interpreter owns
+	// the stack switching, so those modules hand it back the two operations
+	// they cannot do here themselves.
+	comptime_set("INTERP", "1");
 	diag_setup();
 	var unit *Unit = 0 as *Unit;
 	if (is_dir(input)) {
