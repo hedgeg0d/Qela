@@ -1,0 +1,76 @@
+// expect-exit: 0
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = -36;
+fn diff4(a int, b int, c int, d int) int { return a - b - c - d; }
+fn zero() int { return 3; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn wide_make(a int, b int, c int) Wide { return Wide{a: a, b: b, c: c}; }
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn main() int {
+    var v0 int = 0;
+    var v1 int = 4;
+    var v2 int = 5;
+    var sv0 str = "hello";
+    var sv1 str = "zz";
+    var fv double = 100.0;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    b = Bag{p: ((-1 >= (false != (!true))) as u16), q: ((diff4((v2 - false), (1 as i32), v0, (553 < true)) == (('c' <= 3) as u32)) > ((('0' | 'a') == (!640)) as i32)), r: (((!('b' - 957)) != 332) as i32), s: ("aa").len};
+    if ((305 != (-(-950)))) {
+        n = Nest{tag: ((((fv / 0.3) / 1.7) / 0.125) != fv), p: Pair{x: ((((false > gv) ^ false) >= ((-26 >> true) > (-537 | 'c'))) >> -688), y: ((((-288 == -442) as u16) ^ 2) + (-837 / ((str_eq("hello", sv0) & 15) + 1)))}};
+        return ((((-85 <= false) < a[(627 & 3)]) >> ((false > '\n') << (true as i16))) / ((tag_e(e) & 15) + 1));
+    } else {
+        e = E.C((((-(!'\t')) ^ ((gv & 'e') >= str_eq("abcd", ("xyz")[0..2]))) >= (!((false & 'c') > (sv1)[0]))), (str_eq(sv1, sv0) << (zero() - (str_eq(sv1, (sv1)[0..2]) / ((gv & 15) + 1)))));
+        e = E.B(str_eq(sv0, (sv0)[0..2]));
+        return (-(!((1 % ((gv & 15) + 1)) << tag_e(e))));
+    }
+    p.x = v1;
+    i0 = 0;
+    while ((i0 < 1)) {
+        i0 = (i0 + 1);
+        gv, v0 = v0, gv;
+        sv1 = ("hello")[2..4];
+    }
+    sv0 = "hi";
+    fv = ((((2.5 - fv) / 0.1) / 0.3) / 2.0);
+    e = E.B(((!((("xyzzy")[2..4])[0..2])[0]) as u32));
+    gv, v1 = v1, gv;
+    sv1 = sv0;
+    var ob Buf;
+    fmt_i64(&ob, v1);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return (a[(((true / ((true & 15) + 1)) as u8) & 3)] + (!((10 - '2') as i16)));
+}
