@@ -249,7 +249,7 @@ fn arg_direct_ok(a *Node) bool {
 // other side): scalar float arguments land in xmm registers with their own
 // counter, and the integer arguments are packed into the GPR registers by
 // their own counter, exactly as SysV classifies them.
-fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) {
+fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) int {
 	var dest [14]int;
 	var src [14]i64;
 	var fmm [14]int;
@@ -508,6 +508,7 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) {
 		}
 	}
 	overflow_pushed = m + pad;
+	return ri;
 }
 
 
@@ -716,14 +717,42 @@ fn gen_indirect_call(n *Node) {
 	var ret_mem bool = is_aggregate(n.ty) && abi_sret(n.ty.size);
 	var hidden i64 = -1;
 	if (ret_mem) { hidden = n.tmp.offset as i64; }
-	gen_args(n, false, false, hidden, false);
+
+	var closured bool = n.clo_code as i64 != 0 && n.clo_env as i64 != 0;
+	if (closured) {
+		ir_load_var(n.varp, ty_i64, n.pos);
+		ir_alu_acc_imm(ALU_AND, ty_i64, 1, n.pos);
+		ir_cmp_acc_imm(0, n.pos);
+		var plain i64 = ir_new_label();
+		var done i64 = ir_new_label();
+		ir_branch(CC_EQ, plain, n.pos);
+		ir_load_var(n.varp, ty_i64, n.pos);
+		ir_add_acc_imm(-1, n.pos);
+		ir_store_stackslot_acc(n.clo_env.offset as i64, ty_i64, n.pos);
+		ir_load_acc(ty_i64, n.pos);
+		ir_store_stackslot_acc(n.clo_code.offset as i64, ty_i64, n.pos);
+		ir_branch(CC_ALWAYS, done, n.pos);
+		ir_label(plain, n.pos);
+		ir_load_var(n.varp, ty_i64, n.pos);
+		ir_store_stackslot_acc(n.clo_code.offset as i64, ty_i64, n.pos);
+		ir_mov_acc_imm(0, n.pos);
+		ir_store_stackslot_acc(n.clo_env.offset as i64, ty_i64, n.pos);
+		ir_label(done, n.pos);
+	}
+
+	var nregs int = gen_args(n, false, false, hidden, false);
+	if (closured && nregs < abi_n_arg_regs()) {
+		ir_load_vreg_var(call_reg(nregs), n.clo_env, ty_i64, n.pos);
+	}
 
 	var odd bool = opt_target == TARGET_X86_64 && (depth & 1) != 0;
 	if (odd) {
 		b1(0x48); b1(0x83); modrm(3, 5, RSP); b1(8);
 	}
 	var target IrOperand;
-	if (n.varp.has_reg) {
+	if (closured) {
+		target = operand_stackslot(n.clo_code.offset as i64, ty_i64);
+	} else if (n.varp.has_reg) {
 		target = operand_vreg(n.varp.reg, n.varp.ty);
 	} else if (n.varp.is_global) {
 		target = operand_global(n.varp);
@@ -2698,6 +2727,7 @@ fn gen_func(f *Func) {
 	if (f.ret.kind != TY_VOID && f.ret.kind != TY_TYPE && !f.naked && !always_returns(f.body)) {
 		error_at(f.pos, "control reaches the end of a non-void function");
 	}
+	if (opt_target == TARGET_X86_64 && (code.n & 1) != 0) { b1(0x90); }
 	f.addr = code.n;
 	line_mark(f.pos);
 	depth = 0;
