@@ -1,0 +1,47 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: true hi
+// expect-out: false
+// expect-out: true 42
+// expect-out: false not a number
+// expect-out: fallback
+import "std/io.qela";
+import "std/opt.qela";
+import "std/res.qela";
+import "std/str.qela";
+
+fn find(s str, c u8) Opt(i64) {
+	var i i64 = str_find(s, c);
+	if (i < 0) { return Opt(i64).None; }
+	return Opt(i64).Some(i);
+}
+
+fn between(s str, a u8, b u8) Opt(str) {
+	var i i64 = find(s, a)?;
+	var j i64 = find(s, b)?;
+	return Opt(str).Some(str_slice(s, i + 1, j));
+}
+
+fn parse_num(s str) Res(i64, str) {
+	var ok bool = false;
+	var v i64 = str_to_int(s, &ok);
+	if (!ok) { return Res(i64, str).Err("not a number"); }
+	return Res(i64, str).Ok(v);
+}
+
+fn add_nums(a str, b str) Res(i64, str) {
+	return Res(i64, str).Ok(parse_num(a)? + parse_num(b)?);
+}
+
+fn main() int {
+	var r = between("x(hi)y", '(', ')');
+	println("${opt_is_some(r)} ${opt_val(r)}");
+	var r2 = between("nope", '(', ')');
+	println("${opt_is_some(r2)}");
+	var s1 = add_nums("2", "40");
+	println("${res_is_ok(s1)} ${res_val(s1)}");
+	var s2 = add_nums("2", "x");
+	println("${res_is_ok(s2)} ${res_err(s2)}");
+	println("${opt_or(r2, "fallback")}");
+	return 0;
+}
