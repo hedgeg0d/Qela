@@ -1388,6 +1388,25 @@ fn parse_primary(t **Token) *Node {
 		var start *Token = *t;
 		*t = (*t).next;
 
+		// vec literal: vec[1, 2, 3]. A real variable named `vec` indexed
+		// the ordinary way wins when one resolves at parse time.
+		if (str_eq(name, "vec") && tok_eq(*t, "[") && find_var("vec") as i64 == 0) {
+			*t = (*t).next;
+			var n *Node = new_node(ND_VECLIT, p);
+			var ahead Node;
+			var atail *Node = &ahead;
+			while (!tok_eq(*t, "]")) {
+				var e *Node = parse_assign(t);
+				atail.next = e;
+				atail = e;
+				n.nargs = n.nargs + 1;
+				if (!tok_consume(t, ",")) { break; }
+			}
+			tok_expect(t, "]");
+			n.args = ahead.next;
+			return n;
+		}
+
 		var named *Type = type_lookup(name);
 		// A template name is followed by its arguments, so the whole
 		// application has to be read as a type before the dot or the brace.
@@ -1419,6 +1438,16 @@ fn parse_primary(t **Token) *Node {
 			while (!tok_eq(*t, "}")) {
 				if (ftail as i64 != &fhead as i64) { tok_expect(t, ","); }
 				if (tok_eq(*t, "}")) { break; }
+				if (tok_consume(t, "...")) {
+					// `P{...q, b: 2}`: the spread copies q's fields.
+					var fld *Node = new_node(ND_FIELD, (*t).pos);
+					fld.name = "...";
+					fld.lhs = parse_assign(t);
+					ftail.next = fld;
+					ftail = fld;
+					n.nargs = n.nargs + 1;
+					continue;
+				}
 				var fnm str = (*t).text;
 				var fpos i64 = (*t).pos;
 				*t = (*t).next;
