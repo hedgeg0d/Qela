@@ -1973,7 +1973,7 @@ fn ir_flush() {
 	ir_flushing = true;
 	var op *IrOp = ir_head;
 	while (op as i64 != 0) {
-		x86_lower_op(op);
+		if (opt_target == TARGET_ARM64) { arm64_lower_op(op); } else { x86_lower_op(op); }
 		op = op.next;
 	}
 	ir_reset();

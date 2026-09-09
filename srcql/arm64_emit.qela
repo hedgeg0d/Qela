@@ -1,0 +1,116 @@
+// AArch64 (ARM64) instruction emission and IR lowering (M9). Mirrors
+// x86_emit.qela's role: codegen.qela's frontend emits target-neutral IR
+// (srcql/ir.qela); this file turns it into AArch64 machine words when
+// opt_target == TARGET_ARM64. Every A64 instruction is exactly one 32-bit
+// little-endian word, so b4() (x86_emit.qela's existing "flush pending IR,
+// then append a u32" primitive) doubles as this backend's only emission
+// primitive -- no separate word-buffer trigger needed.
+//
+// Register convention, chosen to mirror x86_emit.qela's accumulator model:
+// X0 is the accumulator (also AAPCS64's first argument/return register, so
+// gen_call's result and a syscall's first argument need no extra move), X1
+// is the op2 scratch register (op2_reg's ARM64 return value), X8 carries a
+// syscall number, X30 is the link register, X29 the frame pointer.
+//
+// Started (2026-08-05): immediate-load into the accumulator, return, direct
+// calls, and the process entry stub -- enough to run
+// `fn main() int { return N; }` under qemu-aarch64. Arithmetic, control
+// flow, locals/spills (which need regalloc.qela's register pool ported off
+// its x86-only RBX/R12-R15 constants first) and everything past core scalar
+// codegen (floats, aggregates, threading/coro/gc/asm/atomic) are not here
+// yet.
+import "comp.qela";
+import "diag.qela";
+import "ir.qela";
+import "x86_emit.qela";
+
+let X0  = 0;
+let X1  = 1;
+let X8  = 8;
+let X29 = 29;
+let X30 = 30;
+let SP  = 31;   // register field value 31 means SP or XZR depending on the instruction; only SP forms are used here.
+
+let SYS_ARM64_EXIT_GROUP = 94;
+
+
+// A64 immediate loads are 16 bits at a time (MOVZ then up to three MOVK,
+// each shifted by 16 more), so an arbitrary 64-bit constant costs up to
+// four instructions. Small constants (everything this backend currently
+// emits) cost one.
+fn arm64_movz(rd int, imm16 i64, hw int) {
+	b4(0xd2800000 | (hw << 21) | ((imm16 & 0xffff) << 5) | rd);
+}
+
+fn arm64_movk(rd int, imm16 i64, hw int) {
+	b4(0xf2800000 | (hw << 21) | ((imm16 & 0xffff) << 5) | rd);
+}
+
+fn arm64_mov_imm64(rd int, v i64) {
+	arm64_movz(rd, v & 0xffff, 0);
+	if (((v >> 16) & 0xffff) != 0) { arm64_movk(rd, (v >> 16) & 0xffff, 1); }
+	if (((v >> 32) & 0xffff) != 0) { arm64_movk(rd, (v >> 32) & 0xffff, 2); }
+	if (((v >> 48) & 0xffff) != 0) { arm64_movk(rd, (v >> 48) & 0xffff, 3); }
+}
+
+fn arm64_ret() {
+	b4(0xd65f0000 | (X30 << 5));
+}
+
+fn arm64_svc() {
+	b4(0xd4000001);
+}
+
+// MOV Xd, Xn -- the ORR (shifted register) alias with the first operand XZR.
+fn arm64_mov_reg(rd int, rn int) {
+	if (rd == rn) { return; }
+	b4(0xaa0003e0 | (rn << 16) | rd);
+}
+
+
+// A direct call's target function address is not known until every
+// function has been laid out, same as x86's add_call -- but BL's target is
+// a 26-bit word-granular immediate baked into the instruction itself, not a
+// trailing rel32 slot, so the fixup records the instruction's own position
+// and the patch reads-modifies-writes the word instead of overwriting a
+// blank rel32.
+fn arm64_add_call(name str, pos i64) {
+	var f *CallFixup = arena_alloc(sizeof(CallFixup), 8) as *CallFixup;
+	f.at = code.n;
+	f.name = name;
+	f.pos = pos;
+	if (calls_tail as i64 == 0) { calls_head = f; } else { calls_tail.next = f; }
+	calls_tail = f;
+	b4(0x94000000);
+}
+
+fn buf_read32(b *Buf, at i64) i64 {
+	var p *u8 = b.p + at;
+	return (*p as i64) | ((*(p + 1) as i64) << 8) | ((*(p + 2) as i64) << 16) | ((*(p + 3) as i64) << 24);
+}
+
+// rel is byte distance from the BL instruction itself to the target -- A64
+// branches are PC-relative to their own address, unlike x86's call rel32
+// (relative to the end of the instruction).
+fn arm64_patch_call(b *Buf, at i64, rel i64) {
+	var word i64 = buf_read32(b, at);
+	var imm26 i64 = (rel >> 2) & 0x3ffffff;
+	buf_patch32(b, at, word | imm26);
+}
+
+
+fn arm64_lower_op(op *IrOp) {
+	if (op.kind == IR_MOV && op.dst.kind == OP_ACC && op.src0.kind == OP_IMM) {
+		arm64_mov_imm64(X0, op.src0.off);
+		return;
+	}
+	if (op.kind == IR_RET) {
+		arm64_ret();
+		return;
+	}
+	if (op.kind == IR_CALL && op.src0.kind == OP_FUNC) {
+		arm64_add_call((op.src0.off as *Func).name, op.pos);
+		return;
+	}
+	die("internal: arm64_lower_op: unhandled IR shape (ARM64 backend covers only literal-return/direct-call programs so far)");
+}
