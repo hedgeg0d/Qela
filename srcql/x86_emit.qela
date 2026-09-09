@@ -495,6 +495,17 @@ fn add_strref(reg int, id int) {
 		push_reloc_id(f.at, id as i64, REL_PCREL32);
 		return;
 	}
+	if (base_is_wide()) {
+		if (reg >= 8) { b1(0x49); } else { b1(0x48); }
+		b1(0xb8 + ((reg as i64) & 7));
+		var wf *StrFixup = arena_alloc(sizeof(StrFixup), 8) as *StrFixup;
+		wf.at = code.n;
+		wf.id = id;
+		if (strrefs_tail as i64 == 0) { strrefs_head = wf; } else { strrefs_tail.next = wf; }
+		strrefs_tail = wf;
+		buf_u64(&code, 0);
+		return;
+	}
 	if (reg >= 8) { b1(0x41); }
 	b1(0xb8 + ((reg as i64) & 7));
 	var f *StrFixup = arena_alloc(sizeof(StrFixup), 8) as *StrFixup;
@@ -526,6 +537,17 @@ fn add_dataref(v *Var) {
 		fmt_str(&sb, v.name);
 		fmt_str(&sb, "' is not linked (extern needs -c and the linker)");
 		error_at(v.pos, buf_str(&sb));
+	}
+	if (base_is_wide()) {
+		b1(0x48);
+		b1(0xb8);
+		var wf *DataFixup = arena_alloc(sizeof(DataFixup), 8) as *DataFixup;
+		wf.at = code.n;
+		wf.varp = v;
+		if (datarefs_tail as i64 == 0) { datarefs_head = wf; } else { datarefs_tail.next = wf; }
+		datarefs_tail = wf;
+		buf_u64(&code, 0);
+		return;
 	}
 	b1(0xb8);
 	var f *DataFixup = arena_alloc(sizeof(DataFixup), 8) as *DataFixup;
@@ -669,7 +691,7 @@ fn gen_bt_walker() {
 	b1(0x49); b1(0xc7); b1(0xc2); b4(0);      // mov r10, 0
 	var scan_at i64 = code.n;
 	b1(0x8b); b1(0x02);                       // mov eax, [rdx]
-	alu_rax_imm(0, ELF_BASE);                 // add rax, ELF_BASE
+	alu_rax_imm(0, opt_base);                 // add rax, opt_base
 	b1(0x48); b1(0x39); b1(0xd8);             // cmp rax, rbx
 	var ja_end i64 = code.n;
 	b1(0x77); b1(0);                          // ja endscan
