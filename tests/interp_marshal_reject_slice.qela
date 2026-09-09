@@ -1,8 +1,10 @@
 // expect-compile-error
 // stage1-only
-// A struct with a slice field (other than str) cannot cross the
-// interpreted/dynamic ABI.
-struct S { a i64, b []i64 }
+// A slice whose elements can hold a pointer (a str here) cannot cross the
+// interpreted/dynamic ABI: its raw image would carry host addresses. A
+// struct with such a field fails the same check.
+struct S { a i64, b []str }
 
-fn interpreted bad(s S) i64 { return 0; }
+fn interpreted bad1(s []str) i64 { return s.len; }
+fn interpreted bad2(s S) i64 { return 0; }
 fn main() int { return 0; }
