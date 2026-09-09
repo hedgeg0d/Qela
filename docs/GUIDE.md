@@ -201,9 +201,20 @@ Not everything survives the trip, and the ones that do not say so:
 |---|---|
 | `asm(...)`, top-level `asm { }`, `fn naked`, `entry` | ignored, one warning per site |
 | `extern` functions and globals | error: there is no linker here |
-| `thread_clone`, `go`, `thread_pool_init` | error: real OS threads are not supported yet |
+| `thread_clone`, `go`, `thread_pool_init` | work: real OS threads, each with its own interpreter state and tvar block |
 | `spawn`, `coro_yield`, channels, the collector | work |
-| atomics, `fence`, `tvar`, `tls_init` | work, as the single-threaded operations they reduce to |
+| atomics, `fence`, `tvar`, `tls_init` | work: real lock-prefixed operations, per-thread tvar blocks |
+
+The thread notes. A thread spawned through `thread_clone` runs its target
+through a fresh interpreter: the stack the program passes is the
+interpreter's own native stack (a tree-walker recurses deeper than
+compiled code, so size it generously), the target must return a scalar,
+and each thread gets its own program tvar block automatically -- no
+`tls_init` call needed to keep two threads from sharing one. The GC
+thread registry and channel spinlocks are sound across threads because
+the atomics are the real compiled ones. `gc_save_regs` stays a no-op:
+every interpreted root is a frame slot in a region the registry scan
+covers.
 
 Coroutines are worth a note. An interpreted coroutine is a suspended
 interpreter -- the evaluator's state is the process's own call stack -- so
