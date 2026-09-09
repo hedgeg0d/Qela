@@ -362,7 +362,7 @@ fn add_call(name str, pos i64) {
 	if (calls_tail as i64 == 0) { calls_head = f; } else { calls_tail.next = f; }
 	calls_tail = f;
 	b4(0);
-	if (opt_object) { push_reloc(f.at, name, R_PLT32); }
+	if (opt_object) { push_reloc(f.at, name, REL_PCREL32_PLT); }
 }
 
 // `$rel name` in asm operands: a rel32 slot patched like a call target.
@@ -374,7 +374,7 @@ fn add_callref(name str, pos i64) {
 	f.pos = pos;
 	if (calls_tail as i64 == 0) { calls_head = f; } else { calls_tail.next = f; }
 	calls_tail = f;
-	if (opt_object) { push_reloc(f.at, name, R_PC32); }
+	if (opt_object) { push_reloc(f.at, name, REL_PCREL32); }
 }
 
 // `$name` in asm operands: an 8-byte absolute address slot.
@@ -387,7 +387,7 @@ fn add_absref(name str, pos i64) {
 	f.pos = pos;
 	if (asmrefs_tail as i64 == 0) { asmrefs_head = f; } else { asmrefs_tail.next = f; }
 	asmrefs_tail = f;
-	if (opt_object) { push_reloc(f.at, name, R_64); }
+	if (opt_object) { push_reloc(f.at, name, REL_ABS64); }
 }
 
 fn add_strref(reg int, id int) {
@@ -403,7 +403,7 @@ fn add_strref(reg int, id int) {
 		if (strrefs_tail as i64 == 0) { strrefs_head = f; } else { strrefs_tail.next = f; }
 		strrefs_tail = f;
 		b4(0);
-		push_reloc_id(f.at, id as i64, R_PC32);
+		push_reloc_id(f.at, id as i64, REL_PCREL32);
 		return;
 	}
 	if (reg >= 8) { b1(0x41); }
@@ -427,7 +427,7 @@ fn add_dataref(v *Var) {
 		rip_ref(0x8d, RAX);
 		var at i64 = code.n;
 		b4(0);
-		push_reloc(at, v.name, R_PC32);
+		push_reloc(at, v.name, REL_PCREL32);
 		return;
 	}
 	if (v.extern && !v.has_init) {
@@ -466,7 +466,7 @@ fn add_funcaddr(name str, pos i64) {
 	else { funcaddrs_tail.next = f; }
 	funcaddrs_tail = f;
 	buf_u64(&code, 0);
-	if (opt_object) { push_reloc(f.at, name, R_64); }
+	if (opt_object) { push_reloc(f.at, name, REL_ABS64); }
 }
 
 fn add_rax_imm(v i64) {
@@ -2828,7 +2828,7 @@ fn gen_panic_stub(msg_id int, msg_len i64) {
 		var nb Buf;
 		fmt_str(&nb, ".Lstrd");
 		fmt_i64(&nb, msg_id as i64);
-		push_reloc(at, buf_str(&nb), R_PC32);
+		push_reloc(at, buf_str(&nb), REL_PCREL32);
 	} else {
 		b1(0xbe);
 		ilist_push(&panic_msg_at, code.n);
@@ -3130,7 +3130,7 @@ fn codegen(u *Unit, img *Image) {
 			var fr *Reloc = arena_alloc(sizeof(Reloc), 8) as *Reloc;
 			fr.at = str_off[sr.id];
 			fr.id = sr.id as i64;
-			fr.kind = R_64;
+			fr.kind = REL_ABS64;
 			if (rodata_relocs_tail as i64 == 0) { rodata_relocs_head = fr; }
 			else { rodata_relocs_tail.next = fr; }
 			rodata_relocs_tail = fr;
