@@ -266,6 +266,31 @@ EOF
 printf '    ok\n'
 
 
+step "interpreted/dynamic call-site trampolines"
+cat > "$tmp2/trampoline.qela" <<'EOF'
+import "std/io.qela";
+fn interpreted square(x i64) i64 {
+	return x * x;
+}
+fn dynamic add3(a i64, b i64, c i64) i64 {
+	return a + b + c;
+}
+fn main() int {
+	var s i64 = square(7);
+	var t i64 = add3(1, 2, 3);
+	var s2 i64 = square(9);
+	write_str(STDOUT, "s=${s} t=${t} s2=${s2}\n");
+	return 0;
+}
+EOF
+( cd "$tmp2" &&
+  "$root/$OUT/s2" trampoline.qela -o trampoline &&
+  [ "$(QELAPATH="$root/$OUT/s2" ./trampoline)" = "s=49 t=6 s2=81" ] &&
+  [ "$(QELAPATH="$root/$OUT/s2" "$root/$OUT/s2" irun trampoline.qela)" = "s=49 t=6 s2=81" ] ) ||
+	fail "an interpreted/dynamic function misbehaves under AOT or irun"
+printf '    ok\n'
+
+
 step "stdin compile and shebang"
 cat > "$tmp2/btcrash.qela" <<'EOF'
 fn deep(n i64) i64 {
