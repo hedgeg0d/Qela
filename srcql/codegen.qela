@@ -1087,8 +1087,12 @@ fn gen_compare(n *Node) i64 {
 // return address that the call pushed onto whichever stack is current,
 // which is exactly how control lands back where a coroutine left off.
 fn gen_coro_switch(n *Node) {
-	if (opt_target == TARGET_ARM64) { die("error: -target arm64 does not support coroutines yet"); }
 	gen_args(n, false, false, -1, false);
+	if (opt_target == TARGET_ARM64) {
+		b4(0x94000000);  // bl placeholder, patched in finalize like a direct call
+		ilist_push(&coro_switch_refs, code.n - 4);
+		return;
+	}
 	b1(0xe8);
 	ilist_push(&coro_switch_refs, code.n);
 	b4(0);
@@ -2360,13 +2364,21 @@ fn gen_coro_entry_addr() {
 
 // Emits one asm operand chain: bytes (a value wider than a byte is a byte
 // string in hex, most significant byte first -- the order a disassembler
-// prints) or a symbol slot: `$name` absolute, `$rel name` relative.
+// prints) or a symbol slot: `$name` absolute, `$rel name` relative. On
+// ARM64 `$name` is the same 8-byte absolute slot, but `$rel name` patches
+// the IMM26 of the 4-byte instruction that precedes it (a `b`/`bl` with a
+// zero immediate) instead of appending a rel32 -- A64 branches carry their
+// displacement inside the word.
 fn gen_asm_operands(a *Node) {
-	if (opt_target == TARGET_ARM64) { die("error: -target arm64 does not support asm blocks yet"); }
 	while (a as i64 != 0) {
 		if (a.kind == ND_ASMREF) {
-			if (a.val != 0) { add_callref(a.name, a.pos); }
-			else { add_absref(a.name, a.pos); }
+			if (a.val != 0) {
+				if (opt_target == TARGET_ARM64) { add_callref_arm64(a.name, a.pos); }
+				else { add_callref(a.name, a.pos); }
+			} else {
+				if (opt_target == TARGET_ARM64) { add_absref_arm64(a.name, a.pos); }
+				else { add_absref(a.name, a.pos); }
+			}
 		} else {
 			var v i64 = a.val;
 			var n i64 = 1;
@@ -2380,6 +2392,44 @@ fn gen_asm_operands(a *Node) {
 		}
 		a = a.next;
 	}
+}
+
+// `$rel name` inside an ARM64 asm block: emits a `bl` with a zero IMM26
+// and records the word's position so the calls chain patches it -- the
+// A64 branch is the whole instruction, unlike x86's trailing rel32.
+fn add_callref_arm64(name str, pos i64) {
+	b4(0x94000000);
+	var f *CallFixup = arena_alloc(sizeof(CallFixup), 8) as *CallFixup;
+	f.at = code.n - 4;
+	f.name = name;
+	f.pos = pos;
+	if (calls_tail as i64 == 0) { calls_head = f; } else { calls_tail.next = f; }
+	calls_tail = f;
+	if (opt_object) { push_reloc(f.at, name, REL_ARM64_CALL26); }
+}
+
+// `$name` inside an ARM64 asm block: loads the symbol's address into X0 as
+// a MOVZ+MOVK pair (exe) or ADRP+ADD_LO12 (object) instead of x86's
+// trailing 8-byte absolute slot -- A64 has no single mov-immediate, and a
+// LDR-literal slot confuses qemu's linear block decoder.
+fn add_absref_arm64(name str, pos i64) {
+	var f *CallFixup = arena_alloc(sizeof(CallFixup), 8) as *CallFixup;
+	f.name = name;
+	f.pos = pos;
+	if (opt_object) {
+		f.at = code.n;
+		arm64_adrp(X0);
+		var at1 i64 = code.n;
+		arm64_add_lo12(X0);
+		push_reloc(f.at, name, REL_ARM64_ADRP);
+		push_reloc(at1, name, REL_ARM64_ADD_LO12);
+	} else {
+		arm64_movz(X0, 0, 0);
+		arm64_movk(X0, 0, 1);
+		f.at = code.n - 8;
+	}
+	if (asmrefs_tail as i64 == 0) { asmrefs_head = f; } else { asmrefs_tail.next = f; }
+	asmrefs_tail = f;
 }
 
 
@@ -2901,24 +2951,30 @@ fn emit_code(u *Unit, main_fn *Func, panic_id int, hdr i64) {
 	}
 
 	if (coro_switch_refs.n != 0) {
-		gen_coro_switch_stub();
+		if (opt_target == TARGET_ARM64) { gen_coro_switch_stub_arm64(); }
+		else { gen_coro_switch_stub(); }
 		var wi i64 = 0;
 		while (wi < coro_switch_refs.n) {
 			var site i64 = coro_switch_refs.p[wi];
-			buf_patch32(&code, site, coro_switch_at - (site + 4));
+			if (opt_target == TARGET_ARM64) { arm64_patch_call(&code, site, coro_switch_at - site); }
+			else { buf_patch32(&code, site, coro_switch_at - (site + 4)); }
 			wi = wi + 1;
 		}
 	}
 
 	if (coro_stub_refs.n != 0) {
-		gen_coro_stub();
+		if (opt_target == TARGET_ARM64) { gen_coro_stub_arm64(); }
+		else { gen_coro_stub(); }
 		var si i64 = 0;
 		while (si < coro_stub_refs.n) {
 			var abs i64 = ELF_BASE + hdr + coro_stub_at;
-			var kk i64 = 0;
-			while (kk < 8) {
-				code.p[coro_stub_refs.p[si] + kk] = ((abs >> (kk * 8)) & 255) as u8;
-				kk = kk + 1;
+			if (opt_target == TARGET_ARM64) { arm64_patch_movz_movk_addr(coro_stub_refs.p[si], abs); }
+			else {
+				var kk i64 = 0;
+				while (kk < 8) {
+					code.p[coro_stub_refs.p[si] + kk] = ((abs >> (kk * 8)) & 255) as u8;
+					kk = kk + 1;
+				}
 			}
 			si = si + 1;
 		}
@@ -3217,10 +3273,13 @@ fn codegen(u *Unit, img *Image) {
 			}
 			aval = dbase + gv.data_off;
 		}
-		var j5 i64 = 0;
-		while (j5 < 8) {
-			code.p[ar.at + j5] = ((aval >> (j5 * 8)) & 255) as u8;
-			j5 = j5 + 1;
+		if (opt_target == TARGET_ARM64) { arm64_patch_movz_movk_addr(ar.at, aval); }
+		else {
+			var j5 i64 = 0;
+			while (j5 < 8) {
+				code.p[ar.at + j5] = ((aval >> (j5 * 8)) & 255) as u8;
+				j5 = j5 + 1;
+			}
 		}
 		ar = ar.next;
 	}
