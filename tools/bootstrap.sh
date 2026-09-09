@@ -61,6 +61,11 @@ printf '\n\033[32mM7 GATE PASSED\033[0m: S2 == S3, %s bytes\n' \
 step "test corpus under S2"
 QELA="$OUT/s2" tools/run-tests.sh || fail "S2 does not pass the test corpus"
 
+step "position-independent executable (--pie)"
+"$OUT/s2" --pie tests/pie.qela -o "$OUT/pie" || fail "--pie failed to compile"
+[ "$("$OUT/pie")" = "pie ok 42" ] || fail "--pie binary produced wrong output"
+printf '    ok\n'
+
 step "test corpus interpreted (qela irun)"
 QELA="$OUT/s2" TARGET=interp tools/run-tests.sh ||
 	fail "the interpreter does not pass the test corpus"

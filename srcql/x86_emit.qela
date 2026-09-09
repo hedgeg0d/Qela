@@ -139,7 +139,11 @@ var panic_msg_ids I64List;
 
 var bt_base_refs I64List;
 
+var bt_off_refs I64List;
+
 var bt_jmps I64List;
+
+var pie_table_site i64 = -1;
 
 var funcaddrs_head *CallFixup;
 
@@ -466,6 +470,9 @@ fn add_callref(name str, pos i64) {
 
 // `$name` in asm operands: an 8-byte absolute address slot.
 fn add_absref(name str, pos i64) {
+	if (opt_pie) {
+		error_at(pos, "$name in asm embeds an absolute address, which a PIE cannot carry; use $rel");
+	}
 	var k i64 = 0;
 	while (k < 8) { b1(0); k = k + 1; }
 	var f *CallFixup = arena_alloc(sizeof(CallFixup), 8) as *CallFixup;
@@ -482,6 +489,9 @@ fn add_absref(name str, pos i64) {
 // in a 4-byte slot -- for 32-bit code, where the 8-byte form would spill
 // into the following instructions.
 fn add_absref32(name str, pos i64) {
+	if (opt_pie) {
+		error_at(pos, "$abs in asm embeds an absolute address, which a PIE cannot carry; use $rel");
+	}
 	b4(0);
 	var f *CallFixup = arena_alloc(sizeof(CallFixup), 8) as *CallFixup;
 	f.at = code.n - 4;
@@ -495,6 +505,19 @@ fn add_absref32(name str, pos i64) {
 
 
 fn add_strref(reg int, id int) {
+	if (opt_pie) {
+		// A PIE resolves the string header's address against the runtime
+		// base: a rip-relative lea with a disp32 the linker fills with a
+		// base-independent delta (header_off - slot - 4).
+		rip_ref(0x8d, reg);
+		var pf *StrFixup = arena_alloc(sizeof(StrFixup), 8) as *StrFixup;
+		pf.at = code.n;
+		pf.id = id;
+		if (strrefs_tail as i64 == 0) { strrefs_head = pf; } else { strrefs_tail.next = pf; }
+		strrefs_tail = pf;
+		b4(0);
+		return;
+	}
 	if (opt_object) {
 		// RIP-relative slot the linker resolves: the address of the string
 		// header is S + A - P from the slot, so it works at any load base
@@ -533,6 +556,16 @@ fn add_strref(reg int, id int) {
 
 
 fn add_dataref(v *Var) {
+	if (opt_pie) {
+		rip_ref(0x8d, RAX);
+		var pf *DataFixup = arena_alloc(sizeof(DataFixup), 8) as *DataFixup;
+		pf.at = code.n;
+		pf.varp = v;
+		if (datarefs_tail as i64 == 0) { datarefs_head = pf; } else { datarefs_tail.next = pf; }
+		datarefs_tail = pf;
+		b4(0);
+		return;
+	}
 	if (opt_object) {
 		// Every global is a RIP-relative lea here: own symbols and exported
 		// externs live in this image, and an imported extern resolves at
@@ -578,13 +611,25 @@ fn add_dataref(v *Var) {
 // disp is a relocation the linker fills, so a reference works at any load
 // base. op 0x8d is a lea (own symbol), 0x8b a GOT load (imported extern).
 fn rip_ref(op int, reg int) {
-	if ((reg as i64) >= 8) { b1(0x49); } else { b1(0x48); }
+	if ((reg as i64) >= 8) { b1(0x4c); } else { b1(0x48); }
 	b1(op);
 	b1(0x05 | (((reg as i64) & 7) << 3));
 }
 
 
 fn add_funcaddr(name str, pos i64) {
+	if (opt_pie) {
+		rip_ref(0x8d, RAX);
+		var pf *CallFixup = arena_alloc(sizeof(CallFixup), 8) as *CallFixup;
+		pf.at = code.n;
+		pf.name = name;
+		pf.pos = pos;
+		if (funcaddrs_tail as i64 == 0) { funcaddrs_head = pf; }
+		else { funcaddrs_tail.next = pf; }
+		funcaddrs_tail = pf;
+		b4(0);
+		return;
+	}
 	rex_w(0, RAX);
 	b1(0xb8);
 	var f *CallFixup = arena_alloc(sizeof(CallFixup), 8) as *CallFixup;
@@ -666,9 +711,17 @@ fn gen_assert(n *Node) {
 // r9  = frames left to walk -- rcx and r11 are clobbered by syscalls
 fn gen_bt_walker() {
 	if (opt_target == TARGET_RISCV64) { riscv_bt_walker(); return; }
-	b1(0x41); b1(0xb8);                       // mov r8d, imm32
-	ilist_push(&bt_base_refs, code.n);
-	b4(0);
+	if (opt_pie) {
+		// The table base is rip-relative; the entries stay file-offset
+		// deltas, so each lookup adds the runtime base (r8 - table_off).
+		rip_ref(0x8d, R8);
+		ilist_push(&bt_base_refs, code.n);
+		b4(0);
+	} else {
+		b1(0x41); b1(0xb8);                   // mov r8d, imm32
+		ilist_push(&bt_base_refs, code.n);
+		b4(0);
+	}
 	b1(0x48); b1(0x8b); b1(0x1c); b1(0x24);   // mov rbx, [rsp]
 	b1(0xe8);
 	var c1 i64 = code.n;                      // call bt_print (rel32 field)
@@ -706,7 +759,17 @@ fn gen_bt_walker() {
 	b1(0x49); b1(0xc7); b1(0xc2); b4(0);      // mov r10, 0
 	var scan_at i64 = code.n;
 	b1(0x8b); b1(0x02);                       // mov eax, [rdx]
-	alu_rax_imm(0, opt_base);                 // add rax, opt_base
+	if (opt_pie) {
+		// rax = delta + runtime base, where base = r8 - bt_table_off
+		// (the imm32 sub operand is patched once the table offset is
+		// known, through bt_off_refs).
+		b1(0x49); b1(0x01); b1(0xc0);         // add rax, r8
+		b1(0x48); b1(0x2d);                   // sub rax, imm32
+		ilist_push(&bt_off_refs, code.n);
+		b4(0);
+	} else {
+		alu_rax_imm(0, opt_base);             // add rax, opt_base
+	}
 	b1(0x48); b1(0x39); b1(0xd8);             // cmp rax, rbx
 	var ja_end i64 = code.n;
 	b1(0x77); b1(0);                          // ja endscan
@@ -1282,6 +1345,41 @@ fn gen_thread_clone(n *Node) {
 
 // Builds a fresh per-thread TLS block: mmap it, copy the template in,
 // write the self-pointer at offset 0, then point %fs at it. Called once
+// A PIE runs at a kernel-chosen base, so before anything else the entry
+// stub finds that base and applies the image's RELATIVE fixups (every
+// data slot that holds an image address; the string headers live in the
+// RW segment for exactly this reason, so no mprotect is needed). The
+// stub sits at code offset 0, so its own rip-relative fields are at
+// fixed offsets: the lea into r13 always sees base + hdr + 7, which the
+// sub below reduces to the runtime base without any patched constant.
+fn gen_pie_prologue(hdr i64) {
+	rip_ref(0x8d, 13);                    // lea r13, [rip+0]
+	b4(0);                                //   r13 = base + hdr + 7
+	b1(0x49); b1(0x81); modrm(3, 5, 13);  // sub r13, imm32(hdr + 7)
+	b4(hdr + 7);                          //   r13 = the runtime base
+	rip_ref(0x8d, 14);                    // lea r14, [rip+d]
+	pie_table_site = code.n;              //   r14 = the fixup table (patched)
+	b4(0);
+	b1(0x4d); b1(0x8b); b1(0x3e);         // mov r15, [r14]  (entry count)
+	b1(0x4d); b1(0x8d); b1(0x66); b1(8);  // lea r12, [r14+8]
+	var loop_at i64 = code.n;
+	b1(0x4d); b1(0x85); b1(0xff);         // test r15, r15
+	var jz_done i64 = code.n;
+	b1(0x74); b1(0);                      // jz done
+	b1(0x49); b1(0x8b); b1(0x04); b1(0x24);      // mov rax, [r12]      slot
+	b1(0x49); b1(0x8b); b1(0x5c); b1(0x24); b1(8); // mov rbx, [r12+8]  target
+	b1(0x4c); b1(0x01); b1(0xe8);         // add rax, r13   slot at runtime
+	b1(0x4c); b1(0x01); b1(0xeb);         // add rbx, r13   target at runtime
+	b1(0x48); b1(0x89); b1(0x18);         // mov [rax], rbx
+	b1(0x49); b1(0x83); b1(0xc4); b1(16); // add r12, 16
+	b1(0x49); b1(0xff); b1(0xcf);         // dec r15
+	var jnz_loop i64 = code.n;
+	b1(0x75); b1(0);                      // jnz loop
+	code.p[jnz_loop + 1] = (loop_at - (jnz_loop + 2)) as u8;
+	var done_at i64 = code.n;
+	code.p[jz_done + 1] = (done_at - (jz_done + 2)) as u8;
+}
+
 // for the main thread (from the entry stub, only when the program
 // declared a tvar) and once per spawned OS thread.
 fn gen_tls_init_stub() {
@@ -1305,10 +1403,16 @@ fn gen_tls_init_stub() {
 
 	// Copy the template in, 8 bytes at a time -- tls_block_size is always
 	// a multiple of 8.
-	rex_w(0, RSI);
-	b1(0xbe);
-	tls_stub_src_at = code.n;      // patched below to the template's runtime address
-	buf_u64(&code, 0);
+	if (opt_pie) {
+		rip_ref(0x8d, RSI);        // lea rsi, [rip+d]: the template's address
+		tls_stub_src_at = code.n;  // patched below to the template's runtime address
+		b4(0);
+	} else {
+		rex_w(0, RSI);
+		b1(0xbe);
+		tls_stub_src_at = code.n;      // patched below to the template's runtime address
+		buf_u64(&code, 0);
+	}
 	mov_reg_reg(RDI, 12);
 	mov_reg_imm(RCX, tls_block_size / 8);
 	b1(0xfc);                      // cld

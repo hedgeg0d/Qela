@@ -19,6 +19,33 @@ server conversation.
 
 ## Done
 
+**Position-independent executables: `--pie` (2026-08-15).** An
+ET_DYN image the kernel loads at a random base, x86_64 only. Every
+address the linker would normally bake in becomes base-independent:
+code references to globals, strings, function values, GC bounds, the
+panic message, the backtrace table, the coroutine and tls stubs all
+emit as rip-relative `lea` with a disp32 computed from image offsets
+(the `hdr` cancels out of every delta), and the few data slots that
+must hold a real address at runtime — string headers, which now live
+in the RW segment for exactly this reason, and the embedded-compiler
+pointer — are fixed by the entry stub itself: it finds the runtime
+base with one `lea r13,[rip]` minus a constant (the stub sits at code
+offset 0, so nothing is patched there), then walks a `{slot, target}`
+table appended to rodata, adding the base to each slot. No mprotect,
+no dynamic section: the only writes land in RW memory. `--pie` is
+rejected with `--base`, with `-c` (an object is already relocatable),
+with `entry name;` or top-level asm (nothing else would run the
+fixup walk), with `$name`/`$abs` in asm (absolute by definition), and
+on arm64/riscv64 for now. The corpus passes whole under `--pie`
+(186/196: the ten exceptions are the asm/entry rejections above and
+the eval tests, whose spawned child needs QELAPATH to point at a bare
+binary — with that set they pass too). `tests/pie.qela` pins strings,
+data/bss globals, bounds checks, a tvar and a coroutine, and
+`tools/bootstrap.sh` compiles and runs it under `--pie` on every gate
+run. S2 700 616 -> 701 216 B (+600). Full writeup in this file.
+
+## Done
+
 **Typed JSON marshalling (2026-08-15).** Go-style `json_marshal(v)` and
 `json_unmarshal(s, &v)` on top of the existing DOM in `std/json.qela`:
 the compiler generates a marshal and an unmarshal function per type the
