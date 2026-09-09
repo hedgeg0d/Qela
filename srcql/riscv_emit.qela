@@ -439,7 +439,7 @@ fn riscv_leave_frame() {
 	riscv_mov_reg(STK, S0);
 	c_ldstsp16(S0, 0, false);               // c.ldsp s0, 0(sp)
 	c_ldstsp16(RA, 8, false);               // c.ldsp ra, 8(sp)
-	riscv_addi(STK, STK, riscv_framesz + 16);
+	riscv_add_imm(STK, STK, riscv_framesz + 16);
 }
 
 fn riscv_ret() {
@@ -461,8 +461,8 @@ fn riscv_local_off(off i64) i64 {
 
 fn riscv_st_local(off i64, reg int) {
 	var imm i64 = riscv_local_off(off);
-	if (imm >= 0 && imm <= 32760) {
-		if (c_ldst16(reg, S0, imm, true)) { return; }
+	if (c_ldst16(reg, S0, imm, true)) { return; }
+	if (imm >= -2048 && imm <= 2047) {
 		riscv_s(imm, reg, S0, 3, 0x23);
 		return;
 	}
@@ -474,8 +474,8 @@ fn riscv_st_local(off i64, reg int) {
 
 fn riscv_ld_local(reg int, off i64) {
 	var imm i64 = riscv_local_off(off);
-	if (imm >= 0 && imm <= 32760) {
-		if (c_ldst16(reg, S0, imm, false)) { return; }
+	if (c_ldst16(reg, S0, imm, false)) { return; }
+	if (imm >= -2048 && imm <= 2047) {
 		riscv_i(imm, S0, 3, reg, 0x03);
 		return;
 	}
@@ -1552,17 +1552,21 @@ fn riscv_lower_op(op *IrOp) {
 	if (op.kind == IR_MEMCPY && op.dst.kind == OP_STACKSLOT) {
 		// gen_ret's ret_slot copy: copy aux bytes from [a0] to the pointer
 		// *stored in* the slot, then leave that pointer as the return value.
-		riscv_mov_reg(T1, A0);
+		// T2, not T1: riscv_ld_local's own large-offset path uses T1 as its
+		// scratch when its dst register isn't T1, and dst here is A0 -- T1
+		// would get clobbered out from under this stash.
+		riscv_mov_reg(T2, A0);
 		riscv_ld_local(A0, op.dst.off);
-		riscv_memcpy(A0, T1, op.aux);
+		riscv_memcpy(A0, T2, op.aux);
 		return;
 	}
 	if (op.kind == IR_MEMCPYDST) {
 		// gen_args' by-ref argument copy: copy aux bytes from [a0] into the
-		// local slot at dst.off, leave that slot's address in a0.
-		riscv_mov_reg(T1, A0);
+		// local slot at dst.off, leave that slot's address in a0. T2 for the
+		// same reason as the IR_MEMCPY/OP_STACKSLOT case above.
+		riscv_mov_reg(T2, A0);
 		riscv_lea_local(A0, op.dst.off);
-		riscv_memcpy(A0, T1, op.aux);
+		riscv_memcpy(A0, T2, op.aux);
 		return;
 	}
 	if (op.kind == IR_UNARY && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC) {
