@@ -1,3 +1,4 @@
+// interp-todo
 // stage1-only
 // expect-exit: 42
 // `go f(...)` spawns onto a pool of real OS threads; results come back

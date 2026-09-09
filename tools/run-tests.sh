@@ -4,6 +4,12 @@
 #   // expect-out: some text
 #   // expect-compile-error  the compiler must reject the file
 #   // stage1-only        a feature stage0 does not have; skipped under ./qela
+#   // interp-skip        nothing for `qela irun` to run: asm, naked, entry,
+#                         extern -- machine-level by definition
+#   // interp-todo        the interpreter does not support this yet
+#
+# TARGET=interp runs each test with `qela irun` instead of compiling it: one
+# process, no binary, so there is no size to report.
 set -u
 
 QELA="${QELA:-./qela}"
@@ -41,6 +47,20 @@ for src in tests/*.qela; do
 		printf 'skip %-16s riscv-only\n' "$name"
 		continue
 	fi
+	if [ "$TARGET" = "interp" ]; then
+		if grep -q '^// x86-only' "$src"; then
+			printf 'skip %-16s x86-only\n' "$name"
+			continue
+		fi
+		if grep -q '^// interp-skip' "$src"; then
+			printf 'skip %-16s interp-skip\n' "$name"
+			continue
+		fi
+		if grep -q '^// interp-todo' "$src"; then
+			printf 'skip %-16s interp-todo\n' "$name"
+			continue
+		fi
+	fi
 
 	want_exit=$(sed -n 's|^// expect-exit: ||p' "$src")
 	want_out=$(sed -n 's|^// expect-out: ||p' "$src")
@@ -59,6 +79,35 @@ for src in tests/*.qela; do
 	elif grep -q '^// expect-compile-error' "$src"; then
 		want_reject=1
 	fi
+	if [ "$TARGET" = "interp" ]; then
+		# One process does both halves, so --no-warn keeps compile
+		# diagnostics out of what the program itself printed; the compiled
+		# path gets the same separation by sending them to a file.
+		if [ "$want_reject" = "1" ]; then
+			if $QELA irun "$src" >/dev/null 2>&1; then
+				printf 'FAIL %s: ran, but was expected to be rejected\n' "$name"
+				fail=$((fail + 1))
+			else
+				printf 'ok   %-16s rejected\n' "$name"
+				pass=$((pass + 1))
+			fi
+			continue
+		fi
+		got_out=$($QELA irun --no-warn "$src" 2>&1)
+		got_exit=$?
+		if [ "$got_exit" != "$want_exit" ]; then
+			printf 'FAIL %s: exit %s, want %s\n' "$name" "$got_exit" "$want_exit"
+			fail=$((fail + 1))
+		elif [ "$got_out" != "$want_out" ]; then
+			printf 'FAIL %s: output %s, want %s\n' "$name" "$got_out" "$want_out"
+			fail=$((fail + 1))
+		else
+			printf 'ok   %-16s interp\n' "$name"
+			pass=$((pass + 1))
+		fi
+		continue
+	fi
+
 	if [ "$want_reject" = "1" ]; then
 		if $QELA "$src" -o "$bin" >/dev/null 2>&1; then
 			printf 'FAIL %s: compiled, but was expected to be rejected\n' "$name"
