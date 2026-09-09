@@ -247,6 +247,25 @@ EOF
 printf '    ok\n'
 
 
+step "eval() over the abi subprocess"
+cat > "$tmp2/evaltest.qela" <<'EOF'
+import "std/eval.qela";
+import "std/io.qela";
+fn main() int {
+	var a i64 = eval("6 * 7");
+	eval("var x = 100;");
+	var b i64 = eval("x - 2");
+	write_str(STDOUT, "a=${a} b=${b}\n");
+	return 0;
+}
+EOF
+( cd "$tmp2" &&
+  "$root/$OUT/s2" evaltest.qela -o evaltest &&
+  [ "$(QELAPATH="$root/$OUT/s2" ./evaltest)" = "a=42 b=98" ] ) ||
+	fail "eval() does not round-trip through the abi subprocess"
+printf '    ok\n'
+
+
 step "stdin compile and shebang"
 cat > "$tmp2/btcrash.qela" <<'EOF'
 fn deep(n i64) i64 {
