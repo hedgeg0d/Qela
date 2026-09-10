@@ -1,0 +1,44 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: {"a":1,"renamed":2}
+// expect-out: 3
+// expect-out: 7
+// expect-out: {"a":1,"renamed":2}
+// expect-out: 9
+// expect-out: 4
+// Field tags: `x i64 "key"` renames the JSON key in both marshal and
+// unmarshal, `"-"` omits the field from the output and leaves it alone on
+// input. Round trips both directions, including through the interpreter.
+import "std/io.qela";
+import "std/json.qela";
+
+struct Tagged {
+	a i64,
+	b i64 "renamed",
+	secret i64 "-",
+}
+
+fn main() int {
+	var t = Tagged{a: 1, b: 2, secret: 99};
+	var s str = json_marshal(t);
+	write_str(STDOUT, s);
+	write_str(STDOUT, "\n");
+	var u Tagged;
+	if (!json_unmarshal(s, &u)) { return 1; }
+	if (u.a != 1 || u.b != 2) { return 2; }
+	write_str(STDOUT, "3\n");
+	if (json_unmarshal("{\"renamed\": 7}", &u)) {
+		if (u.b != 7 || u.a != 1) { return 3; }
+	}
+	write_str(STDOUT, "7\n");
+	if (json_unmarshal("{\"b\": 9}", &u)) {
+		if (u.a != 1 || u.b != 7) { return 4; }
+	}
+	var s2 str = json_marshal(Tagged{a: 1, b: 2, secret: 42});
+	if (!str_eq(s2, "{\"a\":1,\"renamed\":2}")) { return 5; }
+	write_str(STDOUT, s2);
+	write_str(STDOUT, "\n");
+	write_str(STDOUT, "9\n");
+	write_str(STDOUT, "4\n");
+	return 0;
+}
