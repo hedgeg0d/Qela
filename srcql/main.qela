@@ -922,7 +922,7 @@ fn repl_print_type(expr str) {
 }
 
 fn repl_print_help() {
-	write_str(STDOUT, "qela repl commands:\n  :help, :h        this text\n  :quit, :q, :exit exit the session\n  :reset           discard all session state and start over\n  :vars            list declared locals and their types\n  :funcs           list functions defined this session\n  :type <expr>     print an expression's type without running it\n\na line starting with fn/struct/enum/import/macro/extern declares a name\nfor the rest of the session; var/let bind a local that survives to later\nlines (retyping the same name rebinds it); anything else runs as a\nstatement, and a bare expression prints its value.\n");
+	write_str(STDOUT, "qela repl commands:\n  :help, :h        this text\n  :quit, :q, :exit exit the session\n  :reset           discard all session state and start over\n  :clear           clear the terminal (session state untouched)\n  :vars            list declared locals and their types\n  :funcs           list functions defined this session\n  :type <expr>     print an expression's type without running it\n\na line starting with fn/struct/enum/import/macro/extern declares a name\nfor the rest of the session; var/let bind a local that survives to later\nlines (retyping the same name rebinds it); anything else runs as a\nstatement, and a bare expression prints its value.\n");
 }
 
 fn repl_command(line str) {
@@ -931,6 +931,15 @@ fn repl_command(line str) {
 	if (str_eq(cmd, "help") || str_eq(cmd, "h")) { repl_print_help(); return; }
 	if (str_eq(cmd, "quit") || str_eq(cmd, "q") || str_eq(cmd, "exit")) { sys_exit(0); }
 	if (str_eq(cmd, "reset")) { repl_init(); write_str(STDOUT, "session reset\n"); return; }
+	if (str_eq(cmd, "clear")) {
+		var b Buf;
+		buf_u8(&b, 27);
+		fmt_str(&b, "[2J");
+		buf_u8(&b, 27);
+		fmt_str(&b, "[H");
+		write_str(STDOUT, buf_str(&b));
+		return;
+	}
 	if (str_eq(cmd, "vars")) { repl_print_vars(); return; }
 	if (str_eq(cmd, "funcs")) { repl_print_funcs(); return; }
 	if (str_eq(cmd, "type")) { repl_print_type(rest); return; }
