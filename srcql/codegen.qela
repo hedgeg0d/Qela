@@ -3939,6 +3939,11 @@ fn codegen(u *Unit, img *Image) {
 		// RW segment and the header size it implies.
 		if (gdata.n + bss_size > 0) { nph = 2; }
 		hdr = EHDR_SZ + PHDR_SZ * (nph as i64);
+		// The backends' own patch functions read these to find the
+		// runtime address of an image offset; they must see the final
+		// header size, not the pre-link guess.
+		riscv_image_hdr = hdr;
+		arm64_image_hdr = hdr;
 		lnk_set_hdr(hdr);
 	}
 
