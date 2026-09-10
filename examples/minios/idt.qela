@@ -1,0 +1,79 @@
+packed struct Gate {
+	off0 u16,
+	sel  u16,
+	ist  u8,
+	typ  u8,
+	off1 u16,
+	off2 u32,
+	zero u32,
+}
+
+var idt [256]Gate;
+
+fn idt_set(v i64, h i64) {
+	var a i64 = h;
+	idt[v].off0 = (a & 65535) as u16;
+	idt[v].sel = 8 as u16;
+	idt[v].ist = 0 as u8;
+	idt[v].typ = 0x8e as u8;
+	idt[v].off1 = ((a >> 16) & 65535) as u16;
+	idt[v].off2 = (a >> 32) as u32;
+	idt[v].zero = 0 as u32;
+}
+
+fn idt_init() {
+	var i i64 = 0;
+	while (i < 256) {
+		idt_set(i, irq_other);
+		i = i + 1;
+	}
+	idt_set(0, exc0);
+	idt_set(1, exc1);
+	idt_set(2, exc2);
+	idt_set(3, exc3);
+	idt_set(4, exc4);
+	idt_set(5, exc5);
+	idt_set(6, exc6);
+	idt_set(7, exc7);
+	idt_set(8, exc8);
+	idt_set(9, exc9);
+	idt_set(10, exc10);
+	idt_set(11, exc11);
+	idt_set(12, exc12);
+	idt_set(13, exc13);
+	idt_set(14, exc14);
+	idt_set(15, exc15);
+	idt_set(32, timer);
+	idt_set(33, kbd_irq);
+	var g Gdtr;
+	g.limit = (256 * 16 - 1) as u16;
+	g.base = (&idt[0] as i64) as u64;
+	lidt(&g as i64);
+}
+
+fn interrupt exc0() { kpanic("exc 0: divide by zero"); }
+fn interrupt exc1() { kpanic("exc 1: debug"); }
+fn interrupt exc2() { kpanic("exc 2: nmi"); }
+fn interrupt exc3() { kpanic("exc 3: breakpoint"); }
+fn interrupt exc4() { kpanic("exc 4: overflow"); }
+fn interrupt exc5() { kpanic("exc 5: bounds"); }
+fn interrupt exc6() { kpanic("exc 6: invalid opcode"); }
+fn interrupt exc7() { kpanic("exc 7: no coprocessor"); }
+fn interrupt exc8() { kpanic("exc 8: double fault"); }
+fn interrupt exc9() { kpanic("exc 9: coprocessor overrun"); }
+fn interrupt exc10() { kpanic("exc 10: invalid tss"); }
+fn interrupt exc11() { kpanic("exc 11: segment not present"); }
+fn interrupt exc12() { kpanic("exc 12: stack fault"); }
+fn interrupt exc13() { kpanic("exc 13: general protection"); }
+fn interrupt exc14() {
+	kputs("exc 14: page fault at ");
+	kputh(read_cr2() as u64);
+	kputs("\n");
+	kpanic("cr2");
+}
+fn interrupt exc15() { kpanic("exc 15: reserved"); }
+
+fn interrupt irq_other() {
+	outb(0x20, 0x20);
+	outb(0xa0, 0x20);
+}

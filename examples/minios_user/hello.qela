@@ -1,0 +1,24 @@
+fn syscall6(nr i64, a0 i64, a1 i64, a2 i64, a3 i64, a4 i64) i64 {
+	return asm(
+		0x48, 0x89, 0xf8,
+		0x48, 0x89, 0xf7,
+		0x48, 0x89, 0xd6,
+		0x48, 0x89, 0xca,
+		0x4d, 0x89, 0xc2,
+		0x4d, 0x89, 0xc8,
+		0x0f, 0x05
+	);
+}
+
+fn main() int {
+	var msg str = "hello from userland\n";
+	syscall6(1, 1, msg.ptr as i64, msg.len, 0, 0);
+	var line [64]u8;
+	var n i64 = 0;
+	while (n <= 0) {
+		n = syscall6(0, 0, &line[0] as i64, 64, 0, 0);
+	}
+	syscall6(1, 1, &line[0] as i64, n, 0, 0);
+	syscall6(60, 0, 0, 0, 0, 0);
+	return 0;
+}
