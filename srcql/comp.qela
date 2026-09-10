@@ -46,6 +46,9 @@ let TY_TYPEVAR = 9;
 let TY_GENERIC = 10;
 let TY_FLOAT   = 11;
 let TY_FUNC    = 12;
+// The type of an expression that already reported an error. Consumers
+// silently accept it so one compile can surface several mistakes.
+let TY_POISON  = 13;
 
 struct Type;
 struct Member;
@@ -283,6 +286,10 @@ struct Func {
 	p7         *Var,
 	pextra     *Var,
 	n_stack_args int,
+	// A monomorphized clone of a generic function. Diagnostics run on it
+	// point at the original source already reported, so warnings gate on
+	// this flag to avoid firing once per instantiation.
+	instantiated bool,
 }
 
 // Source order drives the output bytes; see the determinism rules.
