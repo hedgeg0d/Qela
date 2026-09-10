@@ -1,0 +1,109 @@
+import "arena.qela";
+import "buf.qela";
+import "str.qela";
+
+// Base64 and hex encodings. The decode helpers set *ok to false (and
+// return an empty string) on any malformed input; the encode helpers
+// always succeed and arena-allocate.
+
+fn base64_encode(data *u8, n i64) str {
+	var b64 str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+	var b Buf;
+	var i i64 = 0;
+	while (i < n) {
+		var rem i64 = n - i;
+		var c0 i64 = data[i] as i64;
+		var c1 i64 = 0;
+		var c2 i64 = 0;
+		if (rem > 1) { c1 = data[i + 1] as i64; }
+		if (rem > 2) { c2 = data[i + 2] as i64; }
+		var v i64 = (c0 << 16) | (c1 << 8) | c2;
+		buf_u8(&b, b64.ptr[(v >> 18) & 63]);
+		buf_u8(&b, b64.ptr[(v >> 12) & 63]);
+		if (rem > 1) { buf_u8(&b, b64.ptr[(v >> 6) & 63]); }
+		else { buf_u8(&b, '='); }
+		if (rem > 2) { buf_u8(&b, b64.ptr[v & 63]); }
+		else { buf_u8(&b, '='); }
+		i = i + 3;
+	}
+	return buf_str(&b);
+}
+
+fn base64_encode_str(s str) str {
+	return base64_encode(s.ptr, s.len);
+}
+
+fn base64_decode(s str, ok *bool) str {
+	*ok = false;
+	if ((s.len & 3) != 0) { return ""; }
+	var b Buf;
+	var i i64 = 0;
+	while (i < s.len) {
+		var v i64 = 0;
+		var pad int = 0;
+		var j int = 0;
+		while (j < 4) {
+			var c i64 = s.ptr[i + j] as i64;
+			if (c == '=') {
+				pad = pad + 1;
+				if (j < 2) { return ""; }
+			} else if (c >= 'A' && c <= 'Z') { v = v | (c - 'A'); }
+			else if (c >= 'a' && c <= 'z') { v = v | (c - 'a' + 26); }
+			else if (c >= '0' && c <= '9') { v = v | (c - '0' + 52); }
+			else if (c == '+') { v = v | 62; }
+			else if (c == '/') { v = v | 63; }
+			else { return ""; }
+			if (j < 3) { v = v << 6; }
+			j = j + 1;
+		}
+		if (pad > 2) { return ""; }
+		buf_u8(&b, ((v >> 16) & 255) as u8);
+		if (pad < 2) { buf_u8(&b, ((v >> 8) & 255) as u8); }
+		if (pad < 1) { buf_u8(&b, (v & 255) as u8); }
+		i = i + 4;
+	}
+	*ok = true;
+	return buf_str(&b);
+}
+
+fn hex_encode(data *u8, n i64) str {
+	var hexd str = "0123456789abcdef";
+	var b Buf;
+	var i i64 = 0;
+	while (i < n) {
+		var c i64 = data[i] as i64;
+		buf_u8(&b, hexd.ptr[(c >> 4) & 15]);
+		buf_u8(&b, hexd.ptr[c & 15]);
+		i = i + 1;
+	}
+	return buf_str(&b);
+}
+
+fn hex_encode_str(s str) str {
+	return hex_encode(s.ptr, s.len);
+}
+
+fn hex_decode(s str, ok *bool) str {
+	*ok = false;
+	if ((s.len & 1) != 0) { return ""; }
+	var b Buf;
+	var i i64 = 0;
+	while (i < s.len) {
+		var hi i64 = 0;
+		var lo i64 = 0;
+		var c i64 = s.ptr[i] as i64;
+		if (c >= '0' && c <= '9') { hi = c - '0'; }
+		else if (c >= 'a' && c <= 'f') { hi = c - 'a' + 10; }
+		else if (c >= 'A' && c <= 'F') { hi = c - 'A' + 10; }
+		else { return ""; }
+		c = s.ptr[i + 1] as i64;
+		if (c >= '0' && c <= '9') { lo = c - '0'; }
+		else if (c >= 'a' && c <= 'f') { lo = c - 'a' + 10; }
+		else if (c >= 'A' && c <= 'F') { lo = c - 'A' + 10; }
+		else { return ""; }
+		buf_u8(&b, ((hi << 4) | lo) as u8);
+		i = i + 2;
+	}
+	*ok = true;
+	return buf_str(&b);
+}

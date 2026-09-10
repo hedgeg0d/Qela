@@ -1,0 +1,45 @@
+// expect-exit: 0
+import "std/encoding.qela";
+import "std/str.qela";
+
+fn main() int {
+	var fails int = 0;
+
+	if (!str_eq(base64_encode_str("hello"), "aGVsbG8=")) { fails = fails + 1; }
+	if (!str_eq(base64_encode_str("a"), "YQ==")) { fails = fails + 1; }
+	if (!str_eq(base64_encode_str(""), "")) { fails = fails + 1; }
+	if (!str_eq(base64_encode_str("ab"), "YWI=")) { fails = fails + 1; }
+	if (!str_eq(base64_encode_str("abc"), "YWJj")) { fails = fails + 1; }
+
+	var ok bool = false;
+	var dec str = base64_decode("aGVsbG8=", &ok);
+	if (!ok || !str_eq(dec, "hello")) { fails = fails + 1; }
+
+	dec = base64_decode("YWJj", &ok);
+	if (!ok || !str_eq(dec, "abc")) { fails = fails + 1; }
+
+	dec = base64_decode("aGVsbG8", &ok);
+	if (ok) { fails = fails + 1; }
+
+	dec = base64_decode("aGVs!!!=", &ok);
+	if (ok) { fails = fails + 1; }
+
+	if (!str_eq(hex_encode_str("hi"), "6869")) { fails = fails + 1; }
+	if (!str_eq(hex_encode_str(""), "")) { fails = fails + 1; }
+
+	dec = hex_decode("6869", &ok);
+	if (!ok || !str_eq(dec, "hi")) { fails = fails + 1; }
+
+	dec = hex_decode("6", &ok);
+	if (ok) { fails = fails + 1; }
+
+	dec = hex_decode("zz", &ok);
+	if (ok) { fails = fails + 1; }
+
+	dec = hex_decode("abCD", &ok);
+	var raw str = str_from_char(0xab as u8);
+	raw = str_cat(raw, str_from_char(0xcd as u8));
+	if (!ok || !str_eq(dec, raw)) { fails = fails + 1; }
+
+	return fails;
+}
