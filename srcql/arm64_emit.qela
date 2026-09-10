@@ -350,6 +350,27 @@ fn arm64_lower_op(op *IrOp) {
 		arm64_mov_reg(X0, op2_reg(op.src0.reg));
 		return;
 	}
+	if (op.kind == IR_MOV && op.dst.kind == OP_VREG && op.src0.kind == OP_IMM) {
+		// gen_args' argument staging: dst.reg is already the physical
+		// register call_reg(rank) resolved to, same convention as x86.
+		arm64_mov_imm64(op.dst.reg, op.src0.off);
+		return;
+	}
+	if (op.kind == IR_LOAD && op.dst.kind == OP_VREG && op.src0.kind == OP_STACKSLOT) {
+		arm64_ld_local(op.dst.reg, op.src0.off);
+		return;
+	}
+	if (op.kind == IR_LOAD && op.dst.kind == OP_VREG && op.src0.kind == OP_VREG) {
+		arm64_mov_reg(op.dst.reg, op.src0.reg);
+		return;
+	}
+	if (op.kind == IR_ALU && op.dst.kind == OP_VREG && op.src0.kind == OP_VREG && op.src1.kind == OP_IMM) {
+		// A call argument's value staged with a fused imm ALU op (e.g.
+		// `f(n - 1)`), in place in its call-arg register.
+		arm64_mov_imm64(X9, op.src1.off);
+		arm64_alu_reg(op.aux, op.dst.reg, op.src0.reg, X9);
+		return;
+	}
 	if (op.kind == IR_RET) {
 		arm64_ret();
 		return;
