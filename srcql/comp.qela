@@ -243,6 +243,7 @@ struct Func {
 	leaf       bool,
 	naked      bool,
 	interrupt  bool,
+	reachable  bool,
 	extern     bool,
 	interpreted bool,
 	dynamic    bool,
