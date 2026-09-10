@@ -54,3 +54,12 @@ fn str_dup(s str) str {
 fn cstr(s str) *u8 {
 	return str_dup(s).ptr;
 }
+
+fn str_from_char(c u8) str {
+	var p *u8 = arena_alloc(1, 1);
+	p[0] = c;
+	var r str;
+	r.ptr = p;
+	r.len = 1;
+	return r;
+}
