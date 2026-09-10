@@ -19,6 +19,22 @@ server conversation.
 
 ## Done
 
+**Versioning: `qela --version` (2026-08-16).** The compiler knows what
+it is. One source of truth: `fn qela_version()` in `srcql/comp.qela`
+returns the version string (a plain function-returning-literal, because a
+global `let` of a string is rejected — the constant-expression checker
+only folds numbers; stage0 has no precedent for a global string
+initializer either). `qela --version` prints `qela alpha-0.1.0` (accepted
+at argv[1] and anywhere in the option loop), the `-h` header opens with
+the same line and the option list mentions `--version`, and the tty-only
+repl banner prefixes it. `tools/bootstrap.sh` pins both the flag and the
+header on every gate run, and the S2 == S3 comparison covers the constant
+itself — it lives in source, so both compilers emit it from the same
+text. S1a (the stage0-built compiler) has the flag too. S2 741 552 ->
+742 216 B (+664). Corpus unchanged: 202/202.
+
+## Done
+
 **Four small syntax batches (2026-08-15).** Struct spread, vec
 literals, binary literals and the `:b` format spec, all pure
 parse/type-time rewrites over shapes that already existed. S2 707 512
