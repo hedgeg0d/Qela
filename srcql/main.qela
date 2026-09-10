@@ -4,6 +4,7 @@ import "lex.qela";
 import "parse.qela";
 import "type.qela";
 import "codegen.qela";
+import "linker.qela";
 import "elf.qela";
 import "fmt.qela";
 import "fmtgen.qela";
@@ -2571,6 +2572,13 @@ fn main(argc int, argv **u8) int {
 		} else if (!have_input) {
 			input = a;
 			have_input = true;
+		} else if (link_npaths < 32 &&
+		           ((a.len > 2 && str_eq(str_slice(a, a.len - 2, a.len), ".o")) ||
+		            (a.len > 2 && str_eq(str_slice(a, a.len - 2, a.len), ".a")))) {
+			// `qela main.qela libfoo.o libbar.a -o app`: statically link
+			// relocatable objects into the image (see linker.qela).
+			link_paths[link_npaths] = a;
+			link_npaths = link_npaths + 1;
 		} else {
 			die("error: more than one input file");
 		}
@@ -2588,6 +2596,12 @@ fn main(argc int, argv **u8) int {
 	if (opt_target == TARGET_RISCV64) { comptime_set("TARGET", "riscv64"); }
 	if (opt_target == TARGET_ARM64) { comptime_set("TARGET", "arm64"); }
 	pie_check();
+	if (opt_pie && link_npaths > 0) {
+		die("error: --pie cannot statically link objects yet (absolute relocations need a fixed base)");
+	}
+	if (opt_object && link_npaths > 0) {
+		die("error: -c emits a relocatable object; drop the linked objects and link with your own ld");
+	}
 
 	if (!have_input) {
 		eprint("usage: qela <file.qela> [-o output]\n");
