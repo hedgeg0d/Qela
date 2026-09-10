@@ -183,7 +183,7 @@ fn diag_reset() {
 	diag_setup_done = false;
 	diag_colored = false;
 	sec_set = false;
-	macro_top = 0 as *MacroSite;
+	macro_top = null;
 }
 
 fn level_word(lvl int) str {

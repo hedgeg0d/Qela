@@ -19,7 +19,7 @@ fn arena_alloc(size i64, align i64) *u8 {
 		} $else {
 			r = syscall(9, 0, want, 3, 34, -1, 0);
 		}
-		if (r < 0 && r > -4096) { return 0 as *u8; }
+		if (r < 0 && r > -4096) { return null; }
 		arena_ptr = r;
 		arena_left = want;
 		if (align > 1) {

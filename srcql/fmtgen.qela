@@ -14,7 +14,7 @@ var fmtgen_seq int = 0;
 var fmtgen_tmp int = 0;
 
 fn fmtgen_reset() {
-	fmtgen_list = 0 as *FmtGen;
+	fmtgen_list = null;
 	fmtgen_seq = 0;
 	fmtgen_tmp = 0;
 }

@@ -25,7 +25,7 @@ fn tmpl_find(name str) *Tmpl {
 		if (str_eq(tm.name, name)) { return tm; }
 		tm = tm.next;
 	}
-	return 0 as *Tmpl;
+	return null;
 }
 
 fn type_has_var(t *Type) bool {
@@ -92,7 +92,7 @@ fn clone_members(src *Member) *Member {
 	while (m as i64 != 0) {
 		var c *Member = arena_alloc(sizeof(Member), 8) as *Member;
 		*c = *m;
-		c.next = 0 as *Member;
+		c.next = null;
 		c.ty = gsubst(m.ty);
 		tail.next = c;
 		tail = c;
@@ -147,7 +147,7 @@ fn generic_instance(tm *Tmpl, a0 *Type, a1 *Type) *Type {
 	while (v as i64 != 0) {
 		var c *Variant = arena_alloc(sizeof(Variant), 8) as *Variant;
 		*c = *v;
-		c.next = 0 as *Variant;
+		c.next = null;
 		c.fields = clone_members(v.fields);
 		vtail.next = c;
 		vtail = c;

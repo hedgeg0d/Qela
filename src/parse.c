@@ -383,6 +383,11 @@ static Node *primary(Token **t) {
 		return n;
 	}
 
+	if (eq(tok, "null")) {
+		*t = tok->next;
+		return num_node(0, tok->pos);
+	}
+
 	if (tok->kind == TK_STR) {
 		Node *n = node(ND_STRLIT, tok->pos);
 		n->val = intern_str(tok->str);
