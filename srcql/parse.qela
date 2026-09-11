@@ -2678,6 +2678,33 @@ fn parse(tok *Token) *Unit {
 		all_funcs = head.next;
 	}
 
+	if (find_func("abi_spawn") as i64 != 0 && find_func("__eval_get_dispatch") as i64 == 0) {
+		var gb Buf;
+		fmt_str(&gb, "fn __eval_get_dispatch(name str) i64 { if (name.len < 0) { return 0; }");
+		var gv *Var = global_vars;
+		while (gv as i64 != 0) {
+			if (gv.eval_export) {
+				interp_check_scalar(gv.ty, gv.pos, "global types");
+				fmt_str(&gb, " if (str_eq(name, \"");
+				fmt_str(&gb, gv.name);
+				fmt_str(&gb, "\")) { return ");
+				fmt_str(&gb, gv.name);
+				fmt_str(&gb, " as i64; }");
+			}
+			gv = gv.next;
+		}
+		fmt_str(&gb, " return 0; }");
+
+		var gfile int = diag_add_file("<eval-get-dispatch>", buf_str(&gb));
+		var gtoks *Token = lex(buf_str(&gb), (gfile as i64) << FILE_SHIFT);
+		var gnf *Func = parse_function(&gtoks, false);
+		if (funcs_tail as i64 == 0) { head.next = gnf; }
+		else { funcs_tail.next = gnf; }
+		funcs_tail = gnf;
+		if (head.next as i64 == 0) { head.next = all_funcs; }
+		all_funcs = head.next;
+	}
+
 	leave_scope();
 
 	var f *Func = head.next;
