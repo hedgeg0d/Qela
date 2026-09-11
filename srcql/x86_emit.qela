@@ -590,6 +590,7 @@ fn jump_bounds(cc i64) {
 
 fn gen_bounds_trampoline() {
 	if (fn_bounds.n == 0) { return; }
+	if (opt_target == TARGET_ARM64) { arm64_gen_bounds_trampoline(); return; }
 	patch_all(&fn_bounds);
 	// With backtraces on this becomes a call, so the return address left on
 	// the stack names the function that tripped the check.
