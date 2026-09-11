@@ -27,11 +27,31 @@ import "x86_emit.qela";
 let X0  = 0;
 let X1  = 1;
 let X8  = 8;
+let X9  = 9;    // address/immediate scratch for st_local/ld_local and imm ALU operands
+let X10 = 10;   // second scratch, for a read-modify-write op's immediate operand
 let X29 = 29;
 let X30 = 30;
 let SP  = 31;   // register field value 31 means SP or XZR depending on the instruction; only SP forms are used here.
 
 let SYS_ARM64_EXIT_GROUP = 94;
+
+// A64 condition codes (the 4-bit field in B.cond/CSET), mapped from
+// srcql/ir.qela's neutral CC_* -- SUBS sets flags the same way for a signed
+// or unsigned compare, only the condition read out differs.
+fn arm64_cc(qcc i64) i64 {
+	if (qcc == CC_EQ)  { return 0; }
+	if (qcc == CC_NE)  { return 1; }
+	if (qcc == CC_ULT) { return 3; }  // LO
+	if (qcc == CC_ULE) { return 9; }  // LS
+	if (qcc == CC_UGT) { return 8; }  // HI
+	if (qcc == CC_UGE) { return 2; }  // HS
+	if (qcc == CC_LT)  { return 11; }
+	if (qcc == CC_LE)  { return 13; }
+	if (qcc == CC_GT)  { return 12; }
+	if (qcc == CC_GE)  { return 10; }
+	die("internal: arm64_cc: unhandled condition code");
+	return 14;
+}
 
 
 // A64 immediate loads are 16 bits at a time (MOVZ then up to three MOVK,
@@ -61,9 +81,14 @@ fn arm64_svc() {
 	b4(0xd4000001);
 }
 
-// MOV Xd, Xn -- the ORR (shifted register) alias with the first operand XZR.
+// MOV Xd, Xn -- the ORR (shifted register) alias with the first operand
+// XZR. Register field 31 means SP or XZR depending on the instruction, and
+// ORR (a shifted-register form) never accepts SP -- 31 there is always
+// XZR -- so a move into or out of SP has to go through ADD (immediate)
+// instead, whose Rn/Rd fields do accept SP.
 fn arm64_mov_reg(rd int, rn int) {
 	if (rd == rn) { return; }
+	if (rd == SP || rn == SP) { arm64_add_imm(rd, rn, 0); return; }
 	b4(0xaa0003e0 | (rn << 16) | rd);
 }
 
@@ -99,9 +124,230 @@ fn arm64_patch_call(b *Buf, at i64, rel i64) {
 }
 
 
+// ADD/SUB (immediate), 64-bit. imm is split into a shifted-by-12 high part
+// and a plain low part so any offset up to 24 bits works, not just the
+// 12-bit range a single instruction covers -- stack frames and local
+// offsets are always non-negative and comfortably under that.
+fn arm64_add_imm(rd int, rn int, imm i64) {
+	var hi i64 = (imm >> 12) & 0xfff;
+	var lo i64 = imm & 0xfff;
+	var src int = rn;
+	if (hi != 0) { b4(0x91400000 | (hi << 10) | (src << 5) | rd); src = rd; }
+	if (lo != 0 || hi == 0) { b4(0x91000000 | (lo << 10) | (src << 5) | rd); }
+}
+
+fn arm64_sub_imm(rd int, rn int, imm i64) {
+	var hi i64 = (imm >> 12) & 0xfff;
+	var lo i64 = imm & 0xfff;
+	var src int = rn;
+	if (hi != 0) { b4(0xd1400000 | (hi << 10) | (src << 5) | rd); src = rd; }
+	if (lo != 0 || hi == 0) { b4(0xd1000000 | (lo << 10) | (src << 5) | rd); }
+}
+
+// STP/LDP Xt1, Xt2, [SP, #imm]! and [SP], #imm -- the frame's own
+// save/restore pair, imm7 scaled by 8.
+fn arm64_stp_pre_sp(rt1 int, rt2 int, imm i64) {
+	var imm7 i64 = (imm / 8) & 0x7f;
+	b4(0xa9800000 | (imm7 << 15) | (rt2 << 10) | (SP << 5) | rt1);
+}
+
+fn arm64_ldp_post_sp(rt1 int, rt2 int, imm i64) {
+	var imm7 i64 = (imm / 8) & 0x7f;
+	b4(0xa8c00000 | (imm7 << 15) | (rt2 << 10) | (SP << 5) | rt1);
+}
+
+fn arm64_enter_frame(stack_size i64) {
+	arm64_stp_pre_sp(X29, X30, -16);
+	arm64_mov_reg(X29, SP);
+	if (stack_size != 0) { arm64_sub_imm(SP, SP, stack_size); }
+}
+
+fn arm64_leave_frame() {
+	arm64_mov_reg(SP, X29);
+	arm64_ldp_post_sp(X29, X30, 16);
+}
+
+
+// STUR/LDUR Xt, [Xn, #simm9] -- unscaled, signed 9-bit byte offset.
+fn arm64_stur(rt int, rn int, simm9 i64) {
+	b4(0xf8000000 | ((simm9 & 0x1ff) << 12) | (rn << 5) | rt);
+}
+
+fn arm64_ldur(rt int, rn int, simm9 i64) {
+	b4(0xf8400000 | ((simm9 & 0x1ff) << 12) | (rn << 5) | rt);
+}
+
+// A local's address is X29 - off. STUR/LDUR's unscaled 9-bit field covers
+// -256..255 directly; a bigger frame materialises the address in X9 first.
+fn arm64_st_local(off i64, reg int) {
+	if (-off >= -256 && -off <= 255) { arm64_stur(reg, X29, -off); return; }
+	arm64_sub_imm(X9, X29, off);
+	arm64_stur(reg, X9, 0);
+}
+
+fn arm64_ld_local(reg int, off i64) {
+	if (-off >= -256 && -off <= 255) { arm64_ldur(reg, X29, -off); return; }
+	arm64_sub_imm(X9, X29, off);
+	arm64_ldur(reg, X9, 0);
+}
+
+
+// A local's declaration zeros its slot before any initializer runs
+// (locals are zeroed at their declaration). Register 31 in a
+// store's Rt field is XZR, not SP, so st_local's helpers double as the
+// 8-byte-at-a-time zeroing loop; the tail under 8 bytes goes one byte at a
+// time via STURB.
+fn arm64_sturb(rt int, rn int, simm9 i64) {
+	b4(0x38000000 | ((simm9 & 0x1ff) << 12) | (rn << 5) | rt);
+}
+
+fn arm64_memset_local(off i64, size i64) {
+	arm64_sub_imm(X9, X29, off);
+	var i i64 = 0;
+	while (i + 8 <= size) { arm64_stur(31, X9, i); i = i + 8; }
+	while (i < size) { arm64_sturb(31, X9, i); i = i + 1; }
+}
+
+
+// Expression-temporary staging (IR_PUSH/IR_POP). x86 uses single-register
+// 8-byte push/pop; A64 has no such instruction, and letting SP drift out of
+// 16-byte alignment risks a hardware fault on a later SP-relative access,
+// so every push/pop here moves SP by 16 and wastes the other 8 bytes.
+fn arm64_push(reg int) {
+	arm64_stur(reg, SP, -16);
+	arm64_sub_imm(SP, SP, 16);
+}
+
+fn arm64_pop(reg int) {
+	arm64_ldur(reg, SP, 0);
+	arm64_add_imm(SP, SP, 16);
+}
+
+
+fn arm64_cmp_reg(rn int, rm int) {
+	b4(0xeb00001f | (rm << 16) | (rn << 5));
+}
+
+fn arm64_cmp_imm(rn int, imm i64) {
+	if (imm >= 0 && imm <= 4095) { b4(0xf1000000 | (imm << 10) | (rn << 5) | 0x1f); return; }
+	arm64_mov_imm64(X9, imm);
+	arm64_cmp_reg(rn, X9);
+}
+
+fn arm64_cset(rd int, qcc i64) {
+	var cond i64 = arm64_cc(qcc);
+	var inv i64 = cond ^ 1;
+	b4(0x9a9f07e0 | (inv << 12) | rd);
+}
+
+
+// Integer ALU, register-register: dst = rn <op> rm.
+fn arm64_alu_reg(aop int, rd int, rn int, rm int) {
+	if (aop == ALU_ADD) { b4(0x8b000000 | (rm << 16) | (rn << 5) | rd); return; }
+	if (aop == ALU_SUB) { b4(0xcb000000 | (rm << 16) | (rn << 5) | rd); return; }
+	if (aop == ALU_MUL) { b4(0x9b007c00 | (rm << 16) | (rn << 5) | rd); return; }
+	if (aop == ALU_AND) { b4(0x8a000000 | (rm << 16) | (rn << 5) | rd); return; }
+	if (aop == ALU_OR)  { b4(0xaa000000 | (rm << 16) | (rn << 5) | rd); return; }
+	if (aop == ALU_XOR) { b4(0xca000000 | (rm << 16) | (rn << 5) | rd); return; }
+	if (aop == ALU_SHL) { b4(0x9ac02000 | (rm << 16) | (rn << 5) | rd); return; }  // LSLV
+	die("internal: arm64_alu_reg: unhandled ALU op (SHR/DIV/MOD are handled by the caller, floats not wired yet)");
+}
+
+// SDIV/UDIV. MOD has no direct instruction: q = a/b (into scratch), then
+// MSUB rd, q, rm, rn computes rn - q*rm, i.e. a - (a/b)*b.
+fn arm64_div(rd int, rn int, rm int, uns bool) {
+	if (uns) { b4(0x9ac00800 | (rm << 16) | (rn << 5) | rd); }
+	else { b4(0x9ac00c00 | (rm << 16) | (rn << 5) | rd); }
+}
+
+fn arm64_mod(rd int, rn int, rm int, uns bool) {
+	arm64_div(X9, rn, rm, uns);
+	b4(0x9b008000 | (rm << 16) | (rn << 10) | (X9 << 5) | rd);   // MSUB rd, X9, rm, rn
+}
+
+// LSRV (unsigned/logical shift right) -- ALU_SHR's other half; arm64_alu_reg
+// only covers the signed (ASRV) case since it has no access to dst.ty.
+fn arm64_lsrv(rd int, rn int, rm int) {
+	b4(0x9ac02400 | (rm << 16) | (rn << 5) | rd);
+}
+
+fn arm64_asrv(rd int, rn int, rm int) {
+	b4(0x9ac02800 | (rm << 16) | (rn << 5) | rd);
+}
+
+
+// Control flow: same pending-chain protocol as x86's jump()/patch_here()
+// (srcql/x86_emit.qela), keyed by srcql/codegen.qela's target-neutral
+// ir_label_pos/ir_label_br/ir_br_next lists, but with its own position list
+// -- A64's branch encoding needs a read-modify-write of the instruction
+// word (the immediate lives inside it), not an overwrite of a blank rel32
+// slot, and unlike x86 there is no short-vs-near relaxation to track.
+var arm64_br_n i64;
+var arm64_br_at I64List;
+
+// cond < 0 means an unconditional B; else a B.cond.
+fn arm64_jump(cond i64) i64 {
+	var id i64 = arm64_br_n;
+	arm64_br_n = arm64_br_n + 1;
+	ilist_set(&arm64_br_at, id, code.n);
+	if (cond < 0) { b4(0x14000000); } else { b4(0x54000000 | cond); }
+	return id;
+}
+
+fn arm64_patch_here(id i64) {
+	var at i64 = arm64_br_at.p[id];
+	var rel i64 = code.n - at;
+	var word i64 = buf_read32(&code, at);
+	if ((word & 0xfc000000) == 0x14000000) {
+		buf_patch32(&code, at, word | ((rel >> 2) & 0x3ffffff));
+	} else {
+		buf_patch32(&code, at, word | (((rel >> 2) & 0x7ffff) << 5));
+	}
+}
+
+fn arm64_jump_back(target i64) {
+	var rel i64 = target - code.n;
+	b4(0x14000000 | ((rel >> 2) & 0x3ffffff));
+}
+
+
+// Narrow X0 in place to ty's width -- the ACC-in-ACC half of IR_CAST,
+// mirroring x86_emit.qela's truncate_to. sf=0 destinations (UXTB/UXTH/a
+// 32-bit MOV) zero-extend to the full 64-bit register as a side effect of
+// AArch64's write-to-W semantics, same as x86's 32-bit mov.
+fn arm64_truncate_to(ty *Type) {
+	if (ty.size == 1) {
+		if (ty.is_unsigned || ty.kind == TY_BOOL) { b4(0x53001c00 | (X0 << 5) | X0); }
+		else { b4(0x93401c00 | (X0 << 5) | X0); }
+		return;
+	}
+	if (ty.size == 2) {
+		if (ty.is_unsigned) { b4(0x53003c00 | (X0 << 5) | X0); }
+		else { b4(0x93403c00 | (X0 << 5) | X0); }
+		return;
+	}
+	if (ty.size == 4) {
+		if (ty.is_unsigned || ty.kind == TY_FLOAT) { b4(0x2a0003e0 | (X0 << 16) | X0); }
+		else { b4(0x93407c00 | (X0 << 5) | X0); }
+	}
+}
+
+
 fn arm64_lower_op(op *IrOp) {
 	if (op.kind == IR_MOV && op.dst.kind == OP_ACC && op.src0.kind == OP_IMM) {
 		arm64_mov_imm64(X0, op.src0.off);
+		return;
+	}
+	if (op.kind == IR_MOV && op.dst.kind == OP_OP2 && op.src0.kind == OP_IMM) {
+		arm64_mov_imm64(op2_reg(op.dst.reg), op.src0.off);
+		return;
+	}
+	if (op.kind == IR_MOV && op.dst.kind == OP_OP2 && op.src0.kind == OP_ACC) {
+		arm64_mov_reg(op2_reg(op.dst.reg), X0);
+		return;
+	}
+	if (op.kind == IR_MOV && op.dst.kind == OP_ACC && op.src0.kind == OP_OP2) {
+		arm64_mov_reg(X0, op2_reg(op.src0.reg));
 		return;
 	}
 	if (op.kind == IR_RET) {
@@ -112,5 +358,134 @@ fn arm64_lower_op(op *IrOp) {
 		arm64_add_call((op.src0.off as *Func).name, op.pos);
 		return;
 	}
-	die("internal: arm64_lower_op: unhandled IR shape (ARM64 backend covers only literal-return/direct-call programs so far)");
+	if (op.kind == IR_LOAD && op.dst.kind == OP_ACC && op.src0.kind == OP_STACKSLOT) {
+		arm64_ld_local(X0, op.src0.off);
+		return;
+	}
+	if (op.kind == IR_LOAD && op.dst.kind == OP_OP2 && op.src0.kind == OP_STACKSLOT) {
+		arm64_ld_local(op2_reg(op.dst.reg), op.src0.off);
+		return;
+	}
+	if (op.kind == IR_STORE && op.dst.kind == OP_STACKSLOT && op.src0.kind == OP_ACC) {
+		arm64_st_local(op.dst.off, X0);
+		return;
+	}
+	if (op.kind == IR_STORE && op.dst.kind == OP_STACKSLOT && op.src0.kind == OP_OP2) {
+		arm64_st_local(op.dst.off, op2_reg(op.src0.reg));
+		return;
+	}
+	if (op.kind == IR_CAST && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC) {
+		if (op.aux == CAST_BOOL) {
+			// (X0 != 0) as 1/0.
+			arm64_cmp_imm(X0, 0);
+			arm64_cset(X0, CC_NE);
+			return;
+		}
+		if (op.aux == CAST_TRUNC) { arm64_truncate_to(op.dst.ty); return; }
+		die("internal: arm64_lower_op: IR_CAST: float casts not wired yet");
+	}
+	if (op.kind == IR_MEMSET && op.dst.kind == OP_STACKSLOT) {
+		arm64_memset_local(op.dst.off, op.aux);
+		return;
+	}
+	if (op.kind == IR_PUSH && op.src0.kind == OP_ACC) {
+		arm64_push(X0);
+		return;
+	}
+	if (op.kind == IR_PUSH && op.src0.kind == OP_OP2) {
+		arm64_push(op2_reg(op.src0.reg));
+		return;
+	}
+	if (op.kind == IR_POP && op.dst.kind == OP_ACC) {
+		arm64_pop(X0);
+		return;
+	}
+	if (op.kind == IR_POP && op.dst.kind == OP_OP2) {
+		arm64_pop(op2_reg(op.dst.reg));
+		return;
+	}
+	if (op.kind == IR_ALU && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC && op.src1.kind == OP_OP2) {
+		var op2 int = op2_reg(op.src1.reg);
+		var uns bool = op.dst.ty.is_unsigned;
+		if (op.aux == ALU_DIV) { arm64_div(X0, X0, op2, uns); return; }
+		if (op.aux == ALU_MOD) { arm64_mod(X0, X0, op2, uns); return; }
+		if (op.aux == ALU_SHR) {
+			if (uns) { arm64_lsrv(X0, X0, op2); } else { arm64_asrv(X0, X0, op2); }
+			return;
+		}
+		arm64_alu_reg(op.aux, X0, X0, op2);
+		return;
+	}
+	if (op.kind == IR_ALU && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC && op.src1.kind == OP_IMM) {
+		var v i64 = op.src1.off;
+		var uns bool = op.dst.ty.is_unsigned;
+		arm64_mov_imm64(X9, v);
+		if (op.aux == ALU_DIV) { arm64_div(X0, X0, X9, uns); return; }
+		if (op.aux == ALU_MOD) { arm64_mod(X0, X0, X9, uns); return; }
+		if (op.aux == ALU_SHR) {
+			if (uns) { arm64_lsrv(X0, X0, X9); } else { arm64_asrv(X0, X0, X9); }
+			return;
+		}
+		arm64_alu_reg(op.aux, X0, X0, X9);
+		return;
+	}
+	if (op.kind == IR_ALU && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC && op.src1.kind == OP_STACKSLOT) {
+		arm64_ld_local(X9, op.src1.off);
+		arm64_alu_reg(op.aux, X0, X0, X9);
+		return;
+	}
+	if (op.kind == IR_CMP && op.src0.kind == OP_ACC && op.src1.kind == OP_OP2) {
+		arm64_cmp_reg(X0, op2_reg(op.src1.reg));
+		return;
+	}
+	if (op.kind == IR_CMP && op.src0.kind == OP_ACC && op.src1.kind == OP_IMM) {
+		arm64_cmp_imm(X0, op.src1.off);
+		return;
+	}
+	if (op.kind == IR_ALU && op.dst.kind == OP_STACKSLOT && op.src0.kind == OP_STACKSLOT && op.src1.kind == OP_IMM) {
+		// v op= imm as a statement (stmt_update's fused form): read-modify-write
+		// the slot directly, no ACC involved.
+		arm64_ld_local(X9, op.dst.off);
+		arm64_mov_imm64(X10, op.src1.off);
+		arm64_alu_reg(op.aux, X9, X9, X10);
+		arm64_st_local(op.dst.off, X9);
+		return;
+	}
+	if (op.kind == IR_CMP && op.src0.kind == OP_ACC && op.src1.kind == OP_STACKSLOT) {
+		arm64_ld_local(X9, op.src1.off);
+		arm64_cmp_reg(X0, X9);
+		return;
+	}
+	if (op.kind == IR_CMP && op.src0.kind == OP_STACKSLOT && op.src1.kind == OP_IMM) {
+		arm64_ld_local(X9, op.src0.off);
+		arm64_cmp_imm(X9, op.src1.off);
+		return;
+	}
+	if (op.kind == IR_SETCC && op.dst.kind == OP_ACC) {
+		arm64_cset(X0, op.aux);
+		return;
+	}
+	if (op.kind == IR_BR) {
+		var label i64 = op.dst.off;
+		if (ir_label_pos.p[label] >= 0) {
+			arm64_jump_back(ir_label_pos.p[label]);
+			return;
+		}
+		var cond i64 = -1;
+		if (op.aux != CC_ALWAYS) { cond = arm64_cc(op.aux); }
+		var id i64 = arm64_jump(cond);
+		ilist_set(&ir_br_next, id, ir_label_br.p[label]);
+		ilist_set(&ir_label_br, label, id);
+		return;
+	}
+	if (op.kind == IR_LABEL) {
+		ilist_set(&ir_label_pos, op.dst.off, code.n);
+		var id i64 = ir_label_br.p[op.dst.off];
+		while (id >= 0) {
+			arm64_patch_here(id);
+			id = ir_br_next.p[id];
+		}
+		return;
+	}
+	die("internal: arm64_lower_op: unhandled IR shape");
 }
