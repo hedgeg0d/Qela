@@ -313,7 +313,7 @@ fn gc_collect() {
 	// above only covers the coroutine gc_collect runs on.
 	var ci int = 1;
 	while (ci <= coro_slots()) {
-		if (ci != cur_coro && coros[ci].alive && !coros[ci].done) {
+		if (ci != cur_coro && coros[ci].alive && !coros[ci].done && !coros[ci].moved) {
 			$if (INTERP == "1") {
 				gc_mark_range(interp_coro_sp(ci), interp_coro_top(ci));
 			} $else {
@@ -321,6 +321,17 @@ fn gc_collect() {
 			}
 		}
 		ci = ci + 1;
+	}
+
+	// A migrated context between publication and destination import belongs
+	// to neither scheduler table. Its mailbox keeps the stack rooted across
+	// that short ownership gap.
+	var hi int = 0;
+	while (hi < CORO_HANDOFF_MAX) {
+		if (atomic_load(&coro_handoff[hi].state) == HANDOFF_READY) {
+			gc_mark_range(coro_handoff[hi].sp, coro_handoff[hi].top);
+		}
+		hi = hi + 1;
 	}
 
 	gc_sweep();

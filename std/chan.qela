@@ -210,6 +210,7 @@ fn chan_block(what str) {
 			chan_stall = 1;
 		}
 	}
+	coro_set_blocked(true);
 	if (!chan_deadlock_check) {
 		// With a pool, a false coro_yield means this thread's own
 		// scheduler has nothing left to run -- a slow sibling may still
@@ -218,6 +219,7 @@ fn chan_block(what str) {
 	} else if (!coro_yield()) {
 		chan_die(what);
 	}
+	coro_set_blocked(false);
 	chan_nblocked = chan_nblocked - 1;
 }
 
