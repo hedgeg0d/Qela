@@ -366,10 +366,10 @@ arrays work like any 4- or 8-byte value. (On the `extern` boundary — a call
 to or from a C function — scalar floats marshal into the SysV XMM registers
 instead, so `f32`/`f64` arguments and results cross into C directly; an
 extern function whose parameters would spill to the stack is a compile
-error.) Interpolation prints floats
-(`"${a}"` → `1.5`). Floats are not comptime constants, subnormal literals
-flush to zero, and printing rounds half-up rather than half-to-even — fine for
-games and numerics, not a libc.
+error.) Interpolation prints floats (`"${a}"` → `1.5`), and `comptime`
+supports float literals, arithmetic, negation and comparisons. Decimal
+literals retain subnormals; fixed-point printing rounds to nearest with ties
+to even.
 
 
 ## 5. Variables
@@ -1109,6 +1109,20 @@ is a compile error). Structs larger than 16 bytes are passed by pointer under
 the hood; you do not have to do anything — but remember it when counting
 argument registers.
 
+Fields may carry a JSON name or be omitted from typed JSON marshalling:
+
+```qela
+struct User {
+	id i64 "user_id",
+	internal str "-",
+}
+```
+
+`json_marshal` and `json_unmarshal` use these tags in both directions. A
+dynamic value uses `~`; parameters are copied on entry, and values in dynamic
+returns are boxed at the return site. Dynamic globals and `extern` declarations
+remain rejected.
+
 Forward declarations are allowed so two structs can point at each other:
 
 ```qela
@@ -1242,6 +1256,17 @@ Each distinct instantiation is a distinct type; identical arguments name the
 same type. `sizeof` follows the argument: `sizeof(Pair(u8)) == 2`,
 `sizeof(Pair(i64)) == 16`.
 
+Up to four type parameters are supported. A parameter may carry a constraint;
+the concrete argument must have that type or an allowed implicit widening:
+
+```qela
+struct Box(T: str) { value T, }
+```
+
+The compiler checks constraints when a generic is instantiated. Generic
+functions can also be overloaded: an exact argument match wins over implicit
+widening, and an equal score keeps the first declaration.
+
 ## 15. Expression macros
 
 `macro` gives you parse-time expression substitution — a tree splice, not
@@ -1286,7 +1311,16 @@ fn main() int {
 ```
 
 Useful for table generation, sizes, and anything you want to compute once and
-not ship. A comptime block that tries to produce a string is an error.
+not ship. A comptime block that tries to produce a string is an error. For a
+short constant expression, `$c("...")` performs the same folding inline:
+
+```qela
+let answer = $c("40 + 2");
+let bytes = $c("sizeof(Pair(i64)) * 2");
+```
+
+The expression is evaluated while parsing; no evaluator or expression code is
+emitted into the resulting program.
 
 ## 17. assert, panic, and bounds checks
 
@@ -1882,7 +1916,7 @@ conversation against it.
 - `--backtrace` prints the function call chain on panic even for plain
   compiles; `qela run` does it by default.
 - `--dump-std <module>` prints any standard module's source — the whole
-  library is 34 small files, all of it readable Qela.
+  library is 39 small files, all of it readable Qela.
 
 ### qela . — projects
 
@@ -2014,7 +2048,7 @@ booting in QEMU.
 - **`docs/STATUS.md`** — what works and what is left, with measurements.
 - **`docs/BOOTSTRAP.md`** — the subset the compiler's own sources must stay
   inside. Relevant only if you start hacking on the compiler.
-- The standard library itself, `std/` (or `qela --dump-std`): 34 small
+- The standard library itself, `std/` (or `qela --dump-std`): 39 small
   files, all of it readable Qela.
 
 ## 24. Compiler flags reference
