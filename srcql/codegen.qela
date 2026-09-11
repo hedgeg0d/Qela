@@ -560,7 +560,11 @@ fn gen_call(n *Node) {
 	if (ret_mem) { hidden = n.tmp.offset as i64; }
 	gen_args(n, false, false, hidden, marshall);
 
-	var odd bool = (depth & 1) != 0;
+	// The 16-byte-alignment pad below is an x86 concern only: its push is
+	// 8 bytes, so an odd depth needs 8 more before a call. ARM64's push
+	// (arm64_push in arm64_emit.qela) always moves SP by 16, so SP never
+	// drifts out of alignment and no padding is ever needed.
+	var odd bool = opt_target != TARGET_ARM64 && (depth & 1) != 0;
 	if (odd) {
 		b1(0x48); b1(0x83); modrm(3, 5, RSP); b1(8);
 	}
@@ -569,6 +573,7 @@ fn gen_call(n *Node) {
 		b1(0x48); b1(0x83); modrm(3, 0, RSP); b1(8);
 	}
 	if (overflow_pushed > 0) {
+		if (opt_target == TARGET_ARM64) { die("error: -target arm64 does not support stack-spilled call arguments yet"); }
 		alu_rax_imm_reg(0, RSP, 8 * overflow_pushed);
 		depth = depth - (overflow_pushed as int);
 	}
@@ -595,7 +600,7 @@ fn gen_indirect_call(n *Node) {
 	if (ret_mem) { hidden = n.tmp.offset as i64; }
 	gen_args(n, false, false, hidden, false);
 
-	var odd bool = (depth & 1) != 0;
+	var odd bool = opt_target != TARGET_ARM64 && (depth & 1) != 0;
 	if (odd) {
 		b1(0x48); b1(0x83); modrm(3, 5, RSP); b1(8);
 	}
@@ -612,6 +617,7 @@ fn gen_indirect_call(n *Node) {
 		b1(0x48); b1(0x83); modrm(3, 0, RSP); b1(8);
 	}
 	if (overflow_pushed > 0) {
+		if (opt_target == TARGET_ARM64) { die("error: -target arm64 does not support stack-spilled call arguments yet"); }
 		alu_rax_imm_reg(0, RSP, 8 * overflow_pushed);
 		depth = depth - (overflow_pushed as int);
 	}
