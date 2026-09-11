@@ -56,12 +56,20 @@ fn abi_spawn() {
 
 	var pid i64 = sys_fork();
 	if (pid == 0) {
-		sys_dup2(in_pipe[0] as i64, 0);
-		sys_dup2(out_pipe[1] as i64, 1);
-		sys_close(in_pipe[0] as i64);
-		sys_close(in_pipe[1] as i64);
-		sys_close(out_pipe[0] as i64);
-		sys_close(out_pipe[1] as i64);
+		sys_dup2(in_pipe[0] as i64, ABI_FD_HOST_TO_CHILD);
+		sys_dup2(out_pipe[1] as i64, ABI_FD_CHILD_TO_HOST);
+		if (in_pipe[0] as i64 != ABI_FD_HOST_TO_CHILD && in_pipe[0] as i64 != ABI_FD_CHILD_TO_HOST) {
+			sys_close(in_pipe[0] as i64);
+		}
+		if (in_pipe[1] as i64 != ABI_FD_HOST_TO_CHILD && in_pipe[1] as i64 != ABI_FD_CHILD_TO_HOST) {
+			sys_close(in_pipe[1] as i64);
+		}
+		if (out_pipe[0] as i64 != ABI_FD_HOST_TO_CHILD && out_pipe[0] as i64 != ABI_FD_CHILD_TO_HOST) {
+			sys_close(out_pipe[0] as i64);
+		}
+		if (out_pipe[1] as i64 != ABI_FD_HOST_TO_CHILD && out_pipe[1] as i64 != ABI_FD_CHILD_TO_HOST) {
+			sys_close(out_pipe[1] as i64);
+		}
 		var cpath *u8 = cstr(path);
 		var cargv [3]i64;
 		cargv[0] = cpath as i64;
@@ -77,4 +85,35 @@ fn abi_spawn() {
 	abi_pid = pid;
 	abi_in = in_pipe[1] as i64;
 	abi_out = out_pipe[0] as i64;
+}
+
+fn abi_wait_result(kind *u8, buf *u8, cap i64) i64 {
+	var scratch [512]u8;
+	while (true) {
+		var n i64 = abi_recv_frame(abi_out, kind, &scratch[0], 512);
+		if (n < 0) { return n; }
+		if (*kind != 3) {
+			if (n > cap) { return -1; }
+			var ci i64 = 0;
+			while (ci < n) { buf[ci] = scratch[ci]; ci = ci + 1; }
+			return n;
+		}
+		if (n < 1) { return -1; }
+		var nlen i64 = scratch[0] as i64;
+		if (n < 1 + nlen + 48) { return -1; }
+		var name str;
+		name.ptr = &scratch[0] + 1;
+		name.len = nlen;
+		var args [6]i64;
+		var vp *u8 = &scratch[0] + 1 + nlen;
+		var i i64 = 0;
+		while (i < 6) {
+			args[i] = abi_decode_u64(vp + i * 8);
+			i = i + 1;
+		}
+		var r i64 = __eval_call_dispatch(name, &args[0]);
+		var rb [8]u8;
+		*(&rb[0] as *i64) = r;
+		abi_send_frame(abi_in, 1 as u8, &rb[0], 8);
+	}
 }

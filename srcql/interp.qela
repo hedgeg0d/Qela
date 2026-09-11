@@ -4,6 +4,8 @@ import "lex.qela";
 import "parse.qela";
 import "type.qela";
 import "../std/io.qela";
+import "../std/buf.qela";
+import "../std/abiwire.qela";
 
 // A tree-walking interpreter for the typed AST: `qela irun prog.qela` runs
 // the program in this process instead of emitting an ELF for it. Not a
@@ -815,7 +817,38 @@ fn ip_syscall(n *Node) i64 {
 
 // ── calls ──
 
+fn ip_foreign_call(n *Node) i64 {
+	var vals [6]i64;
+	var given int = 0;
+	var a *Node = n.args;
+	while (a as i64 != 0 && given < 6) {
+		vals[given] = ip_eval(a);
+		a = a.next;
+		given = given + 1;
+	}
+	var b Buf;
+	buf_u8(&b, n.name.len as u8);
+	buf_bytes(&b, n.name.ptr, n.name.len);
+	var j int = 0;
+	while (j < 6) {
+		var v i64 = 0;
+		if (j < given) { v = vals[j]; }
+		buf_u64(&b, v);
+		j = j + 1;
+	}
+	var msg str = buf_str(&b);
+	abi_send_frame(ABI_FD_CHILD_TO_HOST, 3 as u8, msg.ptr, msg.len);
+
+	var rbuf [8]u8;
+	var kind u8 = 0;
+	var rn i64 = abi_recv_frame(ABI_FD_HOST_TO_CHILD, &kind, &rbuf[0], 8);
+	if (rn < 0) { ip_panic("interpreter: the host process died answering a foreign call\n"); }
+	if (kind == 2) { ip_panic("interpreter: the host rejected a foreign call\n"); }
+	return *(&rbuf[0] as *i64);
+}
+
 fn ip_call_node(n *Node) i64 {
+	if (n.foreign) { return ip_foreign_call(n); }
 	var f *Func = 0 as *Func;
 	if (n.varp as i64 != 0) {
 		// Indirect: the value is the *Func ND_FUNCADDR handed out.
