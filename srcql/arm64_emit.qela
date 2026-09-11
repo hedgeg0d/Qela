@@ -578,6 +578,10 @@ fn arm64_lower_op(op *IrOp) {
 		arm64_svc();
 		return;
 	}
+	if (op.kind == IR_LEA && op.dst.kind == OP_OP2 && op.src0.kind == OP_STACKSLOT && op.src1.kind == OP_NONE) {
+		arm64_sub_imm(op2_reg(op.dst.reg), X29, op.src0.off);
+		return;
+	}
 	if (op.kind == IR_LOAD2) {
 		// gen_ret's register-returned aggregate: word 1 first (into X1, the
 		// second-value register), so X0 still holds the base address while
