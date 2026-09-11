@@ -65,6 +65,10 @@ var gen_fn *Func;
 
 var cur_defers *DeferScope;
 
+var gen_shared_epilogue bool;
+
+var gen_epilogue_label i64;
+
 var defer_depth int;
 
 
@@ -2368,9 +2372,17 @@ fn gen_block(n *Node) {
 	cur_defers = &ds;
 
 	var s *Node = n.body;
-	while (s as i64 != 0) { gen_stmt(s); s = s.next; }
+	var terminated bool = false;
+	while (s as i64 != 0) {
+		gen_stmt(s);
+		if (s.kind == ND_RET || s.kind == ND_BREAK || s.kind == ND_CONT) {
+			terminated = true;
+			break;
+		}
+		s = s.next;
+	}
 
-	run_defers(&ds);
+	if (!terminated) { run_defers(&ds); }
 	cur_defers = ds.prev;
 	defer_depth = defer_depth - 1;
 }
@@ -2400,7 +2412,8 @@ fn gen_ret(n *Node) {
 		if (wide) { ir_pop_reg(RDX, n.pos); }
 		ir_pop_acc(n.pos);
 	}
-	gen_epilogue(n.pos);
+	if (gen_shared_epilogue) { ir_branch(CC_ALWAYS, gen_epilogue_label, n.pos); }
+	else { gen_epilogue(n.pos); }
 }
 
 
@@ -2573,6 +2586,19 @@ fn loop_has_break(n *Node) bool {
 	       loop_has_break(n.lhs) || loop_has_break(n.rhs) ||
 	       loop_has_break(n.args) || loop_has_break(n.init) ||
 	       loop_has_break(n.step);
+}
+
+
+fn return_count(n *Node) int {
+	var count int = 0;
+	while (n as i64 != 0) {
+		if (n.kind == ND_RET) { count = count + 1; }
+		count = count + return_count(n.lhs) + return_count(n.rhs) + return_count(n.cond);
+		count = count + return_count(n.then) + return_count(n.els) + return_count(n.init);
+		count = count + return_count(n.step) + return_count(n.body) + return_count(n.args);
+		n = n.next;
+	}
+	return count;
 }
 
 
@@ -2859,6 +2885,23 @@ fn gen_epilogue(pos i64) {
 
 
 fn gen_restore() {
+	if (opt_target == TARGET_ARM64) {
+		var pending int = -1;
+		var ai int = 0;
+		while (ai < ra_nsaved()) {
+			var ar int = ra_saved(ai);
+			if (reg_used(gen_fn, ar)) {
+				if (pending < 0) { pending = ar; }
+				else {
+					arm64_ldp_off(ar, pending, X29, -saved_slot(gen_fn, ar));
+					pending = -1;
+				}
+			}
+			ai = ai + 1;
+		}
+		if (pending >= 0) { arm64_ld_local(pending, saved_slot(gen_fn, pending)); }
+		return;
+	}
 	var i int = 0;
 	while (i < ra_nsaved()) {
 		var r int = ra_saved(i);
@@ -2866,6 +2909,36 @@ fn gen_restore() {
 			if (opt_target == TARGET_RISCV64) { riscv_ld_local(r, saved_slot(gen_fn, r)); }
 			else if (opt_target == TARGET_ARM64) { arm64_ld_local(r, saved_slot(gen_fn, r)); }
 			else { ld_local(r, saved_slot(gen_fn, r)); }
+		}
+		i = i + 1;
+	}
+}
+
+
+fn gen_save() {
+	if (opt_target == TARGET_ARM64) {
+		var pending int = -1;
+		var ai int = 0;
+		while (ai < ra_nsaved()) {
+			var ar int = ra_saved(ai);
+			if (reg_used(gen_fn, ar)) {
+				if (pending < 0) { pending = ar; }
+				else {
+					arm64_stp_off(ar, pending, X29, -saved_slot(gen_fn, ar));
+					pending = -1;
+				}
+			}
+			ai = ai + 1;
+		}
+		if (pending >= 0) { arm64_st_local(saved_slot(gen_fn, pending), pending); }
+		return;
+	}
+	var i int = 0;
+	while (i < ra_nsaved()) {
+		var r int = ra_saved(i);
+		if (reg_used(gen_fn, r)) {
+			if (opt_target == TARGET_RISCV64) { riscv_st_local(saved_slot(gen_fn, r), r); }
+			else { st_local(saved_slot(gen_fn, r), r); }
 		}
 		i = i + 1;
 	}
@@ -3111,6 +3184,8 @@ fn gen_func(f *Func) {
 	// A naked function has no frame by definition, and its body ends with
 	// its own ret or iretq: nothing may be emitted before or after it.
 	gen_frameless = f.naked || (f.leaf && f.stack_size == 0 && f.n_stack_args == 0);
+	gen_shared_epilogue = opt_target == TARGET_ARM64 && !gen_frameless && return_count(f.body) > 1;
+	if (gen_shared_epilogue) { gen_epilogue_label = ir_new_label(); }
 	if (!gen_frameless && opt_target == TARGET_RISCV64) {
 		riscv_enter_frame(f.stack_size as i64);
 	} else if (!gen_frameless && opt_target == TARGET_ARM64) {
@@ -3125,16 +3200,7 @@ fn gen_func(f *Func) {
 	}
 
 	if (!f.naked) {
-		var si int = 0;
-		while (si < ra_nsaved()) {
-			var sr int = ra_saved(si);
-			if (reg_used(f, sr)) {
-				if (opt_target == TARGET_RISCV64) { riscv_st_local(saved_slot(f, sr), sr); }
-				else if (opt_target == TARGET_ARM64) { arm64_st_local(saved_slot(f, sr), sr); }
-				else { st_local(saved_slot(f, sr), sr); }
-			}
-			si = si + 1;
-		}
+		gen_save();
 
 		var ri int = 0;
 		if (f.extern) {
@@ -3185,6 +3251,10 @@ fn gen_func(f *Func) {
 		// (IR_MOV dst=ACC src0=IMM), so this costs x86 nothing and gets
 		// ARM64 the IR dispatch it needs -- mov_reg_imm itself is native x86.
 		ir_mov_acc_imm(0, f.pos);
+		if (!gen_shared_epilogue) { gen_epilogue(f.pos); }
+	}
+	if (gen_shared_epilogue) {
+		ir_label(gen_epilogue_label, f.pos);
 		gen_epilogue(f.pos);
 	}
 	// A trailing bounds check can still be sitting unlowered in the IR

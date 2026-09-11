@@ -329,6 +329,14 @@ fn arm64_ldp_post_sp(rt1 int, rt2 int, imm i64) {
 	b4(0xa8c00000 | (imm7 << 15) | (rt2 << 10) | (SP << 5) | rt1);
 }
 
+fn arm64_stp_off(rt1 int, rt2 int, rn int, off i64) {
+	b4(0xa9000000 | (((off / 8) & 0x7f) << 15) | (rt2 << 10) | (rn << 5) | rt1);
+}
+
+fn arm64_ldp_off(rt1 int, rt2 int, rn int, off i64) {
+	b4(0xa9400000 | (((off / 8) & 0x7f) << 15) | (rt2 << 10) | (rn << 5) | rt1);
+}
+
 fn arm64_enter_frame(stack_size i64) {
 	arm64_stp_pre_sp(X29, X30, -16);
 	arm64_mov_reg(X29, SP);
@@ -386,7 +394,10 @@ fn arm64_sturb(rt int, rn int, simm9 i64) {
 fn arm64_memset_local(off i64, size i64) {
 	arm64_sub_imm(X9, X29, off);
 	var i i64 = 0;
+	while (i + 16 <= size && i <= 504) { arm64_stp_off(31, 31, X9, i); i = i + 16; }
 	while (i + 8 <= size) { arm64_str_off(31, X9, i); i = i + 8; }
+	if (i + 4 <= size) { arm64_strw_off(31, X9, i); i = i + 4; }
+	if (i + 2 <= size) { arm64_strh_off(31, X9, i); i = i + 2; }
 	while (i < size) { arm64_strb_off(31, X9, i); i = i + 1; }
 }
 
@@ -703,6 +714,35 @@ fn arm64_jump_back(target i64) {
 	b4(0x14000000 | ((rel >> 2) & 0x3ffffff));
 }
 
+// CMP reg,#0 followed by B.eq/B.ne is CBZ/CBNZ in one word. Returns true
+// when the two IR ops were consumed together.
+fn arm64_cmp_zero_branch(op *IrOp) bool {
+	if (op.kind != IR_CMP || op.src1.kind != OP_IMM || op.src1.off != 0) { return false; }
+	if (op.src0.ty as i64 != 0 && is_float(op.src0.ty)) { return false; }
+	var br *IrOp = op.next;
+	if (br as i64 == 0 || br.kind != IR_BR || (br.aux != CC_EQ && br.aux != CC_NE)) { return false; }
+	var reg int = -1;
+	if (op.src0.kind == OP_ACC) { reg = X0; }
+	else if (op.src0.kind == OP_VREG) { reg = op.src0.reg; }
+	else if (op.src0.kind == OP_OP2) { reg = arm64_op2(op.src0.reg); }
+	if (reg < 0) { return false; }
+	var base i64 = 0xb4000000;
+	if (br.aux == CC_NE) { base = 0xb5000000; }
+	var label i64 = br.dst.off;
+	if (ir_label_pos.p[label] >= 0) {
+		var rel i64 = ir_label_pos.p[label] - code.n;
+		b4(base | (((rel >> 2) & 0x7ffff) << 5) | reg);
+		return true;
+	}
+	var id i64 = arm64_br_n;
+	arm64_br_n = arm64_br_n + 1;
+	ilist_set(&arm64_br_at, id, code.n);
+	b4(base | reg);
+	ilist_set(&ir_br_next, id, ir_label_br.p[label]);
+	ilist_set(&ir_label_br, label, id);
+	return true;
+}
+
 
 // Narrow X0 in place to ty's width -- the ACC-in-ACC half of IR_CAST,
 // mirroring x86_emit.qela's truncate_to. sf=0 destinations (UXTB/UXTH/a
@@ -901,6 +941,18 @@ fn arm64_ldw_off(rt int, rn int, off i64) {
 	b4(0xb9400000 | ((off / 4) << 10) | (rn << 5) | rt);
 }
 
+fn arm64_strw_off(rt int, rn int, off i64) {
+	b4(0xb9000000 | ((off / 4) << 10) | (rn << 5) | rt);
+}
+
+fn arm64_ldrh_off(rt int, rn int, off i64) {
+	b4(0x79400000 | ((off / 2) << 10) | (rn << 5) | rt);
+}
+
+fn arm64_strh_off(rt int, rn int, off i64) {
+	b4(0x79000000 | ((off / 2) << 10) | (rn << 5) | rt);
+}
+
 
 fn arm64_str_off(rt int, rn int, off i64) {
 	b4(0xf9000000 | ((off / 8) << 10) | (rn << 5) | rt);
@@ -923,10 +975,21 @@ fn arm64_strb_off(rt int, rn int, off i64) {
 // aggregates actually have.
 fn arm64_memcpy(dst int, src int, size i64) {
 	var i i64 = 0;
+	while (i + 16 <= size && i <= 504) {
+		arm64_ldp_off(X9, X10, src, i);
+		arm64_stp_off(X9, X10, dst, i);
+		i = i + 16;
+	}
 	while (i + 8 <= size) {
 		arm64_ld_at(X9, src, i);
 		arm64_str_off(X9, dst, i);
 		i = i + 8;
+	}
+	if (i + 4 <= size) {
+		arm64_ldw_off(X9, src, i); arm64_strw_off(X9, dst, i); i = i + 4;
+	}
+	if (i + 2 <= size) {
+		arm64_ldrh_off(X9, src, i); arm64_strh_off(X9, dst, i); i = i + 2;
 	}
 	while (i < size) {
 		arm64_ldrb_off(X9, src, i);
