@@ -155,6 +155,7 @@ let ND_STRPART   = 54;
 let ND_ASMREF    = 55;
 let ND_ARRLIT    = 56;
 let ND_MAPLIT    = 57;
+let ND_ASMLE     = 58;
 
 struct Var;
 struct Node;

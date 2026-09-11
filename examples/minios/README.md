@@ -74,15 +74,17 @@ Boot order, from `main.qela`'s naked entry:
    and zeroes the BSS;
 4. `ring3_enter` iretq's into the user program at ring 3.
 
-The kernel never runs with interrupts enabled: syscall entry masks IF via
-FMASK, interrupt entry clears it in hardware, and `sys_read` polls the
-PS/2 controller instead of blocking (see DESIGN.md for why).
+The syscall entry masks IF via FMASK (the entry path is brief and
+non-preemptible), but the kernel itself runs with interrupts enabled:
+`sys_read` blocks on `sti; hlt; cli` until a keyboard or timer IRQ
+wakes it — ring-0 entries work since the compiler's `gen_isr_save`
+pads their interrupt frames (see DESIGN.md).
 
 ## Status
 
 - boots to long mode, prints, runs ring-3 code, handles write/read/exit
   syscalls, echoes keyboard input (PS/2, US layout, shift works, no
-  caps/ctrl/alt);
+  caps/ctrl/alt); `sys_read` blocks with interrupts enabled at ring 0;
 - syscalls implemented (Linux numbers): read 0, write 1, fstat 5,
   brk 12, getpid 39, exit 60, exit_group 231. Everything else returns
   -ENOSYS (-38);
