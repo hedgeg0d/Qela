@@ -102,6 +102,23 @@ let CC_ULE    = 8;
 let CC_UGT    = 9;
 let CC_UGE    = 10;
 
+// The opposite condition: a backend inverts an IR_BR by mapping to its own
+// inverted encoding, never by the frontend materialising a negated predicate.
+fn cc_invert(cc i64) i64 {
+	if (cc == CC_EQ) { return CC_NE; }
+	if (cc == CC_NE) { return CC_EQ; }
+	if (cc == CC_LT) { return CC_GE; }
+	if (cc == CC_GE) { return CC_LT; }
+	if (cc == CC_LE) { return CC_GT; }
+	if (cc == CC_GT) { return CC_LE; }
+	if (cc == CC_ULT) { return CC_UGE; }
+	if (cc == CC_UGE) { return CC_ULT; }
+	if (cc == CC_ULE) { return CC_UGT; }
+	if (cc == CC_UGT) { return CC_ULE; }
+	die("internal: cc_invert: unhandled cc");
+	return CC_ALWAYS;
+}
+
 struct IrOperand;
 struct IrOperand {
 	kind int,
@@ -123,15 +140,14 @@ struct IrOp {
 
 var ir_head *IrOp;
 var ir_tail *IrOp;
-var ir_next_label i64;
 
-// Called once per function, before that function's lowering starts; the
-// list is walked and discarded by the backend before the next function
-// begins, so nothing here needs to survive across gen_func calls.
+// Clears the op list. A backend walks and discards the list once after each
+// op it lowers (x86_lower_all today), so an op never survives into the next
+// function -- label ids stay the backend's concern, keyed off the frontend's
+// ir_new_label below, and are zeroed per function by gen_func.
 fn ir_reset() {
 	ir_head = 0 as *IrOp;
 	ir_tail = 0 as *IrOp;
-	ir_next_label = 0;
 }
 
 fn operand_none() IrOperand {
@@ -231,12 +247,4 @@ fn ir_emit(kind int, pos i64) *IrOp {
 	if (ir_tail as i64 == 0) { ir_head = op; } else { ir_tail.next = op; }
 	ir_tail = op;
 	return op;
-}
-
-// A fresh label id; the caller emits a matching IR_LABEL op at the point
-// the label should resolve to, and IR_BR ops reference it by id in dst.off.
-fn ir_new_label() i64 {
-	var id i64 = ir_next_label;
-	ir_next_label = ir_next_label + 1;
-	return id;
 }
