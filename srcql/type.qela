@@ -1685,6 +1685,47 @@ fn dot_receiver(a *Node, want *Type, pos i64) *Node {
 	return a;
 }
 
+// Overload resolution, first cut. When more than one function shares a
+// name, the best match on the argument types wins: exact type matches
+// beat implicit-widening matches, and ties keep the first declared. Only
+// plain functions participate -- comptime-parameter (generic) functions
+// still resolve by monomorphizing the first declared, and a call must
+// match the parameter count exactly (defaults do not count). When nothing
+// scores, the call falls back to the first declared and reports its usual
+// type errors, so a single function behaves exactly as before.
+fn overload_score(n *Node, f *Func) int {
+	var a *Node = n.args;
+	var i int = 0;
+	var score int = 2;
+	while (a as i64 != 0) {
+		var want *Type = func_param(f, i).ty;
+		if (a.ty as i64 == 0 || want as i64 == 0) { return 0; }
+		if (!same_type(a.ty, want)) {
+			if (is_aggregate(a.ty) || is_aggregate(want)) { return 0; }
+			if (!can_implicit(a, want)) { return 0; }
+			score = 1;
+		}
+		a = a.next;
+		i = i + 1;
+	}
+	return score;
+}
+
+fn overload_pick(n *Node) *Func {
+	var best *Func = null;
+	var best_score int = 0;
+	var f *Func = all_funcs;
+	while (f as i64 != 0) {
+		if (str_eq(f.name, n.name) && f.nct == 0 && f.nparams == n.nargs) {
+			var sc int = overload_score(n, f);
+			if (sc > best_score) { best = f; best_score = sc; }
+		}
+		f = f.next;
+	}
+	if (best as i64 != 0) { n.ovfunc = best; }
+	return best;
+}
+
 fn type_call(n *Node) {
 	if (type_intrinsic(n)) { return; }
 	if (n.varp as i64 == 0 && n.name.len > 0 &&
@@ -1749,6 +1790,10 @@ fn type_call(n *Node) {
 		fmt_str(&b, n.name);
 		fmt_str(&b, "'");
 		error_suggest(n.pos, buf_str(&b), suggest_name(n.name));
+	}
+	if (f.nct == 0) {
+		var ov *Func = overload_pick(n);
+		if (ov as i64 != 0) { f = ov; }
 	}
 	if (f.nct != 0) {
 		// A dotcall receiver is address-wrapped before inference: the

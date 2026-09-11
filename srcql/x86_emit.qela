@@ -45,7 +45,10 @@ fn ilist_set(l *I64List, i i64, v i64) {
 
 
 struct CallFixup;
-struct CallFixup { next *CallFixup, at i64, name str, pos i64, abs32 bool, }
+// fn is set when the fixup came from a direct call whose target was
+// resolved at type time (add_call_fn): the patch must use that exact
+// function, because a name can now resolve to several overloads.
+struct CallFixup { next *CallFixup, at i64, name str, pos i64, fptr *Func, abs32 bool, }
 
 
 struct StrFixup;
@@ -451,6 +454,15 @@ fn add_call(name str, pos i64) {
 	calls_tail = f;
 	b4(0);
 	if (opt_object) { push_reloc(f.at, name, REL_PCREL32_PLT); }
+}
+
+// A direct call to an already-resolved function: the fixup records the
+// Func so the patch pass does not re-resolve by name (a name can now mean
+// several overloads; the first would win and the wrong body would be
+// called).
+fn add_call_fn(f *Func, pos i64) {
+	add_call(f.name, pos);
+	if (calls_tail as i64 != 0) { calls_tail.fptr = f; }
 }
 
 
@@ -2061,7 +2073,7 @@ fn x86_lower_op(op *IrOp) {
 	}
 	if (op.kind == IR_CALL) {
 		if (op.src0.kind == OP_FUNC) {
-			add_call((op.src0.off as *Func).name, op.pos);
+			add_call_fn(op.src0.off as *Func, op.pos);
 			return;
 		}
 		// An indirect target goes in r10 (never an argument register) and
