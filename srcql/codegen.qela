@@ -81,6 +81,18 @@ fn by_ref_ty(ty *Type) bool {
 }
 
 
+// An argument staged for a by-value spill copies its bytes into a.tmp and
+// the spill block pushes them into the outgoing stack area -- a >16-byte
+// struct on x86 (SysV MEMORY class) or a straddling two-word value (a str
+// or 16-byte struct) on any target. On AAPCS64/LP64D a >16-byte struct
+// instead crosses by reference in one GPR word and never reaches the block.
+fn marshall_byval_words(n *Node) bool {
+	if (n.tmp as i64 == 0 || n.stack_tmp as i64 != 0) { return false; }
+	if (by_ref_ty(n.ty)) { return opt_target == TARGET_X86_64; }
+	return n.byval_spill;
+}
+
+
 // A local scalar of machine width lives at a known rbp offset, so it can be
 // read or written with one instruction instead of materialising its address.
 fn direct_local(n *Node) bool {
@@ -439,6 +451,15 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) int
 				a = a.next;
 				continue;
 			}
+			// A straddling two-word value (a str or 16-byte struct that no
+			// longer fits the GPRs) stages its bytes in a.tmp and lets the
+			// spill block push them, exactly like a by-ref MEMORY-class
+			// struct. The accumulator already holds the value's address.
+			if (marshall && marshall_byval_words(a)) {
+				ir_memcpy_dst(a.tmp.offset as i64, a.ty.size as i64, a.pos);
+				a = a.next;
+				continue;
+			}
 			// v1 never spills a >8-byte, <=16-byte (2-word) aggregate --
 			// parse.qela rejects that -- so a spilled aggregate here is
 			// always a single word.
@@ -548,7 +569,10 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) int
 	while (ci < an) {
 		var oa0 *Node = av[ci] as *Node;
 		if (oa0.stack_tmp as i64 != 0) { m = m + 1; }
-		else if (marshall && opt_target == TARGET_X86_64 && by_ref_ty(oa0.ty)) { m = m + ((oa0.ty.size as i64 + 7) / 8); }
+		else if (marshall && marshall_byval_words(oa0)) {
+			var nw i64 = (oa0.ty.size as i64 + 7) / 8;
+			m = m + nw;
+		}
 		ci = ci + 1;
 	}
 	// gen_call's own 16-byte alignment check runs after this, on whatever
@@ -579,7 +603,7 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) int
 					riscv_ld_local(T0, oa.stack_tmp.offset as i64);
 					riscv_str_off(T0, STK, 8 * si2);
 					si2 = si2 + 1;
-				} else if (marshall && opt_target == TARGET_X86_64 && by_ref_ty(oa.ty)) {
+				} else if (marshall && marshall_byval_words(oa)) {
 					var nw i64 = (oa.ty.size as i64 + 7) / 8;
 					riscv_lea_local(T1, oa.tmp.offset as i64);
 					var w i64 = 0;
@@ -614,7 +638,7 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) int
 					arm64_ld_local(X9, oa.stack_tmp.offset as i64);
 					arm64_str_off(X9, SP, 8 * si2);
 					si2 = si2 + 1;
-				} else if (marshall && opt_target == TARGET_X86_64 && by_ref_ty(oa.ty)) {
+				} else if (marshall && marshall_byval_words(oa)) {
 					var nw i64 = (oa.ty.size as i64 + 7) / 8;
 					arm64_sub_imm(X9, X29, oa.tmp.offset as i64);
 					var w i64 = 0;
@@ -640,7 +664,7 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) int
 				if (oa.stack_tmp as i64 != 0) {
 					ir_load_var(oa.stack_tmp, type_ptr(ty_i64), oa.pos);
 					ir_push_acc(oa.pos);
-				} else if (marshall && opt_target == TARGET_X86_64 && by_ref_ty(oa.ty)) {
+				} else if (marshall && marshall_byval_words(oa)) {
 					// Words high-to-low so the struct's byte 0 sits nearest
 					// rsp once the callee's frame is up (rbp+16+8k).
 					ir_lea_slot_acc(oa.tmp.offset as i64, oa.pos);
