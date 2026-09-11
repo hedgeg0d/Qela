@@ -10,6 +10,15 @@ fn die(msg str) {
 	sys_exit(1);
 }
 
+fn print(s str) {
+	write_str(STDOUT, s);
+}
+
+fn println(s str) {
+	write_str(STDOUT, s);
+	write_str(STDOUT, "\n");
+}
+
 fn file_exists(path str) bool {
 	var fd i64 = sys_open_read(cstr(path));
 	if (fd < 0) { return false; }
