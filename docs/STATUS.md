@@ -1052,8 +1052,9 @@ integer" met float bits: `spine_ok` folded float comparisons as integers
 miscopied or mistyped float moves (`srcql/codegen.qela`). All fixed.
 
 Decimal literals, including subnormals, and fixed-point formatting use
-round-to-nearest, ties-to-even. `comptime` expressions support float
-literals, arithmetic, negation and comparisons in S2/S3.
+round-to-nearest, ties-to-even. `comptime` folding stays integer-only: a
+float literal or arithmetic inside `comptime`/`$c` is an error, because the
+evaluator lives in the bootstrap subset where stage0 has no float.
 
 **Hardening pass (2026-08-04).** Every fix below is mirrored in stage0 where
 the feature exists there, and pinned by a corpus test; the gate stayed green
