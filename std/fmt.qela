@@ -85,6 +85,76 @@ fn fmt_put_bool(b Buf, v bool) Buf {
 	return b;
 }
 
+// `${s!r}`: a quoted, escaped repr of a string.
+fn fmt_put_repr(b Buf, s str) Buf {
+	buf_u8(&b, '"');
+	var i i64 = 0;
+	while (i < s.len) {
+		var c u8 = s.ptr[i];
+		if (c == '"') { fmt_str(&b, "\\\""); }
+		else if (c == '\\') { fmt_str(&b, "\\\\"); }
+		else if (c == '\n') { fmt_str(&b, "\\n"); }
+		else if (c == '\t') { fmt_str(&b, "\\t"); }
+		else if (c == '\r') { fmt_str(&b, "\\r"); }
+		else { buf_u8(&b, c); }
+		i = i + 1;
+	}
+	buf_u8(&b, '"');
+	return b;
+}
+
+// `${x:5d}` / `${x:05d}`: decimal padded to a width, spaces or zeros.
+// The sign sits inside the padding: -5 with :05d prints "-0005".
+fn fmt_put_i64_w(b Buf, v i64, w i64, zp bool) Buf {
+	var neg bool = v < 0;
+	if (neg) { v = -v; }
+	var rev [24]u8;
+	var n i64 = 0;
+	if (v == 0) { rev[0] = '0'; n = 1; }
+	while (v > 0) {
+		rev[n] = ('0' as i64 + v % 10) as u8;
+		v = v / 10;
+		n = n + 1;
+	}
+	var pad i64 = w - n;
+	if (neg) { pad = pad - 1; }
+	if (pad < 0) { pad = 0; }
+	if (!zp) {
+		var i i64 = 0;
+		while (i < pad) { buf_u8(&b, ' '); i = i + 1; }
+	}
+	if (neg) { buf_u8(&b, '-'); }
+	if (zp) {
+		var i i64 = 0;
+		while (i < pad) { buf_u8(&b, '0'); i = i + 1; }
+	}
+	while (n > 0) { n = n - 1; buf_u8(&b, rev[n]); }
+	return b;
+}
+
+// `${x:08x}` / `${x:08X}`: the low `w` hex digits, zero-padded. A width
+// past 16 is all leading zeros: the value's bits never go that high.
+fn fmt_put_hex_w(b Buf, v i64, w i64, upper bool) Buf {
+	var hex [16]u8;
+	hex[0] = '0'; hex[1] = '1'; hex[2] = '2'; hex[3] = '3';
+	hex[4] = '4'; hex[5] = '5'; hex[6] = '6'; hex[7] = '7';
+	hex[8] = '8'; hex[9] = '9'; hex[10] = 'a'; hex[11] = 'b';
+	hex[12] = 'c'; hex[13] = 'd'; hex[14] = 'e'; hex[15] = 'f';
+	var n i64 = w;
+	if (n > 16) { n = 16; }
+	var i i64 = 0;
+	while (i < w - n) { buf_u8(&b, '0'); i = i + 1; }
+	i = n - 1;
+	while (i >= 0) {
+		var d i64 = (v >> (4 * i)) & 15;
+		var c u8 = hex[d];
+		if (upper && d >= 10) { c = (c as i64 - 32) as u8; }
+		buf_u8(&b, c);
+		i = i - 1;
+	}
+	return b;
+}
+
 fn fmt_result(b Buf) str {
 	var s str;
 	s.ptr = b.p;
@@ -177,18 +247,7 @@ fn fmt_f64_bits(b *Buf, bits i64) {
 		while (i < 53) { arr[i] = mbits[i]; i = i + 1; }
 		i = 53;
 		while (i < n) { arr[i] = 0; i = i + 1; }
-
-		var digs *u8 = arena_alloc(n, 1);
-		var nd i64 = 0;
-		while (!fdig_allzero(arr, 0, n) && nd < FDIG_CAP) {
-			digs[nd] = fdig_div10(arr, 0, n) as u8;
-			nd = nd + 1;
-		}
-		if (nd == 0) { buf_u8(b, '0'); }
-		else {
-			i = nd;
-			while (i > 0) { i = i - 1; buf_u8(b, ('0' as i64 + (digs[i] as i64)) as u8); }
-		}
+		fdig_print_int(b, arr, n);
 		return;
 	}
 
@@ -227,6 +286,120 @@ fn fmt_f64_bits(b *Buf, bits i64) {
 
 fn fmt_put_f64_bits(b Buf, bits i64) Buf {
 	fmt_f64_bits(&b, bits);
+	return b;
+}
+
+// Prints an MSB-first bit array's decimal value. Used by fmt_f64_bits and
+// fmt_f64_fixed for the integer part.
+fn fdig_print_int(b *Buf, arr *u8, n i64) {
+	var digs *u8 = arena_alloc(n, 1);
+	var nd i64 = 0;
+	while (!fdig_allzero(arr, 0, n) && nd < FDIG_CAP) {
+		digs[nd] = fdig_div10(arr, 0, n) as u8;
+		nd = nd + 1;
+	}
+	if (nd == 0) { buf_u8(b, '0'); }
+	else {
+		var i i64 = nd;
+		while (i > 0) { i = i - 1; buf_u8(b, ('0' as i64 + (digs[i] as i64)) as u8); }
+	}
+}
+
+// `${x:.2f}`: fixed-point with exactly `prec` digits after the point,
+// rounding half-up on the prec+1-th digit. The carry can ripple into the
+// integer part, so the fraction is fully rounded before it is printed.
+fn fmt_f64_fixed(b *Buf, bits i64, prec i64) {
+	var sign i64 = (bits >> 63) & 1;
+	var expf i64 = (bits >> 52) & 0x7ff;
+	var mant i64 = bits & 0xfffffffffffff;
+
+	if (sign != 0) { buf_u8(b, '-'); }
+
+	if (expf == 0x7ff) {
+		if (mant == 0) { fmt_str(b, "inf"); } else { fmt_str(b, "nan"); }
+		return;
+	}
+	if (expf == 0 && mant == 0) {
+		buf_u8(b, '0');
+		var z i64 = 0;
+		while (z < prec) { buf_u8(b, '0'); z = z + 1; }
+		return;
+	}
+
+	var m i64 = mant;
+	var e i64 = 0;
+	if (expf == 0) {
+		e = 1 - 1023 - 52;
+	} else {
+		m = mant | 0x10000000000000;
+		e = expf - 1023 - 52;
+	}
+
+	var mbits [53]u8;
+	var i i64 = 0;
+	while (i < 53) {
+		mbits[i] = ((m >> (52 - i)) & 1) as u8;
+		i = i + 1;
+	}
+
+	var intv i64 = 0;
+	if (e >= 0) {
+		// An exact integer: the fraction is all zeros.
+		var n i64 = 53 + e;
+		var arr *u8 = arena_alloc(n, 1);
+		i = 0;
+		while (i < 53) { arr[i] = mbits[i]; i = i + 1; }
+		i = 53;
+		while (i < n) { arr[i] = 0; i = i + 1; }
+		fdig_print_int(b, arr, n);
+		buf_u8(b, '.');
+		i = 0;
+		while (i < prec) { buf_u8(b, '0'); i = i + 1; }
+		return;
+	}
+
+	var w i64 = -e;
+	if (w < 53) { intv = m >> w; }
+
+	var frac *u8 = arena_alloc(w, 1);
+	if (w > 53) {
+		i = 0;
+		while (i < w - 53) { frac[i] = 0; i = i + 1; }
+		var j i64 = 0;
+		while (j < 53) { frac[w - 53 + j] = mbits[j]; j = j + 1; }
+	} else {
+		i = 0;
+		while (i < w) { frac[i] = mbits[53 - w + i]; i = i + 1; }
+	}
+
+	var digs *u8 = arena_alloc(prec + 1, 1);
+	var k i64 = 0;
+	while (k < prec) {
+		digs[k] = fdig_mul10(frac, 0, w) as u8;
+		k = k + 1;
+	}
+	var round_up bool = fdig_mul10(frac, 0, w) >= 5;
+	var carry bool = round_up;
+	k = prec;
+	while (k > 0 && carry) {
+		k = k - 1;
+		var d i64 = digs[k] as i64 + 1;
+		if (d == 10) { digs[k] = 0; carry = true; }
+		else { digs[k] = d as u8; carry = false; }
+	}
+	if (carry) { intv = intv + 1; }
+
+	fmt_i64(b, intv);
+	buf_u8(b, '.');
+	k = 0;
+	while (k < prec) {
+		buf_u8(b, ('0' as i64 + (digs[k] as i64)) as u8);
+		k = k + 1;
+	}
+}
+
+fn fmt_put_f64_fixed(b Buf, bits i64, prec i64) Buf {
+	fmt_f64_fixed(&b, bits, prec);
 	return b;
 }
 
