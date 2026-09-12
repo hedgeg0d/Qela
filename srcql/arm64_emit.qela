@@ -26,6 +26,7 @@ import "x86_emit.qela";
 
 let X0  = 0;
 let X1  = 1;
+let X2  = 2;
 let X8  = 8;
 let X9  = 9;    // address/immediate scratch for st_local/ld_local and imm ALU operands
 let X10 = 10;   // second scratch, for a read-modify-write op's immediate operand
@@ -34,6 +35,7 @@ let X30 = 30;
 let SP  = 31;   // register field value 31 means SP or XZR depending on the instruction; only SP forms are used here.
 
 let SYS_ARM64_EXIT_GROUP = 94;
+let SYS_ARM64_WRITE = 64;
 
 // A64 condition codes (the 4-bit field in B.cond/CSET), mapped from
 // srcql/ir.qela's neutral CC_* -- SUBS sets flags the same way for a signed
@@ -378,6 +380,50 @@ fn arm64_store_imm(ty *Type, v i64) {
 }
 
 
+// A bounds check's trip jump lives on fn_bounds (srcql/x86_emit.qela's
+// list, shared bookkeeping between backends -- it just holds branch ids)
+// and is patched to the trampoline at the function's end by
+// arm64_gen_bounds_trampoline, the ARM64 half of gen_bounds_trampoline.
+fn arm64_gen_bounds_trampoline() {
+	var i i64 = 0;
+	while (i < fn_bounds.n) { arm64_patch_here(fn_bounds.p[i]); i = i + 1; }
+	ilist_push(&bounds_checks, code.n);
+	b4(0x14000000);   // placeholder B, patched by arm64_patch_call like a direct call
+	fn_bounds.n = 0;
+}
+
+// A MOVZ+MOVK pair loading an address not yet known at emission time (the
+// panic message's runtime location) -- patched the same read-modify-write
+// way as a branch, but 16 bits at a time into two instruction words instead
+// of one imm26. Addresses here are always well under 4GB (ELF_BASE plus a
+// small offset), so two halves are enough; no MOVK #32/#48 needed.
+fn arm64_patch_movz_movk_addr(at i64, addr i64) {
+	var w0 i64 = buf_read32(&code, at);
+	var w1 i64 = buf_read32(&code, at + 4);
+	buf_patch32(&code, at, w0 | ((addr & 0xffff) << 5));
+	buf_patch32(&code, at + 4, w1 | (((addr >> 16) & 0xffff) << 5));
+}
+
+// A bounds/assert trip: print the message to stderr, then exit(134). The
+// message's own address is unknown until the image is laid out (it lives
+// in .rodata), so it loads through a placeholder MOVZ/MOVK pair recorded on
+// panic_msg_at/panic_msg_ids (srcql/codegen.qela's lists, shared with the
+// x86 stub) and patched at image finalize time.
+fn arm64_gen_panic_stub(msg_id int, msg_len i64) {
+	ilist_push(&panic_msg_at, code.n);
+	ilist_push(&panic_msg_ids, msg_id as i64);
+	arm64_movz(X1, 0, 0);
+	arm64_movk(X1, 0, 1);
+	arm64_mov_imm64(X0, 2);
+	arm64_mov_imm64(X2, msg_len);
+	arm64_mov_imm64(X8, SYS_ARM64_WRITE);
+	arm64_svc();
+	arm64_mov_imm64(X0, 134);
+	arm64_mov_imm64(X8, SYS_ARM64_EXIT_GROUP);
+	arm64_svc();
+}
+
+
 fn arm64_lower_op(op *IrOp) {
 	if (op.kind == IR_MOV && op.dst.kind == OP_ACC && op.src0.kind == OP_IMM) {
 		arm64_mov_imm64(X0, op.src0.off);
@@ -428,6 +474,22 @@ fn arm64_lower_op(op *IrOp) {
 	if (op.kind == IR_LEA && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC && op.src1.kind == OP_NONE) {
 		// A constant offset folded into an address already in X0 (a struct
 		// member, a constant array index): X0 += dst.off.
+		if (op.dst.off != 0) { arm64_add_signed_imm(X0, X0, op.dst.off); }
+		return;
+	}
+	if (op.kind == IR_LEA && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC &&
+	    (op.src1.kind == OP_OP2 || op.src1.kind == OP_VREG)) {
+		// Array element: X0 = X0 + idx*scale, idx in the OP2 staging
+		// register or a promoted local. aux is the literal element size
+		// (1/2/4/8), not a code -- ADD (shifted register) folds a
+		// power-of-two scale into the add via LSL.
+		var idx int;
+		if (op.src1.kind == OP_OP2) { idx = op2_reg(op.src1.reg); } else { idx = op.src1.reg; }
+		var scale i64 = op.aux;
+		var shift i64 = 0;
+		if (scale == 2) { shift = 1; } else if (scale == 4) { shift = 2; } else if (scale == 8) { shift = 3; }
+		else if (scale != 1) { die("internal: arm64_lower_op: IR_LEA: non-power-of-two element size not wired yet"); }
+		b4(0x8b000000 | (shift << 10) | (idx << 16) | (X0 << 5) | X0);
 		if (op.dst.off != 0) { arm64_add_signed_imm(X0, X0, op.dst.off); }
 		return;
 	}
@@ -540,6 +602,10 @@ fn arm64_lower_op(op *IrOp) {
 		arm64_st_local(op.dst.off, X9);
 		return;
 	}
+	if (op.kind == IR_CMP && op.src0.kind == OP_OP2 && op.src1.kind == OP_IMM) {
+		arm64_cmp_imm(op2_reg(op.src0.reg), op.src1.off);
+		return;
+	}
 	if (op.kind == IR_CMP && op.src0.kind == OP_ACC && op.src1.kind == OP_STACKSLOT) {
 		arm64_ld_local(X9, op.src1.off);
 		arm64_cmp_reg(X0, X9);
@@ -567,6 +633,11 @@ fn arm64_lower_op(op *IrOp) {
 		ilist_set(&ir_label_br, label, id);
 		return;
 	}
+	if (op.kind == IR_BOUNDS) {
+		var id i64 = arm64_jump(arm64_cc(op.aux));
+		ilist_push(&fn_bounds, id);
+		return;
+	}
 	if (op.kind == IR_LABEL) {
 		ilist_set(&ir_label_pos, op.dst.off, code.n);
 		var id i64 = ir_label_br.p[op.dst.off];
@@ -576,5 +647,10 @@ fn arm64_lower_op(op *IrOp) {
 		}
 		return;
 	}
+	fmt_i64_to_fd(2, op.kind as i64); write_str(2, " ");
+	fmt_i64_to_fd(2, op.dst.kind as i64); write_str(2, " ");
+	fmt_i64_to_fd(2, op.src0.kind as i64); write_str(2, " ");
+	fmt_i64_to_fd(2, op.src1.kind as i64); write_str(2, " aux=");
+	fmt_i64_to_fd(2, op.aux); write_str(2, "\n");
 	die("internal: arm64_lower_op: unhandled IR shape");
 }

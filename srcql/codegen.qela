@@ -2480,6 +2480,11 @@ fn layout_globals(globals *Var) {
 // to the walker instead of exiting, so the caller of the trampoline call
 // below is still on the stack when the walker reads it.
 fn gen_panic_stub(msg_id int, msg_len i64) {
+	if (opt_target == TARGET_ARM64) {
+		if (opt_object) { die("error: -target arm64 does not support -c yet"); }
+		arm64_gen_panic_stub(msg_id, msg_len);
+		return;
+	}
 	if (opt_object) {
 		// The message bytes get a `.Lstrd<id>` symbol; a RIP-relative lea
 		// with a PC32 reloc survives PIE (an absolute slot would be TEXTREL).
@@ -2608,7 +2613,8 @@ fn emit_code(u *Unit, main_fn *Func, panic_id int, hdr i64) {
 		gen_panic_stub(panic_id, 20);
 		var i i64 = 0;
 		while (i < bounds_checks.n) {
-			buf_patch32(&code, bounds_checks.p[i], panic_addr - (bounds_checks.p[i] + 4));
+			if (opt_target == TARGET_ARM64) { arm64_patch_call(&code, bounds_checks.p[i], panic_addr - bounds_checks.p[i]); }
+			else { buf_patch32(&code, bounds_checks.p[i], panic_addr - (bounds_checks.p[i] + 4)); }
 			i = i + 1;
 		}
 	}
@@ -2754,7 +2760,8 @@ fn codegen(u *Unit, img *Image) {
 			gen_panic_stub(panic_id, 20);
 			var i i64 = 0;
 			while (i < bounds_checks.n) {
-				buf_patch32(&code, bounds_checks.p[i], panic_addr - (bounds_checks.p[i] + 4));
+				if (opt_target == TARGET_ARM64) { arm64_patch_call(&code, bounds_checks.p[i], panic_addr - bounds_checks.p[i]); }
+			else { buf_patch32(&code, bounds_checks.p[i], panic_addr - (bounds_checks.p[i] + 4)); }
 				i = i + 1;
 			}
 		}
@@ -2963,7 +2970,9 @@ fn codegen(u *Unit, img *Image) {
 	var rodata_vaddr i64 = ELF_BASE + hdr + code.n;
 	var pm i64 = 0;
 	while (pm < panic_msg_at.n) {
-		buf_patch32(&code, panic_msg_at.p[pm], rodata_vaddr + bytes_off[panic_msg_ids.p[pm]]);
+		var pm_addr i64 = rodata_vaddr + bytes_off[panic_msg_ids.p[pm]];
+		if (opt_target == TARGET_ARM64) { arm64_patch_movz_movk_addr(panic_msg_at.p[pm], pm_addr); }
+		else { buf_patch32(&code, panic_msg_at.p[pm], pm_addr); }
 		pm = pm + 1;
 	}
 	if (bt_table_off >= 0) {
