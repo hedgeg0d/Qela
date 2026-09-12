@@ -1063,6 +1063,7 @@ fn cmd_repl(argc int, argv **u8) int {
 
 let ABI_REQ_RUN = 1;
 let ABI_REQ_CALL = 2;
+let ABI_REQ_JIT = 6;
 let ABI_RESP_OK = 1;
 let ABI_RESP_ERR = 2;
 
@@ -1116,6 +1117,62 @@ fn abi_try_run(src str, name str, path_a bool) bool {
 	return ((status[0] >> 8) & 255) == 0 && (status[0] & 127) == 0;
 }
 
+fn abi_handle_jit(f *Func) {
+	var pid i64 = sys_fork();
+	if (pid == 0) {
+		var devnull i64 = sys_open_append(cstr("/dev/null"));
+		sys_dup2(devnull, STDOUT);
+		type_abi_mode = false;
+
+		var fid int = diag_file_of(f.pos);
+		var fsrc str = diag_src_of(fid);
+		var body_only str = str_slice(fsrc, diag_offset_of(f.body_start), diag_offset_of(f.src_end));
+
+		var sigb Buf;
+		fmt_str(&sigb, "fn ");
+		fmt_str(&sigb, f.name);
+		fmt_str(&sigb, "(");
+		var pi int = 0;
+		while (pi < f.nparams) {
+			if (pi > 0) { fmt_str(&sigb, ", "); }
+			var pv *Var = func_param(f, pi);
+			fmt_str(&sigb, pv.name);
+			fmt_str(&sigb, " ");
+			fmt_str(&sigb, type_name(pv.ty));
+			pi = pi + 1;
+		}
+		fmt_str(&sigb, ") ");
+		if (f.ret.kind != TY_VOID) {
+			fmt_str(&sigb, type_name(f.ret));
+			fmt_str(&sigb, " ");
+		}
+		fmt_str(&sigb, body_only);
+		var body_src str = buf_str(&sigb);
+
+		reset_compile();
+		opt_object = true;
+		var jfile int = diag_add_file("<jit>", body_src);
+		var junit *Unit = parse(lex(body_src, (jfile as i64) << FILE_SHIFT));
+		var img Image;
+		codegen(junit, &img);
+
+		var ok bool = o_rela_count(img.relocs) == 0;
+		if (!ok) {
+			var msg str = "dynamic: not self-contained yet -- calls, globals and literals inside a dynamic function are not supported by the jit path (see docs/INTERPRETED.md)";
+			abi_send_frame(ABI_FD_CHILD_TO_HOST, ABI_RESP_ERR as u8, msg.ptr, msg.len);
+			sys_exit(0);
+		}
+		abi_send_frame(ABI_FD_CHILD_TO_HOST, ABI_RESP_OK as u8, img.code.p, img.code.n);
+		sys_exit(0);
+	}
+	var status [1]i64;
+	sys_wait4(pid, &status[0] as *u8);
+	if (((status[0] >> 8) & 255) != 0 || (status[0] & 127) != 0) {
+		var msg str = "dynamic: the compiler crashed while jit-compiling";
+		abi_send_frame(ABI_FD_CHILD_TO_HOST, ABI_RESP_ERR as u8, msg.ptr, msg.len);
+	}
+}
+
 fn cmd_abi_server(argc int, argv **u8) int {
 	repl_init();
 	type_abi_mode = true;
@@ -1159,6 +1216,20 @@ fn cmd_abi_server(argc int, argv **u8) int {
 			var cvb [8]u8;
 			*(&cvb[0] as *i64) = cval;
 			abi_send_frame(ABI_FD_CHILD_TO_HOST, ABI_RESP_OK as u8, &cvb[0], 8);
+			continue;
+		}
+		if (kind == ABI_REQ_JIT as u8) {
+			var jname str;
+			jname.ptr = buf;
+			jname.len = n;
+			jname = str_dup(jname);
+			var jf *Func = find_func(jname);
+			if (jf as i64 == 0) {
+				var msg str = "dynamic: unknown function";
+				abi_send_frame(ABI_FD_CHILD_TO_HOST, ABI_RESP_ERR as u8, msg.ptr, msg.len);
+				continue;
+			}
+			abi_handle_jit(jf);
 			continue;
 		}
 		if (kind != ABI_REQ_RUN as u8) { return 0; }
