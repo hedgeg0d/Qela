@@ -749,12 +749,7 @@ fn gen_addr(n *Node) {
 				jump_bounds(0x83);
 			}
 			pop_reg(RDI);
-			if (!lea_index(lt.base.size, RDI, RAX)) {
-				scale_by(lt.base.size);
-				rex_w(RDI, RAX);
-				b1(0x01);
-				modrm(3, RDI, RAX);
-			}
+			ir_lea_acc(operand_op2(0), operand_acc(), lt.base.size, 0, n.pos);
 			return;
 		}
 
@@ -763,7 +758,8 @@ fn gen_addr(n *Node) {
 		// emitted for it and the offset folds into the address.
 		if (n.rhs.kind == ND_NUM &&
 		    (lt.kind != TY_ARRAY || (n.rhs.val >= 0 && n.rhs.val < lt.len))) {
-			add_rax_imm(n.rhs.val * (lt.base.size as i64));
+			ir_lea_acc(operand_acc(), operand_none(), 1,
+			           n.rhs.val * (lt.base.size as i64), n.pos);
 			return;
 		}
 		var idx int = RDI;
@@ -792,14 +788,7 @@ fn gen_addr(n *Node) {
 			mov_reg_reg(RDI, RAX);
 			pop_reg(RAX);
 		}
-		if (!lea_index(lt.base.size, RAX, idx)) {
-			mov_reg_imm(RCX, lt.base.size as i64);
-			b1(0x48); b1(0x0f); b1(0xaf);
-			modrm(3, RDI, RCX);
-			rex_w(RDI, RAX);
-			b1(0x01);
-			modrm(3, RDI, RAX);
-		}
+		ir_lea_acc(operand_acc(), operand_index(idx), lt.base.size, 0, n.pos);
 		return;
 	}
 	if (k == ND_SLICE) {
@@ -2187,6 +2176,45 @@ fn x86_lower_op(op *IrOp) {
 		setcc(x86_setcc_byte(op.aux));
 		return;
 	}
+	if (op.kind == IR_LEA && op.dst.kind == OP_ACC) {
+		var scale int = op.aux as int;
+		if (op.src0.kind == OP_ACC && op.src1.kind == OP_NONE) {
+			// A constant index folded into the address: rax += disp.
+			add_rax_imm(op.dst.off);
+			return;
+		}
+		if (op.src0.kind == OP_ACC && (op.src1.kind == OP_OP2 || op.src1.kind == OP_VREG)) {
+			// Array element: rax = base + idx*scale. base is the accumulator,
+			// the index a staging register (OP2) or a promoted local.
+			var idx int;
+			if (op.src1.kind == OP_OP2) { idx = op2_reg(op.src1.reg); } else { idx = op.src1.reg; }
+			if (lea_scale_ok(scale)) {
+				lea_index(scale, RAX, idx);
+			} else {
+				// The imul-with-rcx fallback. A non-power-of-two scale skips
+				// the promoted-index fast path, so idx is always the OP2 reg.
+				mov_reg_imm(RCX, scale as i64);
+				b1(0x48); b1(0x0f); b1(0xaf);
+				modrm(3, idx, RCX);
+				rex_w(idx, RAX); b1(0x01); modrm(3, idx, RAX);
+			}
+			if (op.dst.off != 0) { add_rax_imm(op.dst.off); }
+			return;
+		}
+		if (op.src0.kind == OP_OP2 && op.src1.kind == OP_ACC) {
+			// Slice element: rax = base + idx*scale, base in the OP2 staging
+			// register and the index in the accumulator.
+			var base int = op2_reg(op.src0.reg);
+			if (lea_scale_ok(scale)) {
+				lea_index(scale, base, RAX);
+			} else {
+				scale_by(scale);
+				rex_w(base, RAX); b1(0x01); modrm(3, base, RAX);
+			}
+			if (op.dst.off != 0) { add_rax_imm(op.dst.off); }
+			return;
+		}
+	}
 	die("internal: x86_lower_op: unhandled IR shape");
 }
 
@@ -2239,6 +2267,27 @@ fn ir_load_var(v *Var, ty *Type, pos i64) {
 	if (v.has_reg) { op.src0 = operand_vreg(v.reg, ty); }
 	else { op.src0 = operand_stackslot(v.offset as i64, ty); }
 	x86_lower_all();
+}
+
+// rax = base + index*scale + disp, the INDEX address form. base is OP_ACC
+// (array) or OP_OP2 (slice); index is OP_ACC/OP_OP2/OP_VREG, or OP_NONE for a
+// plain constant fold. aux carries the element scale, dst.off the fixed
+// displacement.
+fn ir_lea_acc(base IrOperand, index IrOperand, scale int, disp i64, pos i64) {
+	var op *IrOp = ir_emit(IR_LEA, pos);
+	op.dst = operand_acc();
+	op.dst.off = disp;
+	op.src0 = base;
+	op.src1 = index;
+	op.aux = scale as i64;
+	x86_lower_all();
+}
+
+// The INDEX path's index register is the OP2 staging slot, or a promoted
+// local that can be the lea index directly.
+fn operand_index(reg int) IrOperand {
+	if (reg == op2_reg(0)) { return operand_op2(0); }
+	return operand_vreg(reg, 0 as *Type);
 }
 
 fn ir_unary_acc(uop int, pos i64) {
