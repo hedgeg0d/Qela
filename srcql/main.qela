@@ -1064,8 +1064,68 @@ fn cmd_repl(argc int, argv **u8) int {
 let ABI_REQ_RUN = 1;
 let ABI_REQ_CALL = 2;
 let ABI_REQ_JIT = 6;
+let ABI_REQ_PARSE = 7;
+let ABI_REQ_RUN_AST = 8;
 let ABI_RESP_OK = 1;
 let ABI_RESP_ERR = 2;
+
+struct AstEntry;
+struct AstEntry {
+	id   i64,
+	node *Node,
+	next *AstEntry,
+}
+var ast_table *AstEntry = 0 as *AstEntry;
+var ast_next_id i64 = 1;
+
+fn ast_store(node *Node) i64 {
+	var e *AstEntry = arena_alloc(sizeof(AstEntry), 8) as *AstEntry;
+	e.id = ast_next_id;
+	ast_next_id = ast_next_id + 1;
+	e.node = node;
+	e.next = ast_table;
+	ast_table = e;
+	return e.id;
+}
+
+fn ast_find(id i64) *Node {
+	var e *AstEntry = ast_table;
+	while (e as i64 != 0) {
+		if (e.id == id) { return e.node; }
+		e = e.next;
+	}
+	return 0 as *Node;
+}
+
+fn abi_try_parse_expr(src str, name str) bool {
+	var pid i64 = sys_fork();
+	if (pid == 0) {
+		var devnull i64 = sys_open_append(cstr("/dev/null"));
+		sys_dup2(devnull, STDOUT);
+		var file2 int = diag_add_file(name, src);
+		var t *Token = lex(src, (file2 as i64) << FILE_SHIFT);
+		resolve_comptime(&t);
+		var pn *Node = parse_stmt(&t);
+		add_type(pn);
+		sys_exit(0);
+	}
+	var status [1]i64;
+	sys_wait4(pid, &status[0] as *u8);
+	return ((status[0] >> 8) & 255) == 0 && (status[0] & 127) == 0;
+}
+
+fn abi_try_run_ast(node *Node) bool {
+	var pid i64 = sys_fork();
+	if (pid == 0) {
+		var devnull i64 = sys_open_append(cstr("/dev/null"));
+		sys_dup2(devnull, STDOUT);
+		ip_stmt(node);
+		sys_exit(0);
+	}
+	var status [1]i64;
+	sys_wait4(pid, &status[0] as *u8);
+	return ((status[0] >> 8) & 255) == 0 && (status[0] & 127) == 0;
+}
 
 fn abi_build_call_args(vals *i64, n int) *Node {
 	var head Node;
@@ -1230,6 +1290,63 @@ fn cmd_abi_server(argc int, argv **u8) int {
 				continue;
 			}
 			abi_handle_jit(jf);
+			continue;
+		}
+		if (kind == ABI_REQ_PARSE as u8) {
+			var araw str;
+			araw.ptr = buf;
+			araw.len = n;
+			araw = str_dup(araw);
+			if (repl_classify(araw) != REPL_PATH_EXPR) {
+				var msg str = "parse_ast: only a single expression is supported (see docs/INTERPRETED.md)";
+				abi_send_frame(ABI_FD_CHILD_TO_HOST, ABI_RESP_ERR as u8, msg.ptr, msg.len);
+				continue;
+			}
+			var to_parse str = abi_wrap_expr(araw);
+
+			seq = seq + 1;
+			var pnameb Buf;
+			fmt_str(&pnameb, "<ast:");
+			fmt_i64(&pnameb, seq as i64);
+			buf_u8(&pnameb, '>');
+			var pname str = buf_str(&pnameb);
+
+			if (!abi_try_parse_expr(to_parse, pname)) {
+				var msg str = "parse_ast: compile error";
+				abi_send_frame(ABI_FD_CHILD_TO_HOST, ABI_RESP_ERR as u8, msg.ptr, msg.len);
+				continue;
+			}
+			var afile int = diag_add_file(pname, to_parse);
+			var at *Token = lex(to_parse, (afile as i64) << FILE_SHIFT);
+			resolve_comptime(&at);
+			var anode *Node = parse_stmt(&at);
+			add_type(anode);
+			repl_sync();
+			var hid i64 = ast_store(anode);
+			var hb [8]u8;
+			*(&hb[0] as *i64) = hid;
+			abi_send_frame(ABI_FD_CHILD_TO_HOST, ABI_RESP_OK as u8, &hb[0], 8);
+			continue;
+		}
+		if (kind == ABI_REQ_RUN_AST as u8) {
+			if (n < 8) { return 0; }
+			var hid2 i64 = abi_decode_u64(buf);
+			var anode2 *Node = ast_find(hid2);
+			if (anode2 as i64 == 0) {
+				var msg str = "run_ast: unknown handle";
+				abi_send_frame(ABI_FD_CHILD_TO_HOST, ABI_RESP_ERR as u8, msg.ptr, msg.len);
+				continue;
+			}
+			if (!abi_try_run_ast(anode2)) {
+				var msg str = "run_ast: runtime error";
+				abi_send_frame(ABI_FD_CHILD_TO_HOST, ABI_RESP_ERR as u8, msg.ptr, msg.len);
+				continue;
+			}
+			ip_stmt(anode2);
+			var rv i64 = ip_load(ip_var_addr(result_var), result_var.ty);
+			var rvb [8]u8;
+			*(&rvb[0] as *i64) = rv;
+			abi_send_frame(ABI_FD_CHILD_TO_HOST, ABI_RESP_OK as u8, &rvb[0], 8);
 			continue;
 		}
 		if (kind != ABI_REQ_RUN as u8) { return 0; }
