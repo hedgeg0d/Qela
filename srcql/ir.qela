@@ -33,6 +33,8 @@ let IR_ATOMIC = 18; // <aux: atomic subop>; dst/src0 carry address and value
 let IR_COROSWITCH = 19; // switch coroutine context around the following call
 let IR_TLSADDR = 20; // dst = address of the TLS slot in src0 (OP_TLSVAR)
 let IR_FENCE = 21; // memory fence; <aux: ordering>
+let IR_PUSH  = 22; // push src0 onto the staging stack
+let IR_POP   = 23; // pop the staging stack into dst
 
 // IrOp.aux for IR_UNARY.
 let UOP_NEG    = 0;
