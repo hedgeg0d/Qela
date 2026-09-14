@@ -66,8 +66,10 @@ fn ra_nsaved() int {
 }
 
 fn ra_nreg(f *Func) int {
-	// RISC-V has no register pool yet (RV4): every local stays in a frame
-	// slot, correct but unoptimized, the same starting point ARM64 had.
+	// RISC-V has no register pool yet: every local stays in a frame slot,
+	// correct but unoptimized. (A promotion pool would need the coroutine
+	// and GC spills to cover the same s1..s10 set it already does, but the
+	// call-staging paths are not there yet.)
 	if (opt_target == TARGET_RISCV64) { return 0; }
 	return ra_nsaved() + ra_nfree(f);
 }
