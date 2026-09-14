@@ -1,0 +1,20 @@
+// expect-exit: 7
+// Dead globals, functions and string literals must be dropped by the
+// emitter without disturbing the live ones: live_g and "abc" survive,
+// dead() and its string ride nowhere.
+var live_g i64 = 4;
+var dead_g i64 = 99;
+
+fn dead() i64 {
+	var s str = "dead string";
+	return dead_g + s.len;
+}
+
+fn live(x i64) i64 {
+	return x;
+}
+
+fn main() int {
+	var s str = "abc";
+	return (live(live_g) + s.len) as int;
+}
