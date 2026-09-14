@@ -321,6 +321,7 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) {
 			// parse.qela rejects that -- so a spilled aggregate here is
 			// always a single word.
 			if (a.stack_tmp as i64 != 0) {
+				if (opt_target == TARGET_ARM64) { die("error: -target arm64 does not support this many aggregate call arguments yet"); }
 				ld_at_rax(RCX, 0);
 				st_local(a.stack_tmp.offset as i64, RCX);
 				a = a.next;
@@ -376,7 +377,9 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) {
 			var sn *Node = src[nd] as *Node;
 			if (!gen_into(sn, dest[nd])) {
 				gen_expr(sn);
-				mov_reg_reg(dest[nd], RAX);
+				// Same bytes as mov_reg_reg(dest[nd], RAX) on x86 (IR_STORE
+				// dst=VREG src0=ACC), routed through IR so ARM64 gets it too.
+				ir_store_vreg_acc(dest[nd], 0 as *Type, n.pos);
 			}
 		}
 	}
@@ -629,7 +632,7 @@ fn gen_indirect_call(n *Node) {
 
 fn gen_logical(n *Node) {
 	gen_expr(n.lhs);
-	test_rax();
+	if (opt_target == TARGET_ARM64) { ir_cmp_acc_imm(0, n.pos); } else { test_rax(); }
 	// Skip the whole materialised value when one side decides the result:
 	// an OR is 1 as soon as either side is true, an AND is 0 as soon as
 	// either side is false.
@@ -638,7 +641,7 @@ fn gen_logical(n *Node) {
 	var mid i64 = ir_new_label();
 	ir_branch(skip_cc, mid, n.pos);
 	gen_expr(n.rhs);
-	test_rax();
+	if (opt_target == TARGET_ARM64) { ir_cmp_acc_imm(0, n.pos); } else { test_rax(); }
 	ir_branch(skip_cc, mid, n.pos);
 	if (n.kind == ND_AND) { ir_mov_acc_imm(1, n.pos); } else { ir_mov_acc_imm(0, n.pos); }
 	var end i64 = ir_new_label();
@@ -2354,7 +2357,10 @@ fn gen_func(f *Func) {
 	gen_stmt(f.body);
 
 	if (!f.naked && !always_returns(f.body)) {
-		mov_reg_imm(RAX, 0);
+		// ir_mov_acc_imm lowers to the exact same mov_reg_imm(RAX, 0) on x86
+		// (IR_MOV dst=ACC src0=IMM), so this costs x86 nothing and gets
+		// ARM64 the IR dispatch it needs -- mov_reg_imm itself is native x86.
+		ir_mov_acc_imm(0, f.pos);
 		gen_epilogue(f.pos);
 	}
 	// A trailing bounds check can still be sitting unlowered in the IR
