@@ -1,0 +1,26 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: 10-hello01-7
+// `s += "x"` builds a string in a loop (the arena grows behind it), and
+// `+` composes; both keep their bounds-checked slices intact.
+import "std/fmt.qela";
+
+fn main() int {
+	var s str = "";
+	var i i64 = 0;
+	while (i < 10) {
+		s += "x";
+		i = i + 1;
+	}
+	var t str = "hello";
+	t += "0" + "1";
+	var o = fmt_begin();
+	o = fmt_put_i64(o, s.len);
+	o = fmt_put_str(o, "-");
+	o = fmt_put_str(o, t);
+	o = fmt_put_str(o, "-");
+	o = fmt_put_i64(o, t.len);
+	var r = fmt_result(o);
+	sys_write(1, r.ptr, r.len);
+	return 0;
+}

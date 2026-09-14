@@ -39,101 +39,94 @@ fn main() int {
     var e E = E.A;
     var a [4]int;
     var i0 int = 0;
-    var i1 int = 0;
+    var i1 int = 0x0;
     var i2 int = 0;
     var i3 int = 0;
     var i4 int = 0;
-    var i5 int = 0;
-    e = E.B(((p.y > p.x) as u16));
-    a[((('d' & str_eq("abcd", sv0)) >> ("aa").len) & 3)] = mul2(gv, (((fv - fv) + (1.0 * -1.5)) > fv));
-    v0 = ((gv as u8) <= (-(true == (-1 * v2))));
-    if (((pair_sum(Pair{x: ((true | 'g') & 744), y: gcd2((100 & 15), ((0 - gv) & 15))}) != ((!a[(false & 3)]) * 42)) <= a[(pair_sum(p) & 3)])) {
-        match (e) {
-            A => {
-                return (false >= ((-('\n' / ((83 & 15) + 1))) > (v2 ^ twice(v2))));
-            }
-            B(mb0) => {
-                return (p.x | mb0);
-            }
-            C(mb0, mb1) => {
-                return (((!((false << 2) >> ('e' / ((true & 15) + 1)))) >= (-false)) - mb1);
-            }
-        }
-        match (e) {
-            A => {
-                return (127 & (((-447 < 100) % ((-334 & 15) + 1)) - ((false == gv) > (-795 < 'b'))));
-            }
-            B(mb0) => {
-                return (true > v2);
-            }
-            C(mb0, mb1) => {
-                return pair_sum(p);
-            }
-        }
-    } else {
-        e = E.C(((!a[((-398 % ((-846 & 15) + 1)) & 3)]) < (a[((1 | true) & 3)] << ((true as i16) <= ('c' == -873)))), (-((sv1).len & 'g')));
-        if ((a[(v2 & 3)] == ("xyz").len)) {
-            a[(((("xyz")[0..2])[0..2]).len & 3)] = ((-v0) | (!((fv / 10.5) < 10.5)));
-            v0 = ((true as i16) ^ 42);
-            return ((-((1 <= false) % ((-618 & 15) + 1))) << 'e');
-        } else {
-            gv = gv;
-            a[(true & 3)] = ((0.125 / 1.7) as i64);
-            return twice(((!('b' > -78)) as i32));
-        }
-    }
-    v0 = (((fv / 0.125) > fv) > ((true + (("abcd")[1..4]).len) >> (-(false >= 'f'))));
+    var i5 int = 0x0;
+    e = E.B(((-(('f' as u32) | p.y)) in a));
+    v1, gv = ((1.5 * fv) as i64), true;
+    v0, v2 = v2, v0;
     i0 = 0;
     while ((i0 < 4)) {
-        if (((((p.x as double) as i64) as i16) <= ((((0 as i8) as i8) as double) as i64))) {
-            gv = gv;
-            if ((((gv * ((10 - 797) <= (v2 + true))) >= (mix5(('\n' as u16), (127 as u16), (-431 | 0), v2, (v0 as u8)) == ((2 as u16) | ('a' >= 255)))) >= v1)) {
-                v2 = (363 == (!(gv / (((-2.0 as i64) & 15) + 1))));
-                i3 = 0;
-                while ((i3 < 1)) {
-                    i3 = (i3 + 1);
-                    match (e) {
-                        A => {
-                            return false;
-                        }
-                        B(mb0) => {
-                            return (sv1)[0];
-                        }
-                        C(mb0, mb1) => {
-                            return ((((127 * v2) > (100 == false)) as i16) % (((((true != -8) / ((('a' == 92) & 15) + 1)) | 255) & 15) + 1));
-                        }
-                    }
-                    v1, v2 = ((((true ^ '3') % (((true >> false) & 15) + 1)) as i32) != (!(-("hello")[1]))), ((a[((((((("xyzzy")[2..4])[0..2])[0..2])[0..2])[0..2]).len & 3)] | ((42 as i32) < (-true))) != (v0 as i8));
-                }
-            } else {
-                gv &= gv;
+        v1 = str_eq((((((("abc")[0..2])[0..2])[0..2])[0..2] + sv0))[0..2], sv0);
+        v0 |= (((fv >= (fv / 0.25)) >= gv) != ((str_eq(sv0, sv1) as double) as i64));
+        a[i0] = (!("no").len);
+        i0 = (i0 + 1);
+    }
+    match (e) {
+        A => {
+            return (((-('\t' as u8)) << ((false << 2) % ((('e' % ((10 & 15) + 1)) & 15) + 1))) & ((((sv1 + ("foobar")[0..2])).len > (p.x - '2')) && ((p.x - '2') >= (false != ('3' as i8)))));
+        }
+        B(mb0) => {
+            return ((a[(gv & 3)] & (((100 + -334) <= (false as i16)) - (("hello")[0] > ('0' in a)))) - mb0);
+        }
+        C(mb0, mb1) => {
+            return (a[(((gv as u16) as i32) & 3)] ^ (!pair_sum(p)));
+        }
+    }
+    p.x = ((-398 << a[((false ^ 'g') & 3)]) <= (((42 as i8) + (0.125 as i64)) in 0..(((-p.y) & 15) + 0x1)));
+    p = Pair{x: -538, y: (((((sv1 + (("foobar")[0..3])[0..2]))[0] * pair_sum(p)) % ((((false - -1) | (955 if (((((false > false) as i32) / ((((true != -8) == gv) & 15) + 0x1)) as i8) == (((((!gv) if (gv == (v2 as u32)) else (fv == fv)) < (-str_eq(sv0, ((sv0)[0..2])[0..2]))) && ((-str_eq(sv0, ((sv0)[0..2])[0..2])) < (!-1))) < ((797 in 0..(((0x26c % ((87 & 15) + 1)) & 15) + 1)) * (('e' if ((((('d' in a) if ((gv == (v0 ^ ((true in a) ^ (!'\n')))) > (((('f' if ((((mix5(v1, '3', gv, 'f', 0x2) >= twice(100)) as i8) / (((a[((gv >= true) & 3)] == (v2 in a)) & 15) + 1)) == v2) else 103) != (('3' > -1) && (-1 >= true))) as u16) > p.x)) else ('a' as u8)) as i16) | (!(("hello")[1] <= ('a' in a)))) == ((sv1)[0] as i8)) else true) as u32)))) else gv)) & 0xf) + 1)) + (((!209) in 0..((('e' in a) & 15) + 1)) if ((((((true >= 0) && (0 < 127)) > (true << true)) - (('3' < 703) as i16)) << (a[((--59) & 3)] if ((a[((((v0 <= -1) && (-1 < true)) if (p.y < (a[(((true | 'g') <= pair_sum(Pair{x: 1, y: -893})) & 3)] as u32)) else gcd2((1 & 0xf), ('e' & 15))) & 3)] & ((str_eq(("xyz")[0..2], sv0) if ((true as i16) > (((('a' <= true) as u16) != ('e' if (str_eq((("abc")[0..2])[0..2], sv1) >= (!v0)) else v1)) + ((pair_sum(p) as i16) + ((0 >= -700) in a)))) else (695 as i32)) > 59)) == ((('a' in a) >= a[((((gv as u8) < tag_e(e)) && (tag_e(e) >= ('c' > 'd'))) & 3)]) && (a[((((gv as u8) < tag_e(e)) && (tag_e(e) >= ('c' > 'd'))) & 3)] <= (0x351 != (('2' in 0..((2 & 15) + 1)) << ('0' + 239)))))) else ((-934 - v1) < p.x))) != v2) else (sv1)[0]))};
+    match (e) {
+        A => {
+            return -123;
+        }
+        B(mb0) => {
+            return ((mix5(((961 as double) >= (fv / 0.5)), ((v1 in a) >> a[(gv & 3)]), ((-405 in 0..((0 & 15) + 1)) > gv), a[((-0x3) & 0x3)], (!(gv in a))) >= ((0x0 as i16) if (((true < (p.x if ((pair_sum(Pair{x: ((0xa / ((971 & 15) + 1)) as u8), y: ((0 in 0..((gv & 15) + 1)) in 0..((('\t' != false) & 15) + 1))}) as u8) > (str_eq(("xyzzy" + sv0), (sv0)[0..2]) % (((-(str_eq(sv1, "aa") + (-392 < 'a'))) & 15) + 1))) else ((10 >= -706) if ((0.125 as i64) != (((((false <= true) && (true < 910)) / (((255 as i8) & 15) + 0x1)) + tag_e(e)) <= (((-458 as u32) | (255 in 0..(('f' & 15) + 1))) if (431 != (0.5 <= (-1.5 / 0.125))) else (false != (gv as u8))))) else (fv as i64)))) && ((p.x if ((pair_sum(Pair{x: ((10 / ((971 & 15) + 1)) as u8), y: ((0 in 0..((gv & 15) + 1)) in 0..((('\t' != false) & 15) + 1))}) as u8) > (str_eq(("xyzzy" + sv0), (sv0)[0..2]) % (((-(str_eq(sv1, "aa") + (-392 < 'a'))) & 15) + 1))) else ((10 >= -706) if ((0.125 as i64) != (((((false <= true) && (true < 910)) / (((255 as i8) & 15) + 1)) + tag_e(e)) <= (((-458 as u32) | (255 in 0..(('f' & 15) + 1))) if (431 != (0.5 <= (-1.5 / 0.125))) else (false != (gv as u8))))) else (fv as i64))) <= ((p.y in a) ^ ((false as u16) >= gv)))) <= ((("abcd")[0..2] + sv0))[0]) else (((("xyzzy")[1..5] + ((("xyzzy")[2..4])[0..2] + (("xyzzy")[0..2] + "no"))) + ((((("xyz" + sv1) + ("foobar")[0..5]) + (("abcd")[1..3])[0..2]) + (("""x
+yz""" + "42"))[0..2]))[0..2])).len)) + mb0);
+        }
+        C(mb0, mb1) => {
+            return ((((((-340 != gv) in a) >> ((-1 in 0..((true & 0xf) + 1)) + (-322 & '2'))) <= v2) && (v2 < (0.3 == ((0.125 - 3.75) * (fv + -2.0))))) ^ mb1);
+        }
+    }
+    if ((((((!true) as u8) * ((-208 >= str_eq("""x
+yz""", ("""ab
+cd""")[1..5])) && (str_eq("""x
+yz""", ("""ab
+cd""")[1..5]) < (false in 0..((3 & 15) + 1))))) - (((gv in 0..((v0 & 15) + 1)) as i8) << (('3' / ((true & 15) + 1)) - (false in a)))) == ((((("abc" + sv0) + sv0))[0..2])[0..2])[0])) {
+        match (e) {
+            A => {
+                return (p.x as u32);
             }
-        } else {
-            e = E.C(((!-1) + ((str_eq(sv0, ((sv0)[0..2])[0..2]) * ('a' & v2)) as i8)), gv);
-            if ((((0.5 <= (-1.5 / 0.125)) == ((fv / 0.3) == (-0.5 - (-938 as double)))) >= ((((0.5 * fv) as i64) as u32) != (v0 as u8)))) {
-                e = E.B(((((1 as u32) >= '\n') - -123) / ((((-('b' % ((v2 & 15) + 1))) * pair_sum(p)) & 15) + 1)));
-                v2 = (sv1)[0];
-                return ((a[(42 & 3)] == ("zz")[1]) != ((10 as u8) | (a[(gv & 3)] ^ (3 % (('\n' & 15) + 1)))));
-            } else {
-                p.x = ((145 as i16) >= ((('1' ^ v2) * (true as u8)) as i32));
-                return (p.x < (false as i16));
+            B(mb0) => {
+                return (42 as u16);
+            }
+            C(mb0, mb1) => {
+                return (((('d' & ('0' | -840)) as i16) >= ((((-836 < false) && (false > 843)) < (-826 * '2')) << (-(sv0).len))) && (((((-836 < false) && (false > 843)) < (-826 * '2')) << (-(sv0).len)) > ((('b' - 'd') - '2') <= (sv0).len)));
             }
         }
-        a[i0] = ((str_eq(("qwerty")[2..4], "abc") << ((false as i32) * (v1 * gv))) * (((gv - '3') != (gv as u32)) ^ ((false as u16) >= gv)));
-        i0 = (i0 + 1);
+        v2 = (((('f' <= 'b') as double) - (fv + fv)) != (10.5 - 10.5));
+        return gcd2((((("aa")[0..2] + ("no")[0..2])).len & 15), (((gcd2((false & 15), ('0' & 15)) in a) != (("""ab
+cd""" + ((("abc")[0..2] + ("foobar" + "hello")) + ("xyzzy")[0..3]))).len) & 15));
+    } else {
+        n.tag = (str_eq("""ab
+cd""", "xyz") as u32);
     }
-    a[((((-(42 == gv)) as u16) >= (!(-false))) & 3)] = tag_e(e);
-    sv0 = sv1;
-    sv1 = "hi";
     i0 = 0;
-    while ((i0 < 3)) {
+    while ((i0 < 4)) {
+        b = Bag{p: ((((-(!true)) as u32) >= (str_eq(sv1, (("foobar")[1..6] + ((("hello")[0..4] + ("xyz")[0..2]) + ("zz")[0..2]))) if ('2' == (gv >> pair_sum(Pair{x: ((-140 as i16) if ((-(((-2.0 as i64) & (!gv)) % ((-687 & 15) + 1))) >= ((!((v0 in 0..(('\n' & 0xf) + 0x1)) - (!42))) >> ((((-128 if ((((('f' as double) == (2.0 / 3.75)) << 'd') ^ ((((((("abc")[0..2] + sv1))[0..2] + ("abcd" + ("""x
+yz""")[1..4])) + ("42" + (sv1)[0..2]))).len == ((("""x
+yz""")[0..3])[0..2])[0])) <= mix5(a[((v1 >= str_eq((("qwerty")[2..5])[0..2], (((("foobar")[2..5] + (("42" + "hi"))[0..2]) + (("xyzzy")[2..4])[0..2]) + "42"))) & 3)], (681 / ((p.x & 0xf) + 1)), gv, ((!('\n' >= gv)) in 0..(('a' & 15) + 1)), ((('f' << 0x266) in 0..((((0x3e8 < true) && (true < false)) & 15) + 1)) >> (('0' | gv) <= (864 in 0..(('b' & 15) + 0x1)))))) else gv) >= ('c' as u8)) && (('c' as u8) <= (!'e'))) if (((1 << ((true * v0) | (0x1d2 >> 'b'))) % ((((('c' in 0..(('c' & 15) + 1)) > str_eq(sv1, (sv1)[0..2])) as i8) & 15) + 0x1)) <= (((('g' if (((0.1 as i64) + (--848)) <= (!a[(((533 >= 'd') / ((((v1 > gv) && (gv >= 'e')) & 0xf) + 1)) & 3)])) else 'b') & str_eq(sv1, (sv0 + "no"))) / (((!pair_sum(Pair{x: true, y: 'f'})) & 15) + 1)) <= (((sv1)[0..2])[1] if (((v1 in a) as u32) < ((((2 / ((0xffffffffffffffbe & 15) + 1)) >= (false == v0)) as i32) in a)) else (v0 << (!928))))) else ((gv % ((0 & 15) + 1)) in 0..((gv & 15) + 0x1))))) else (gv as u16)), y: 'b'}))) else ((255 >= -177) in 0..(((v1 ^ -151) & 15) + 1)))) && ((str_eq(sv1, (("foobar")[1..6] + ((("hello")[0..4] + ("xyz")[0..2]) + ("zz")[0..2]))) if ('2' == (gv >> pair_sum(Pair{x: ((-140 as i16) if ((-(((-2.0 as i64) & (!gv)) % ((-687 & 15) + 1))) >= ((!((v0 in 0..(('\n' & 15) + 1)) - (!42))) >> ((((-128 if ((((('f' as double) == (2.0 / 3.75)) << 'd') ^ ((((((("abc")[0..2] + sv1))[0..2] + ("abcd" + ("""x
+yz""")[1..4])) + ("42" + (sv1)[0..2]))).len == ((("""x
+yz""")[0..3])[0..2])[0])) <= mix5(a[((v1 >= str_eq((("qwerty")[2..5])[0..2], (((("foobar")[2..5] + (("42" + "hi"))[0..2]) + (("xyzzy")[2..4])[0..2]) + "42"))) & 3)], (681 / ((p.x & 15) + 1)), gv, ((!('\n' >= gv)) in 0..(('a' & 15) + 1)), ((('f' << 0x266) in 0..((((1000 < true) && (true < false)) & 15) + 1)) >> (('0' | gv) <= (864 in 0..(('b' & 15) + 1)))))) else gv) >= ('c' as u8)) && (('c' as u8) <= (!'e'))) if (((1 << ((true * v0) | (466 >> 'b'))) % ((((('c' in 0..(('c' & 15) + 1)) > str_eq(sv1, (sv1)[0..2])) as i8) & 0xf) + 0x1)) <= (((('g' if (((0.1 as i64) + (--848)) <= (!a[(((0x215 >= 'd') / ((((v1 > gv) && (gv >= 'e')) & 15) + 1)) & 3)])) else 'b') & str_eq(sv1, (sv0 + "no"))) / (((!pair_sum(Pair{x: true, y: 'f'})) & 15) + 1)) <= (((sv1)[0..2])[1] if (((v1 in a) as u32) < ((((2 / ((0xffffffffffffffbe & 15) + 0x1)) >= (false == v0)) as i32) in a)) else (v0 << (!928))))) else ((gv % ((0 & 15) + 1)) in 0..((gv & 15) + 1))))) else (gv as u16)), y: 'b'}))) else ((255 >= -177) in 0..(((v1 ^ -151) & 15) + 1))) >= gv)), q: (!(-(tag_e(e) < a[('b' & 3)]))), r: v0, s: 3};
+        a[i0] = (('1' if ((((str_eq("abc", (("""ab
+cd""" + (("xyz")[0..2])[0..2]))[0..2]) <= ((!gv) > (-1 as i16))) && (((!gv) > (-1 as i16)) <= (('b' as i8) as u16))) <= ((true if ((((10 as u16) in 0..(((!3) & 15) + 1)) in a) < ((-(-(--583))) in 0..(((((-'e') as i8) as u8) & 0xf) + 1))) else tag_e(e)) >= ((100 == 255) * str_eq(("xyzzy")[1..3], ("abcd")[1..4])))) != (-910 >> (((fv / 0.5) >= (0.25 / 0.25)) | (p.x % ((((true > false) && (false < 1)) & 15) + 1))))) else ((v1 in 0..((v1 & 15) + 1)) as i8)) <= (str_eq(sv1, ((((sv1)[0..2])[0..2] + (("foobar")[0..6])[0..2]))[0..2]) as i8));
         i0 = (i0 + 1);
-        n.tag = (gv % ((((v2 as u8) as u16) & 15) + 1));
     }
-    p = pair_swap(p);
+    match (e) {
+        A => {
+            return ((((625 in 0..((v2 & 15) + 1)) if (((((gv * (3 as i16)) < (!(v2 if (((((-v0) | pair_sum(Pair{x: '1', y: gv})) in a) + a[(tag_e(e) & 3)]) == '0') else 0))) && ((!(v2 if (((((-v0) | pair_sum(Pair{x: '1', y: gv})) in a) + a[(tag_e(e) & 3)]) == '0') else 0)) < ((fv + -0.5) <= (fv / 0.125)))) in 0..((mix5(((!'f') as u32), ((!'b') >> 'f'), (v0 in a), (pair_sum(Pair{x: 255, y: '\t'}) in 0..(((true ^ '\n') & 15) + 1)), ("zz").len) & 15) + 1)) < ((-p.x) in a)) else (528 as i8)) == (((255 <= 'b') && ('b' >= v2)) as i16)) <= a[(a[((-992 << 998) & 3)] & 3)]);
+        }
+        B(mb0) => {
+            return (true - mb0);
+        }
+        C(mb0, mb1) => {
+            return (str_eq("no", ("xyz")[0..3]) in 0..((((!('3' as i32)) as i32) & 15) + 0x1));
+        }
+    }
     var ob Buf;
     fmt_i64(&ob, v0);
     write_str(STDOUT, buf_str(&ob));
     write_str(STDOUT, "\n");
-    return a[((-'g') & 3)];
+    return tag_e(e);
 }

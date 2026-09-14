@@ -50,12 +50,14 @@ let ABI_REQ_AST_CHILD = 10;
 let ABI_REQ_AST_NEXT = 11;
 let ABI_REQ_AST_SET = 12;
 
+/// Records an abstract handle for later replay.
 fn abi_ast_register(a *Ast) {
 	if (abi_asts_tail as i64 == 0) { abi_asts = a; }
 	else { abi_asts_tail.next = a; }
 	abi_asts_tail = a;
 }
 
+/// Records an abstract mutation for later replay.
 fn abi_set_record(parent *Ast, index i64, child *Ast) {
 	var s *AstSet = arena_alloc(sizeof(AstSet), 8) as *AstSet;
 	s.parent = parent;
@@ -76,6 +78,7 @@ fn abi_set_record(parent *Ast, index i64, child *Ast) {
 // session is genuinely broken and the caller reports it. At-least-once:
 // a request that was in flight when the child died is re-sent by its
 // caller and may have already run.
+/// Restarts the child and replays the full session.
 fn abi_respawn() bool {
 	if (abi_respawned) { return false; }
 	abi_respawned = true;
@@ -139,11 +142,13 @@ fn abi_respawn() bool {
 var __qela_embedded *u8 = null;
 var __qela_embedded_len i64 = 0;
 
+/// Reports whether a filesystem path exists.
 fn abi_path_exists(p str) bool {
 	var st [144]u8;
 	return sys_stat(cstr(p), &st[0]) == 0;
 }
 
+/// Locates an executable by searching the PATH variable.
 fn abi_find_on_path(name str) str {
 	var path str = sys_getenv("PATH");
 	var i i64 = 0;
@@ -165,6 +170,7 @@ fn abi_find_on_path(name str) str {
 	return e;
 }
 
+/// Launches the qela child process and opens pipes.
 fn abi_spawn() {
 	if (abi_pid >= 0) { return; }
 	// $QELAPATH is an explicit override; otherwise the embedded compiler
@@ -246,6 +252,7 @@ fn abi_spawn() {
 // global, 5 = write one) that arrived while the host was waiting for its
 // own response. Shared by both waiters so the marshalled path answers
 // interleaved requests exactly like the scalar one.
+/// Answers a child-to-host call or global access request.
 fn abi_serve_host_req(kind u8, buf *u8, n i64) {
 	if (kind == 4) {
 		var gname str;
@@ -294,6 +301,7 @@ fn abi_serve_host_req(kind u8, buf *u8, n i64) {
 	abi_send_frame(abi_in, 1 as u8, resp.p, resp.n);
 }
 
+/// Waits for a child response into a fixed buffer.
 fn abi_wait_result(kind *u8, buf *u8, cap i64) i64 {
 	var scratch [512]u8;
 	while (true) {
@@ -314,6 +322,7 @@ fn abi_wait_result(kind *u8, buf *u8, cap i64) i64 {
 // large, so it is received into the arena instead of a caller buffer.
 // kind 0 means the child died; 1 = ok, 2 = error, and the payload is the
 // marshalled value or the error message.
+/// Waits for a child response delivered into the arena.
 fn abi_wait_result_payload(kind *u8) str {
 	while (true) {
 		var total i64 = abi_peek_len(abi_out);

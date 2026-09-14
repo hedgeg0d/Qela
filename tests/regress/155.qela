@@ -1,4 +1,4 @@
-// expect-exit: 0
+// expect-exit: 3
 // got: CRASH
 struct Pair { x int, y int, }
 struct Wide { a int, b int, c int, }
@@ -6,8 +6,6 @@ struct Bag { p int, q int, r int, s int, }
 struct Nest { tag int, p Pair, }
 enum E { A, B(int), C(int, int), }
 enum D { None, Some(int), }
-import "std/fmt.qela";
-import "std/io.qela";
 import "std/str.qela";
 var gv int = -20;
 fn zero() int { return 3; }
@@ -27,7 +25,7 @@ fn tag_e(e E) int {
 fn main() int {
     var v0 int = 10;
     var v1 int = 1;
-    var v2 int = 1;
+    var v2 int = 0x1;
     var sv0 str = "foobar";
     var sv1 str = "abc";
     var fv double = -1.5;
@@ -39,48 +37,45 @@ fn main() int {
     var a [4]int;
     var i0 int = 0;
     var i1 int = 0;
-    var i2 int = 0;
+    var i2 int = 0x0;
     var i3 int = 0;
     var i4 int = 0;
     var i5 int = 0;
     v0 = v0;
-    gv = (((('f' >> true) as u16) as u32) & (((-634 as u8) >= (-270)) as u32));
-    sv0 = ("abcd")[1..3];
-    n.p.x = v2;
-    i0 = 0;
-    while ((i0 < 4)) {
-        match (e) {
-            A => {
-                return p.x;
-            }
-            B(mb0) => {
-                return ((p.x < ((!(("xyzzy")[2..5]).len) < diff4((10 / ((true & 15) + 1)), (!gv), 943, p.y))) & mb0);
-            }
-            C(mb0, mb1) => {
-                return (zero() * mb1);
-            }
-        }
-        a[i0] = ((pair_sum(Pair{x: v0, y: 'a'}) ^ (-(260 != 192))) <= ((((("abcd")[1..4])[0..2])[1] << (v1 != 1)) <= (diff4('2', 42, v2, 136) as i16)));
-        i0 = (i0 + 1);
-    }
-    v1 += (nest_sum(n) as i32);
-    e = E.C((!str_eq(("abcd")[1..4], (sv0)[0..2])), (!((gv + (v1 != 972)) * (str_eq(sv1, "abcd") as u8))));
-    v1 ^= ((p.x ^ ((gv >> 287) >> ('\n' >> false))) ^ min2(((692 % ((255 & 15) + 1)) <= (!-30)), v1));
+    gv = (((('f' >> true) as u16) as u32) & (((0xfffffffffffffd86 as u8) >= (-0x10e)) as u32));
+    sv0 = ((("aa")[0..2] + ("abc")[0..2]) + """x
+yz""");
+    v1 = ((v1 / ((((-false) <= ('g' <= gv)) & 15) + 1)) != (diff4((10 / ((true & 15) + 1)), (!gv), ((-312 >= '\n') && ('\n' >= true)), (gv in 0..((gv & 15) + 1))) in 0..((((-94 <= -8) as i16) & 15) + 1)));
+    v1, v2 = ((((((((sv0)[0..2])[0..2] + (sv0 + ("42")[0..2])) + "42") + """x
+yz"""))[0..2])[1] | v1), (("hello")[1..4]).len;
     match (e) {
         A => {
-            return 'c';
+            return 3;
         }
         B(mb0) => {
-            return (((((!'d') as u16) as u32) >= (a[(('a' <= v1) & 3)] <= ((gv > 2) >> (319 * true)))) ^ mb0);
+            return (gv + mb0);
         }
         C(mb0, mb1) => {
-            return ((sv1)[1] | mb1);
+            return ((((!str_eq((((((("xyz")[0..3])[0..2])[0..2] + (("""ab
+cd""")[0..2] + ("zz" + ("xyz")[0..2]))) + sv0) + (("""x
+yz""")[0..3])[0..2]), ("42")[0..2])) in a) in 0..((zero() & 15) + 1)) & mb1);
         }
     }
-    sv1 = "abcd";
-    var ob Buf;
-    fmt_i64(&ob, v1);
-    write_str(STDOUT, buf_str(&ob));
-    write_str(STDOUT, "\n");
-    return ((((fv as i64) >= (931 > '\n')) as i16) + (((gv >> gv) << (gv - v2)) > (-(-1 + '0'))));
+    e = E.C((((((-1 != 'f') >= (42 >> gv)) && ((42 >> gv) <= a[(1 & 3)])) ^ min2((-30 <= 'g'), (692 % ((255 & 15) + 1)))) as i32), p.x);
+    sv0 += sv0;
+    match (e) {
+        A => {
+            return ((((((sv0 + ("xyz")[0..3]) + ((("""x
+yz""")[1..4] + """ab
+cd"""))[0..2]))[1] <= (true >> true)) as u16) in a);
+        }
+        B(mb0) => {
+            return ((!(-(diff4(false, 100, gv, 99) as i32))) + mb0);
+        }
+        C(mb0, mb1) => {
+            return (p.y >> (((gv >> gv) if (((gv >= ((false in 0..(('\n' & 15) + 1)) > (931 as i8))) as i8) != ((('f' ^ (gv in a)) + (-gcd2((42 & 15), (gv & 15)))) + ((true > (-gcd2((gv & 15), (436 & 15)))) && ((-gcd2((gv & 15), (436 & 15))) >= (('0' * gv) as i32))))) else p.y) + ((0.25 == 10.5) > gcd2((false & 0xf), ('0' & 15)))));
+        }
+    }
+    a[(((sv1).len <= gv) & 3)] = ((((!459) - ((true > false) && (false <= gv))) as double) as i64);
+    return ((gcd2((('1' % ((v2 & 15) + 1)) & 15), ((127 in 0..((gv & 15) + 1)) & 15)) as u32) <= ((-((sv0)[0..2]).len) >= (849 ^ ('1' / ((255 & 15) + 1)))));
 }

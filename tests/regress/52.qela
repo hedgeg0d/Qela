@@ -1,4 +1,4 @@
-// expect-exit: 1
+// expect-exit: 0
 // got: CRASH
 struct Pair { x int, y int, }
 struct Wide { a int, b int, c int, }
@@ -31,7 +31,7 @@ fn main() int {
     var p Pair = Pair{};
     var w Wide = Wide{};
     var b Bag = Bag{};
-    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0x0, y: 0}};
     var e E = E.A;
     var a [4]int;
     var i0 int = 0;
@@ -39,39 +39,23 @@ fn main() int {
     var i2 int = 0;
     var i3 int = 0;
     var i4 int = 0;
-    var i5 int = 0;
+    var i5 int = 0x0;
     v0 = true;
     v2, v1 = v1, v2;
-    a[((-(((false * v1) as double) as i64)) & 3)] = a[(((v0 as i16) as u8) & 3)];
-    if ((a[(v2 & 3)] >= ((!(("zz")[0..2])[1]) & p.y))) {
-        if ((str_eq(("qwerty")[0..3], (("abc")[0..2])[0..2]) <= true)) {
-            sv0 = sv1;
-            a[(false & 3)] = 2;
-        } else {
-            v0 <<= (-false);
-            return (a[(false & 3)] > (((0 << 373) as double) <= (p.y as double)));
-        }
-        i1 = 0;
-        while ((i1 < 2)) {
-            i1 = (i1 + 1);
-            v1, v2 = v2, v1;
-            v0 = ((((false as i8) != (!189)) == (add2(-331, 10) != ('e' % ((-655 & 15) + 1)))) - (fv as i64));
-            e = E.B(fact(((((v0 | -843) > '\n') * ((3 as i8) - (-359 / ((v0 & 15) + 1)))) & 15)));
-        }
-    } else {
-        v2 %= ((((127 <= add2(-286, (0 / ((true & 15) + 1)))) as u16) & 15) + 1);
-        return (!((('\t' as u8) as u32) * (!(!408))));
-    }
-    v1 = (-((!(sv1).len) << ((-750 as i16) >= v1)));
-    v0 ^= (sv0).len;
-    v1 += (-'e');
-    w = Wide{a: (false << ((!('\n' as u32)) & ("xyz").len)), b: ((((v0 | true) + 3) * ((true as i16) as i32)) / (((((-874 % ((v2 & 15) + 1)) & (174 == '3')) as i32) & 15) + 1)), c: true};
-    n = Nest{tag: (add2(true, a[((!-1) & 3)]) as i32), p: Pair{x: (!(str_eq("qwerty", "hello") == (!str_eq(("xyzzy")[0..2], "aa")))), y: ((((fv * fv) + 1.5) as i64) & (!((-144 > false) + (-444))))}};
-    n.tag = ((((-536 >> false) as u8) > (str_eq((sv0)[0..2], ("abcd")[1..3]) == (2 ^ 100))) as u16);
-    v1 *= (("foobar")[1..6])[0];
-    var ob Buf;
-    fmt_i64(&ob, v1);
-    write_str(STDOUT, buf_str(&ob));
-    write_str(STDOUT, "\n");
-    return (((a[('\n' & 3)] >= 'e') <= zero()) / ((((-('0' as i16)) as u32) & 15) + 1));
+    a[((-(((false * v1) as double) as i64)) & 3)] = a[((v2 as u8) & 3)];
+    v0 &= (((str_eq((("abc")[0..2] + sv1), (sv0 + """ab
+cd""")) as double) / 3.75) != 2.5);
+    n.p.x = ((-1 as u16) << (v0 in 0..((((255 if ((('b' as double) >= fv) == str_eq(("abc")[0..3], "xyzzy")) else -737) | (-1 as u16)) & 15) + 1)));
+    e = E.B(v1);
+    v0 = (true if ((((fv == (fv * -0.5)) | 255) == (((fv as i64) / (((true | 0x224) & 15) + 1)) if (((-2.0 as i64) == (str_eq(((((("""ab
+cd""")[2..4] + ("""ab
+cd""")[1..5]))[0..2])[0..2])[0..2], "foobar") != ((-331 * 'd') % ((false & 15) + 1)))) <= (-str_eq((("abc")[0..3])[0..2], ("xyz")[0..3]))) else ((true << 0x149) as u8))) == (-(-(((0 << true) >= 127) && (127 > false))))) else ((('\t' as u8) as u32) * (!(!408))));
+    p = pair_swap(p);
+    v1 = ((((('\t' in a) > (true in 0..((v2 & 15) + 1))) && ((true in 0..((v2 & 15) + 1)) > str_eq((sv1 + (sv1 + sv1)), (("""x
+yz""")[1..4] + "hello")))) as u16) in a);
+    p = pair_swap(p);
+    b = Bag{p: (fv >= (str_eq("qwerty", ("no" + "hello")) as double)), q: ((((((42 >= 42) && (42 < v0)) >= 0xffffffffffffff20) && (-224 <= (2 & 'c'))) in 0..(((('a' != false) - (v1 > true)) & 15) + 1)) / (((((true as i16) + ((("""x
+yz""")[0..4])[0..2]).len) << (((1 << v2) <= ((v2 <= v0) && (v0 >= 'g'))) && (((v2 <= v0) && (v0 >= 'g')) <= str_eq(((("qwerty")[0..4])[0..2] + ("xyzzy")[1..5]), "42")))) & 15) + 1)), r: (-v0), s: ((v0 >= 'b') && ('b' < (-add2(str_eq(sv1, (("hello")[1..5])[0..2]), (true ^ false)))))};
+    write_str(STDOUT, "${v1=}\n");
+    return ((((("foobar" + sv1))[1] as u16) in 0..(((-('0' as i16)) & 15) + 1)) > (pair_sum(Pair{x: 'd', y: (!'c')}) == (('f' >> -41) ^ (486 <= 2))));
 }

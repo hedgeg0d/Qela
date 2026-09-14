@@ -51,6 +51,7 @@ var pool_lock [32]i64;
 // whenever a queue gets a real burst pushed onto it. pool_worker calls
 // this every iteration, so the backlog still drains, just interleaved
 // with give-someone-else-a-turn spacing instead of all at once.
+/// Pops one pending spawn request off the queue.
 fn pool_drain(id i64) {
 	if (pool_head[id] == pool_tail[id]) { return; }
 	if (!atomic_cas(&pool_lock[id], 0, 1)) { return; }
@@ -69,6 +70,7 @@ fn pool_drain(id i64) {
 // id (so threads don't all pile onto neighbor 0 first). A try-lock, not a
 // blocking one: a busy victim is skipped rather than waited on, since the
 // whole point is to not stall while there might be idle work elsewhere.
+/// Steals one pending task from a neighbor's queue.
 fn pool_steal(id i64) bool {
 	var i i64 = 1;
 	while (i < pool_n) {
@@ -93,6 +95,7 @@ fn pool_steal(id i64) bool {
 // now -- set once per thread, read by any coroutine scheduled on it.
 tvar pool_worker_id i64 = -1;
 
+/// Runs one pool thread's scheduling loop forever.
 fn pool_worker(id i64) i64 {
 	tls_init();
 	pool_worker_id = id;
@@ -110,6 +113,7 @@ fn pool_worker(id i64) i64 {
 
 // Spawns n OS threads, each running its own coroutine scheduler. Call
 // once; there is no way to grow the pool afterward.
+/// Spawns a fixed pool of operating-system threads.
 fn thread_pool_init(n i64) {
 	// The single-scheduler deadlock heuristic in chan.qela can't tell a
 	// slow sibling thread from real deadlock; see chan_deadlock_check.
@@ -130,6 +134,7 @@ fn thread_pool_init(n i64) {
 
 // Round-robins a goroutine onto one of the pool's threads. fn takes up to
 // five i64/pointer-sized arguments, the same convention coro_spawn uses.
+/// Schedules a goroutine onto one of the pool threads.
 fn go(fn_ptr i64, a0 i64, a1 i64, a2 i64, a3 i64, a4 i64) {
 	var id i64 = atomic_add(&pool_next, 1) % pool_n;
 	while (!atomic_cas(&pool_lock[id], 0, 1)) { sys_sched_yield(); }

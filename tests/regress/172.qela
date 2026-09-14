@@ -1,4 +1,4 @@
-// expect-exit: 246
+// expect-exit: 145
 // got: CRASH
 struct Pair { x int, y int, }
 struct Wide { a int, b int, c int, }
@@ -38,59 +38,31 @@ fn main() int {
     var e E = E.A;
     var a [4]int;
     var i0 int = 0;
-    var i1 int = 0;
+    var i1 int = 0x0;
     var i2 int = 0;
-    var i3 int = 0;
+    var i3 int = 0x0;
     var i4 int = 0;
-    var i5 int = 0;
-    e = E.C(((!(-(fv as i64))) != (((!gv) + ('a' <= '2')) & ((gv as i8) <= (("xyzzy")[1..5])[1]))), (((fv > (fv / 2.0)) as i32) / (((((sv0)[1] % (((-993 % ((-213 & 15) + 1)) & 15) + 1)) > (gv << v2)) & 15) + 1)));
-    match (e) {
-        A => {
-            return ((-(p.y & (!255))) >> false);
-        }
-        B(mb0) => {
-            return p.y;
-        }
-        C(mb0, mb1) => {
-            return (((-10) as i16) - mb1);
-        }
+    var i5 int = 0x0;
+    e = E.C((((fv > (fv / 2.0)) as i32) != (((sv0)[1] % ((a[(-993 & 3)] & 0xf) + 0x1)) & ((10 in a) <= (((("""ab
+cd""")[2..5] + ("xyzzy")[1..3]) + ("""x
+yz""" + (((("foobar")[0..5] + (("xyz")[0..3])[0..2]) + (sv0 + ("qwerty")[2..4])) + ((sv0)[0..2] + ("foobar")[0..2])))))[0]))), ((-(("xyzzy")[0..2])[1]) >> false));
+    v2, gv = gv, v2;
+    p.y = gv;
+    gv = ((fv <= ((3.75 + 2.5) * (2.5 / 0.25))) / ((((p.y < (fv as i64)) as u8) & 15) + 0x1));
+    p.y = (((!((sv0 + ("hello")[2..4]))[1]) as u8) as i16);
+    i0 = 0;
+    while ((i0 < 4)) {
+        gv = (-v2);
+        a[i0] = ((!(-('g' & 738))) in a);
+        i0 = (i0 + 1);
     }
-    match (e) {
-        A => {
-            return 42;
-        }
-        B(mb0) => {
-            return (((((sv1).len ^ (fv as i64)) == (('e' as u32) as u32)) ^ (fv <= ((3.75 + 2.5) * (2.5 / 0.25)))) - mb0);
-        }
-        C(mb0, mb1) => {
-            return ((false ^ p.y) & mb1);
-        }
+    p.x = v1;
+    i0 = 0;
+    while ((i0 < 1)) {
+        i0 = (i0 + 1);
+        v1 = (gcd2((((('g' > false) && (false >= gv)) in 0..(((v1 + 127) & 0xf) + 1)) & 15), (((100 >> 0x338) in 0..((gv & 15) + 1)) & 15)) - ((str_eq("abc", (("abcd")[1..4])[0..2]) * ((true < true) && (true >= gv))) ^ ((!'0') >> ((10 >= true) && (true <= 298)))));
     }
-    fv = (10.5 / 2.0);
-    if ((gv == 703)) {
-        match (e) {
-            A => {
-                return (((("abc")[0..3])[1] + v1) < (((42 % ((-483 & 15) + 1)) >> 0) - v1));
-            }
-            B(mb0) => {
-                return (!(((false - -946) ^ (gv - 0)) * bag_sum(b)));
-            }
-            C(mb0, mb1) => {
-                return ((127 < (!v1)) - mb1);
-            }
-        }
-        return ((!((false != 100) % (((v0 & false) & 15) + 1))) as u32);
-    } else {
-        e = E.C((((fv + (fv / 10.5)) / 1.7) as i64), ((p.x + '\t') >> (fv as i64)));
-        v2, gv = gv, v2;
-    }
-    e = E.B(a[(nest_sum(Nest{tag: (((100 << (2 + gv)) >> (v1 as u8)) > ((a[('b' & 3)] - str_eq(("xyzzy")[0..4], ("hello")[1..3])) + ((false >> 'a') / (((255 % ((-374 & 15) + 1)) & 15) + 1)))), p: Pair{x: pair_sum(Pair{x: v0, y: (-(sv1)[0])}), y: ((((-708 >= -1) << (true % ((383 & 15) + 1))) << ((0 >> true) | (--233))) < 2)}}) & 3)]);
-    a[(349 & 3)] = (-((("hello")[1..5])[0..2])[0]);
-    sv1 = ("foobar")[0..2];
-    v2 -= gv;
-    var ob Buf;
-    fmt_i64(&ob, v2);
-    write_str(STDOUT, buf_str(&ob));
-    write_str(STDOUT, "\n");
-    return ((((sv0)[0] > min2(v2, 1)) as u8) == ((("xyz")[0..2])[0] / ((465 & 15) + 1)));
+    v0 = ((((false < -363) % ((a[(true & 3)] & 15) + 1)) == ((10.5 >= 2.0) as i16)) / ((1 & 15) + 1));
+    write_str(STDOUT, "${v0:08x}\n");
+    return (((('\n' - 451) >> (-false)) % ((gv & 15) + 1)) ^ ('e' & (-(0x26d != 'd'))));
 }

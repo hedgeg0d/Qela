@@ -12,7 +12,7 @@ fn std_blob_data() str { return ""; }
 
 fn std_blob_count() int { return 36; }
 
-fn std_blob_total() i64 { return 133583; }
+fn std_blob_total() i64 { return 149953; }
 
 fn std_blob_name(i int) str {
 	if (i == 0) { return "std/abiconn.qela"; }
@@ -56,80 +56,80 @@ fn std_blob_name(i int) str {
 
 fn std_blob_off(i int) i64 {
 	if (i == 0) { return 0; }
-	if (i == 1) { return 10385; }
-	if (i == 2) { return 12244; }
-	if (i == 3) { return 13316; }
-	if (i == 4) { return 14759; }
-	if (i == 5) { return 23600; }
-	if (i == 6) { return 29278; }
-	if (i == 7) { return 30379; }
-	if (i == 8) { return 33238; }
-	if (i == 9) { return 38174; }
-	if (i == 10) { return 39274; }
-	if (i == 11) { return 49626; }
-	if (i == 12) { return 52621; }
-	if (i == 13) { return 62099; }
-	if (i == 14) { return 65310; }
-	if (i == 15) { return 66031; }
-	if (i == 16) { return 68540; }
-	if (i == 17) { return 73547; }
-	if (i == 18) { return 78235; }
-	if (i == 19) { return 91152; }
-	if (i == 20) { return 92082; }
-	if (i == 21) { return 94608; }
-	if (i == 22) { return 95114; }
-	if (i == 23) { return 97572; }
-	if (i == 24) { return 98118; }
-	if (i == 25) { return 99382; }
-	if (i == 26) { return 100833; }
-	if (i == 27) { return 101725; }
-	if (i == 28) { return 102356; }
-	if (i == 29) { return 104051; }
-	if (i == 30) { return 104489; }
-	if (i == 31) { return 105209; }
-	if (i == 32) { return 112092; }
-	if (i == 33) { return 125259; }
-	if (i == 34) { return 130618; }
-	if (i == 35) { return 131417; }
+	if (i == 1) { return 10863; }
+	if (i == 2) { return 13077; }
+	if (i == 3) { return 14349; }
+	if (i == 4) { return 16172; }
+	if (i == 5) { return 25740; }
+	if (i == 6) { return 31899; }
+	if (i == 7) { return 33118; }
+	if (i == 8) { return 36272; }
+	if (i == 9) { return 41781; }
+	if (i == 10) { return 43013; }
+	if (i == 11) { return 54706; }
+	if (i == 12) { return 57993; }
+	if (i == 13) { return 68337; }
+	if (i == 14) { return 71764; }
+	if (i == 15) { return 72630; }
+	if (i == 16) { return 75333; }
+	if (i == 17) { return 80728; }
+	if (i == 18) { return 86027; }
+	if (i == 19) { return 100284; }
+	if (i == 20) { return 101385; }
+	if (i == 21) { return 104419; }
+	if (i == 22) { return 105153; }
+	if (i == 23) { return 108081; }
+	if (i == 24) { return 108858; }
+	if (i == 25) { return 110369; }
+	if (i == 26) { return 112002; }
+	if (i == 27) { return 112979; }
+	if (i == 28) { return 113803; }
+	if (i == 29) { return 115647; }
+	if (i == 30) { return 116125; }
+	if (i == 31) { return 116895; }
+	if (i == 32) { return 125252; }
+	if (i == 33) { return 140899; }
+	if (i == 34) { return 146522; }
+	if (i == 35) { return 147558; }
 	return -1;
 }
 
 fn std_blob_len(i int) i64 {
-	if (i == 0) { return 10385; }
-	if (i == 1) { return 1859; }
-	if (i == 2) { return 1072; }
-	if (i == 3) { return 1443; }
-	if (i == 4) { return 8841; }
-	if (i == 5) { return 5678; }
-	if (i == 6) { return 1101; }
-	if (i == 7) { return 2859; }
-	if (i == 8) { return 4936; }
-	if (i == 9) { return 1100; }
-	if (i == 10) { return 10352; }
-	if (i == 11) { return 2995; }
-	if (i == 12) { return 9478; }
-	if (i == 13) { return 3211; }
-	if (i == 14) { return 721; }
-	if (i == 15) { return 2509; }
-	if (i == 16) { return 5007; }
-	if (i == 17) { return 4688; }
-	if (i == 18) { return 12917; }
-	if (i == 19) { return 930; }
-	if (i == 20) { return 2526; }
-	if (i == 21) { return 506; }
-	if (i == 22) { return 2458; }
-	if (i == 23) { return 546; }
-	if (i == 24) { return 1264; }
-	if (i == 25) { return 1451; }
-	if (i == 26) { return 892; }
-	if (i == 27) { return 631; }
-	if (i == 28) { return 1695; }
-	if (i == 29) { return 438; }
-	if (i == 30) { return 720; }
-	if (i == 31) { return 6883; }
-	if (i == 32) { return 13167; }
-	if (i == 33) { return 5359; }
-	if (i == 34) { return 799; }
-	if (i == 35) { return 2166; }
+	if (i == 0) { return 10863; }
+	if (i == 1) { return 2214; }
+	if (i == 2) { return 1272; }
+	if (i == 3) { return 1823; }
+	if (i == 4) { return 9568; }
+	if (i == 5) { return 6159; }
+	if (i == 6) { return 1219; }
+	if (i == 7) { return 3154; }
+	if (i == 8) { return 5509; }
+	if (i == 9) { return 1232; }
+	if (i == 10) { return 11693; }
+	if (i == 11) { return 3287; }
+	if (i == 12) { return 10344; }
+	if (i == 13) { return 3427; }
+	if (i == 14) { return 866; }
+	if (i == 15) { return 2703; }
+	if (i == 16) { return 5395; }
+	if (i == 17) { return 5299; }
+	if (i == 18) { return 14257; }
+	if (i == 19) { return 1101; }
+	if (i == 20) { return 3034; }
+	if (i == 21) { return 734; }
+	if (i == 22) { return 2928; }
+	if (i == 23) { return 777; }
+	if (i == 24) { return 1511; }
+	if (i == 25) { return 1633; }
+	if (i == 26) { return 977; }
+	if (i == 27) { return 824; }
+	if (i == 28) { return 1844; }
+	if (i == 29) { return 478; }
+	if (i == 30) { return 770; }
+	if (i == 31) { return 8357; }
+	if (i == 32) { return 15647; }
+	if (i == 33) { return 5623; }
+	if (i == 34) { return 1036; }
+	if (i == 35) { return 2395; }
 	return 0;
 }

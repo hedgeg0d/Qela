@@ -69,9 +69,12 @@ var gc_stw_requested i64 = 0;
 var gc_threads [64]GcThread;
 tvar gc_my_slot i64 = -1;
 
+/// Acquires the collector's allocation lock.
 fn gc_lock() { while (!atomic_cas(&gc_alloc_lock, 0, 1)) { sys_sched_yield(); } }
+/// Releases the collector's allocation lock.
 fn gc_unlock() { atomic_store(&gc_alloc_lock, 0); }
 
+/// Initializes the collector once, if not already ready.
 fn gc_init() {
 	if (gc_ready) { return; }
 	gc_ready = true;
@@ -84,6 +87,7 @@ fn gc_init() {
 // once, early -- the stack base recorded here has to sit above every frame
 // that will ever need scanning, the same assumption gc_init makes for the
 // thread that happens to trigger it first.
+/// Registers the calling thread as a garbage collection root.
 fn gc_thread_enter() {
 	gc_init();
 	while (!atomic_cas(&gc_reg_lock, 0, 1)) { sys_sched_yield(); }
@@ -103,6 +107,7 @@ fn gc_thread_enter() {
 	atomic_store(&gc_reg_lock, 0);
 }
 
+/// Deregisters the calling thread from the collector.
 fn gc_thread_exit() {
 	if (gc_my_slot < 0) { return; }
 	while (!atomic_cas(&gc_reg_lock, 0, 1)) { sys_sched_yield(); }
@@ -113,6 +118,7 @@ fn gc_thread_exit() {
 
 // Called from every point a thread might sit idle for a while: a collector
 // on another thread can only scan roots it has actually parked.
+/// Parks the calling thread so a collector can scan it.
 fn gc_safepoint() {
 	if (atomic_load(&gc_stw_requested) == 0) { return; }
 	if (gc_my_slot < 0) { return; }
@@ -125,6 +131,7 @@ fn gc_safepoint() {
 	atomic_store(&gc_threads[slot].at_safepoint, 0);
 }
 
+/// Maps a new chunk large enough for the requested need.
 fn gc_chunk(need i64) bool {
 	var want i64 = GC_CHUNK;
 	while (want < need) { want = want * 2; }
@@ -137,6 +144,7 @@ fn gc_chunk(need i64) bool {
 	return true;
 }
 
+/// Claims a fresh block of the requested size from a chunk.
 fn gc_take(size i64) *u8 {
 	var total i64 = GC_HEADER + ((size + 7) & ~7);
 	if (gc_end - gc_cur < total) {
@@ -153,6 +161,7 @@ fn gc_take(size i64) *u8 {
 	return (b as i64 + GC_HEADER) as *u8;
 }
 
+/// Reuses a free block large enough for the size.
 fn gc_reuse(size i64) *u8 {
 	var total i64 = GC_HEADER + ((size + 7) & ~7);
 	var prev *GcBlock = null;
@@ -172,6 +181,7 @@ fn gc_reuse(size i64) *u8 {
 	return null;
 }
 
+/// Allocates a collectible block of the requested size.
 fn gc_alloc(size i64) *u8 {
 	gc_init();
 	gc_safepoint();
@@ -185,6 +195,7 @@ fn gc_alloc(size i64) *u8 {
 
 // A word is a candidate only if it lands inside a mapped chunk and points
 // exactly at a block's payload.
+/// Returns the block that owns a payload address.
 fn gc_block_at(addr i64) *GcBlock {
 	if (addr < gc_lo + GC_HEADER || addr >= gc_hi) { return null; }
 	if ((addr & 7) != 0) { return null; }
@@ -196,6 +207,7 @@ fn gc_block_at(addr i64) *GcBlock {
 	return null;
 }
 
+/// Marks the block a word points into as reachable.
 fn gc_mark_word(w i64) {
 	var b *GcBlock = gc_block_at(w);
 	if (b as i64 == 0) { return; }
@@ -212,6 +224,7 @@ fn gc_mark_word(w i64) {
 	}
 }
 
+/// Marks every reachable block in a memory range.
 fn gc_mark_range(lo i64, hi i64) {
 	var p i64 = (lo + 7) & ~7;
 	while (p + 8 <= hi) {
@@ -223,6 +236,7 @@ fn gc_mark_range(lo i64, hi i64) {
 
 // marked: 0 = live but unreached this cycle, 1 = reached, -1 = on the free
 // list. The third state keeps a second sweep from linking a block twice.
+/// Frees unreached blocks and resets live bytes.
 fn gc_sweep() {
 	gc_live = 0;
 	var b *GcBlock = gc_blocks;
@@ -239,6 +253,7 @@ fn gc_sweep() {
 	}
 }
 
+/// Runs a full stop-the-world garbage collection.
 fn gc_collect() {
 	gc_init();
 
@@ -313,4 +328,5 @@ fn gc_collect() {
 	atomic_store(&gc_stw_requested, 0);
 }
 
+/// Returns the number of live bytes currently allocated.
 fn gc_live_bytes() i64 { return gc_live; }

@@ -36,6 +36,7 @@ var chan_epoch i64 = 0;
 tvar chan_stall int = 0;
 tvar chan_stall_epoch i64 = -1;
 
+/// Initializes a channel with the given capacity.
 fn chan_init(comptime T: type, c *Chan(T), cap i64) {
 	if (cap < 1) { cap = 0; }
 	var alloc i64 = cap;
@@ -49,18 +50,23 @@ fn chan_init(comptime T: type, c *Chan(T), cap i64) {
 	c.lock = 0;
 }
 
+/// Acquires the channel's internal lock.
 fn chan_lock(comptime T: type, c *Chan(T)) {
 	while (!atomic_cas(&c.lock, 0, 1)) { sys_sched_yield(); }
 }
 
+/// Releases the channel's internal lock.
 fn chan_unlock(comptime T: type, c *Chan(T)) {
 	atomic_store(&c.lock, 0);
 }
 
+/// Returns the number of buffered values.
 fn chan_len(comptime T: type, c *Chan(T)) i64 { return c.n; }
 
+/// Reports whether the channel is closed.
 fn chan_is_closed(comptime T: type, c *Chan(T)) bool { return c.closed; }
 
+/// Marks the channel closed for sending.
 fn chan_close(comptime T: type, c *Chan(T)) {
 	chan_lock(c);
 	c.closed = true;
@@ -78,6 +84,7 @@ fn chan_close(comptime T: type, c *Chan(T)) {
 // without the scheduler knowing about other threads, which it doesn't.
 var chan_deadlock_check bool = true;
 
+/// Reports deadlock and exits the process.
 fn chan_die(what str) {
 	eprint("qela: deadlock, every coroutine is blocked on a channel ");
 	eprint(what);
@@ -92,6 +99,7 @@ fn chan_die(what str) {
 // caught anyway, so it is skipped rather than repurposed. Real cross-thread
 // deadlock detection needs the scheduler to know about other threads,
 // which it does not yet (that lands with the per-thread scheduler work).
+/// Blocks the caller until the channel makes progress.
 fn chan_block(what str) {
 	if (!chan_deadlock_check || coro_live() == 0) {
 		if (!coro_yield()) { fence(); }
@@ -111,6 +119,7 @@ fn chan_block(what str) {
 	chan_nblocked = chan_nblocked - 1;
 }
 
+/// Sends a value into the channel, blocking when full.
 fn chan_send(comptime T: type, c *Chan(T), v T) {
 	while (true) {
 		chan_lock(c);
@@ -149,6 +158,7 @@ fn chan_send(comptime T: type, c *Chan(T), v T) {
 
 // Returns a zeroed element once a closed channel has drained; pair it with
 // chan_is_closed when the zero value is also a valid one.
+/// Receives a value from the channel, blocking when empty.
 fn chan_recv(comptime T: type, c *Chan(T)) T {
 	var zero T;
 	while (true) {
@@ -187,6 +197,7 @@ fn chan_recv(comptime T: type, c *Chan(T)) T {
 // range loop can stop without losing the last buffered value or running its
 // body on a zero. While the channel is open and empty it blocks like any
 // other receive, so the loop simply waits for the next value.
+/// Receives for a range loop, reporting success through ok.
 fn chan_recv_range(comptime T: type, c *Chan(T), ok *bool) T {
 	var zero T;
 	*ok = false;
@@ -226,6 +237,7 @@ fn chan_recv_range(comptime T: type, c *Chan(T), ok *bool) T {
 // when one is immediately available; a closed channel counts as ready with
 // a zeroed value (the same value chan_recv would return), matching select's
 // contract that a closed channel never blocks a case.
+/// Non-blockingly receives a value, reporting availability through ok.
 fn chan_try_recv(comptime T: type, c *Chan(T), ok *bool) T {
 	var zero T;
 	*ok = false;
@@ -262,6 +274,7 @@ fn chan_try_recv(comptime T: type, c *Chan(T), ok *bool) T {
 // placed without waiting. A rendezvous (cap 0) send completes the handoff
 // slot and returns immediately -- unlike chan_send it does not wait for the
 // receiver to take the value out.
+/// Non-blockingly sends a value, reporting whether it fit.
 fn chan_try_send(comptime T: type, c *Chan(T), v T) bool {
 	chan_lock(c);
 	if (c.closed) {
@@ -290,6 +303,7 @@ fn chan_try_send(comptime T: type, c *Chan(T), v T) bool {
 // The wait a `select` with no ready case and no default falls into. Same
 // deadlock heuristic as a blocking send/receive: every coroutine parked
 // here while the epoch stands still is reported.
+/// Blocks waiting inside a select with no ready case.
 fn chan_select_block() {
 	chan_block("select");
 }

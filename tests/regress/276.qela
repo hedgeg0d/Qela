@@ -1,0 +1,66 @@
+// expect-exit: 100
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/str.qela";
+var gv int = -47;
+fn sub2(a int, b int) int { return a - b; }
+fn max2(a int, b int) int { if (a > b) { return a; } else { return b; } }
+fn sum3(a int, b int, c int) int { return a + b + c; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn wide_make(a int, b int, c int) Wide { return Wide{a: a, b: b, c: c}; }
+fn bag_sum(b Bag) int { return b.p + b.q + b.r + b.s; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 0x2;
+    var v1 int = 5;
+    var v2 int = 3;
+    var sv0 str = "abc";
+    var sv1 str = "xyzzy";
+    var fv double = 1.0;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0x0;
+    var i5 int = 0;
+    gv, v2 = v2, gv;
+    gv %= ((((-1 in a) as u16) & 15) + 1);
+    fv = (((100.0 * fv) / 1.7) + (((!-1) | ('b' / ((547 & 15) + 1))) as double));
+    a[((max2(bag_sum(b), str_eq(sv0, ((("hello")[0..2] + ((sv1)[0..2] + (("qwerty")[2..4] + sv0))) + sv0))) as u8) & 3)] = ((gv >> (('3' as double) > fv)) in 0..((100 & 15) + 0x1));
+    sv1 = (("xyz")[0..3] + "zz");
+    if (((bag_sum(b) >> ((1.0 == (fv + -0.5)) > 865)) == (((sv1).len != gv) in 0..(((((0x1 as u32) in a) == ((-136 in a) << (10 + 0xfffffffffffffd93))) & 15) + 1)))) {
+        w = Wide{a: ((-((('3' < 0x3) && (3 <= true)) as u8)) < (((3 != 100) as double) != 2.5)), b: 'e', c: (((!(('2' > false) && (false <= -1))) if ((1.7 != (0.5 * 0.25)) < (((('b' | 'a') + (0.25 <= fv)) == ((-919 >= -284) / ((pair_sum(p) & 15) + 1))) as i32)) else -652) >> (!((-870 < 1) >> max2(gv, false))))};
+        n.tag = true;
+        return 100;
+    } else {
+        gv = v0;
+        gv &= (((((sv0)[0..2]).len * p.y) & (gv as i16)) << (((gv as i8) != (fv as i64)) - (-(gv - 10))));
+    }
+    p.y = ((((sv1).len in a) if (max2(p.x, (((516 + '\n') < (true as i16)) as i16)) > (((!((v2 < true) >= (true as i8))) > a[((gv << (v2 >> true)) & 3)]) && (a[((gv << (v2 >> true)) & 3)] < (v2 as u16)))) else (0.125 >= ('2' as double))) * (((!(fv as i64)) < ((v2 >= 255) in a)) && (((v2 >= 255) in a) < ((gv >> -280) >= (true as i8)))));
+    v2, v0 = v0, v2;
+    return 3;
+}
