@@ -66,6 +66,7 @@ fn main() int {
 	var spins i64 = 0;
 	while (atomic_load(&worker_built) == 0) {
 		spins = spins + 1;
+		if (spins % 1000 == 0) { sys_sched_yield(); }
 		if (spins > 200000000) { return 3; }
 	}
 
@@ -80,6 +81,7 @@ fn main() int {
 	spins = 0;
 	while (atomic_load(&worker_done) == 0) {
 		spins = spins + 1;
+		if (spins % 1000 == 0) { sys_sched_yield(); }
 		if (spins > 200000000) { return 4; }
 	}
 
