@@ -4,7 +4,8 @@ This guide teaches you to program in Qela from zero. Everything here runs on
 the shipped compiler, S2 (`build/bootstrap/s2`). Each example is a complete
 program you can copy, compile and run.
 
-Qela is a compiled systems language for x86-64 Linux:
+Qela is a compiled systems language for Linux (x86-64 by default, arm64
+and riscv64 with `--target`):
 
 - **No libc, no linker, no assembler.** The compiler writes its own ELF
   files. A Qela binary is a static executable and nothing else.
@@ -18,6 +19,11 @@ Qela is a compiled systems language for x86-64 Linux:
   register, with SSE only at the instant of an operation. On the `extern`
   boundary the compiler marshals scalar floats into the SysV XMM registers,
   so floats cross into C directly.
+- **Scripting sugar on a systems core.** Interpolation with format specs,
+  `x in coll`, list and map comprehensions, closures, `?` error propagation
+  — Python-style conveniences that cost a few KB each — sit on top of raw
+  syscalls, `asm`, coroutines and threads, so the same language drives a
+  one-liner REPL and a bootloader.
 - **Memory is an arena by default**, with a scoped `arena_mark`/`arena_reset`
   rewind, a K&R `std/heap.qela` malloc/free/realloc for blocks that come back,
   and an optional conservative garbage collector for programs whose lifetimes
@@ -144,7 +150,9 @@ qela --dump-std <module>    # print a standard module's embedded source
 ```
 
 Flags: `-g` (DWARF for gdb), `--backtrace`, `--no-bounds-checks`,
-`--no-warn`, `--color=auto|always|never`, `-o <file>`.
+`--no-warn`, `--color=auto|always|never`, `-o <file>`, `--target, -t <t>`
+(x86_64 — the default — arm64 or riscv64), `--interpreted` and `--jit`
+(section 3.2).
 
 `qela .` is the compiler as its own build system: every `.qela` file in a
 directory is merged into one program, so functions call across files with no
@@ -209,6 +217,24 @@ out identical to the compiled one's. It is about 550x slower.
 Accepted flags are `--no-bounds-checks`, `--no-warn` and `-D NAME=VALUE`,
 all before the program's own arguments; everything from the file name on
 belongs to the program, with the file itself as `argv[0]`.
+
+### 3.2 Interpreted and dynamic functions
+
+Two flags turn parts of a compiled program into interpreter calls, trading
+machine code for flexibility:
+
+- `--interpreted` makes every function of yours an interpreted call: the
+  binary embeds the compiler's own interpreter and a copy of the program's
+  source, and calls a foreign-function boundary instead of a `call`
+  instruction. The code for `std/` is still compiled natively.
+- `--jit` makes them *dynamic*: the same boundary, but the interpreter
+  compiles a function's body to machine code on its first call — no
+  recompilation, no type rechecking, just a one-time codegen with real
+  addresses. A dynamic function can even redefine itself at runtime
+  (rebinding the global a function body calls affects its next invocation).
+
+Both run on any target and need no special build of the compiler — the
+interpreter ships inside S2.
 
 ## 4. Types
 
@@ -317,6 +343,12 @@ var z = 5;          // type inferred: int
 let w = 5;          // same as `var w = 5`; `let` just requires an initializer
 ```
 
+A `var ~n = expr` declares a **dynamic** local (`std/dyn.qela`): it boxes
+any value with its type id, can change type on reassignment, and frees its
+box automatically when the block exits. Reading it back needs a cast:
+`n as i64`. The scripting escape hatch — the static type system stays the
+default, this is the explicit opt-in.
+
 The zeroing rule is deliberate and unlike C: a local declared inside a loop
 starts clean **every** iteration. A bare `var` is never uninitialized memory.
 
@@ -344,7 +376,8 @@ Shadowing an outer name in an inner block is legal and emits a warning
 | logical | `&&` `\|\|` `!` (short-circuit) |
 | bitwise | `& \| ^ ~ << >>` |
 | compound | `+= -= *= /= %= &= \|= ^= <<= >>=` |
-| others | `as` (cast), `sizeof(T)`, `&` and `*` (section 10), `<-` (section 19) |
+| membership | `in` / `not in` (section 7.1) |
+| other | `as` (cast), `sizeof(T)`, `&` and `*` (section 10), `<-` (section 19), `?` (section 13.1) |
 
 ```qela
 var s int = 0;
@@ -353,6 +386,14 @@ s += 10;                // compound forms for every binary op
 var mask int = ~0x0f;
 var shifted int = 1 << 8;
 ```
+
+Comparisons chain like Python: `0 <= x < 10` is `0 <= x && x < 10` with the
+middle operand evaluated once, and only if the comparison before it held.
+The ternary `a if c else b` is an expression (section 7.1).
+
+Integer literals may separate digit groups with `_`: `1_000_000`,
+`0xFFFF_FF00`. The separator never survives into the value — it is syntax
+only.
 
 Division and remainder by a constant zero are compile errors; by a runtime
 zero they do whatever the CPU does. `as` casts between any two integer types,
@@ -403,8 +444,17 @@ if ('A' == 65) { ... }
 
 Escapes: `\n \t \r \0 \\ \' \"`.
 
-There is no string concatenation operator. Build strings with a `Buf`
-(section 18) or interpolation (section 8).
+Strings concatenate with `+` and `+=` — `"a" + "b"` is `str_cat` under the
+hood, and `s += "x"` appends in place:
+
+```qela
+var s str = "hello";
+s += ", world";          // "hello, world"
+var t str = "a" + "b";   // "ab"
+```
+
+For heavy building, use a `Buf` (section 18) — concatenation allocates a new
+string every time.
 
 ## 7. Control flow
 
@@ -463,7 +513,48 @@ On a fixed-size array the compiler proves the bounds away and emits no check;
 on a slice or string the dynamic length keeps the check. The most natural
 loop is also the smallest.
 
+`for x in coll` also works over any type with a `<prefix>_iter` or
+`<prefix>_view` function: a `Vec(T)` (via `vec_view`), a `Map(V)` (iterates
+its `str` keys), a generator (section 19.1), and a channel, which iterates
+values until it is closed and drained:
+
+```qela
+var v Vec(i64);
+vec_push(&v, 1); vec_push(&v, 2);
+for x in v { ... }                    // 1, 2 — the Vec protocol
+for k in m { ... }                    // keys of a Map
+for c in ch { ... }                   // channel values, until close
+```
+
 `break` and `continue` work in `for` and `while`.
+
+### 7.1 The ternary and membership
+
+`a if c else b` is an expression: the value of `a` when `c` is true, `b`
+otherwise. It nests to the right (`a if c else b if d else e`), and the
+branches must have the same type — strings and structs included.
+
+```qela
+var price i64 = 10 if member else 20;
+var tag str = "big" if n > 100 else "small";
+```
+
+`x in coll` tests membership; `x not in coll` negates. What it means depends
+on the collection's type:
+
+| collection | `x in coll` means |
+|---|---|
+| `str` | `x` is a substring (str_contains) |
+| array / slice | a linear scan; `x` compared to each element (`str_eq` for `[]str`) |
+| struct with `<prefix>_has` | `vec_has` for a `Vec`, `map_has` for a `Map` |
+| `lo..hi` range | `lo <= x < hi`, the left side evaluated once |
+
+```qela
+if (key in m) { ... }                 // map_has
+if (3 not in arr) { ... }             // scan an array
+if ("dev" in host) { ... }            // substring
+if (x in 0..100) { ... }              // 0 <= x && x < 100
+```
 
 ### defer
 
@@ -500,7 +591,8 @@ contain any mix of literal text and `${...}` runs.
 
 The killer convenience: a string literal containing `${expr}` is rewritten
 by the compiler into a chain of formatting calls. Integers render as decimal,
-strings in place, pointers as hex.
+strings in place, pointers as hex — and structs, enums, arrays and slices get
+a printer generated for their type on first use:
 
 ```qela
 import "std/io.qela";
@@ -517,8 +609,62 @@ prints `n = 42, s = hi, sum = 3`. The expression is evaluated at runtime, and
 the chain allocates its own buffer, so two interpolated strings alive at once
 never alias. Any expression works, including a call: `"${fib(10)}"`.
 
+A format spec after a colon picks the rendering: `d`/`x`/`X` (decimal, hex,
+upper hex) with an optional width, `0` for zero padding, `.Nf` for fixed-point
+floats, and `!r` for a quoted, escaped string repr:
+
+```qela
+"${n:08x}"    // hex, zero-padded to 8 digits: 000000ff
+"${n:5d}"     // decimal, space-padded to 5:   255 -> "  255"
+"${f:.2f}"    // fixed-point, 2 decimals: 3.14159 -> "3.14"
+"${s!r}"      // quoted and escaped: "hi\n" -> "\"hi\\n\""
+```
+
+`${x=}` prints an expression's source text and its value — the debug print:
+
+```qela
+"${x=} ${n:08x}"   // x=42 0000002a
+```
+
 Interpolation is a stdlib feature (it lowers to `fmt_*` calls in
 `std/fmt.qela`) — it auto-imports, so no `import` is needed for it.
+
+### Multi-line strings
+
+`"""..."""` is a raw multi-line string: newlines are kept verbatim, and no
+escapes or interpolation are processed inside — a `$` is a literal dollar.
+For templates, SQL and test data:
+
+```qela
+var usage str = """usage: qela [options] file.qela
+       qela run file.qela
+       qela repl""";
+```
+
+### The string library
+
+`std/str.qela` provides the everyday operations, all returning fresh arena
+strings (or indexes into the input):
+
+```qela
+import "std/str.qela";
+
+s.trim()            // strip surrounding whitespace
+s.contains("x")     // substring
+s.index("x")        // first index or -1
+s.starts_with("a") / s.ends_with("z")
+s.replace("a", "b")
+s.split(",")        // []str
+s.cat(t)            // concatenation, like + 
+s.repeat(3)         // "ab" -> "ababab"
+s.lower() / s.upper()
+str_to_int(s, &ok)  // parse, ok set on success
+```
+
+The dot call is sugar: `s.trim()` compiles to `str_trim(s)`. The rule: a
+bare function name wins; otherwise the receiver's type prefix is tried, so
+any `str_*` function is callable as a method on a string, any `vec_*` on a
+Vec, any `map_*` on a Map — `m.get(k)`, `v.view()`, `v.push(x)` all work.
 
 ## 9. Functions
 
@@ -630,13 +776,53 @@ fn pick(v i64) fn(i64) i64 {
 }
 ```
 
-Limits, all checked at compile time: a function value is only the address —
-**no closures**, so a `cmp` must be a real function, not a capture of local
-state; at most **six parameters**, each fitting in one register (no `str`,
-no aggregate); the return type must fit in two words (a >16-byte aggregate
-is rejected); and a generic function cannot be used as a value (there is no
-monomorphized address to take). Stage1-only: stage0, the frozen bootstrap,
-has no function values.
+**Closures.** A lambda may also capture the enclosing function's locals —
+by value, at the point the lambda is written. The closure is a one-word
+value: a tagged pointer (bit 0 set) to an arena record holding the code
+address and the captured values, so function types, the calling convention
+and function pointers are all unchanged. A captured variable that the
+enclosing function writes after the closure is made sees the old value —
+this is copy semantics, not a reference:
+
+```qela
+var base i64 = 10;
+var add_base = fn (x i64) i64 { return x + base; };   // captures base
+add_base(5);                                           // 15
+```
+
+Limits, all checked at compile time: at most **six parameters**, each
+fitting in one register (no `str`, no aggregate); the return type must fit
+in two words (a >16-byte aggregate is rejected); a generic function cannot
+be used as a value (there is no monomorphized address to take); and a
+function value is still only the address — calling a closure through a
+`fn`-typed variable works, but a plain (non-lambda) function cannot capture
+locals. Stage1-only: stage0, the frozen bootstrap, has no function values.
+
+**Default parameters.** A parameter with a `= value` initializer may be
+omitted at the call site; the default expression is evaluated in the
+callee when it is:
+
+```qela
+fn greet(name str, punct str = "!") str {
+	return "hello " + name + punct;
+}
+greet("qela");          // "hello qela!"
+greet("qela", "?");     // "hello qela?"
+```
+
+Defaults must trail the required parameters.
+
+**Multiple assignment.** Several targets can be assigned at once; the whole
+right side is evaluated into hidden temporaries first, so a swap needs no
+third variable:
+
+```qela
+var a i64 = 1;
+var b i64 = 2;
+a, b = b, a;               // swap: a = 2, b = 1
+a, b = 3, 4;
+p.x, p.y = p.y, p.x;       // members and indexes work too
+```
 
 An `extern` function declares a body that lives elsewhere — in a C file the
 system linker will pull in. `extern fn f(a i64) i64;` (no body) stays an
@@ -758,6 +944,48 @@ Array length must be a positive compile-time constant. Indexing is bounds
 checked at runtime; a bad index aborts with `index out of bounds` (exit 134).
 The check can be disabled program-wide with `--no-bounds-checks`.
 
+### Array and map literals
+
+`[1, 2, 3]` is an array literal — its element type is inferred from the
+elements, nested literals work, and a declared target type overrides the
+inference. Arrays assign and copy by value:
+
+```qela
+var a [3]i64 = [1, 2, 3];
+var b [3]i64 = a;          // copy
+var m = [["a", "b"], ["c", "d"]];   // [2][2]str
+```
+
+`["key": value]` is a map literal — a `Map(V)` with `str` keys:
+
+```qela
+var scores = ["alice": 91, "bob": 77];
+var s i64 = scores["bob"];          // 77, via the map_get sugar
+scores["alice"] = 95;               // map_put
+```
+
+### Comprehensions
+
+`[expr for x in coll]` builds a fresh slice; an `if cond` filter keeps only
+the elements that pass. Works over arrays, slices, strings, Vecs, Maps
+(keys) and generators — the loop variable is scoped to the comprehension:
+
+```qela
+var doubled = [x * 2 for x in arr];            // [2, 4, 6]
+var squares = [x * x for x in arr if x > 1];   // [4, 9]
+var keys = [k for k in m];                     // the map's keys
+```
+
+`[k: v for k in coll]` is the map comprehension — the key must be a `str`,
+the value may use the loop variable:
+
+```qela
+var sq = [k: m[k] * m[k] for k in m];
+```
+
+The hidden accumulator is a Vec (`std/vec.qela`) or a Map (`std/map.qela`),
+so those imports are required; the result is a fresh slice or Map value.
+
 ### Slices
 
 A slice `[]T` is a `{ptr, len}` view into an array (or a string's bytes) with
@@ -786,6 +1014,12 @@ Passing a slice is the idiomatic way to hand an array (or a piece of one) to
 a function.
 
 > **Note:** A slice `[]T` is a fixed-size view (`{ptr, len}`) over contiguous memory, so elements cannot be directly appended to a raw slice. For a growable collection where elements can be added dynamically, use `Vec(T)` from `import "std/vec.qela";` with `vec_push(&v, elem)`. You can convert a vector to a slice at any time using `vec_view(&v)` (see section 19).
+
+A Vec is fully wired into the language's sugar, so it behaves like a native
+collection: `v[i]` reads (vec_get), `v[i] = x` writes (vec_set),
+`v.push(x)` appends, `x in v` tests, `for x in v` iterates, and
+`vec_of([1, 2, 3])` is the vec literal. The same `<prefix>_` protocol makes
+a `Map(V)` respond to `m[k]`, `m[k] = v`, `k in m` and `for k in m`.
 
 ## 12. Structs
 
@@ -890,6 +1124,42 @@ match (op) {
 
 An enum has no implicit equality and cannot be compared with `==`; compare
 by matching. Up to 64 variants.
+
+### 13.1 Opt(T), Res(T, E), and `?`
+
+The standard library's error-handling pair is two enums:
+`Opt(T)` — `None` or `Some(T)` — and `Res(T, E)` — `Ok(T)` or `Err(E)`.
+A function that may fail returns one of them:
+
+```qela
+import "std/opt.qela";
+
+fn find(hay []i64, needle i64) Opt(i64) {
+	var i i64 = 0;
+	while (i < hay.len) {
+		if (hay[i] == needle) { return Opt(i64).Some(i); }
+		i = i + 1;
+	}
+	return Opt(i64).None;
+}
+```
+
+`?` postfix does the early return for you: `expr?` — where `expr` is an
+`Opt(T)` or `Res(T, E)` — leaves the function with `None`/`Err(...)` when
+the value is absent, and evaluates to the payload otherwise. It is hoisted
+to the statement boundary, so it works anywhere in a statement, and the
+enclosing function must return the same Opt or Res type:
+
+```qela
+fn twice(hay []i64, a i64, b i64) Opt(i64) {
+	var i i64 = find(hay, a)?;      // None propagates
+	var j i64 = find(hay, b)?;
+	return Opt(i64).Some(i + j);
+}
+```
+
+Matching gives the explicit form, and `opt_is_some` / `opt_val` /
+`res_is_ok` / `res_err` inspect without matching.
 
 ## 14. Generics
 
@@ -1005,8 +1275,8 @@ carry no check at all.
 the compiler, imports resolve with nothing on disk. A program importing
 `std/io.qela` compiles in an empty directory.
 
-The standard library is deliberately small — each module is a few dozen to a
-couple of hundred lines of Qela and you can read the source with
+The standard library is deliberately small — each module is a few dozen to
+a few hundred lines of Qela and you can read the source with
 `qela --dump-std io.qela` or in `std/`.
 
 ### The ones you will use most
@@ -1019,15 +1289,22 @@ couple of hundred lines of Qela and you can read the source with
 | read a whole file | `read_file(path)` → `str` |
 | read a line from stdin | `read_line()` → `str`, `""` at EOF |
 | build a string / binary data | `Buf` + `buf_u8` / `buf_bytes` / `buf_str` |
-| growable array of anything | `Vec(T)`: `vec_init`, `vec_push`, `vec_get`, `vec_view` |
-| dictionary | `Map`: `map_put`, `map_get` (keys `str`, values `*u8`) |
+| growable array of anything | `Vec(T)`: `vec_of([...])`, `vec_push`, `v[i]`, `for x in v` |
+| dictionary | `Map(V)`: `m[k]`, `m[k] = v`, `k in m`, `["k": v]` literals |
 | list of pointers | `List`: `list_push`, `list_get` |
+| optional value / error | `Opt(T)` / `Res(T, E)` + `?` |
 | random number | `rand_range(lo, hi)` in `[lo, hi)` |
 | sort `i64`s | `sort_i64(slice, 0, n-1)` |
+| files and directories | `std/fs.qela`: listdir, file_size, mkdir, rename, getcwd |
+| signals | `std/signal.qela`: sig_set, sig_raise |
+| JSON | `std/json.qela`: json_parse, json_strify, a builder |
+| TCP sockets | `std/net.qela`: tcp_connect / tcp_listen |
+| processes | `std/proc.qela`: fork, exec, pipes |
 | allocate | `arena_alloc(size, align)` — never frees |
 | scoped temporary blocks | `arena_mark()` / `arena_reset(m)` — free in one call |
 | individual blocks, malloc-style | `heap_alloc` / `heap_free` / `heap_realloc` |
 | object lifetimes that are not stack-shaped | `gc_alloc`, `gc_collect` |
+| embed a file's bytes | `$bytes("path")` — a compile-time `str` (section 22) |
 
 ### sys — raw syscalls
 
@@ -1150,29 +1427,29 @@ the default.
 
 ### vec — generic growable vector
 
-`std/vec.qela`. `Vec(T)` with `vec_init`, `vec_push`, `vec_get`
-(out-of-range reads return a zeroed element), `vec_pop`, `vec_clear`, and
-`vec_view` — the slice view that lets a vector participate in checked
-iteration:
+`std/vec.qela`. `Vec(T)` is arena-backed (its lifetime is the program's).
+The sugar is complete: `vec_of([1, 2, 3])` builds one, `v[i]` reads
+(`vec_get`, out-of-range reads a zeroed element), `v[i] = x` writes,
+`v.push(x)` appends, `x in v` scans, `for x in v` iterates, and `vec_view`
+is the slice view that hands the data to checked indexing:
 
 ```qela
 import "std/io.qela";
 import "std/vec.qela";
 
 fn main() int {
-	var v Vec(i64);
-	vec_init(&v);
-	var i i64 = 0;
-	while (i < 20) {
-		vec_push(&v, i * 3);
-		i = i + 1;
-	}
+	var v = vec_of([0, 3, 6, 9]);
+	v.push(12);
+	v[1] = 2;
 	var t i64 = 0;
-	for x in vec_view(&v) { t = t + x; }
-	write_str(STDOUT, "${t}\n");        // 570
+	for x in v { t = t + x; }
+	write_str(STDOUT, "${t}\n");        // 0+2+6+9+12 = 29
 	return 0;
 }
 ```
+
+A `Vec(T)` local declared with no initializer is zeroed, so `vec_init` is
+optional.
 
 ### list — growable pointer array
 
@@ -1184,18 +1461,99 @@ list_get(l *List, i i64) *u8   // 0 on out of range
 list_len(l *List) i64
 ```
 
-### map — str -> *u8
+### map — str -> V
 
-`std/map.qela`. Insertion-order iteration, O(N) lookup (N is tiny in a
-compiler):
+`std/map.qela`. A typed open-addressing map: `Map(V)` with `str` keys.
+Lookup is O(N) over a dense insertion-ordered array (N is tiny in a
+compiler). The sugar covers everything: `m[k]` reads (map_get, zeroed when
+absent), `m[k] = v` writes (map_put), `k in m` tests, `for k in m`
+iterates the keys, and `["a": 1]` is the literal:
 
 ```qela
-map_put(m *Map, key str, val *u8)   // update in place, no duplicate keys
-map_get(m *Map, key str) *u8        // 0 when absent
-map_len(m *Map) i64
-map_key(m *Map, i i64) str          // iteration
-map_val(m *Map, i i64) *u8
+import "std/map.qela";
+
+var m = ["alice": 91, "bob": 77];
+m["carol"] = 88;
+if ("bob" in m) { var s i64 = m["bob"]; }
+for k in m { ... }
 ```
+
+### opt, res, dyn
+
+`std/opt.qela` and `std/res.qela` define the `Opt(T)` and `Res(T, E)` enums
+behind `?` (section 13.1). `std/dyn.qela` is the dynamic side: a `var ~n =
+expr` local boxes any value with its type id, so a script-style variable
+can change type at runtime; reading it back needs an `as` cast
+(`n as i64`), and the box is freed automatically when the declaring block
+exits.
+
+### fs — the filesystem
+
+`std/fs.qela`. Reads never die on a missing path (an empty slice / -1
+instead); writes return 0 or a negated errno:
+
+```qela
+fs_listdir(path str) []str     // names, "." and ".." skipped
+fs_file_size(path str) i64     // -1 when it cannot be stat'ed
+fs_mtime(path str) i64         // seconds since the epoch
+fs_mkdir(path str) i64
+fs_rmdir(path str) i64
+fs_rename(a str, b str) i64
+fs_unlink(path str) i64
+fs_getcwd() str
+```
+
+### signal — POSIX signals
+
+`std/signal.qela`. `sig_set(sig, handler)` installs a handler — an ordinary
+`fn` with no parameters, called by the kernel on the interrupted stack —
+`sig_raise(sig)` delivers. The kernel returns through a naked rt_sigreturn
+restorer the module provides; the handler itself should be small (a flag
+write, a sys_write), since only the arena's bump allocator is safe from an
+async context:
+
+```qela
+import "std/signal.qela";
+
+var interrupted i64 = 0;
+
+fn on_alarm() {
+	interrupted = 1;
+}
+
+sig_set(SIGALRM, on_alarm);
+sig_raise(SIGALRM);
+```
+
+### json — parse, build, print
+
+`std/json.qela`. A parsed document is a tagged node tree (`Json`):
+`json_parse(s)` returns the root or null on any syntax error; objects are
+`{"key": value}` chains; accessors are `json_type`, `json_get`,
+`json_arr_at`, `json_str`/`json_int`/`json_float`/`json_bool`. The builder
+goes the other way:
+
+```qela
+import "std/json.qela";
+
+var doc = json_obj_new();
+json_put(doc, "name", json_str_new("qela"));
+json_put(doc, "ver", json_int_new(42));
+var s str = json_strify(doc);          // {"name":"qela","ver":42}
+var back = json_parse(s);              // round-trip
+```
+
+`json_view(a)` materializes a JSON array as a `[]*Json` slice, so
+`for e in json_view(a)` iterates it with the checked loop.
+
+### time, net, proc — the system
+
+`std/time.qela`: wall clock and monotonic seconds (time_now,
+time_monotonic). `std/net.qela`: TCP over raw sockets —
+`tcp_connect(host, port)`, `tcp_listen`, `tcp_accept`, send/recv.
+`std/proc.qela`: process spawning — fork, exec, pipes. All verified over
+real loopback and real processes; see their sources (or `qela --dump-std
+net.qela`) for the exact signatures.
 
 ### math, sort, rand
 
@@ -1272,6 +1630,35 @@ fn main() int {
 `spawn f(args)` starts `f` on a fresh 64 KiB stack; `coro_yield()` hands
 control to the next runnable coroutine; `coro_run_all()` runs the herd to
 completion. The main context is slot 0, so the program is itself a coroutine.
+
+### 19.1 Generators
+
+A function returning `*Gen(T)` whose body contains `yield` is rewritten at
+parse time into a coroutine that produces values on demand — Python's
+generator, on the coroutine machinery. `for x in gen(...)` pulls values
+until the body finishes:
+
+```qela
+import "std/gen.qela";
+
+fn counter(lo i64, hi i64) *Gen(i64) {
+	var i i64 = lo;
+	while (i < hi) {
+		yield i;
+		i = i + 1;
+	}
+}
+
+var t i64 = 0;
+for x in counter(1, 5) { t = t + x; }    // 1+2+3+4 = 10
+```
+
+A generator takes the same parameters its signature says, may return early,
+yield strings or structs, and may itself consume another generator (the
+sub-generator's consumer is the parent's coroutine). `gen_next(g, &v)`
+advances one step explicitly when a plain loop is not the shape you need;
+a `*Gen(T)` value is a snapshot you can hand around, and iterating it
+resumes it.
 
 ### Channels
 
@@ -1457,7 +1844,7 @@ conversation against it.
 - `--backtrace` prints the function call chain on panic even for plain
   compiles; `qela run` does it by default.
 - `--dump-std <module>` prints any standard module's source — the whole
-  library is 15 small files, worth reading.
+  library is 34 small files, all of it readable Qela.
 
 ### qela . — projects
 
@@ -1511,13 +1898,15 @@ asm(0x0f, 0x05);              // syscall
 ```
 
 `$name` inside an operand embeds a symbol's absolute address and `$rel name`
-a rel32 slot, patched by the same machinery that patches call targets. See
-`docs/ASM.md` — common encodings as one-`let` rows, each verified on real
-hardware.
+a rel32 slot, patched by the same machinery that patches call targets.
+`$abs name` embeds an address in a 4-byte slot — for 32-bit boot stubs that
+need an absolute far-jump target — and `$le N v` emits exactly N bytes (2/4/8)
+little-endian, for multiboot headers and friends. See `docs/ASM.md` — common
+encodings as one-`let` rows, each verified on real hardware.
 
-### fn naked
+### fn naked and fn interrupt
 
-A function with no prologue, no epilogue and no implicit `ret` — the body is
+A `fn naked` has no prologue, no epilogue and no implicit `ret` — the body is
 bare bytes ending in its own `ret` or `iretq`. For ISR entries and syscall
 stubs. It cannot take parameters, have locals, return, defer or call; only
 `asm` and `syscall`:
@@ -1528,6 +1917,20 @@ fn naked weird_entry() int {
 	asm(0xc3);                             // ret
 }
 ```
+
+A `fn interrupt` is an interrupt handler: the compiler emits the save-all
+frame and the `iretq` for you, and works from ring 3 and ring 0 (the frame
+is padded to five words when a ring-0 entry comes in with only three):
+
+```qela
+fn interrupt exc14() {   // page fault
+	...
+}
+```
+
+The machine intrinsics — `outb`/`inb`, `cli`/`sti`/`hlt`, `lgdt`/`lidt`,
+`write_cr3`/`read_cr2`, `rdmsr`/`wrmsr` (x86-64) — are ordinary functions in
+`std/sys.qela`, usable from any function.
 
 ### The image itself
 
@@ -1548,12 +1951,24 @@ fn naked start() {
 }
 ```
 
+`--base <addr>` links the image at a chosen address — a higher-half kernel
+at `0xffffffff80000000` with 64-bit absolute addressing. `$bytes("path")`
+embeds a file's bytes as a `str` at compile time (`.len` is the size,
+`.ptr` the data, NULs and all); the path resolves relative to the source
+file that writes it, and a missing file is a warning with a null `ptr` —
+`examples/minios/` is a full x86-64 kernel built on all of the above,
+booting in QEMU.
+
 ## 23. Where to look next
 
 - **`tests/`** — one file per feature, with the expected behavior in the
   leading comments. The best reference: `tests/structlit.qela`,
   `tests/enum.qela`, `tests/generictype.qela`, `tests/chan.qela`,
-  `tests/vec.qela`, `tests/topasm.qela`, `tests/thread_pool.qela`.
+  `tests/gen.qela`, `tests/comprehension.qela`, `tests/membership.qela`,
+  `tests/interpformat.qela`, `tests/thread_pool.qela`, `tests/signal.qela`.
+- **`examples/minios/`** — a real x86-64 kernel in Qela: boot stub,
+  interrupts, PS/2 keyboard, a shell, ring-3 user programs over
+  Linux-numbered syscalls. Boots in QEMU.
 - **`examples/lisp/`** — a complete Lisp interpreter in Qela: lexer, reader,
   evaluator with closures and macros, REPL. Runs `qela test . tests.lisp`.
 - **`examples/fizzbuzz.qela`** — the annotated tour of a small real program.
@@ -1561,7 +1976,7 @@ fn naked start() {
 - **`docs/STATUS.md`** — what works and what is left, with measurements.
 - **`docs/BOOTSTRAP.md`** — the subset the compiler's own sources must stay
   inside. Relevant only if you start hacking on the compiler.
-- The standard library itself, `std/` (or `qela --dump-std`): 19 small
+- The standard library itself, `std/` (or `qela --dump-std`): 34 small
   files, all of it readable Qela.
 
 ## 24. Compiler flags reference
