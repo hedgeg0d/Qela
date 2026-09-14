@@ -3578,6 +3578,19 @@ fn layout_globals(globals *Var, funcs *Func) {
 		v = v.next;
 	}
 	var bss i64 = gdata.n;
+	// The data segment must end word-aligned: an ARM64 PIE's Android
+	// tables (gnu hash, symtab, strtab, dynamic and section tables --
+	// 392 bytes) sit right after the file-backed data, and bionic's
+	// linker64 rejects a section table at an odd offset. The last
+	// initialized global can end on any byte (a `[3]u8` at an aligned
+	// slot), so pad the tail here; the bss layout below starts from the
+	// padded end.
+	if ((bss & 7) != 0) {
+		var dpad i64 = 8 - (bss & 7);
+		var dpi i64 = 0;
+		while (dpi < dpad) { buf_u8(&gdata, 0); dpi = dpi + 1; }
+		bss = gdata.n;
+	}
 	v = globals;
 	while (v as i64 != 0) {
 		if (!v.is_tls && v.init == 0 && !(v.extern && !v.has_init) && (v.reachable || opt_object)) {
