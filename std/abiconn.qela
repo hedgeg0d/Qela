@@ -9,6 +9,59 @@ var abi_pid i64 = -1;
 var abi_in i64 = -1;
 var abi_out i64 = -1;
 
+// A handle into the child's parsed-AST cache. Every handle is opaque and
+// sequential: the child's ids run from 1 in parse order, which is exactly
+// why a respawn can replay the sources and keep every handle valid.
+// The chain also carries each handle's source so the replay knows what to
+// re-parse.
+struct Ast;
+struct Ast {
+	id   i64,
+	src  str,
+	next *Ast,
+}
+var abi_asts *Ast = 0 as *Ast;
+var abi_asts_tail *Ast = 0 as *Ast;
+var abi_respawned bool = false;
+
+// Lives here (not in eval.qela, which defines the other request kinds)
+// because the respawn replay uses it.
+let ABI_REQ_PARSE = 7;
+
+fn abi_ast_register(a *Ast) {
+	if (abi_asts_tail as i64 == 0) { abi_asts = a; }
+	else { abi_asts_tail.next = a; }
+	abi_asts_tail = a;
+}
+
+// Binds a fresh child after the old one died and rebuilds the session:
+// the registration bundle (interpreted/dynamic functions, eval vars) and
+// every cached ast, in creation order, so the sequential ids come out
+// identical and the host's handles stay valid. One respawn per process;
+// a second death means the session is genuinely broken and the caller
+// reports it. At-least-once: a request that was in flight when the child
+// died is re-sent by its caller and may have already run.
+fn abi_respawn() bool {
+	if (abi_respawned) { return false; }
+	abi_respawned = true;
+	if (abi_in >= 0) { sys_close(abi_in as i64); }
+	if (abi_out >= 0) { sys_close(abi_out as i64); }
+	abi_pid = -1;
+	abi_in = -1;
+	abi_out = -1;
+	abi_spawn();
+	var a *Ast = abi_asts;
+	while (a as i64 != 0) {
+		abi_send_frame(abi_in, ABI_REQ_PARSE as u8, a.src.ptr, a.src.len);
+		var k u8 = 0;
+		var bb [8]u8;
+		var bn i64 = abi_wait_result(&k, &bb[0], 8);
+		if (bn < 0 || k == 2) { return false; }
+		a = a.next;
+	}
+	return true;
+}
+
 // The embedded compiler copy: the compiler itself fills these in when it
 // builds a program that pulls in the ABI (see codegen's embed handling),
 // so a shipped binary can spawn its own child without qela installed.
