@@ -233,6 +233,7 @@ struct Func {
 	dynamic    bool,
 	frozen     bool,
 	eval_export bool,
+	interp_body *Node,
 	body       *Node,
 	ret_slot   *Var,
 	addr       i64,
