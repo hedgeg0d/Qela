@@ -48,24 +48,48 @@ fn coro_spawn(target i64, a0 i64, a1 i64, a2 i64, a3 i64, a4 i64) {
 	var stack *u8 = coro_alloc_stack();
 	var top i64 = ((stack as i64) + CORO_STACK) & ~15;
 
-	// Thirteen words: six callee-saved, the trampoline address, five
-	// arguments and the target. Landing on sp % 16 == 8 leaves the target
-	// with the alignment a call would have given it.
-	var sp0 i64 = top - 13 * 8;
-	if ((sp0 & 15) != 8) { sp0 = sp0 - 8; }
+	// Nineteen words on arm64: twelve callee-saved slots, the first LDP
+	// pair populating x29/x30 with zero and the trampoline address (so the
+	// switch stub's ret lands inside it), a padding word skipped by the
+	// stub's realignment add, five arguments and the target. Landing on
+	// sp % 16 == 8 leaves the target with the alignment a call would have
+	// given it.
+	$if (TARGET == "arm64") {
+		var sp0 i64 = top - 19 * 8;
+		if ((sp0 & 15) != 8) { sp0 = sp0 - 8; }
 
-	var p *i64 = sp0 as *i64;
-	var i i64 = 0;
-	while (i < 6) { p[i] = 0; i = i + 1; }
-	p[6] = coro_entry_addr();
-	p[7] = a0;
-	p[8] = a1;
-	p[9] = a2;
-	p[10] = a3;
-	p[11] = a4;
-	p[12] = target;
+		var p *i64 = sp0 as *i64;
+		var i i64 = 0;
+		while (i < 12) { p[i] = 0; i = i + 1; }
+		p[1] = coro_entry_addr();
+		p[13] = a0;
+		p[14] = a1;
+		p[15] = a2;
+		p[16] = a3;
+		p[17] = a4;
+		p[18] = target;
 
-	coros[id].sp = sp0;
+		coros[id].sp = sp0;
+	} $else {
+		// Thirteen words: six callee-saved, the trampoline address, five
+		// arguments and the target. Landing on sp % 16 == 8 leaves the target
+		// with the alignment a call would have given it.
+		var sp0 i64 = top - 13 * 8;
+		if ((sp0 & 15) != 8) { sp0 = sp0 - 8; }
+
+		var p *i64 = sp0 as *i64;
+		var i i64 = 0;
+		while (i < 6) { p[i] = 0; i = i + 1; }
+		p[6] = coro_entry_addr();
+		p[7] = a0;
+		p[8] = a1;
+		p[9] = a2;
+		p[10] = a3;
+		p[11] = a4;
+		p[12] = target;
+
+		coros[id].sp = sp0;
+	}
 	coros[id].top = top;
 	coros[id].done = false;
 	coros[id].alive = true;
