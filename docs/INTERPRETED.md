@@ -877,17 +877,21 @@ not necessarily how valuable it is:
    `abi_spawn()` would then `memfd_create()`+`fexecve()` its own
    embedded copy instead of searching `$PATH`, with `$QELAPATH` kept as
    an explicit override, not the primary path.
-3. **Self-recursive `dynamic` functions.** A `dynamic` function calling
-   itself is currently indistinguishable from calling any other function
-   — a relocation, which fails the self-containment check and falls back
-   to `interpreted`. Fixable without touching the ABI at all: the host
-   already knows its own JIT'd address once compiled once, so a
-   self-call could patch its own relocation against that address after
-   the fact, entirely locally, no new round trip. The general "calls
-   another `dynamic` function" case is a different, harder problem (needs
-   the *other* function's address, which may not be JIT'd yet) and
-   probably isn't worth solving before item 1 changes what's even
-   possible to pass between them.
+3. ~~**Self-recursive `dynamic` functions.**~~ **Done (2026-08-09).** A
+   `dynamic` function calling itself used to be indistinguishable from
+   calling any other function — a relocation, which failed the
+   self-containment check and fell back to `interpreted` (when it
+   compiled at all; the mid-parse typing of the saved `interp_body`
+   rejected the self-call outright). Now the self-containment gate admits
+   `R_X86_64_PLT32` relocations naming the function itself — the child
+   sends their slot offsets with the code, and the host patches each
+   rel32 locally against its own mapped address (the function sits at
+   offset 0, so rel32 = -(slot + 4)), no second round trip. The
+   marshalled-signature rewrite also rewrites self-calls: a tail call
+   passes the hidden out-parameter through, any other call goes through a
+   fresh per-site temp of the return type. A call to *another* `dynamic`
+   function is still the harder problem (needs the other function's
+   address, which may not be JIT'd yet) and stays a clean fallback.
 4. **`parse_ast` beyond a single expression.** Statements and multi-line
    blocks would need deciding what "run it again" even means for a `var`
    declaration (redeclaration the second time?) or a sequence with a
