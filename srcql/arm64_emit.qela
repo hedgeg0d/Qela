@@ -27,10 +27,17 @@ import "x86_emit.qela";
 let X0  = 0;
 let X1  = 1;
 let X2  = 2;
+let X3  = 3;
+let X4  = 4;
+let X5  = 5;
 let X8  = 8;
 let X9  = 9;    // address/immediate scratch for st_local/ld_local and imm ALU operands
 let X10 = 10;   // second scratch, for a read-modify-write op's immediate operand
+let X11 = 11;   // third scratch, an exclusive-store retry status word
 let X16 = 16;   // indirect-call target scratch (AAPCS64's IP0, dead between calls)
+let X19 = 19;   // thread_clone's child-args carrier (callee-saved, saved around the call)
+let X20 = 20;
+let X28 = 28;   // top of the AAPCS64 callee-saved block (x19-x28), GC-scan range end
 let X29 = 29;
 let X30 = 30;
 let SP  = 31;   // register field value 31 means SP or XZR depending on the instruction; only SP forms are used here.
@@ -338,6 +345,73 @@ fn arm64_cmp_imm(rn int, imm i64) {
 	if (rn == X9) { scratch = X10; }
 	arm64_mov_imm64(scratch, imm);
 	arm64_cmp_reg(rn, scratch);
+}
+
+// Exclusive-access pair for atomic_cas/atomic_add: LDXR Xt, [Xn] and
+// STXR Ws, Xt, [Xn]. STXR's status (0 = stored) goes to the W register,
+// not the flags, so a retry loop branches on it with CBNZ.
+fn arm64_ldxr(rt int, rn int) { b4(0xc85f7c00 | (rn << 5) | rt); }
+
+fn arm64_stxr(rs int, rt int, rn int) { b4(0xc800fc00 | (rs << 16) | (rn << 5) | rt); }
+
+// CBNZ Wt, target -- a backward-only retry jump (atomic loops), where the
+// target is already emitted. Imm19 is negative, counted in words.
+fn arm64_cbnz_back(rt int, target i64) {
+	var rel i64 = target - code.n;
+	b4(0x35000000 | (((rel >> 2) & 0x7ffff) << 5) | rt);
+}
+
+// Acquire/release atomics and the full fence. LDAR/STLR are the pairing
+// primitives: a reader that LDARs a location written by STLR sees the
+// writer's earlier stores (the C11 acquire/release of atomic_load/
+// atomic_store), and DMB ISH orders everything around it.
+fn arm64_ldar(rt int, rn int) { b4(0xc8df7c00 | (rn << 5) | rt); }
+
+fn arm64_stlr(rt int, rn int) { b4(0xc89ffc00 | (rn << 5) | rt); }
+
+fn arm64_dmb() { b4(0xd5033bbf); }
+
+// tvar's thread pointer: tpidr_el0, the AAPCS64 TLS register, is both
+// readable and writable from EL0 (unlike tpidr_el1), which is exactly the
+// %fs-based scheme x86 uses -- TLS block address in, offset out.
+fn arm64_mrs_tpidr(rd int) { b4(0xd53bd040 | rd); }
+
+fn arm64_msr_tpidr(rt int) { b4(0xd51bd040 | rt); }
+
+// Builds a fresh per-thread TLS block, the ARM64 counterpart of x86_emit's
+// gen_tls_init_stub: mmap it, copy the template in, write the self-pointer
+// at offset 0, then point tpidr_el0 at it. mmap returns the block in X0 and
+// the stub leaves it there -- the caller (the process entry stub) must not
+// be relying on X0/X1 across the BL.
+let SYS_ARM64_MMAP = 222;
+fn gen_tls_init_stub_arm64() {
+	tls_stub_at = code.n;
+	// mmap(0, tls_block_size, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)
+	arm64_movz(X0, 0, 0);
+	arm64_mov_imm64(X1, tls_block_size);
+	arm64_movz(X2, 3, 0);
+	arm64_movz(X3, 34, 0);
+	arm64_mov_imm64(X4, -1);
+	arm64_movz(X5, 0, 0);
+	arm64_mov_imm64(X8, SYS_ARM64_MMAP);
+	arm64_svc();
+
+	arm64_mov_reg(X2, X0);               // x2 = dst (the new block)
+	arm64_movz(X1, 0, 0);                // x1 = template address (placeholder)
+	arm64_movk(X1, 0, 1);
+	ilist_push(&tls_src_refs, code.n - 8);
+	arm64_mov_imm64(X3, tls_block_size / 8);
+	var loop i64 = code.n;
+	arm64_ld_at(X9, X1, 0);              // copy one 8-byte word
+	arm64_add_imm(X1, X1, 8);
+	arm64_str_off(X9, X2, 0);
+	arm64_add_imm(X2, X2, 8);
+	arm64_sub_imm(X3, X3, 1);
+	arm64_cbnz_back(X3, loop);
+
+	arm64_str_off(X0, X0, 0);            // [block] = self-pointer
+	arm64_msr_tpidr(X0);                 // tpidr_el0 = block
+	arm64_ret();
 }
 
 fn arm64_cset(rd int, qcc i64) {
@@ -1116,6 +1190,14 @@ fn arm64_lower_op(op *IrOp) {
 	}
 	if (op.kind == IR_SETCC && op.dst.kind == OP_ACC) {
 		arm64_cset(X0, op.aux);
+		return;
+	}
+	if (op.kind == IR_TLSADDR) {
+		// Same scheme as x86_emit.qela's ld_fs_self: the thread pointer out
+		// of the TLS register, then the tvar's offset within the block.
+		arm64_mrs_tpidr(X0);
+		var toff i64 = (op.src0.off as *Var).tls_off;
+		if (toff != 0) { arm64_add_imm(X0, X0, toff); }
 		return;
 	}
 	if (op.kind == IR_BR) {
