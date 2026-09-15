@@ -606,6 +606,34 @@ does not exist — deliberately out of scope, same reasoning the original
 design gave: "its own real sub-effort — a stable, ergonomic AST API is
 more design work than the ABI plumbing itself."
 
+**Self-embedding the compiler into the output — done** (2026-08-09). A
+program that pulls in the runtime ABI now carries the compiler's own
+image in its data segment, so the shipped binary spawns its child from
+itself (`memfd_create` + write + `fexecve`) and needs no `qela` installed
+— `$QELAPATH` stays as an explicit override, `$PATH` as the last resort.
+The handshake is two globals declared in `std/abiconn.qela`
+(`__qela_embedded`/`__qela_embedded_len`); when codegen finds them
+(which is exactly when the ABI is in use — the std module that declares
+them is only spliced then) it reads its own bytes via
+`/proc/self/exe` (reliable: the process doing the compiling is the
+compiler), sets the length global's init before layout so the real size
+lands in `.data`, forces the pointer global into a `.data` slot, appends
+the blob after the bss region (the file carries bss-size zero padding up
+to it, so the conservative GC scan, which ends at the bss, never walks
+the compiler's bytes), and patches the pointer slot with the blob's
+runtime address once the image geometry is known. A program that does
+not use the ABI embeds nothing — the globals do not exist, byte for byte
+the same output as before. Object mode (`-c`) skips the embed (no
+relocation story for the blob), and `qela irun` never runs codegen at
+all, so under the interpreter the globals keep their zero inits and the
+spawn falls back to `$QELAPATH`/`$PATH` — the same code path a
+non-embedded build always used. The embedded child is *today's* compiler,
+frozen at build time, which is also the reproducibility property the
+original design wanted: upgrading the installed `qela` later does not
+change already-shipped binaries. Fixed on the way: `sys_fexecve` passed
+a NULL path to `execveat`, which the kernel rejects with EFAULT — with
+`AT_EMPTY_PATH` the path must be a valid pointer to an empty string.
+
 **Struct/string marshalling over the ABI — done** (2026-08-09). The
 scalar-only ceiling is gone: `interpreted`/`dynamic` functions and `eval
 fn` host calls now carry `str`, floats, structs and arrays across the
@@ -671,10 +699,8 @@ reject tests, and bootstrap.sh's "interpreted/dynamic str and struct
 marshalling over the abi" and "eval fn" steps, each asserting concrete
 values. S2 535 064 -> 562 392 B.
 
-What's left, precisely — edges, not missing mechanisms: the self-copy is
-not embedded at compile time, `abi_spawn()` still resolves the child via
-`$QELAPATH`/`$PATH` (the correction earlier in this document); `eval
-var` globals are still scalar-only (the child has no way to learn a
+What's left, precisely — edges, not missing mechanisms:
+`eval var` globals are still scalar-only (the child has no way to learn a
 global's type at parse time — the `ND_FUNCADDR` foreign fallback types
 everything as `i64` — so a str global stays out of reach); a
 self-recursive `dynamic` function always falls back to `interpreted` (a
@@ -695,14 +721,19 @@ halfway mark of the 1 MiB budget with real headroom left. `std/eval.qela`,
 count against this budget: they ship in the *output* of programs that
 import them, never inside `qela` itself.)
 
-Self-copy (whole binary embedded in the *output*, cost does not touch
-`qela` itself):
+Self-copy (the compiler's own image embedded into ABI-using outputs;
+the cost never touches `qela` itself):
 
 | what's embedded in the output | size |
 |---|---|
-| raw `qela` binary, uncompressed | 501,488 |
+| raw `qela` binary, uncompressed — **what ships now** | ~561,000 |
 | + gzip -9 | 137,941 |
 | + xz -9 | 111,420 |
+
+Compression was measured but not built: the blob is copied once at
+process start, and a decompressor in the host would cost more bytes than
+the compressed size saves below ~60% of the original. The table stays
+for anyone re-deriving that tradeoff.
 
 What permanently embedding a source blob *inside `qela`* would have cost —
 kept only as a record of a rejected path, not a live option under the
