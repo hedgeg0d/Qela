@@ -802,16 +802,20 @@ ARM64 (below), or accept the ratio and spend budget on wow/byte elsewhere.
 
 ### 2. ARM64 backend
 
-Self-hosting works for the scalar-core subset (2026-08-06): the compiler,
-cross-compiled to ARM64 by itself, compiles itself again under
+Self-hosting works for the scalar-core-plus-floats subset (2026-08-06): the
+compiler, cross-compiled to ARM64 by itself, compiles itself again under
 `qemu-aarch64` and produces a byte-identical ARM64 binary
-(`S2_arm64 == S3_arm64`, 639744 B), and 50/51 applicable corpus tests match
-the native x86 compiler exactly. See `docs/TASKS.md` for the two frame-
-layout bugs this found and fixed in `srcql/arm64_emit.qela`. Not yet
-ported: floats, `extern`, threading/coro/gc, `asm`/`atomic`/`tvar`,
-promoted-register locals (`regalloc.qela`'s `ra_nreg` returns 0 for this
-target, so every ARM64 local sits in a frame slot), more than ~4 call
-arguments. RISC-V is not started.
+(`S2_arm64 == S3_arm64`, 643696 B). Floats ride the same "bits in a GPR,
+FP register only for the instant of one instruction" model x86 uses (D0/D1
+standing in for XMM0/XMM1); `tests/float.qela`, `tests/floatfmt.qela` and
+`tests/f32global.qela` all match the native x86 compiler byte-for-byte.
+See `docs/TASKS.md` for the two frame-layout bugs this found and fixed in
+`srcql/arm64_emit.qela` first, and the float opcodes added after. Not yet
+ported: `extern`, threading/coro/gc, `asm`/`atomic`/`tvar`, indirect calls
+through a function value, slice indexing, promoted-register locals
+(`regalloc.qela`'s `ra_nreg` returns 0 for this target, so every ARM64
+local sits in a frame slot), more than ~4 call arguments. RISC-V is not
+started.
 
 ### 3. Smaller
 
