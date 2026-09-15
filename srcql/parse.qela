@@ -1877,6 +1877,16 @@ fn parse_function(t **Token, is_extern bool) *Func {
 	// implicit ret. The body is asm bytes plus bare stores, so the
 	// restrictions below are the frame's absence stated out loud.
 	var naked_fn bool = tok_consume(t, "naked");
+	var interpreted_fn bool = false;
+	var dynamic_fn bool = false;
+	var frozen_fn bool = false;
+	if (!naked_fn) {
+		interpreted_fn = tok_consume(t, "interpreted");
+		if (!interpreted_fn) {
+			dynamic_fn = tok_consume(t, "dynamic");
+			if (!dynamic_fn) { frozen_fn = tok_consume(t, "frozen"); }
+		}
+	}
 	var name str = (*t).text;
 	var p i64 = (*t).pos;
 	*t = (*t).next;
@@ -1886,7 +1896,13 @@ fn parse_function(t **Token, is_extern bool) *Func {
 	f.ret = type_lookup("void");
 	f.pos = p;
 	f.naked = naked_fn;
+	f.interpreted = interpreted_fn;
+	f.dynamic = dynamic_fn;
+	f.frozen = frozen_fn;
 	f.extern = is_extern;
+	if (is_extern && (interpreted_fn || dynamic_fn)) {
+		error_at(p, "an extern function cannot be 'interpreted' or 'dynamic'");
+	}
 	cur_func = f;
 	type_set_fn(f);
 
@@ -2342,7 +2358,7 @@ fn blob_find(name str) int {
 	return -1;
 }
 
-fn parse_global(t **Token, is_extern bool) {
+fn parse_global(t **Token, is_extern bool, is_eval bool) {
 	var kw str = (*t).text;
 	var is_tls bool = str_eq(kw, "tvar");
 	var typed bool = str_eq(kw, "var") || is_tls;
@@ -2370,6 +2386,7 @@ fn parse_global(t **Token, is_extern bool) {
 	gv.has_init = has_init;
 	gv.init = init;
 	gv.is_tls = is_tls;
+	gv.eval_export = is_eval;
 	tok_expect(t, ";");
 }
 
@@ -2466,13 +2483,18 @@ fn parse(tok *Token) *Unit {
 		if (tok_eq(tok, "macro")) { parse_macro(&tok); continue; }
 		if (tok_eq(tok, "struct")) { parse_struct(&tok); continue; }
 		if (tok_eq(tok, "enum")) { parse_enum(&tok); continue; }
-		if (tok_eq(tok, "let") || tok_eq(tok, "var") || tok_eq(tok, "tvar")) { parse_global(&tok, false); continue; }
+		if (tok_eq(tok, "let") || tok_eq(tok, "var") || tok_eq(tok, "tvar")) { parse_global(&tok, false, false); continue; }
 		if (tok_eq(tok, "extern") && tok.next.kind == TK_KW && str_eq(tok.next.text, "var")) {
 			// `extern var x i64;` imports the C symbol, `extern var x i64 = K;`
 			// exports a Qela global. Same split as extern fn, keyed on the
 			// initializer.
 			tok = tok.next;
-			parse_global(&tok, true);
+			parse_global(&tok, true, false);
+			continue;
+		}
+		if (tok_eq(tok, "eval") && tok.next.kind == TK_KW && str_eq(tok.next.text, "var")) {
+			tok = tok.next;
+			parse_global(&tok, false, true);
 			continue;
 		}
 		if (tok_eq(tok, "import")) {
@@ -2505,7 +2527,13 @@ fn parse(tok *Token) *Unit {
 			is_ext = true;
 			tok = tok.next;
 		}
+		var is_eval_fn bool = false;
+		if (tok_eq(tok, "eval") && tok.next.kind == TK_KW && str_eq(tok.next.text, "fn")) {
+			is_eval_fn = true;
+			tok = tok.next;
+		}
 		var nf *Func = parse_function(&tok, is_ext);
+		nf.eval_export = is_eval_fn;
 		// Appending through funcs_tail keeps mid-parse instantiations
 		// (a generic call typed by a var initializer) and lambdas in the
 		// list: the local chain alone would orphan them on the next append.

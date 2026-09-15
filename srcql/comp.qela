@@ -181,6 +181,7 @@ struct Var {
 	// A parameter's default value expression, `fn f(a=0 i32)`. Null for
 	// every non-parameter Var and for a parameter with no default.
 	default   *Node,
+	eval_export bool,
 }
 
 struct Node {
@@ -228,6 +229,10 @@ struct Func {
 	leaf       bool,
 	naked      bool,
 	extern     bool,
+	interpreted bool,
+	dynamic    bool,
+	frozen     bool,
+	eval_export bool,
 	body       *Node,
 	ret_slot   *Var,
 	addr       i64,
