@@ -104,7 +104,6 @@ struct VarScope;
 // ── global state ──
 
 var scope_root *Scope;
-var cur_func *Func;
 var global_vars *Var;
 
 // The innermost lambda's own scope and a counter for its hidden name. Both
