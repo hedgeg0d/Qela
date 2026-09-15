@@ -903,10 +903,10 @@ not necessarily how valuable it is:
    local is re-initialised); the value is the last expression
    statement's, cut out of the chain so a trailing call's side effect
    runs once; a `return` stops the sequence and its value becomes the
-   sequence's value. An enum-to-int cast turned out to hand over the
-   value's address (enums are aggregates), which the marshaller works
-   around by sending enums as raw images; the cast itself is a known
-   compiler-wide gap.
+   sequence's value. An enum-to-int cast used to hand over the value's
+   address (enums are aggregates); it means the tag now, fixed in both
+   the compiled and the interpreted paths, and the marshaller sends
+   enums as raw images.
 5. ~~**AST inspection/mutation API**~~ **Done (2026-08-09).** `ast_info`
    (kind name, payload value, child count), `ast_child`, `ast_next` and
    the type-checked `ast_set` over four new request kinds, with the
@@ -922,6 +922,6 @@ not necessarily how valuable it is:
    source is replayed in creation order so the handles stay valid; the
    in-flight request is re-sent (at-least-once). JIT'd `dynamic`
    functions never needed the child anyway. A second death still reports
-   the old error. Known edge: handles for *child nodes* obtained through
-   `ast_child` are not replayed (only the top-level handles are); the
-   replay can't know how a program traversed the tree.
+   the old error. The replay also rebuilds *child-node* handles (the
+   host records how each one was reached) and re-applies every recorded
+   `ast_set`, so a mutated tree comes back mutated.
