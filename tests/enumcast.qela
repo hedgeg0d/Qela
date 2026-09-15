@@ -1,0 +1,33 @@
+// expect-exit: 0
+// expect-out: enum casts ok
+// stage1-only
+// An enum is an aggregate, so an enum expression is its address; a
+// numeric or boolean cast must mean the tag (the first word of its
+// memory), and a pointer cast keeps the address.
+import "std/io.qela";
+
+enum Lvl { Lo, Hi }
+enum Shape { Circle(i64), Rect(i64, i64), Point }
+
+var lvl Lvl;
+var sh Shape;
+
+fn main() int {
+	lvl = Lvl.Hi;
+	sh = Shape.Circle(5);
+	var fails i64 = 0;
+	if (lvl as i64 != 1) { fails = fails + 1; }
+	if (Lvl.Hi as i64 != 1) { fails = fails + 1; }
+	if (Lvl.Lo as i64 != 0) { fails = fails + 1; }
+	if (sh as i64 != 0) { fails = fails + 1; }
+	if (Shape.Circle(9) as i64 != 0) { fails = fails + 1; }
+	if (Shape.Point as i64 != 2) { fails = fails + 1; }
+	if (lvl as i8 != 1) { fails = fails + 1; }
+	if (!(lvl as bool)) { fails = fails + 1; }
+	if (Lvl.Lo as bool) { fails = fails + 1; }
+	if (lvl as i64 != 1) { fails = fails + 1; }
+	var p *u8 = &sh as *u8;
+	if (*(p as *i64) != 0) { fails = fails + 1; }
+	if (fails == 0) { write_str(STDOUT, "enum casts ok\n"); }
+	return fails as int;
+}
