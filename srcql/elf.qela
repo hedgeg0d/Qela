@@ -327,7 +327,6 @@ fn o_build_syms(img *Image, sec_text int, sec_rodata int, sec_drro int, sec_data
 	}
 }
 
-// Counts relocation entries in a list.
 fn o_rela_count(head *Reloc) i64 {
 	var n i64 = 0;
 	var r *Reloc = head;

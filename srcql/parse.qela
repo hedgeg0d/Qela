@@ -74,7 +74,6 @@ fn lev_dist(a str, b str) i64 {
 			cur[k] = v;
 			k = k + 1;
 		}
-		// swap prev and cur
 		var tmp *i64 = prev;
 		prev = cur;
 		cur = tmp;
@@ -710,7 +709,6 @@ fn parse_tmpl_params(t **Token, name str, p i64) *Tmpl {
 
 // ── expression parser ──
 
-// forward
 fn call_args(t **Token, n *Node) *Node {
 	tok_expect(t, "(");
 	var nargs int = 0;
@@ -916,7 +914,6 @@ fn parse_primary(t **Token) *Node {
 			return n;
 		}
 
-		// function call
 		if (tok_eq(*t, "(")) {
 			if (cur_func as i64 != 0 && cur_func.naked && !str_eq(name, "asm") && !str_eq(name, "syscall")) {
 				error_at(p, "naked functions cannot call other functions");
@@ -1196,7 +1193,6 @@ fn parse_assign_inner(t **Token) *Node {
 		return send;
 	}
 
-	// op=
 	if (tok_consume(t, "+=")) { return opassign_node(n, parse_assign(t), ND_ADD, p); }
 	if (tok_consume(t, "-=")) { return opassign_node(n, parse_assign(t), ND_SUB, p); }
 	if (tok_consume(t, "*=")) { return opassign_node(n, parse_assign(t), ND_MUL, p); }
