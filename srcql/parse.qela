@@ -116,6 +116,22 @@ var lambda_seq int;
 // Sequential names for the hidden temps of a multi-assignment (`_$m<N>`).
 var multi_assign_seq int = 0;
 
+// Sequential names for select's hidden temps and a generator's hidden
+// function (`_$s<N>` / `_$gen<N>`); one counter keeps every hidden name in
+// a compilation distinct.
+var gen_seq int = 0;
+
+// Generator rewrite state, live only while one function's body is being
+// parsed. cur_gen_ret is the function's return type when it is a generator
+// candidate (*Gen(T) -- set before the body so `yield` can be recognized),
+// gen_yields_seen records whether the body actually contained a `yield`
+// (a Gen-returning function without one is an ordinary factory and is left
+// alone), and gen_g_var is the hidden `_$g` parameter the yield rewrites
+// reference, created on first use.
+var cur_gen_ret *Type;
+var gen_yields_seen bool;
+var gen_g_var *Var;
+
 // Typed block expressions (`T { ...; super v; }`) desugar to an
 // immediately-called hidden function like a lambda, but unlike a lambda
 // they may read outer locals: each one becomes a hidden by-value parameter
@@ -1480,6 +1496,538 @@ fn parse_spawn_like(t **Token, p i64, callee str, kw str) *Node {
 	return st;
 }
 
+// ── select ──
+//
+// `select { case <-ch: ... case x = <-ch: ... case ch <- v: ... default:
+// ... }` desugars to a polling loop, because the channel scheduler already
+// polls: each case becomes a non-blocking try (in source order, so the
+// first ready case wins), the body of the first ready case runs and breaks
+// out of the loop, and a select with nothing ready and no default falls
+// into chan_select_block -- the same deadlock-detecting wait a blocking
+// send/receive uses. `break` inside a case body exits the select (Go's
+// rule); `continue` re-enters the polling loop. Send values are
+// re-evaluated on every poll, and a `case x = <-ch:` needs x already
+// declared -- both documented divergences from Go.
+fn parse_select_body(t **Token) *Node {
+	enter_scope();
+	var head Node;
+	var tail *Node = &head;
+	while (!tok_eq(*t, "}") && !tok_eq(*t, "case") && !tok_eq(*t, "default")) {
+		tail.next = parse_stmt(t);
+		// A `var ~n = ...` returns a two-node chain; walk to the real end.
+		while (tail.next.next as i64 != 0) { tail = tail.next; }
+		tail = tail.next;
+	}
+	leave_scope();
+	return head.next;
+}
+
+fn select_name(kind str) str {
+	var b Buf;
+	fmt_str(&b, "_$s");
+	fmt_str(&b, kind);
+	fmt_i64(&b, gen_seq as i64);
+	gen_seq = gen_seq + 1;
+	return buf_str(&b);
+}
+
+// `var _$sok<N> bool = false;` -- the readiness flag a case polls.
+fn select_ok_decl(okv *Var, p i64) *Node {
+	var n *Node = new_node(ND_EXPRSTMT, p);
+	var l *Node = new_node(ND_VAR, p);
+	l.varp = okv;
+	n.lhs = bin_node(ND_ASSIGN, l, num_node(0, p), p);
+	return n;
+}
+
+// `if (cond) { [assign;] body...; break; }` -- one select case.
+fn select_if(cond *Node, assign *Node, body *Node, p i64) *Node {
+	var ifn *Node = new_node(ND_IF, p);
+	ifn.cond = cond;
+	var b *Node = new_node(ND_BLOCK, p);
+	var head Node;
+	var tail *Node = &head;
+	if (assign as i64 != 0) { tail.next = assign; tail = assign; }
+	tail.next = body;
+	while (tail.next as i64 != 0) { tail = tail.next; }
+	var brk *Node = new_node(ND_BREAK, p);
+	tail.next = brk;
+	b.body = head.next;
+	ifn.then = b;
+	return ifn;
+}
+
+// Whether a subtree contains a `continue` that belongs to the select (a
+// continue inside a nested loop belongs to that loop -- the scan stops at
+// any ND_FOR). parse_select emits its continue-forwarding flag and trailing
+// `if (_$sc) { continue; }` only when a case body actually has one, so a
+// plain select never carries the trailing continue (which would be a
+// compile error outside any loop).
+fn select_count_cont(n *Node) i64 {
+	if (n as i64 == 0) { return 0; }
+	if (n.kind == ND_CONT) { return 1 + select_count_cont(n.next); }
+	if (n.kind == ND_FOR) { return select_count_cont(n.next); }
+	return select_count_cont(n.next) + select_count_cont(n.lhs) +
+		select_count_cont(n.rhs) + select_count_cont(n.cond) +
+		select_count_cont(n.then) + select_count_cont(n.els) +
+		select_count_cont(n.init) + select_count_cont(n.step) +
+		select_count_cont(n.body) + select_count_cont(n.args);
+}
+
+// Rewrites `continue` inside a select's case bodies. Go's rule: a continue
+// in a select case continues the loop enclosing the select, not the select
+// itself -- so each continue becomes `_$sc<N> = true; break;` (breaking the
+// select's internal polling loop), and parse_select appends an
+// `if (_$sc<N>) { continue; }` after that loop, where the continue really
+// does target the enclosing loop. A continue inside a nested loop belongs
+// to that loop and is left alone; the rewrite stops at any ND_FOR.
+fn select_rewrite_cont(n *Node, fv *Var) *Node {
+	if (n as i64 == 0) { return 0 as *Node; }
+	if (n.kind == ND_CONT) {
+		var av *Node = new_node(ND_ASSIGN, n.pos);
+		var fvn *Node = new_node(ND_VAR, n.pos);
+		fvn.varp = fv;
+		av.lhs = fvn;
+		av.rhs = num_node(1, n.pos);
+		var es *Node = new_node(ND_EXPRSTMT, n.pos);
+		es.lhs = av;
+		var brk *Node = new_node(ND_BREAK, n.pos);
+		es.next = brk;
+		brk.next = select_rewrite_cont(n.next, fv);
+		return es;
+	}
+	if (n.kind == ND_FOR) {
+		n.next = select_rewrite_cont(n.next, fv);
+		return n;
+	}
+	n.next = select_rewrite_cont(n.next, fv);
+	n.lhs = select_rewrite_cont(n.lhs, fv);
+	n.rhs = select_rewrite_cont(n.rhs, fv);
+	n.cond = select_rewrite_cont(n.cond, fv);
+	n.then = select_rewrite_cont(n.then, fv);
+	n.els = select_rewrite_cont(n.els, fv);
+	n.init = select_rewrite_cont(n.init, fv);
+	n.step = select_rewrite_cont(n.step, fv);
+	n.body = select_rewrite_cont(n.body, fv);
+	n.args = select_rewrite_cont(n.args, fv);
+	return n;
+}
+
+fn select_case(e *Node, body *Node, p i64) *Node {
+	// `case <-ch:` -- receive, value discarded.
+	if (e.kind == ND_CALL && str_eq(e.name, "chan_recv")) {
+		var head Node;
+		var tail *Node = &head;
+		var okv *Var = declare_var(select_name("ok"), type_lookup("bool"), p);
+		tail.next = select_ok_decl(okv, p);
+		tail = tail.next;
+		var call *Node = new_node(ND_CALL, p);
+		call.name = "chan_try_recv";
+		var ch *Node = e.args;
+		call.args = ch;
+		var on *Node = new_node(ND_ADDR, p);
+		on.lhs = new_node(ND_VAR, p);
+		on.lhs.varp = okv;
+		ch.next = on;
+		call.nargs = 2;
+		var es *Node = new_node(ND_EXPRSTMT, p);
+		es.lhs = call;
+		tail.next = es;
+		tail = es;
+		var cv *Node = new_node(ND_VAR, p);
+		cv.varp = okv;
+		tail.next = select_if(cv, 0 as *Node, body, p);
+		return head.next;
+	}
+	// `case x = <-ch:` -- receive into an already-declared variable. The
+	// value temp's type is the channel element type, inferred from the
+	// generic call exactly as `var x = f(...)` would.
+	if (e.kind == ND_ASSIGN && e.rhs.kind == ND_CALL && str_eq(e.rhs.name, "chan_recv")) {
+		var head Node;
+		var tail *Node = &head;
+		var okv *Var = declare_var(select_name("ok"), type_lookup("bool"), p);
+		var vv *Var = declare_var(select_name("val"), 0 as *Type, p);
+		tail.next = select_ok_decl(okv, p);
+		tail = tail.next;
+		var call *Node = new_node(ND_CALL, p);
+		call.name = "chan_try_recv";
+		var ch *Node = e.rhs.args;
+		call.args = ch;
+		var on *Node = new_node(ND_ADDR, p);
+		on.lhs = new_node(ND_VAR, p);
+		on.lhs.varp = okv;
+		ch.next = on;
+		call.nargs = 2;
+		add_type(call);
+		vv.ty = call.ty;
+		var vdecl *Node = new_node(ND_EXPRSTMT, p);
+		var vl *Node = new_node(ND_VAR, p);
+		vl.varp = vv;
+		vdecl.lhs = bin_node(ND_ASSIGN, vl, call, p);
+		tail.next = vdecl;
+		tail = vdecl;
+		var cv *Node = new_node(ND_VAR, p);
+		cv.varp = okv;
+		var rv *Node = new_node(ND_VAR, p);
+		rv.varp = vv;
+		var asg *Node = bin_node(ND_ASSIGN, e.lhs, rv, p);
+		tail.next = select_if(cv, asg, body, p);
+		return head.next;
+	}
+	// `case ch <- v:` -- send.
+	if (e.kind == ND_CALL && str_eq(e.name, "chan_send")) {
+		var call *Node = new_node(ND_CALL, p);
+		call.name = "chan_try_send";
+		call.args = e.args;
+		call.nargs = 2;
+		return select_if(call, 0 as *Node, body, p);
+	}
+	error_at(p, "a select case must be a channel send or receive");
+	return 0 as *Node;
+}
+
+fn parse_select(t **Token, p i64) *Node {
+	tok_expect(t, "select");
+	tok_expect(t, "{");
+	var n *Node = new_node(ND_FOR, p);
+	n.cond = num_node(1, p);
+	var bhead Node;
+	var btail *Node = &bhead;
+	var has_default bool = false;
+	var fv *Var = 0 as *Var;
+	var fdecl *Node = 0 as *Node;
+	while (!tok_eq(*t, "}")) {
+		if (tok_consume(t, "default")) {
+			if (has_default) { error_at((*t).pos, "a select can have only one 'default'"); }
+			has_default = true;
+			tok_expect(t, ":");
+			var body *Node = parse_select_body(t);
+			if (select_count_cont(body) > 0) {
+				if (fv as i64 == 0) {
+					fv = declare_var(select_name("sc"), type_lookup("bool"), p);
+					fdecl = select_ok_decl(fv, p);
+				}
+				body = select_rewrite_cont(body, fv);
+			}
+			var brk *Node = new_node(ND_BREAK, p);
+			var tail *Node = body;
+			if (tail as i64 == 0) { body = brk; }
+			else {
+				while (tail.next as i64 != 0) { tail = tail.next; }
+				tail.next = brk;
+			}
+			var blk *Node = new_node(ND_BLOCK, p);
+			blk.body = body;
+			btail.next = blk;
+			btail = blk;
+			continue;
+		}
+		tok_expect(t, "case");
+		var cp i64 = (*t).pos;
+		var e *Node = parse_assign(t);
+		tok_expect(t, ":");
+		var body *Node = parse_select_body(t);
+		if (select_count_cont(body) > 0) {
+			if (fv as i64 == 0) {
+				fv = declare_var(select_name("sc"), type_lookup("bool"), p);
+				fdecl = select_ok_decl(fv, p);
+			}
+			body = select_rewrite_cont(body, fv);
+		}
+		btail.next = select_case(e, body, cp);
+		while (btail.next.next as i64 != 0) { btail = btail.next; }
+		btail = btail.next;
+	}
+	tok_expect(t, "}");
+	if (!has_default) {
+		var cb *Node = new_node(ND_EXPRSTMT, p);
+		var cc *Node = new_node(ND_CALL, p);
+		cc.name = "chan_select_block";
+		cc.nargs = 0;
+		cb.lhs = cc;
+		btail.next = cb;
+	}
+	var blk *Node = new_node(ND_BLOCK, p);
+	blk.body = bhead.next;
+	n.body = blk;
+	if (fv as i64 == 0) { return n; }
+	// The whole select is the chain [var _$sc = false; while (true) {...};
+	// if (_$sc) { continue; }]. The trailing continue is the Go semantics
+	// for a continue in a case body: it sits outside the select's polling
+	// loop, so it continues whatever loop encloses the select. With no
+	// enclosing loop it is a compile error, pointing at the select.
+	fdecl.next = n;
+	var cif *Node = new_node(ND_IF, p);
+	var cv *Node = new_node(ND_VAR, p);
+	cv.varp = fv;
+	cif.cond = cv;
+	var cb2 *Node = new_node(ND_BLOCK, p);
+	var cn *Node = new_node(ND_CONT, p);
+	cb2.body = cn;
+	cif.then = cb2;
+	n.next = cif;
+	return fdecl;
+}
+
+// ── generators ──
+//
+// A function with `yield` in its body is rewritten here, after the body is
+// parsed, into a spawner plus a hidden `_$gen<N>` coroutine body. The
+// spawner keeps the function's name and signature and now allocates the
+// Gen, spawns the body (the hidden function, which takes the same
+// parameters plus a Gen pointer), advances it to the first yield and
+// returns the pointer; the original body moves to the hidden function with
+// parameter references rebound to its own (freshly cloned) parameters and
+// every `return` rewritten to gen_finish.
+fn gen_elem_of(ty *Type) *Type {
+	if (ty as i64 == 0) { return 0 as *Type; }
+	var tm *Tmpl = tmpl_find("Gen");
+	if (tm as i64 == 0) { return 0 as *Type; }
+	if (ty.kind == TY_PTR && ty.base as i64 != 0) {
+		if (ty.base.tmpl as i64 == tm as i64) { return ty.base.ga0; }
+		return 0 as *Type;
+	}
+	if (ty.tmpl as i64 == tm as i64) { return ty.ga0; }
+	return 0 as *Type;
+}
+
+// Rebinds the body's references to the visible function's parameters onto
+// the hidden function's clones and rewrites `return;` to gen_finish(_$g)
+// (a generator body must never return to the coroutine trampoline -- its
+// one-way coro_finish would round-robin away from the consumer). A
+// generator cannot return a value: rejected here.
+fn gen_rewrite(n *Node, f *Func, hf *Func) *Node {
+	if (n as i64 == 0) { return 0 as *Node; }
+	if (n.kind == ND_RET) {
+		if (n.lhs as i64 != 0) { error_at(n.pos, "a generator cannot return a value"); }
+		var c *Node = new_node(ND_CALL, n.pos);
+		c.name = "gen_finish";
+		var gv *Node = new_node(ND_VAR, n.pos);
+		gv.varp = gen_g_var;
+		c.args = gv;
+		c.nargs = 1;
+		var es *Node = new_node(ND_EXPRSTMT, n.pos);
+		es.lhs = c;
+		es.next = gen_rewrite(n.next, f, hf);
+		return es;
+	}
+	if (n.kind == ND_VAR) {
+		var i int = 0;
+		while (i < f.nparams) {
+			if ((n.varp as i64) == (func_param(f, i) as i64)) {
+				n.varp = func_param(hf, i);
+				break;
+			}
+			i = i + 1;
+		}
+	}
+	n.next = gen_rewrite(n.next, f, hf);
+	n.lhs = gen_rewrite(n.lhs, f, hf);
+	n.rhs = gen_rewrite(n.rhs, f, hf);
+	n.cond = gen_rewrite(n.cond, f, hf);
+	n.then = gen_rewrite(n.then, f, hf);
+	n.els = gen_rewrite(n.els, f, hf);
+	n.init = gen_rewrite(n.init, f, hf);
+	n.step = gen_rewrite(n.step, f, hf);
+	n.body = gen_rewrite(n.body, f, hf);
+	n.args = gen_rewrite(n.args, f, hf);
+	return n;
+}
+
+fn parse_generator_rewrite(f *Func) {
+	var elem *Type = gen_elem_of(f.ret);
+	if (elem as i64 == 0) { error_at(f.pos, "a function with 'yield' must return *Gen(T)"); }
+	if (f.interpreted || f.dynamic) {
+		error_at(f.pos, "a generator function cannot be 'interpreted' or 'dynamic'");
+	}
+	if (f.nparams > 4) { error_at(f.pos, "a generator function takes at most 4 parameters"); }
+	var i int = 0;
+	while (i < f.nparams) {
+		var pv *Var = func_param(f, i);
+		if (is_aggregate(pv.ty) && pv.ty.size > 8) {
+			error_at(pv.pos, "a generator parameter must fit in one register word (coro_spawn carries five words)");
+		}
+		i = i + 1;
+	}
+	// The hidden coroutine body: same parameters (fresh clones -- regalloc
+	// and codegen keep per-function state on the Var, so two functions must
+	// never share one), then the Gen pointer.
+	var nb Buf;
+	fmt_str(&nb, "_$gen");
+	fmt_i64(&nb, gen_seq as i64);
+	gen_seq = gen_seq + 1;
+	var hf *Func = arena_alloc(sizeof(Func), 8) as *Func;
+	hf.name = buf_str(&nb);
+	hf.ret = type_lookup("void");
+	hf.pos = f.pos;
+	hf.nparams = f.nparams + 1;
+	i = 0;
+	while (i < f.nparams) {
+		var src *Var = func_param(f, i);
+		var pv *Var = arena_alloc(sizeof(Var), 8) as *Var;
+		*pv = *src;
+		pv.next = 0 as *Var;
+		pv.pnext = 0 as *Var;
+		set_func_param(hf, i, pv);
+		i = i + 1;
+	}
+	set_func_param(hf, f.nparams, gen_g_var);
+	hf.body = gen_rewrite(f.body, f, hf);
+	// The body must end by switching back to the consumer even when it
+	// falls off the end, or the coroutine trampoline's round-robin
+	// coro_finish would switch away from the wrong context.
+	var fin *Node = new_node(ND_CALL, f.pos);
+	fin.name = "gen_finish";
+	var fgv *Node = new_node(ND_VAR, f.pos);
+	fgv.varp = gen_g_var;
+	fin.args = fgv;
+	fin.nargs = 1;
+	var fes *Node = new_node(ND_EXPRSTMT, f.pos);
+	fes.lhs = fin;
+	if (hf.body.body as i64 == 0) { hf.body.body = fes; }
+	else {
+		var tail *Node = hf.body.body;
+		while (tail.next as i64 != 0) { tail = tail.next; }
+		tail.next = fes;
+	}
+	// Split the function's locals: the body's own locals move to the
+	// hidden function; the parameters (and only they) stay, joined by the
+	// spawner's own temp below.
+	var keep_head Var;
+	var keep_tail *Var = &keep_head;
+	var mv_head Var;
+	var mv_tail *Var = &mv_head;
+	var v *Var = f.locals;
+	while (v as i64 != 0) {
+		var nxt *Var = v.next;
+		v.next = 0 as *Var;
+		if ((v as i64) == (gen_g_var as i64)) {
+			// Now a hidden-function parameter; in neither locals chain.
+		} else {
+			var isp bool = false;
+			var i2 int = 0;
+			while (i2 < f.nparams) {
+				if ((v as i64) == (func_param(f, i2) as i64)) { isp = true; break; }
+				i2 = i2 + 1;
+			}
+			if (isp) { keep_tail.next = v; keep_tail = v; }
+			else { mv_tail.next = v; mv_tail = v; }
+		}
+		v = nxt;
+	}
+	hf.locals = mv_head.next;
+	// The hidden function's parameters are frame slots too, and the frame
+	// layout pass assigns offsets by walking f.locals. parse_function's own
+	// parameters land there via declare_var; these clones and the Gen
+	// pointer are built by hand, so they have to be linked in here or they
+	// would all sit at offset 0 and clobber each other (and the saved rbp).
+	var hl_head Var;
+	var hl_tail *Var = &hl_head;
+	var hi int = 0;
+	while (hi <= f.nparams) {
+		hl_tail.next = func_param(hf, hi);
+		hl_tail = hl_tail.next;
+		hi = hi + 1;
+	}
+	hl_tail.next = hf.locals;
+	hf.locals = hl_head.next;
+	var gv *Var = arena_alloc(sizeof(Var), 8) as *Var;
+	gv.name = "_$g";
+	gv.ty = f.ret;
+	gv.next = keep_head.next;
+	f.locals = gv;
+	f.body = gen_spawner(f, hf, gv);
+	add_func(hf);
+}
+
+// The visible generator function's new body: allocate the Gen on the arena
+// (never freed, like a coroutine stack), spawn the hidden body with the
+// parameters and the Gen pointer, remember the coroutine id, advance to the
+// first yield and hand the Gen to the caller.
+fn gen_spawner(f *Func, hf *Func, gv *Var) *Node {
+	var p i64 = f.pos;
+	var blk *Node = new_node(ND_BLOCK, p);
+	var head Node;
+	var tail *Node = &head;
+	// var _$g = arena_alloc(sizeof(Gen(T)), 8) as *Gen(T);
+	var sz *Node = new_node(ND_SIZEOF, p);
+	sz.typeval = f.ret.base;
+	var ac *Node = new_node(ND_CALL, p);
+	ac.name = "arena_alloc";
+	ac.args = sz;
+	sz.next = num_node(8, p);
+	ac.nargs = 2;
+	var acast *Node = new_node(ND_CAST, p);
+	acast.ty = f.ret;
+	acast.lhs = ac;
+	var gv1 *Node = new_node(ND_VAR, p);
+	gv1.varp = gv;
+	var decl *Node = new_node(ND_EXPRSTMT, p);
+	decl.lhs = bin_node(ND_ASSIGN, gv1, acast, p);
+	tail.next = decl;
+	tail = decl;
+	// _$g.coro = coro_spawn(_$gen<N>, params..., _$g, 0...); -- six
+	// arguments: the target plus the five words coro_spawn carries.
+	var sp *Node = new_node(ND_CALL, p);
+	sp.name = "coro_spawn";
+	var fa *Node = new_node(ND_FUNCADDR, p);
+	fa.name = hf.name;
+	sp.args = fa;
+	var stail *Node = fa;
+	var gi int = 0;
+	while (gi < f.nparams) {
+		var pn *Node = new_node(ND_VAR, p);
+		pn.varp = func_param(f, gi);
+		var pc *Node = new_node(ND_CAST, p);
+		pc.ty = type_lookup("i64");
+		pc.lhs = pn;
+		stail.next = pc;
+		stail = pc;
+		gi = gi + 1;
+	}
+	var gv2 *Node = new_node(ND_VAR, p);
+	gv2.varp = gv;
+	var gc *Node = new_node(ND_CAST, p);
+	gc.ty = type_lookup("i64");
+	gc.lhs = gv2;
+	stail.next = gc;
+	stail = gc;
+	while (gi < 4) {
+		stail.next = num_node(0, p);
+		stail = stail.next;
+		gi = gi + 1;
+	}
+	sp.nargs = 6;
+	var cm *Node = new_node(ND_MEMBER, p);
+	var gv3 *Node = new_node(ND_VAR, p);
+	gv3.varp = gv;
+	cm.lhs = gv3;
+	cm.name = "coro";
+	var cs *Node = new_node(ND_EXPRSTMT, p);
+	cs.lhs = bin_node(ND_ASSIGN, cm, sp, p);
+	tail.next = cs;
+	tail = cs;
+	// gen_resume(_$g);
+	var gr *Node = new_node(ND_CALL, p);
+	gr.name = "gen_resume";
+	var gv4 *Node = new_node(ND_VAR, p);
+	gv4.varp = gv;
+	gr.args = gv4;
+	gr.nargs = 1;
+	var gs *Node = new_node(ND_EXPRSTMT, p);
+	gs.lhs = gr;
+	tail.next = gs;
+	tail = gs;
+	// return _$g;
+	var rn *Node = new_node(ND_RET, p);
+	var gv5 *Node = new_node(ND_VAR, p);
+	gv5.varp = gv;
+	rn.lhs = gv5;
+	tail.next = rn;
+	blk.body = head.next;
+	return blk;
+}
+
 fn parse_stmt_inner(t **Token) *Node {
 	var p i64 = (*t).pos;
 
@@ -1499,6 +2047,37 @@ fn parse_stmt_inner(t **Token) *Node {
 
 	if (tok_eq(*t, "go") && (*t).next.kind == TK_IDENT) {
 		return parse_spawn_like(t, p, "go", "go");
+	}
+
+	// `select { case <-ch: ... case ch <- v: ... default: ... }` desugars
+	// to a polling loop over chan_try_recv/chan_try_send; see parse_select.
+	if (tok_eq(*t, "select") && tok_eq((*t).next, "{")) {
+		return parse_select(t, p);
+	}
+
+	// `yield v;` inside a generator function (return type *Gen(T)) becomes
+	// gen_yield(_$g, v); the rewrite to the hidden coroutine body happens
+	// in parse_generator_rewrite after the body is parsed. Anywhere else it
+	// is an error, not an expression: `yield` is reserved in statement
+	// position.
+	if (tok_consume(t, "yield")) {
+		if (cur_gen_ret as i64 == 0) {
+			error_at(p, "'yield' outside a generator function (its return type must be *Gen(T))");
+		}
+		gen_yields_seen = true;
+		if (gen_g_var as i64 == 0) { gen_g_var = declare_var("_$g", cur_gen_ret, p); }
+		var n *Node = new_node(ND_EXPRSTMT, p);
+		var c *Node = new_node(ND_CALL, p);
+		c.name = "gen_yield";
+		var gv *Node = new_node(ND_VAR, p);
+		gv.varp = gen_g_var;
+		c.args = gv;
+		var v *Node = parse_assign(t);
+		gv.next = v;
+		c.nargs = 2;
+		n.lhs = c;
+		tok_expect(t, ";");
+		return n;
 	}
 
 	if (tok_consume(t, "return")) {
@@ -1561,6 +2140,56 @@ fn parse_stmt_inner(t **Token) *Node {
 			*t = (*t).next.next;
 			var lo *Node = parse_assign(t);
 			if (!tok_consume(t, "..")) {
+				// `for x in <gen>`: pull values off a generator with
+				// while (gen_next(&g, &x)) instead of indexing. The
+				// expression is hoisted like any other collection, the
+				// loop variable is a plain `var x T;` gen_next writes
+				// through, and the call in the condition both advances
+				// the generator and ends the loop when it is done.
+				var gc *Node = lo;
+				add_type(gc);
+				var elem *Type = gen_elem_of(gc.ty);
+				if (elem as i64 != 0) {
+					if (gc.ty.kind != TY_PTR) {
+						error_at(np, "for-in over a generator needs a *Gen(T); a Gen(T) value is a snapshot and cannot drive the coroutine");
+					}
+					if (gc.kind != ND_VAR) {
+						var cv *Var = declare_var("_$c", gc.ty, np);
+						var clhs *Node = new_node(ND_VAR, np);
+						clhs.varp = cv;
+						var cin *Node = new_node(ND_EXPRSTMT, np);
+						cin.lhs = bin_node(ND_ASSIGN, clhs, gc, np);
+						var cr *Node = new_node(ND_VAR, np);
+						cr.varp = cv;
+						n.init = cin;
+						gc = cr;
+					}
+					var v *Var = declare_var(name, elem, np);
+					var vz *Node = new_node(ND_ZERO, np);
+					vz.varp = v;
+					var zstmt *Node = new_node(ND_EXPRSTMT, np);
+					zstmt.lhs = vz;
+					if (n.init as i64 == 0) { n.init = zstmt; }
+					else {
+						var it *Node = n.init;
+						while (it.next as i64 != 0) { it = it.next; }
+						it.next = zstmt;
+					}
+					var gn *Node = new_node(ND_CALL, np);
+					gn.name = "gen_next";
+					var g1 *Node = gc;
+					var g2 *Node = new_node(ND_ADDR, np);
+					var xv *Node = new_node(ND_VAR, np);
+					xv.varp = v;
+					g2.lhs = xv;
+					gn.args = g1;
+					g1.next = g2;
+					gn.nargs = 2;
+					n.cond = gn;
+					n.body = stmt_as_body(parse_stmt(t));
+					leave_scope();
+					return n;
+				}
 				// for x in a: iterate by value over an array, a slice or a
 				// string. The index is a hidden local; a collection that is
 				// not a plain variable is evaluated once into a hidden
@@ -2905,6 +3534,14 @@ fn parse_function(t **Token, is_extern bool) *Func {
 	tok_expect(t, ")");
 
 	if (!tok_eq(*t, "{")) { f.ret = parse_type(t); }
+	// A *Gen(T) return type marks a generator candidate: `yield` is legal
+	// only in its body, and the body is rewritten to a coroutine below when
+	// it actually contains one. A Gen-returning function without yields is
+	// an ordinary factory and is left alone.
+	cur_gen_ret = 0 as *Type;
+	if (gen_elem_of(f.ret) as i64 != 0) { cur_gen_ret = f.ret; }
+	gen_yields_seen = false;
+	gen_g_var = 0 as *Var;
 	if (tok_eq(*t, ";")) {
 		// `extern fn f(...) t;` -- a declaration only. A plain function
 		// still has to have a body; a bare prototype needs the extern to
@@ -2915,6 +3552,7 @@ fn parse_function(t **Token, is_extern bool) *Func {
 	} else {
 		var body_start i64 = (*t).pos;
 		f.body = parse_block(t);
+		if (gen_yields_seen) { parse_generator_rewrite(f); }
 		if (f.interpreted || f.dynamic) {
 			interp_synthesize_trampoline(t, f, fn_start, body_start, (*t).pos);
 		}
@@ -2954,6 +3592,14 @@ fn parse_lambda(t **Token, p i64) *Node {
 	// lambda nested inside one still has no environment of its own.
 	var saved_capturing bool = capturing;
 	capturing = false;
+	// A lambda is its own function: `yield` inside one is an error even
+	// when the lambda is nested in a generator body.
+	var saved_gen_ret *Type = cur_gen_ret;
+	var saved_gen_yields bool = gen_yields_seen;
+	var saved_gen_g *Var = gen_g_var;
+	cur_gen_ret = 0 as *Type;
+	gen_yields_seen = false;
+	gen_g_var = 0 as *Var;
 	tok_expect(t, "(");
 	var nparams int = 0;
 	var rwords int = 0;
@@ -2981,6 +3627,9 @@ fn parse_lambda(t **Token, p i64) *Node {
 	leave_scope();
 	lambda_scope = saved_lscope;
 	capturing = saved_capturing;
+	cur_gen_ret = saved_gen_ret;
+	gen_yields_seen = saved_gen_yields;
+	gen_g_var = saved_gen_g;
 	cur_func = saved_func;
 	type_set_fn(saved_func);
 
@@ -3031,6 +3680,13 @@ fn parse_typed_block(t **Token, p i64, ty *Type) *Node {
 	cap_n = 0;
 	cap_rwords = 0;
 	cap_stack_slot = 0;
+	// A typed block is its own function: `yield` inside one is an error.
+	var saved_gen_ret *Type = cur_gen_ret;
+	var saved_gen_yields bool = gen_yields_seen;
+	var saved_gen_g *Var = gen_g_var;
+	cur_gen_ret = 0 as *Type;
+	gen_yields_seen = false;
+	gen_g_var = 0 as *Var;
 
 	f.body = parse_block(t);
 	f.nparams = cap_n;
@@ -3045,6 +3701,9 @@ fn parse_typed_block(t **Token, p i64, ty *Type) *Node {
 	cap_n = saved_cap_n;
 	cap_rwords = saved_cap_rwords;
 	cap_stack_slot = saved_cap_stack_slot;
+	cur_gen_ret = saved_gen_ret;
+	gen_yields_seen = saved_gen_yields;
+	gen_g_var = saved_gen_g;
 	cur_func = saved_func;
 	type_set_fn(saved_func);
 

@@ -170,6 +170,7 @@ std/list.qela      growable pointer array
 std/map.qela       str -> pointer hash table, deterministic iteration
 std/coro.qela      coroutines on their own stacks
 std/chan.qela      Chan(T), buffered channels of any element type
+std/gen.qela       Gen(T): generator coroutines behind `yield` and `for x in gen()`
 std/gc.qela        conservative mark-sweep collector, cross-thread stop-the-world
 std/thread.qela    a pool of real OS threads, go()/thread_pool_init
 std/heap.qela      K&R malloc/free/realloc on its own mmap regions
