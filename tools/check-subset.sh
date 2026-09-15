@@ -17,7 +17,13 @@ strip() {
 # The subset binds whatever stage1 is built from: srcql/ plus the std modules it
 # imports, directly or through another. The rest of std/ is compiled by stage1
 # itself and may use the whole language.
-boot_std=$(grep -ho 'import "\.\./std/[A-Za-z_0-9]*\.qela"' srcql/*.qela |
+#
+# srcql/interp.qela is the one exception in srcql/: tools/bootstrap.sh drops it
+# from the stage0 step with -D BOOTSTRAP=1, so no stage0 ever sees it and it may
+# use the whole language. Its imports must not drag std modules into the subset
+# either, so it is filtered out here and skipped by every check below.
+boot_std=$(grep -ho 'import "\.\./std/[A-Za-z_0-9]*\.qela"' \
+	$(ls srcql/*.qela | grep -v '^srcql/interp\.qela$') |
 	sed 's|.*/std/||;s|\.qela"||' | sort -u | tr '\n' ' ')
 changed=1
 while [ "$changed" = 1 ]; do
@@ -36,6 +42,7 @@ done
 
 in_bootstrap() {
 	case "$1" in
+	srcql/interp.qela) return 1 ;;
 	srcql/*) return 0 ;;
 	esac
 	case " $boot_std " in
@@ -65,6 +72,14 @@ for f in srcql/*.qela std/*.qela; do
 	# std/sys.qela's own already-wrapped syscalls. Not stage1 code calling
 	# them directly, so it is exempt like std/* is.
 	srcql/std_blob.qela) ;;
+	# Stage1-only, so asm and assert/panic (both stage0 limitations) are its
+	# to use. The syscall rule is about layering rather than stage0, so it
+	# still applies.
+	srcql/interp.qela)
+		if strip "$f" | grep -qE '(^|[^_[:alnum:]])syscall *\('; then
+			report "$f:" "raw syscall, wrap it in std/sys.qela"
+		fi
+		;;
 	*)
 		if strip "$f" | grep -qE '(^|[^_[:alnum:]])syscall *\('; then
 			report "$f:" "raw syscall, wrap it in std/sys.qela"
