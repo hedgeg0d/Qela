@@ -5506,8 +5506,12 @@ fn parse(tok *Token) *Unit {
 	// callee in the list, and the clone needs the callee's types.
 	f = head.next;
 	while (f as i64 != 0) {
+		if (f.nct == 0) { inline_func(f); }
+		f = f.next;
+	}
+	f = head.next;
+	while (f as i64 != 0) {
 		if (f.nct == 0) {
-			inline_func(f);
 			opt_func(f);
 			elide_bounds(f);
 			regalloc(f);

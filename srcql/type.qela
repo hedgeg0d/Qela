@@ -2860,18 +2860,10 @@ fn inline_site(f *Func, n *Node) bool {
 		if (p.by_ref || is_aggregate(p.ty) || p.default as i64 != 0) { return false; }
 		i = i + 1;
 	}
-	if (callee.inlinable == 0) { return false; }
-	var shape int;
-	if (callee.inlinable == 1) {
-		shape = 1;
-		if (callee.ret.kind == TY_VOID) { shape = 0; }
-	} else {
-		shape = inline_shape(callee);
-		if (shape < 0) { callee.inlinable = 0; return false; }
-		if (shape == 1 && !inline_flow_free(callee)) { callee.inlinable = 0; return false; }
-		if (shape == 0 && !inline_void_ok(callee)) { callee.inlinable = 0; return false; }
-		callee.inlinable = 1;
-	}
+	var shape int = inline_shape(callee);
+	if (shape < 0) { return false; }
+	if (shape == 1 && !inline_flow_free(callee)) { return false; }
+	if (shape == 0 && !inline_void_ok(callee)) { return false; }
 
 	var an [3]*Node;
 	var na int = 0;
