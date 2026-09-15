@@ -279,6 +279,44 @@ fn ip_layout(u *Unit, write bool) {
 	ip_lay_align(16);
 }
 
+fn ip_repl_layout_var(v *Var) {
+	if (v.extern && !v.has_init) {
+		error_at(v.pos, "interpreter: an extern global has no definition to run against");
+	}
+	ip_lay_align(v.ty.align as i64);
+	v.data_off = ip_lay;
+	ip_memzero(ip_data + ip_lay, v.ty.size as i64);
+	if (v.init != 0) {
+		var init i64 = v.init;
+		if (v.ty.kind == TY_FLOAT && v.ty.size == 4) {
+			init = ip_bits32(ip_f64(init) as f32);
+		}
+		ip_store(ip_data + ip_lay, v.ty, init);
+	}
+	ip_lay = ip_lay + (v.ty.size as i64);
+}
+
+fn ip_repl_layout_globals(head *Var, stop *Var) {
+	if (head as i64 == 0 || head as i64 == stop as i64) { return; }
+	ip_repl_layout_globals(head.next, stop);
+	ip_repl_layout_var(head);
+}
+
+fn ip_repl_layout_strs(s *StrLit) {
+	while (s as i64 != 0) {
+		var bytes i64 = ip_lay;
+		ip_memcpy(ip_data + bytes, s.s.ptr as i64, s.s.len);
+		ip_store(ip_data + bytes + s.s.len, ty_u8, 0);
+		ip_lay = ip_lay + s.s.len + 1;
+		ip_lay_align(8);
+		s.off = ip_data + ip_lay;
+		ip_st64(ip_data + ip_lay, ip_data + bytes);
+		ip_st64(ip_data + ip_lay + 8, s.s.len);
+		ip_lay = ip_lay + 16;
+		s = s.next;
+	}
+}
+
 // ── expressions ──
 
 fn ip_addr(n *Node) i64 {
