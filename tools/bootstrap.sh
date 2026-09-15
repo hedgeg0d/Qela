@@ -331,20 +331,34 @@ step "eval var: host globals readable and writable from eval'd source"
 cat > "$tmp2/evalvar.qela" <<'EOF'
 import "std/eval.qela";
 import "std/io.qela";
+struct P { x i64, y i64 }
 eval var price i64 = 100;
+eval var tag str;
+eval var ratio f64;
+eval var p P;
 var secret i64 = 12345;
 fn main() int {
+	tag = "hi";
+	ratio = 1.5;
+	p = P{x: 3, y: 4};
 	var a i64 = eval("price * 2");
 	var b i64 = eval("secret");
 	eval("price = price + 50;");
-	write_str(STDOUT, "a=${a} b=${b} price=${price}\n");
+	var tl i64 = eval("tag.len");
+	var rm i64 = eval("ratio * 2.0");
+	var px i64 = eval("p.x + p.y");
+	eval("tag = \"yo!\";");
+	eval("ratio = ratio + 0.5;");
+	eval("p.x = 10;");
+	eval("p = P{x: 1, y: 2};");
+	write_str(STDOUT, "a=${a} b=${b} price=${price} tl=${tl} rm=${rm} px=${px} tag=${tag} ratio=${ratio} p=${p.x},${p.y}\n");
 	return 0;
 }
 EOF
 ( cd "$tmp2" &&
   "$root/$OUT/s2" evalvar.qela -o evalvar &&
-  [ "$(QELAPATH="$root/$OUT/s2" ./evalvar)" = "a=200 b=0 price=150" ] ) ||
-	fail "eval var does not expose an exported global, leaks an unexported one, or double-applies a write"
+  [ "$(QELAPATH="$root/$OUT/s2" ./evalvar)" = "a=200 b=0 price=150 tl=2 rm=3 px=7 tag=yo! ratio=2.0 p=1,2" ] ) ||
+	fail "eval var does not expose an exported global, leak an unexported one, double-apply a write, or marshal str/float/struct values"
 printf '    ok\n'
 
 
