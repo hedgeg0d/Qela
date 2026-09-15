@@ -42,6 +42,7 @@ void diag_setup(void);
 void diag_reset(void);
 
 Token *lex(Str src, isize base);
+void comptime_def_set(Str name, Str val);
 
 typedef enum {
 	TY_VOID,

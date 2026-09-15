@@ -2973,7 +2973,9 @@ fn codegen(u *Unit, img *Image) {
 
 	var sf *StrFixup = strrefs_head;
 	while (sf as i64 != 0) {
-		buf_patch32(&code, sf.at, ELF_BASE + hdr + code.n + str_off[sf.id]);
+		var sf_addr i64 = ELF_BASE + hdr + code.n + str_off[sf.id];
+		if (opt_target == TARGET_ARM64) { arm64_patch_movz_movk_addr(sf.at, sf_addr); }
+		else { buf_patch32(&code, sf.at, sf_addr); }
 		sf = sf.next;
 	}
 
@@ -3005,7 +3007,8 @@ fn codegen(u *Unit, img *Image) {
 
 	var df *DataFixup = datarefs_head;
 	while (df as i64 != 0) {
-		buf_patch32(&code, df.at, dbase + df.varp.data_off);
+		if (opt_target == TARGET_ARM64) { arm64_patch_movz_movk_addr(df.at, dbase + df.varp.data_off); }
+		else { buf_patch32(&code, df.at, dbase + df.varp.data_off); }
 		df = df.next;
 	}
 

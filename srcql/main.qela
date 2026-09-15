@@ -674,6 +674,7 @@ fn cmd_help() int {
 }
 
 fn main(argc int, argv **u8) int {
+	comptime_set("TARGET", "x86_64");
 	if (argc >= 2 && str_eq(str_from_cstr(argv[1]), "-h")) {
 		return cmd_help();
 	}
@@ -723,6 +724,13 @@ fn main(argc int, argv **u8) int {
 			if (str_eq(t, "x86_64")) { opt_target = TARGET_X86_64; }
 			else if (str_eq(t, "arm64")) { opt_target = TARGET_ARM64; }
 			else { die("error: -target must be x86_64 or arm64"); }
+		} else if (str_eq(a, "-D")) {
+			i = i + 1;
+			if (i == argc) { die("error: -D needs NAME=VALUE"); }
+			var d str = str_from_cstr(argv[i]);
+			var eq i64 = str_find(d, '=');
+			if (eq < 0) { die("error: -D needs NAME=VALUE"); }
+			comptime_set(str_slice(d, 0, eq), str_slice(d, eq + 1, d.len));
 		} else if (str_eq(a, "--no-bounds-checks")) {
 			opt_no_bounds = true;
 		} else if (str_eq(a, "--backtrace")) {
@@ -752,6 +760,8 @@ fn main(argc int, argv **u8) int {
 		}
 		i = i + 1;
 	}
+
+	if (opt_target == TARGET_ARM64) { comptime_set("TARGET", "arm64"); }
 
 	if (!have_input) {
 		eprint("usage: qela <file.qela> [-o output]\n");
