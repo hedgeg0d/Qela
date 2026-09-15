@@ -339,6 +339,8 @@ fn warn_unused(f *Func) {
 	if (f.p3 as i64 != 0 && f.p3.reads == 0) { np_unused = np_unused + 1; }
 	if (f.p4 as i64 != 0 && f.p4.reads == 0) { np_unused = np_unused + 1; }
 	if (f.p5 as i64 != 0 && f.p5.reads == 0) { np_unused = np_unused + 1; }
+	if (f.p6 as i64 != 0 && f.p6.reads == 0) { np_unused = np_unused + 1; }
+	if (f.p7 as i64 != 0 && f.p7.reads == 0) { np_unused = np_unused + 1; }
 	var pe *Var = f.pextra;
 	while (pe as i64 != 0) {
 		if (pe.reads == 0) { np_unused = np_unused + 1; }
@@ -363,6 +365,8 @@ fn warn_unused(f *Func) {
 		if (f.p3 as i64 != 0 && f.p3.reads == 0) { warn_unused_one(f.p3, "parameter"); }
 		if (f.p4 as i64 != 0 && f.p4.reads == 0) { warn_unused_one(f.p4, "parameter"); }
 		if (f.p5 as i64 != 0 && f.p5.reads == 0) { warn_unused_one(f.p5, "parameter"); }
+		if (f.p6 as i64 != 0 && f.p6.reads == 0) { warn_unused_one(f.p6, "parameter"); }
+		if (f.p7 as i64 != 0 && f.p7.reads == 0) { warn_unused_one(f.p7, "parameter"); }
 		pe = f.pextra;
 		while (pe as i64 != 0) {
 			if (pe.reads == 0) { warn_unused_one(pe, "parameter"); }
