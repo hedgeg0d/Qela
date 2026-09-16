@@ -1,0 +1,52 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: 7 8 9 len=3
+// expect-out: 4 5 6 len=3
+// expect-out: 30 40 50 len=3
+// expect-out: 199 200 201
+// expect-out: 4 5 6 3
+// expect-out: 10 2 3
+// A slice of an array literal must point at memory that outlives the
+// creating frame: a return, a struct field and a call argument all carry
+// the descriptor out, so the literal's backing is re-backed onto the arena
+// at the coercion site. The backing stays writable, and literals nested
+// inside a coerced literal are re-backed on their own.
+import "std/io.qela";
+
+struct Rec { id i64, tags []i64 }
+
+fn mk() Rec {
+	var t []i64 = [7,8,9];
+	var r Rec = Rec{id: 5, tags: t};
+	return r;
+}
+
+fn bare() []i64 {
+	return [4,5,6];
+}
+
+var g []i64;
+
+fn take(t []i64) {
+	g = t;
+}
+
+fn main() int {
+	var r Rec = mk();
+	println("${r.tags[0]} ${r.tags[1]} ${r.tags[2]} len=${r.tags.len}");
+	var b []i64 = bare();
+	println("${b[0]} ${b[1]} ${b[2]} len=${b.len}");
+	take([30,40,50]);
+	println("${g[0]} ${g[1]} ${g[2]} len=${g.len}");
+	var s []i64;
+	for i in 0..200 {
+		s = [i, i+1, i+2];
+	}
+	println("${s[0]} ${s[1]} ${s[2]}");
+	var rs []Rec = [Rec{id: 1, tags: [1,2,3]}, Rec{id: 2, tags: [4,5,6]}];
+	println("${rs[1].tags[0]} ${rs[1].tags[1]} ${rs[1].tags[2]} ${rs[0].tags.len}");
+	var m []i64 = [1,2,3];
+	m[0] = 10;
+	println("${m[0]} ${m[1]} ${m[2]}");
+	return 0;
+}
