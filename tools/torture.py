@@ -298,6 +298,11 @@ def exec_stmt(st, env: dict):
     if kind == "asgn":
         set_lvalue(st[1], eval_expr(st[2], env), env)
         return None
+    if kind == "masgn":
+        vals = [eval_expr(r, env) for r in st[2]]
+        for tgt, v in zip(st[1], vals):
+            set_lvalue(tgt, v, env)
+        return None
     if kind == "opasgn":
         old = eval_expr(st[1], env)
         rhs = eval_expr(st[3], env)
@@ -415,6 +420,10 @@ def render_stmt(st, ind: int) -> str:
         return f"{pad}var {st[1]} {st[2]} = {emit(st[3], set())};"
     if kind == "asgn":
         return f"{pad}{emit(st[1], set())} = {emit(st[2], set())};"
+    if kind == "masgn":
+        lhs = ", ".join(emit(t, set()) for t in st[1])
+        rhs = ", ".join(emit(r, set()) for r in st[2])
+        return f"{pad}{lhs} = {rhs};"
     if kind == "opasgn":
         return f"{pad}{emit(st[1], set())} {st[2]}= {emit(st[3], set())};"
     if kind == "ret":
@@ -526,7 +535,9 @@ class Gen:
         self.help = []          # scalar helper names usable in expressions
         self.agg = []           # struct/enum helper names usable in calls
         self.gv = False         # set when a global variable is generated
-        self.floats = floats    # False for stage0, which has no float support
+        self.floats = floats    # False for stage0, which has no float support.
+        # Multi-assignment is stage1-only too (stage0 parses `a, b = 1, 2`
+        # as the comma operator), so it rides the same probe.
 
     def leaf(self, vars_used: set, depth: int = 0) -> tuple:
         # At the depth limit only a plain scalar: calls and indexing would
@@ -544,7 +555,7 @@ class Gen:
             if self.gv and self.rng.random() < 0.5:
                 return ("var", "gv")
             return ("var", self.rng.choice(["v0", "v1", "v2"]))
-        k = self.rng.randint(0, 13)
+        k = self.rng.randint(0, 14)
         if k == 0:
             return ("int", "i64", self.rng.randint(-1000, 1000))
         if k == 1:
@@ -746,14 +757,32 @@ class Gen:
         return e
 
     def stmt(self, allow_flow: bool, depth: int) -> list:
-        k = self.rng.randint(0, 13)
+        k = self.rng.randint(0, 14)
         if k < 3:
             if self.gv and self.rng.random() < 0.3:
                 tgt = ("var", "gv")
             else:
                 tgt = ("var", self.rng.choice(["v0", "v1", "v2"]))
             return [("asgn", tgt, self.expr(0, set()))]
+        if k == 3 and self.floats:
+            # v0, v1 = v1, v0 (or with an expression): a multi-assignment.
+            pool = ["v0", "v1", "v2"]
+            if self.gv: pool.append("gv")
+            p1 = self.rng.choice(pool)
+            p2 = self.rng.choice([p for p in pool if p != p1])
+            t1 = ("var", p1)
+            t2 = ("var", p2)
+            if self.rng.random() < 0.5:
+                return [("masgn", [t1, t2], [t2, t1])]
+            return [("masgn", [t1, t2],
+                     [self.expr(0, set()), self.expr(0, set())])]
         if k == 3:
+            if self.gv and self.rng.random() < 0.3:
+                tgt = ("var", "gv")
+            else:
+                tgt = ("var", self.rng.choice(["v0", "v1", "v2"]))
+            return [("asgn", tgt, self.expr(0, set()))]
+        if k == 4:
             if self.gv and self.rng.random() < 0.3:
                 tgt = ("var", "gv")
             else:
@@ -763,34 +792,34 @@ class Gen:
             if op in ("/", "%"):
                 rhs = ("+", ("&", rhs, ("int", "i64", 15)), ("int", "i64", 1))
             return [("opasgn", tgt, op, rhs)]
-        if k == 4:
+        if k == 5:
             return [("asgn", ("mem", ("var", "p"), self.rng.choice(["x", "y"])),
                      self.expr(0, set()))]
-        if k == 5:
+        if k == 6:
             tgt = self.rng.choice(["p", "w", "b", "n"])
             ty = {"p": "Pair", "w": "Wide", "b": "Bag", "n": "Nest"}[tgt]
             return [("asgn", ("var", tgt), self.struct_value(ty))]
-        if k == 6:
+        if k == 7:
             idx = ("&", self.expr(0, set()), ("int", "i64", 3))
             return [("asgn", ("idx", ("var", "a"), idx), self.expr(0, set()))]
-        if k == 7:
+        if k == 8:
             variant, arity = self.rng.choice([("B", 1), ("C", 2)])
             args = [self.expr(0, set()) for _ in range(arity)]
             return [("asgn", ("var", "e"), ("enumlit", "E", variant, args))]
-        if k == 8:
+        if k == 9:
             # A string or float variable assignment: the value's type
             # must match the target's.
             if self.rng.random() < 0.5 or not self.floats:
                 return [("asgn", ("var", self.rng.choice(["sv0", "sv1"])),
                          self.sexpr(0))]
             return [("asgn", ("var", "fv"), self.fexpr(0))]
-        if k == 9:
+        if k == 10:
             # A nested member write: n.tag or n.p.x.
             if self.rng.random() < 0.5:
                 return [("asgn", ("mem", ("var", "n"), "tag"), self.expr(0, set()))]
             return [("asgn", ("mem", ("mem", ("var", "n"), "p"), "x"),
                      self.expr(0, set()))]
-        if k == 10 and allow_flow and depth < self.md:
+        if k == 12 and allow_flow and depth < self.md:
             body_t = self.stmts(True, depth + 1, self.rng.randint(1, 2))
             body_f = self.stmts(True, depth + 1, self.rng.randint(1, 2))
             if self.rng.random() < 0.3:
