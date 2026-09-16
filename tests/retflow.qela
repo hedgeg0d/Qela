@@ -1,0 +1,22 @@
+// expect-exit: 7
+// A function with a non-void return type must return on every path; the
+// check understands if/else, match (exhaustive by construction) and
+// `while true` (only a break can fall out of it).
+enum E { A, B, }
+
+fn pick(e E) i64 {
+	match (e) {
+		A => { return 3; }
+		B => { return 4; }
+	}
+}
+
+fn spin() i64 {
+	while (true) {
+		return 7;
+	}
+}
+
+fn main() i64 {
+	return pick(E.A) + spin() - 3;
+}
