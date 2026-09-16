@@ -1,0 +1,142 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: bump1->2
+// expect-out: bump12->111
+// expect-out: bump13->7
+// expect-out: d
+// expect-out: in-block 1
+// expect-out: after-block 99
+// expect-out: wb=99
+// expect-out: agg 7 8
+// expect-out: aw=0
+// expect-out: rv=5
+// expect-out: iter 1
+// expect-out: iter 2
+// expect-out: iter 3
+// expect-out: arm1
+// expect-out: m1
+// expect-out: arm2
+// expect-out: m2
+// expect-out: L1
+// expect-out: L2
+// expect-out: rl1
+// expect-out: rl2
+// expect-out: rl2
+// expect-out: ri=2
+// expect-out: g=13
+// Defer corners beyond tests/defer.qela: the deferred statement executes at
+// unwind and reads its variables then -- a call argument is evaluated at
+// unwind, not at registration, and `defer println("L${i}")` before
+// `i = i + 1` prints the post-increment value. Writes through a defer
+// outlive their block for scalars and aggregate fields; loop-body defers
+// unwind per iteration, and a return inside the loop unwinds only the
+// pending ones.
+import "std/io.qela";
+
+var g i64 = 0;
+
+struct P { a i64, b i64 }
+
+fn bump(v i64) i64 {
+	g = g + 1;
+	println("bump${g}->${v}");
+	return v;
+}
+
+fn arg_eval() i64 {
+	var x i64 = 1;
+	defer bump(x);
+	x = 2;
+	return 0;
+}
+
+fn side_effect_order() i64 {
+	defer bump(g + 100);
+	g = g + 10;
+	return 0;
+}
+
+fn ret_expr() i64 {
+	defer println("d");
+	return bump(7);
+}
+
+fn write_after_block() i64 {
+	var x i64 = 1;
+	{
+		defer { x = 99; }
+		println("in-block ${x}");
+	}
+	println("after-block ${x}");
+	return x;
+}
+
+fn agg_write() i64 {
+	var p P;
+	{
+		defer { p.a = 7; p.b = 8; }
+		p.a = 1;
+	}
+	println("agg ${p.a} ${p.b}");
+	return 0;
+}
+
+fn ret_value() i64 {
+	var v i64 = 5;
+	defer { v = 99; }
+	return v;
+}
+
+fn forin_defer() i64 {
+	for x in [1, 2, 3] {
+		defer println("iter ${x}");
+	}
+	return 0;
+}
+
+enum M { One, Two }
+
+fn match_defer(n i64) i64 {
+	var m M;
+	if (n == 1) { m = M.One; } else { m = M.Two; }
+	match (m) {
+		One => { defer println("m1"); println("arm1"); }
+		_ => { defer println("m2"); println("arm2"); }
+	}
+	return 0;
+}
+
+fn loop_slot_reuse() i64 {
+	var i i64 = 0;
+	while (i < 2) {
+		defer println("L${i}");
+		i = i + 1;
+	}
+	return 0;
+}
+
+fn ret_in_loop() i64 {
+	var i i64 = 0;
+	while (i < 5) {
+		defer println("rl${i}");
+		if (i == 2) { return i; }
+		i = i + 1;
+	}
+	return -1;
+}
+
+fn main() int {
+	arg_eval();
+	side_effect_order();
+	ret_expr();
+	println("wb=${write_after_block()}");
+	println("aw=${agg_write()}");
+	println("rv=${ret_value()}");
+	forin_defer();
+	match_defer(1);
+	match_defer(2);
+	loop_slot_reuse();
+	println("ri=${ret_in_loop()}");
+	println("g=${g}");
+	return 0;
+}
