@@ -3437,10 +3437,7 @@ fn layout_tls(globals *Var, funcs *Func) {
 			f = f.next;
 		}
 		if (!has_call) { return; }
-		var align8 i64 = (gdata.n + 7) & ~7;
-		while (gdata.n < align8) { buf_u8(&gdata, 0); }
-		tls_template_off = gdata.n;
-		buf_u64(&gdata, 0);
+		tls_bss_reserve = 8;
 		return;
 	}
 
@@ -3465,6 +3462,23 @@ fn layout_tls(globals *Var, funcs *Func) {
 	}
 	while ((tmpl.n & 7) != 0) { buf_u8(&tmpl, 0); }
 	tls_block_size = tmpl.n;
+	// An all-zero template carries no information the kernel does not
+	// already provide: the segment tail past the file-backed data is
+	// zero-filled. Reserving the block there instead of emitting the bytes
+	// leaves the memory image identical -- and the block tls_init mmaps for
+	// a thread is zeroed anonymous memory anyway, so the copy was zeros over
+	// zeros -- while the file drops tls_block_size bytes. For the compiler
+	// itself that is 41 096 bytes of `tvar ip_coro [256]IpCoro` and friends.
+	var nz bool = false;
+	var ti i64 = 0;
+	while (ti < tmpl.n) {
+		if (tmpl.p[ti] != 0) { nz = true; }
+		ti = ti + 1;
+	}
+	if (!nz) {
+		tls_bss_reserve = tls_block_size;
+		return;
+	}
 	var align8 i64 = (gdata.n + 7) & ~7;
 	while (gdata.n < align8) { buf_u8(&gdata, 0); }
 	tls_template_off = gdata.n;
@@ -3617,6 +3631,15 @@ fn layout_globals(globals *Var, funcs *Func) {
 			v2 = v2.next;
 		}
 		bss = bss + 392;
+	}
+	// A zero TLS template lives here, past the file-backed data: the kernel
+	// zero-fills that tail, so the bytes are the same in memory and the file
+	// does not carry them. Reserved after the PIE table shift above, or the
+	// Android tables would land inside it.
+	if (tls_bss_reserve > 0) {
+		bss = (bss + 7) & ~7;
+		tls_template_off = bss;
+		bss = bss + tls_bss_reserve;
 	}
 	bss_size = bss - gdata.n;
 }
