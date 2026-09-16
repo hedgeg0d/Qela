@@ -1,0 +1,26 @@
+// stage1-only
+// expect-exit: 1
+// expect-out: qela: deadlock, every coroutine is blocked on a channel receive
+// The pool equivalent of deadlock.qela: every goroutine and the main
+// thread wait on a channel nobody will ever send to. The cross-thread
+// registry reports it instead of spinning forever -- every registered
+// thread is parked inside chan_block (or idle), so nothing anywhere can
+// deliver.
+import "std/thread.qela";
+import "std/chan.qela";
+
+var ch Chan(i64);
+
+fn eater(_n i64) i64 {
+	var v i64 = chan_recv(&ch);
+	return v;
+}
+
+fn main() int {
+	chan_init(&ch, 1);
+	thread_pool_init(2);
+	go eater(0);
+	go eater(1);
+	var v i64 = chan_recv(&ch);
+	return v as int;
+}
