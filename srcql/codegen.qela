@@ -2209,7 +2209,13 @@ fn x86_lower_op(op *IrOp) {
 		b1(0x50 + ((r as i64) & 7));
 		return;
 	}
-	if (op.kind == IR_MEMCPY) {
+	if (op.kind == IR_PUSH && op.src0.kind == OP_REG) {
+		var r int = op.src0.reg;
+		if (r >= 8) { b1(0x41); }
+		b1(0x50 + ((r as i64) & 7));
+		return;
+	}
+	if (op.kind == IR_MEMCPY && op.dst.kind == OP_NONE) {
 		// copy_aggregate's protocol, replayed byte for byte: pop the
 		// destination from the staging stack, copy aux bytes from [rax] to
 		// it, leave the destination address in the accumulator. Emitted raw
@@ -2222,6 +2228,16 @@ fn x86_lower_op(op *IrOp) {
 		b1(0x58);                       // pop rax (result = destination)
 		return;
 	}
+	if (op.kind == IR_MEMCPY && op.dst.kind == OP_STACKSLOT) {
+		// gen_ret's ret_slot copy: copy aux bytes from [rax] to the pointer
+		// stored in the slot, then reload the pointer as the return value.
+		mov_reg_reg(RSI, RAX);
+		rbp_mem(0x8b, RDI, -(op.dst.off));
+		mov_reg_imm(RCX, op.aux);
+		b1(0xf3); b1(0xa4);
+		rbp_mem(0x8b, RAX, -(op.dst.off));
+		return;
+	}
 	if (op.kind == IR_POP && op.dst.kind == OP_ACC) {
 		b1(0x58);
 		return;
@@ -2230,6 +2246,12 @@ fn x86_lower_op(op *IrOp) {
 		// pop <op2_reg>: the binop staging register. Emitted raw, not via
 		// pop_reg, so the staging depth stays the frontend's bookkeeping.
 		var r int = op2_reg(op.dst.reg);
+		if (r >= 8) { b1(0x41); }
+		b1(0x58 + ((r as i64) & 7));
+		return;
+	}
+	if (op.kind == IR_POP && op.dst.kind == OP_REG) {
+		var r int = op.dst.reg;
 		if (r >= 8) { b1(0x41); }
 		b1(0x58 + ((r as i64) & 7));
 		return;
@@ -2741,6 +2763,42 @@ fn ir_memcpy_stage(size i64, pos i64) {
 	x86_lower_all();
 }
 
+// gen_ret's sret copy: copy <size> bytes from the address in the accumulator
+// to the pointer stored in the frame slot at <off>, leaving the slot's pointer
+// in the accumulator. No staging traffic.
+fn ir_memcpy_slot(off i64, size i64, pos i64) {
+	var op *IrOp = ir_emit(IR_MEMCPY, pos);
+	op.dst = operand_stackslot(off, 0 as *Type);
+	op.src0 = operand_acc();
+	op.aux = size;
+	x86_lower_all();
+}
+
+fn ir_push_reg(reg int, pos i64) {
+	var op *IrOp = ir_emit(IR_PUSH, pos);
+	op.src0 = operand_reg(reg);
+	depth = depth + 1;
+	x86_lower_all();
+}
+
+fn ir_pop_reg(reg int, pos i64) {
+	var op *IrOp = ir_emit(IR_POP, pos);
+	op.dst = operand_reg(reg);
+	depth = depth - 1;
+	x86_lower_all();
+}
+
+// acc += v, the address-form small add (IR_LEA acc,acc,0).
+fn ir_add_acc_imm(v i64, pos i64) {
+	var op *IrOp = ir_emit(IR_LEA, pos);
+	op.dst = operand_acc();
+	op.dst.off = v;
+	op.src0 = operand_acc();
+	op.src1 = operand_none();
+	op.aux = 1;
+	x86_lower_all();
+}
+
 // mov <op2_reg>, rax -- the frontend's "evaluate into the staging register".
 fn ir_mov_acc_op2(pos i64) {
 	var op *IrOp = ir_emit(IR_MOV, pos);
@@ -3065,15 +3123,16 @@ fn gen_match(n *Node) {
 		if (arm.variant as i64 != 0) { f = arm.variant.fields; }
 		var b *Node = arm.args;
 		while (b as i64 != 0) {
-			lea_local(RDI, b.varp.offset as i64);
-			push_reg(RDI);
-			ld_local(RAX, soff);
-			add_rax_imm(f.offset as i64);
+			ir_lea_op2_slot(b.varp.offset as i64, b.pos);
+			ir_push_op2(b.pos);
+			ir_load_var(n.tmp, type_ptr(ty_i64), b.pos);
+			ir_add_acc_imm(f.offset as i64, b.pos);
 			if (is_aggregate(f.ty)) {
-				copy_aggregate(f.ty.size);
+				ir_memcpy_stage(f.ty.size as i64, b.pos);
 			} else {
-				load(f.ty);
-				store(f.ty);
+				ir_load_acc(f.ty, b.pos);
+				ir_pop_op2(b.pos);
+				ir_store_op2_acc(f.ty, b.pos);
 			}
 			f = f.next;
 			b = b.next;
@@ -3107,10 +3166,7 @@ fn gen_ret(n *Node) {
 		gen_expr(n.lhs);
 		if (is_aggregate(n.lhs.ty)) {
 			if (gen_fn.ret_slot as i64 != 0) {
-				mov_reg_reg(RSI, RAX);
-				ld_local(RDI, gen_fn.ret_slot.offset as i64);
-				copy_rsi_rdi(n.lhs.ty.size);
-				ld_local(RAX, gen_fn.ret_slot.offset as i64);
+				ir_memcpy_slot(gen_fn.ret_slot.offset as i64, n.lhs.ty.size as i64, n.pos);
 			} else {
 				if (n.lhs.ty.size > 8) { ld_at_rax(RDX, 8); }
 				ld_at_rax(RAX, 0);
@@ -3124,11 +3180,11 @@ fn gen_ret(n *Node) {
 		if (n.lhs as i64 != 0 && is_aggregate(n.lhs.ty)) {
 			wide = n.lhs.ty.size > 8 && n.lhs.ty.size <= 16;
 		}
-		push_reg(RAX);
-		if (wide) { push_reg(RDX); }
+		ir_push_acc(n.pos);
+		if (wide) { ir_push_reg(RDX, n.pos); }
 		unwind_to(0);
-		if (wide) { pop_reg(RDX); }
-		pop_reg(RAX);
+		if (wide) { ir_pop_reg(RDX, n.pos); }
+		ir_pop_acc(n.pos);
 	}
 	gen_epilogue(n.pos);
 }
