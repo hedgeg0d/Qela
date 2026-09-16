@@ -3727,6 +3727,8 @@ fn parse_function(t **Token, is_extern bool) *Func {
 	// implicit ret. The body is asm bytes plus bare stores, so the
 	// restrictions below are the frame's absence stated out loud.
 	var naked_fn bool = tok_consume(t, "naked");
+	var interrupt_fn bool = false;
+	if (!naked_fn) { interrupt_fn = tok_consume(t, "interrupt"); }
 	var interpreted_fn bool = false;
 	var dynamic_fn bool = false;
 	var frozen_fn bool = false;
@@ -3753,6 +3755,7 @@ fn parse_function(t **Token, is_extern bool) *Func {
 	f.ret = type_lookup("void");
 	f.pos = p;
 	f.naked = naked_fn;
+	f.interrupt = interrupt_fn;
 	f.interpreted = interpreted_fn;
 	f.dynamic = dynamic_fn;
 	f.frozen = frozen_fn;
@@ -3840,6 +3843,9 @@ fn parse_function(t **Token, is_extern bool) *Func {
 	}
 	f.nparams = nparams;
 	tok_expect(t, ")");
+	if (interrupt_fn && nparams != 0) {
+		error_at(p, "an interrupt handler takes no parameters");
+	}
 
 	if (!tok_eq(*t, "{")) { f.ret = parse_type(t); }
 	// A *Gen(T) return type marks a generator candidate: `yield` is legal
@@ -4174,6 +4180,7 @@ fn parse_typed_block(t **Token, p i64, ty *Type) *Node {
 }
 
 fn parse_struct(t **Token) {
+	var packed bool = tok_consume(t, "packed");
 	tok_expect(t, "struct");
 	var name str = (*t).text;
 	var p i64 = (*t).pos;
@@ -4208,6 +4215,8 @@ fn parse_struct(t **Token) {
 	var mhead Member;
 	var mtail *Member = &mhead;
 	var off int = 0; var align int = 1;
+	var bitpos int = 0;
+	var bitunit *Type = 0 as *Type;
 	while (!tok_eq(*t, "}")) {
 		if (mtail != &mhead) { tok_expect(t, ","); }
 		if (tok_eq(*t, "}")) { break; }
@@ -4215,15 +4224,46 @@ fn parse_struct(t **Token) {
 		var fp i64 = (*t).pos;
 		*t = (*t).next;
 		var fty *Type = parse_type(t);
-		off = (off + fty.align - 1) & ~(fty.align - 1);
 		var m *Member = arena_alloc(sizeof(Member), 8) as *Member;
-		m.name = fnm; m.ty = fty; m.offset = off; m.pos = fp;
+		m.name = fnm; m.ty = fty; m.pos = fp;
+		if (tok_consume(t, ":")) {
+			if (fty.kind != TY_INT) { error_at(fp, "a bit field must have an integer type"); }
+			var w i64 = (*t).val;
+			if ((*t).kind != TK_NUM || w < 1 || w > (fty.size as i64) * 8) {
+				error_at((*t).pos, "a bit field needs a width between 1 and the type's own bits");
+			}
+			*t = (*t).next;
+			if (bitunit as i64 != 0 && same_type(bitunit, fty) &&
+			    bitpos + (w as int) <= fty.size * 8) {
+				m.offset = off - fty.size;
+				m.bitoff = bitpos;
+				m.bitw = w as int;
+				bitpos = bitpos + (w as int);
+			} else {
+				if (!packed) { off = (off + fty.align - 1) & ~(fty.align - 1); }
+				m.offset = off;
+				m.bitoff = 0;
+				m.bitw = w as int;
+				off = off + fty.size;
+				bitunit = fty;
+				bitpos = w as int;
+				if (fty.align > align) { align = fty.align; }
+			}
+			mtail.next = m; mtail = m;
+			continue;
+		}
+		bitunit = 0 as *Type;
+		bitpos = 0;
+		if (!packed) { off = (off + fty.align - 1) & ~(fty.align - 1); }
+		m.offset = off;
 		off = off + fty.size;
 		if (fty.align > align) { align = fty.align; }
 		mtail.next = m; mtail = m;
 	}
 	tok_expect(t, "}");
 	ty.members = mhead.next;
+	ty.packed = packed;
+	if (packed) { align = 1; }
 	ty.align = align;
 	ty.size = (off + align - 1) & ~(align - 1);
 	ntype_vars = saved_tv;
@@ -4510,6 +4550,7 @@ fn parse(tok *Token) *Unit {
 		if (tok_eq(tok, "entry")) { parse_entry(&tok); continue; }
 		if (tok_eq(tok, "macro")) { parse_macro(&tok); continue; }
 		if (tok_eq(tok, "struct")) { parse_struct(&tok); continue; }
+		if (tok_eq(tok, "packed") && tok_eq(tok.next, "struct")) { parse_struct(&tok); continue; }
 		if (tok_eq(tok, "enum")) { parse_enum(&tok); continue; }
 		if (tok_eq(tok, "let") || tok_eq(tok, "var") || tok_eq(tok, "tvar")) { parse_global(&tok, false, false); continue; }
 		if (tok_eq(tok, "extern") && tok.next.kind == TK_KW && str_eq(tok.next.text, "var")) {

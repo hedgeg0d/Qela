@@ -65,6 +65,8 @@ struct Member {
 	name   str,
 	ty     *Type,
 	offset int,
+	bitoff int,
+	bitw   int,
 	pos    i64,
 }
 
@@ -92,6 +94,7 @@ struct Type {
 	tmpl        *Tmpl,
 	ga0         *Type,
 	ga1         *Type,
+	packed      bool,
 }
 
 let ND_NUM       = 0;
@@ -239,6 +242,7 @@ struct Func {
 	nsaved     int,
 	leaf       bool,
 	naked      bool,
+	interrupt  bool,
 	extern     bool,
 	interpreted bool,
 	dynamic    bool,
@@ -299,6 +303,11 @@ struct Unit {
 }
 
 let ELF_BASE   = 0x400000;
+var opt_base i64 = 0x400000;
+
+fn base_is_wide() bool {
+	return opt_base < 0 || opt_base > 4294967295;
+}
 let EHDR_SZ    = 64;
 let PHDR_SZ    = 56;
 let SEG_GAP    = 0x1000;
