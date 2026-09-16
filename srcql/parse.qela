@@ -123,6 +123,19 @@ var gen_seq int = 0;
 var try_head *Node;
 var try_tail *Node;
 
+struct LamCap {
+	next  *LamCap,
+	outer *Var,
+	off   i64,
+}
+
+var lam_cap_head *LamCap;
+var lam_cap_tail *LamCap;
+var lam_cap_size i64 = 8;
+var lam_env *Var;
+var lam_capturing bool = false;
+var need_arena bool = false;
+
 // Generator rewrite state, live only while one function's body is being
 // parsed. cur_gen_ret is the function's return type when it is a generator
 // candidate (*Gen(T) -- set before the body so `yield` can be recognized),
@@ -1031,7 +1044,9 @@ fn parse_primary(t **Token) *Node {
 				s = s.next;
 			}
 			if (!found) {
-				if (capturing) {
+				if (lam_capturing) {
+					return lambda_capture_node(v, p);
+				} else if (capturing) {
 					v = capture_get_or_add(v, p);
 				} else {
 					var mb Buf;
@@ -3853,6 +3868,94 @@ fn parse_function(t **Token, is_extern bool) *Func {
 // variable from an enclosing function is rejected (there is no environment
 // to carry), which also means the return type can be inferred from the
 // body's returns by type.qela.
+fn lambda_capture_node(v *Var, p i64) *Node {
+	var off i64 = -1;
+	var c *LamCap = lam_cap_head;
+	while (c as i64 != 0) {
+		if (c.outer as i64 == v as i64) { off = c.off; }
+		c = c.next;
+	}
+	if (off < 0) {
+		if (lam_env as i64 == 0) {
+			if (cur_func.nparams >= abi_n_arg_regs()) {
+				error_at(p, "a lambda that captures takes one parameter fewer");
+			}
+			lam_env = declare_var("_$env", type_ptr(type_lookup("u8")), p);
+			set_func_param(cur_func, cur_func.nparams, lam_env);
+			cur_func.nparams = cur_func.nparams + 1;
+		}
+		var al i64 = v.ty.align as i64;
+		if (al < 1) { al = 1; }
+		lam_cap_size = (lam_cap_size + al - 1) & ~(al - 1);
+		off = lam_cap_size;
+		lam_cap_size = lam_cap_size + v.ty.size as i64;
+		var nc *LamCap = arena_alloc(sizeof(LamCap), 8) as *LamCap;
+		nc.outer = v;
+		nc.off = off;
+		if (lam_cap_head as i64 == 0) { lam_cap_head = nc; } else { lam_cap_tail.next = nc; }
+		lam_cap_tail = nc;
+	}
+	var ev *Node = new_node(ND_VAR, p);
+	ev.varp = lam_env;
+	var add *Node = bin_node(ND_ADD, ev, num_node(off, p), p);
+	var cst *Node = new_node(ND_CAST, p);
+	cst.lhs = add;
+	cst.ty = type_ptr(v.ty);
+	var dr *Node = new_node(ND_DEREF, p);
+	dr.lhs = cst;
+	return dr;
+}
+
+fn lambda_env_build(name str, p i64) *Node {
+	need_arena = true;
+	var cb Buf;
+	fmt_str(&cb, "_$clo");
+	fmt_i64(&cb, lambda_seq as i64);
+	var clo *Var = declare_var(buf_str(&cb), type_ptr(type_lookup("u8")), p);
+
+	var cl0 *Node = new_node(ND_VAR, p);
+	cl0.varp = clo;
+	var alloc *Node = new_node(ND_CALL, p);
+	alloc.name = "arena_alloc";
+	alloc.args = num_node(lam_cap_size, p);
+	alloc.args.next = num_node(8, p);
+	alloc.nargs = 2;
+	var chain *Node = bin_node(ND_ASSIGN, cl0, alloc, p);
+
+	var fa *Node = new_node(ND_FUNCADDR, p);
+	fa.name = name;
+	chain = bin_node(ND_COMMA, chain, lambda_env_store(clo, 0, type_lookup("i64"), fa, p), p);
+
+	var c *LamCap = lam_cap_head;
+	while (c as i64 != 0) {
+		var src *Node = new_node(ND_VAR, p);
+		src.varp = c.outer;
+		chain = bin_node(ND_COMMA, chain, lambda_env_store(clo, c.off, c.outer.ty, src, p), p);
+		c = c.next;
+	}
+
+	var cl1 *Node = new_node(ND_VAR, p);
+	cl1.varp = clo;
+	var iv *Node = new_node(ND_CAST, p);
+	iv.lhs = cl1;
+	iv.ty = type_lookup("i64");
+	var tagged *Node = bin_node(ND_BITOR, iv, num_node(1, p), p);
+	return bin_node(ND_COMMA, chain, tagged, p);
+}
+
+fn lambda_env_store(clo *Var, off i64, ty *Type, val *Node, p i64) *Node {
+	var cv *Node = new_node(ND_VAR, p);
+	cv.varp = clo;
+	var base *Node = cv;
+	if (off != 0) { base = bin_node(ND_ADD, cv, num_node(off, p), p); }
+	var cst *Node = new_node(ND_CAST, p);
+	cst.lhs = base;
+	cst.ty = type_ptr(ty);
+	var dr *Node = new_node(ND_DEREF, p);
+	dr.lhs = cst;
+	return bin_node(ND_ASSIGN, dr, val, p);
+}
+
 fn parse_lambda(t **Token, p i64) *Node {
 	var b Buf;
 	fmt_str(&b, "_$lambda");
@@ -3875,6 +3978,16 @@ fn parse_lambda(t **Token, p i64) *Node {
 	// lambda nested inside one still has no environment of its own.
 	var saved_capturing bool = capturing;
 	capturing = false;
+	var saved_lam_cap bool = lam_capturing;
+	var saved_cap_head *LamCap = lam_cap_head;
+	var saved_cap_tail *LamCap = lam_cap_tail;
+	var saved_cap_size i64 = lam_cap_size;
+	var saved_env *Var = lam_env;
+	lam_capturing = true;
+	lam_cap_head = 0 as *LamCap;
+	lam_cap_tail = 0 as *LamCap;
+	lam_cap_size = 8;
+	lam_env = 0 as *Var;
 	// A lambda is its own function: `yield` inside one is an error even
 	// when the lambda is nested in a generator body.
 	var saved_gen_ret *Type = cur_gen_ret;
@@ -3917,6 +4030,37 @@ fn parse_lambda(t **Token, p i64) *Node {
 	type_set_fn(saved_func);
 
 	add_func(f);
+
+	var caps *LamCap = lam_cap_head;
+	lam_capturing = saved_lam_cap;
+	lam_cap_head = saved_cap_head;
+	lam_cap_tail = saved_cap_tail;
+	var size i64 = lam_cap_size;
+	lam_cap_size = saved_cap_size;
+	lam_env = saved_env;
+
+	if (caps as i64 != 0) {
+		var saved2 *LamCap = lam_cap_head;
+		var saved2t *LamCap = lam_cap_tail;
+		var saved2s i64 = lam_cap_size;
+		lam_cap_head = caps;
+		lam_cap_size = size;
+		var built *Node = lambda_env_build(name, p);
+		lam_cap_head = saved2;
+		lam_cap_tail = saved2t;
+		lam_cap_size = saved2s;
+		if (f.ret as i64 != 0) {
+			var full int = f.nparams;
+			f.nparams = nparams;
+			var fty *Type = func_type_of(f);
+			f.nparams = full;
+			var cst *Node = new_node(ND_CAST, p);
+			cst.lhs = built;
+			cst.ty = fty;
+			return cst;
+		}
+		return built;
+	}
 
 	var n *Node = new_node(ND_FUNCADDR, p);
 	n.name = name;
@@ -4339,6 +4483,10 @@ fn parse(tok *Token) *Unit {
 		if (need_dyn) {
 			need_dyn = false;
 			tok = splice_import(tok, "std/dyn.qela", tok.pos);
+		}
+		if (need_arena) {
+			need_arena = false;
+			tok = splice_import(tok, "std/arena.qela", tok.pos);
 		}
 		if (need_interp) {
 			need_interp = false;

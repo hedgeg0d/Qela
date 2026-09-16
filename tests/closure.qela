@@ -1,0 +1,65 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: 15 11
+// expect-out: hi bob
+// expect-out: 15
+// expect-out: 6 10
+// expect-out: 33
+// expect-out: 12
+// expect-out: 101
+// expect-out: abc!
+// expect-out: [5, 4, 3, 2, 1]
+import "std/io.qela";
+import "std/sortcmp.qela";
+
+fn apply(f fn(i64) i64, x i64) i64 { return f(x); }
+
+fn make_adder(n i64) fn(i64) i64 {
+	return fn (x i64) i64 { return x + n; };
+}
+
+struct P { x i64, y i64 }
+
+fn main() int {
+	var k i64 = 10;
+	var add_k fn(i64) i64 = fn (x i64) i64 { return x + k; };
+	println("${add_k(5)} ${apply(add_k, 1)}");
+	var name str = "bob";
+	var greet fn() str = fn () str { return "hi ${name}"; };
+	println(greet());
+	k = 100;
+	println("${add_k(5)}");
+
+	var a5 = make_adder(5);
+	var a9 = make_adder(9);
+	println("${a5(1)} ${a9(1)}");
+
+	var i i64 = 0;
+	var total i64 = 0;
+	while (i < 3) {
+		var f = make_adder(i * 10);
+		total = total + f(1);
+		i = i + 1;
+	}
+	println("${total}");
+
+	var p P;
+	p.x = 3; p.y = 4;
+	var area = fn () i64 { return p.x * p.y; };
+	println("${area()}");
+
+	var base i64 = 100;
+	var outer = fn (x i64) i64 { return x + base; };
+	println("${apply(outer, 1)}");
+
+	var s str = "abc";
+	var shout = fn () str { return "${s}!"; };
+	println(shout());
+
+	var arr [5]i64 = [5, 1, 4, 2, 3];
+	var sl []i64 = arr[0..5];
+	var desc bool = true;
+	sort_cmp(sl, 0, 4, fn (x i64, y i64) bool { if (desc) { return x > y; } return x < y; });
+	println("${sl}");
+	return 0;
+}
