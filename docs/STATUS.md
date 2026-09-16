@@ -829,6 +829,24 @@ both targets, the unused x86 tail always zero and harmless to scan) instead
 of chasing frame layouts. The full writeup is above. RISC-V is
 not started.
 
+**Verified on real ARM64 hardware, not just qemu (2026-08-06).** Four bugs
+qemu-aarch64's user-mode emulation never exposed, found running on an actual
+ARMv9 phone (Termux + proot-distro, since stock Android refuses to exec a
+non-PIE ELF at all): `LDAR`/`STXR` had swapped acquire-release encoding bits,
+`atomic_cas`/`atomic_add`'s retry branch targeted a stale address (a lazy-IR-
+flush ordering bug -- harmless under qemu, which never spuriously fails
+`STXR`, but real hardware does even without contention), the coroutine
+switch stub carried a bogus x86-derived SP realignment that actually broke
+AArch64's real 16-byte call-boundary alignment, and its trampoline popped
+six words one at a time -- which drops SP off that alignment for every pop
+after the first, and AArch64 faults on that unconditionally. All fixed;
+this file records the full writeup and the `gdbserver`-inside-`proot`
+technique that root-caused the last two. Re-verified end to end on the real
+device: self-hosting fixed point (`S2_arm64 == S3_arm64`), the full corpus
+3x with no flakiness, and a round trip where the *phone's own* ARM64-hosted
+compiler cross-compiled the compiler back to x86-64 -- byte-identical to the
+native x86 build, passing the x86 corpus here.
+
 ### 3. Smaller
 
 - `tools/torture.py` now generates full programs — calls with up to four
