@@ -3006,10 +3006,30 @@ fn f64_to_f32_bits(b i64) i64 {
 }
 
 
+// A call of tls_init anywhere in the tree? The template has to exist for
+// the stub to copy, even when no tvar is declared -- the no-tvar case
+// needs the lone self-pointer slot (see layout_tls).
+fn tree_calls_tls_init(n *Node) bool {
+	while (n as i64 != 0) {
+		if (n.kind == ND_CALL && str_eq(n.name, "tls_init")) { return true; }
+		if (tree_calls_tls_init(n.lhs)) { return true; }
+		if (tree_calls_tls_init(n.rhs)) { return true; }
+		if (tree_calls_tls_init(n.cond)) { return true; }
+		if (tree_calls_tls_init(n.then)) { return true; }
+		if (tree_calls_tls_init(n.els)) { return true; }
+		if (tree_calls_tls_init(n.init)) { return true; }
+		if (tree_calls_tls_init(n.step)) { return true; }
+		if (tree_calls_tls_init(n.body)) { return true; }
+		if (tree_calls_tls_init(n.args)) { return true; }
+		n = n.next;
+	}
+	return false;
+}
+
 // tvar bytes never live in .data/.bss: they're a template copied into a
 // fresh mmap'd block per thread. Offset 0 is reserved for the self-pointer
 // tls_init writes at runtime; real tvars start at 8.
-fn layout_tls(globals *Var) {
+fn layout_tls(globals *Var, funcs *Func) {
 	var any bool = false;
 	var v0 *Var = globals;
 	while (v0 as i64 != 0) {
@@ -3021,7 +3041,24 @@ fn layout_tls(globals *Var) {
 	// need at all (that's a whole extra program header, 56 bytes, for
 	// zero benefit). tls_block_size stays at its default 8 and tls_init
 	// is never emitted -- see the tls_block_size > 8 check in emit_code.
-	if (!any) { return; }
+	// The one exception is a program that calls tls_init anyway: the stub
+	// copies tls_block_size bytes from the template, so the lone
+	// self-pointer word has to exist or the copy reads past the mapped
+	// image.
+	if (!any) {
+		var has_call bool = false;
+		var f *Func = funcs;
+		while (f as i64 != 0 && !has_call) {
+			if (f.body as i64 != 0 && tree_calls_tls_init(f.body)) { has_call = true; }
+			f = f.next;
+		}
+		if (!has_call) { return; }
+		var align8 i64 = (gdata.n + 7) & ~7;
+		while (gdata.n < align8) { buf_u8(&gdata, 0); }
+		tls_template_off = gdata.n;
+		buf_u64(&gdata, 0);
+		return;
+	}
 
 	var tmpl Buf;
 	buf_u64(&tmpl, 0);
@@ -3119,8 +3156,8 @@ fn embed_patch(dbase i64) {
 	}
 }
 
-fn layout_globals(globals *Var) {
-	layout_tls(globals);
+fn layout_globals(globals *Var, funcs *Func) {
+	layout_tls(globals, funcs);
 	var v *Var = globals;
 	while (v as i64 != 0) {
 		if (v.is_tls || (!v.reachable && !opt_object)) { v = v.next; continue; }
@@ -3589,7 +3626,7 @@ fn codegen(u *Unit, img *Image) {
 	}
 
 	embed_prepare();
-	layout_globals(u.globals);
+	layout_globals(u.globals, u.funcs);
 	embed_append();
 	if (opt_object) {
 		// `-c`: no entry, no panic stub, no gc roots. Code plus the
