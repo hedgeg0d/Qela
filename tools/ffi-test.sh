@@ -40,6 +40,8 @@ int64_t c_big_sum(Big b) { return b.a + b.b + b.c + b.d; }
 Big c_big_inc(Big b) { b.a = b.a + 100; return b; }
 Big c_six_ret(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, int64_t f, int64_t g) { Big r = {a, b, c, 0}; r.d = d + e + f + g; return r; }
 int64_t c_spill7(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, int64_t f, int64_t g, int64_t h, int64_t i) { return a + b + c + d + e + f + g + h + i; }
+typedef struct { uint8_t utf8[5]; uint8_t reserved[3]; uint32_t modifiers; } CInput;
+void c_fill_input(void *raw) { CInput *input = raw; input->utf8[0] = 'O'; input->utf8[1] = 'K'; input->utf8[2] = 0; input->modifiers = 0x24; }
 int64_t c_big_early(Big b, int64_t x, int64_t y, int64_t z, int64_t w) { return b.a + b.b + b.c + b.d + x + y + z + w; }
 int64_t c_pair_after5(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, Pair p) { return a + b + c + d + e + p.a + p.b; }
 int64_t c_six_one(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, int64_t f, double x, int64_t g) { return a + b + c + d + e + f + g + (int64_t)x; }
@@ -75,6 +77,7 @@ extern fn c_v2d_add(a Vec2d, b Vec2d) Vec2d;
 extern fn c_call_qela_v2d() Vec2d;
 extern var c_global i64;
 struct Big { a i64, b i64, c i64, d i64 }
+struct CInput { utf8 [5]u8, reserved [3]u8, modifiers u32 }
 
 extern fn c_big_sum(b Big) i64;
 extern fn c_big_inc(b Big) Big;
@@ -86,6 +89,7 @@ extern fn c_six_one(a i64, b i64, c i64, d i64, e i64, f i64, x f64, g i64) i64;
 extern fn c_fsum9(a f32, b f32, c f32, d f32, e f32, f f32, g f32, h f32, i f32) f64;
 extern fn c_call_qela_big() i64;
 extern fn c_call_qela_spill() i64;
+extern fn c_fill_input(raw *u8) void;
 extern fn qela_big_sum(b Big) Big {
 	return b;
 }
@@ -156,6 +160,10 @@ fn main() int {
 	// C calling Qela with the same shapes (a Big by value both ways).
 	if (c_call_qela_big() != 777010) { fails = fails + 1; }
 	if (c_call_qela_spill() != 45) { fails = fails + 1; }
+	var raw [16]u8;
+	c_fill_input(&raw[0]);
+	var input *CInput = &raw[0] as *CInput;
+	if (input.modifiers != 0x24 || input.utf8[0] != 'O' || input.utf8[1] != 'K') { fails = fails + 1; }
 	return fails as int;
 }
 EOF
