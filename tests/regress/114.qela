@@ -1,0 +1,81 @@
+// expect-exit: 0
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = -37;
+fn mix5(a int, b int, c int, d int, e int) int { return a + b - c + d - e; }
+fn sub2(a int, b int) int { return a - b; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn nest_sum(n Nest) int { return n.tag + n.p.x + n.p.y; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 1;
+    var v1 int = 7;
+    var v2 int = 6;
+    var sv0 str = "hello";
+    var sv1 str = "42";
+    var fv double = 10.5;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    e = E.C((-(((127 != 255) == (-1 & 776)) as i16)), gv);
+    v0 /= (((-(((!true) > false) == 'd')) & 15) + 1);
+    p = Pair{x: v2, y: (("abc")[0..3]).len};
+    p.y = mix5(((('1' < 724) as i8) / (((sub2(true, 600) as u8) & 15) + 1)), (!a[((2 > v2) & 3)]), ((("qwerty")[2..4])[0] & pair_sum(Pair{x: (!-334), y: (-641 != true)})), gv, (!(!(v1 * 3))));
+    v2 = v2;
+    match (e) {
+        A => {
+            return (!(-((3.75 as i64) << (-462))));
+        }
+        B(mb0) => {
+            return ((((false as u32) > (a[('0' & 3)] - (!98))) << ((('3' as u16) / (((("abc")[0..3]).len & 15) + 1)) as i8)) + mb0);
+        }
+        C(mb0, mb1) => {
+            return ((((true < 42) ^ (-952 % ((2 & 15) + 1))) < true) >> ("no").len);
+        }
+    }
+    a[((0.25 as i64) & 3)] = (((("foobar")[2..5])[0..2]).len >= ("hello")[1]);
+    if ((((a[((174 as i32) & 3)] & '1') > (!((1 < gv) + ('c' % ((true & 15) + 1))))) <= (-true))) {
+        b = Bag{p: -1, q: a[((-(sub2(-176, -628) << (gv >= gv))) & 3)], r: (a[((-(2 & false)) & 3)] >= (((false as i16) / ((('\t' & v1) & 15) + 1)) > ((0.125 + fv) as i64))), s: ((((fv as i64) * str_eq(("foobar")[0..4], ("qwerty")[1..5])) >> (('g' <= 'c') - (42 as u16))) - ('f' as i32))};
+        b = Bag{p: (opt_d(D.Some(((3.75 + 0.3) <= fv))) >= (((-88) as i32) < ((0 as i16) != (v2 < 'f')))), q: '0', r: ((("hi").len as double) as i64), s: (!((tag_e(e) - ('0' / ((false & 15) + 1))) << ((10 / (('d' & 15) + 1)) as i8)))};
+    } else {
+        sv0 = sv0;
+        v0 = (-((gv + (("abcd")[0..4])[0]) | gv));
+    }
+    a[(true & 3)] = (!-268);
+    p.y = v0;
+    var ob Buf;
+    fmt_i64(&ob, v1);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return (((((("xyzzy")[1..5])[0..2])[0..2])[0..2])[0..2])[1];
+}

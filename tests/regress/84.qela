@@ -1,0 +1,74 @@
+// expect-exit: 0
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = 1;
+fn min2(a int, b int) int { if (a < b) { return a; } else { return b; } }
+fn add2(a int, b int) int { return a + b; }
+fn twice(n int) int { return n + n; }
+fn fact(n int) int { if (n <= 1) { return 1; } return n * fact(n - 1); }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn nest_sum(n Nest) int { return n.tag + n.p.x + n.p.y; }
+fn wide_swap(w Wide) Wide { return Wide{a: w.b, b: w.a, c: w.c}; }
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 5;
+    var v1 int = 9;
+    var v2 int = 3;
+    var sv0 str = "xyz";
+    var sv1 str = "aa";
+    var fv double = -2.0;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    e = E.B(23);
+    e = E.C(0, ((str_eq(sv0, sv1) as u8) << (-(-701 & (-48 & 114)))));
+    p.y = gv;
+    if ((((a[(pair_sum(p) & 3)] as u8) != (((false < v1) != v2) / ((624 & 15) + 1))) >= (false % (((-((-844 > v0) as i32)) & 15) + 1)))) {
+        w = wide_swap(w);
+        n.p.x = opt_d(D.None);
+    } else {
+        sv0 = sv1;
+    }
+    match (e) {
+        A => {
+            return (nest_sum(n) <= p.x);
+        }
+        B(mb0) => {
+            return (a[((((("42")[0..2])[0..2])[0] << (p.x != (-427 + '1'))) & 3)] & mb0);
+        }
+        C(mb0, mb1) => {
+            return (((((-823 - 552) != (gv as u32)) % (((twice(v2) >> (100 as u16)) & 15) + 1)) % ((p.y & 15) + 1)) ^ mb1);
+        }
+    }
+    b = Bag{p: ((fv / 0.1) as i64), q: (-(-(str_eq((("qwerty")[2..5])[0..2], (("abc")[0..3])[0..2]) == (-804 != gv)))), r: (((fact((true & 15)) >= (-true)) >> ((true > v1) | (sv1)[0])) & 10), s: (!((!str_eq("42", ("abcd")[0..2])) >= v2))};
+    n.tag = p.y;
+    e = E.C(min2((!p.y), (!a[((v0 ^ 42) & 3)])), ((-2.0 < (2.5 * (3.75 / -1.5))) | 'c'));
+    var ob Buf;
+    fmt_i64(&ob, v2);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return (!(((true > v2) << (1 < false)) % ((((324 as u32) as i8) & 15) + 1)));
+}

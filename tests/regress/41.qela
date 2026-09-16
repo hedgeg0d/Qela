@@ -1,0 +1,128 @@
+// expect-exit: 1
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = -31;
+fn sum3(a int, b int, c int) int { return a + b + c; }
+fn max2(a int, b int) int { if (a > b) { return a; } else { return b; } }
+fn mul2(a int, b int) int { return a * b; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn nest_sum(n Nest) int { return n.tag + n.p.x + n.p.y; }
+fn wide_sum(w Wide) int { return w.a + w.b + w.c; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn main() int {
+    var v0 int = 2;
+    var v1 int = 5;
+    var v2 int = 2;
+    var sv0 str = "qwerty";
+    var sv1 str = "aa";
+    var fv double = 1.0;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    if ((((str_eq(("hello")[2..4], (("hello")[1..3])[0..2]) / (((false >> false) & 15) + 1)) == ((str_eq("hi", sv0) + (-833 as i8)) ^ gv)) < ((!(-(true as i16))) <= ((('c' | -954) > (false as i32)) as i16)))) {
+        b = Bag{p: (-455 * ((fv as i64) >= v0)), q: (gv >> (sv1).len), r: ("xyzzy")[0], s: ((mul2((802 <= v2), (("xyz")[0..2])[0]) >> 2) as u32)};
+        return (698 >= ('1' as u8));
+    } else {
+        i1 = 0;
+        while ((i1 < 1)) {
+            i1 = (i1 + 1);
+            i2 = 0;
+            while ((i2 < 2)) {
+                i2 = (i2 + 1);
+                i3 = 0;
+                while ((i3 < 3)) {
+                    i3 = (i3 + 1);
+                    p = Pair{x: ((((sv1).len ^ (1 as u8)) / (((true == (-562 % (('\n' & 15) + 1))) & 15) + 1)) >> (!(!(-false)))), y: (44 & (((sv0)[1] >= (-635 != false)) < nest_sum(n)))};
+                    n.p.x = ((((gv - v2) as u32) as u8) << (((true >= 127) & ('2' as u16)) % (((('\n' <= true) | (779 < gv)) & 15) + 1)));
+                    n = Nest{tag: ((((fv == 3.75) | (("abc")[0..3])[0]) as i8) != a[('c' & 3)]), p: Pair{x: ((gv ^ (("abcd").len as i16)) as u32), y: (-(p.y & ((!v0) < v1)))}};
+                }
+                match (e) {
+                    A => {
+                        return (-(((-872) % (((848 == -601) & 15) + 1)) ^ 0));
+                    }
+                    B(mb0) => {
+                        return (str_eq((((sv1)[0..2])[0..2])[0..2], ("abcd")[1..4]) - mb0);
+                    }
+                    C(mb0, mb1) => {
+                        return ((('3' as double) > (((1.5 - fv) - (true as double)) - ((-1.5 != 1.7) as double))) & mb1);
+                    }
+                }
+                n.tag = (tag_e(e) - (v1 != true));
+            }
+            a[(v2 & 3)] = tag_e(e);
+            v2 = ((((10 as u8) as double) as i64) > (!((false < true) - ("foobar").len)));
+        }
+    }
+    gv = ((("hello")[1..5]).len % ((((-('d' as u32)) >> (('\n' as u32) << v2)) & 15) + 1));
+    v0 = ((((!true) << (!'d')) as double) >= 1.7);
+    if ((v1 < pair_sum(Pair{x: (-(!(-862 >> true))), y: a[(((gv as u8) as i16) & 3)]}))) {
+        v2, v0 = 602, ((str_eq(("hello")[0..3], ("xyzzy")[1..3]) - ((gv + -113) > (1 / ((true & 15) + 1)))) < nest_sum(Nest{tag: ((!(("hello")[1..4])[0]) as u8), p: Pair{x: ((3 as u8) as i16), y: 371}}));
+        e = E.B((sv1)[0]);
+        return gv;
+    } else {
+        n.p.x = str_eq(("foobar")[1..4], "hello");
+    }
+    match (e) {
+        A => {
+            return (("zz")[0..2])[1];
+        }
+        B(mb0) => {
+            return (((fv * fv) as i64) | mb0);
+        }
+        C(mb0, mb1) => {
+            return (sum3(("xyz")[1], (sv1)[0], ((!(--129)) % ((((42 - '3') as i32) & 15) + 1))) + mb1);
+        }
+    }
+    match (e) {
+        A => {
+            return gv;
+        }
+        B(mb0) => {
+            return (((0.1 / 2.0) as i64) > (((v1 * true) / (((gv << false) & 15) + 1)) == ((fv <= fv) << (3 * false))));
+        }
+        C(mb0, mb1) => {
+            return ((-tag_e(e)) | mb1);
+        }
+    }
+    gv = (((false <= ('c' >= 255)) << ((2.5 as i64) <= ('b' as i16))) * 10);
+    match (e) {
+        A => {
+            return (((gv + ('\n' << 'f')) > ((false << 'b') >> (gv ^ '\n'))) / ((a[((("42")[1] + (320 << false)) & 3)] & 15) + 1));
+        }
+        B(mb0) => {
+            return (-a[((!false) & 3)]);
+        }
+        C(mb0, mb1) => {
+            return (str_eq("zz", sv1) - mb1);
+        }
+    }
+    var ob Buf;
+    fmt_i64(&ob, v2);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return pair_sum(Pair{x: (!((!497) % (((100 + false) & 15) + 1))), y: ((gv >= (-v0)) * (('1' ^ -236) | ('c' < 'c')))});
+}

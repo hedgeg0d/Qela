@@ -1,0 +1,65 @@
+// expect-exit: 0
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = -15;
+fn gcd2(a int, b int) int { while (b != 0) { var t int = a % b; a = b; b = t; } return a; }
+fn zero() int { return 3; }
+fn min2(a int, b int) int { if (a < b) { return a; } else { return b; } }
+fn add2(a int, b int) int { return a + b; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn wide_sum(w Wide) int { return w.a + w.b + w.c; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn main() int {
+    var v0 int = 9;
+    var v1 int = 3;
+    var v2 int = 2;
+    var sv0 str = "no";
+    var sv1 str = "zz";
+    var fv double = 100.0;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    gv = (p.y * (-(v1 ^ '0')));
+    e = E.B(('\t' as u8));
+    e = E.C(((((("xyz")[0..2])[0..2])[0..2])[0..2])[0], ((-699 / (((p.y * (-0)) & 15) + 1)) << 'c'));
+    i0 = 0;
+    while ((i0 < 3)) {
+        i0 = (i0 + 1);
+        b = Bag{p: ((("foobar")[3..6]).len < ((("xyzzy")[0..2])[1] % ((((10 << '0') << (263 as i16)) & 15) + 1))), q: ("hello")[0], r: a[((!p.y) & 3)], s: ((-p.x) >> (-((gv as i32) / (((v2 as u8) & 15) + 1))))};
+        e = E.B(((0.125 as i64) | (add2((-319 <= -236), (false as i32)) as i16)));
+    }
+    v1 = 3;
+    v1 %= ((false & 15) + 1);
+    n.tag = ((((728 * false) & ('a' % (('\n' & 15) + 1))) < ((fv / -0.5) as i64)) <= (((-963 as double) >= -1.5) << ((255 % ((gv & 15) + 1)) == v1)));
+    v0 = ((!((100 as u16) as i8)) as i32);
+    fv = -2.0;
+    var ob Buf;
+    fmt_i64(&ob, v2);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return ((961 as u16) << ((-236 as i16) as i8));
+}

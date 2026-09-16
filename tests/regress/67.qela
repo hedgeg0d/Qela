@@ -1,0 +1,67 @@
+// expect-exit: 0
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = -14;
+fn sub2(a int, b int) int { return a - b; }
+fn diff4(a int, b int, c int, d int) int { return a - b - c - d; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn bag_sum(b Bag) int { return b.p + b.q + b.r + b.s; }
+fn wide_swap(w Wide) Wide { return Wide{a: w.b, b: w.a, c: w.c}; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn main() int {
+    var v0 int = 0;
+    var v1 int = 2;
+    var v2 int = 7;
+    var sv0 str = "xyz";
+    var sv1 str = "hello";
+    var fv double = 2.0;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    gv >>= a[((false as i32) & 3)];
+    v1 = ((((3 as i32) > a[(-471 & 3)]) + ("xyz").len) < (((fv / 0.5) + ('f' as double)) as i64));
+    e = E.B((!100));
+    gv = (!(((true == -14) as i32) + gv));
+    i0 = 0;
+    while ((i0 < 4)) {
+        v1 = v1;
+        gv = ((((v0 % (('e' & 15) + 1)) != ('\n' + v1)) & (-11 >= tag_e(e))) % (((sub2((!1), (-276 * gv)) - (-(2 % ((954 & 15) + 1)))) & 15) + 1));
+        a[i0] = ((a[(diff4('0', 255, true, true) & 3)] == ((("abc")[0..2]).len as u16)) + str_eq(("abc")[0..2], sv0));
+        i0 = (i0 + 1);
+    }
+    sv1 = ("xyz")[0..2];
+    p.x = str_eq(sv0, (("hello")[2..4])[0..2]);
+    e = E.C(((-((false < v1) < (v2 + -971))) >> ((a[(0 & 3)] != p.y) != v0)), ((((42 * 117) as double) - fv) == 1.0));
+    a[(sub2((((100.0 as i64) & gv) | v1), diff4(((596 >= -986) % (((v2 as u8) & 15) + 1)), ((-919 ^ 100) | 'a'), a[((-100) & 3)], 232)) & 3)] = (-'3');
+    gv >>= (str_eq("abc", ("abc")[0..3]) as u32);
+    gv = gv;
+    var ob Buf;
+    fmt_i64(&ob, v0);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return (((-p.x) as double) as i64);
+}

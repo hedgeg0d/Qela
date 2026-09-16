@@ -1,0 +1,65 @@
+// expect-exit: 137
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = 14;
+fn mix5(a int, b int, c int, d int, e int) int { return a + b - c + d - e; }
+fn sum3(a int, b int, c int) int { return a + b + c; }
+fn fact(n int) int { if (n <= 1) { return 1; } return n * fact(n - 1); }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn wide_swap(w Wide) Wide { return Wide{a: w.b, b: w.a, c: w.c}; }
+fn wide_sum(w Wide) int { return w.a + w.b + w.c; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn main() int {
+    var v0 int = 4;
+    var v1 int = 9;
+    var v2 int = 7;
+    var sv0 str = "hello";
+    var sv1 str = "foobar";
+    var fv double = 0.1;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    gv = (!fact(((sv1)[0] & 15)));
+    if (((!v0) > (((p.y < ((("xyzzy")[1..5])[0..2]).len) as i32) << (((3 as i8) % (((gv - false) & 15) + 1)) >= ((fv as i64) | 3))))) {
+        e = E.B((-(false - (42 + (false < true)))));
+        e = E.B(p.y);
+    } else {
+        gv = gv;
+        return mix5((v0 as i32), gv, (true as u8), p.y, ("zz")[0]);
+    }
+    v1, v0 = v0, v1;
+    v2, v1 = v1, v2;
+    gv = (((p.x < 501) * sum3(1, (-106 ^ 'f'), (349 < 979))) >= true);
+    b = Bag{p: (((100.0 * (fv / -2.0)) + fv) as i64), q: ('2' as u32), r: ((fv as i64) as u8), s: 42};
+    v0 = ((a[((!v1) & 3)] ^ (('\t' % ((10 & 15) + 1)) <= v1)) | (!v2));
+    n.p.x = (((-(true << 597)) != (false as u8)) > -1);
+    n.p.x = (-787 != ("42")[0]);
+    var ob Buf;
+    fmt_i64(&ob, v2);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return ((((false >= 25) | (596 as u32)) == p.y) ^ ((-(255 <= '2')) <= (('b' & true) >> (-1 * 10))));
+}
