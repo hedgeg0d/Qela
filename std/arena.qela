@@ -13,7 +13,12 @@ fn arena_alloc(size i64, align i64) *u8 {
 	}
 	if (arena_left < pad + size) {
 		var want i64 = size + align + (64 * 1024 * 1024);
-		var r i64 = syscall(9, 0, want, 3, 34, -1, 0);
+		var r i64 = 0;
+		$if (TARGET == "arm64") {
+			r = syscall(222, 0, want, 3, 34, -1, 0);
+		} $else {
+			r = syscall(9, 0, want, 3, 34, -1, 0);
+		}
 		if (r < 0 && r > -4096) { return 0 as *u8; }
 		arena_ptr = r;
 		arena_left = want;
