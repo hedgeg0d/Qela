@@ -101,7 +101,7 @@ fn is_dir(path str) bool {
 	var st Stat;
 	if (sys_stat(cstr(path), &st as *u8) != 0) { return false; }
 	var mode i64 = st.mode;
-	$if (TARGET == "arm64") {
+	$if (TARGET != "x86_64") {
 		mode = st.d2;
 	}
 	return (mode & 0xf000) == 0x4000;

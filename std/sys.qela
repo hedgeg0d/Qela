@@ -23,7 +23,7 @@ let SYS_ARCH_PRCTL = 158;
 let SYS_FUTEX = 202;
 let SYS_SCHED_YIELD = 24;
 
-$if (TARGET == "arm64") {
+$if (TARGET != "x86_64") {
 let SYS_READ_N  = 63;
 let SYS_WRITE_N = 64;
 let SYS_OPENAT_N = 56;
@@ -58,7 +58,7 @@ let FUTEX_WAKE = 1;
 // phase, once there's a per-thread block to point %fs at. arm64 adds
 // CLONE_SYSVSEM(0x40000): qemu user-mode rejects the bare thread set with
 // EINVAL, and real kernels accept both forms.
-$if (TARGET == "arm64") {
+$if (TARGET != "x86_64") {
 let CLONE_THREAD_FLAGS = 331520;
 } $else {
 let CLONE_THREAD_FLAGS = 69376;
@@ -71,56 +71,56 @@ let O_WRITE_NEW   = 577;  // O_WRONLY | O_CREAT | O_TRUNC
 let O_WRITE_APPEND = 1089; // O_WRONLY | O_CREAT | O_APPEND
 
 fn sys_read(fd i64, buf *u8, n i64) i64 {
-	$if (TARGET == "arm64") {
+	$if (TARGET != "x86_64") {
 		return syscall(SYS_READ_N, fd, buf as i64, n);
 	}
 	return syscall(SYS_READ, fd, buf as i64, n);
 }
 
 fn sys_write(fd i64, buf *u8, n i64) i64 {
-	$if (TARGET == "arm64") {
+	$if (TARGET != "x86_64") {
 		return syscall(SYS_WRITE_N, fd, buf as i64, n);
 	}
 	return syscall(SYS_WRITE, fd, buf as i64, n);
 }
 
 fn sys_open_read(path *u8) i64 {
-	$if (TARGET == "arm64") {
+	$if (TARGET != "x86_64") {
 		return syscall(SYS_OPENAT_N, AT_FDCWD, path as i64, 0, 0);
 	}
 	return syscall(SYS_OPEN, path as i64, 0, 0);
 }
 
 fn sys_open_exec(path *u8) i64 {
-	$if (TARGET == "arm64") {
+	$if (TARGET != "x86_64") {
 		return syscall(SYS_OPENAT_N, AT_FDCWD, path as i64, O_WRITE_NEW, 493);
 	}
 	return syscall(SYS_OPEN, path as i64, O_WRITE_NEW, 493);
 }
 
 fn sys_open_append(path *u8) i64 {
-	$if (TARGET == "arm64") {
+	$if (TARGET != "x86_64") {
 		return syscall(SYS_OPENAT_N, AT_FDCWD, path as i64, O_WRITE_APPEND, 493);
 	}
 	return syscall(SYS_OPEN, path as i64, O_WRITE_APPEND, 493);
 }
 
 fn sys_close(fd i64) i64 {
-	$if (TARGET == "arm64") {
+	$if (TARGET != "x86_64") {
 		return syscall(SYS_CLOSE_N, fd, 0, 0);
 	}
 	return syscall(SYS_CLOSE, fd, 0, 0);
 }
 
 fn sys_mmap_anon(n i64) i64 {
-	$if (TARGET == "arm64") {
+	$if (TARGET != "x86_64") {
 		return syscall(SYS_MMAP_N, 0, n, 3, 34, -1, 0);
 	}
 	return syscall(SYS_MMAP, 0, n, 3, 34, -1, 0);
 }
 
 fn sys_munmap(addr i64, n i64) i64 {
-	$if (TARGET == "arm64") {
+	$if (TARGET != "x86_64") {
 		return syscall(SYS_MUNMAP_N, addr, n, 0);
 	}
 	return syscall(SYS_MUNMAP, addr, n, 0);
@@ -131,7 +131,7 @@ fn sys_munmap(addr i64, n i64) i64 {
 // initial stack image itself -- there is no libc clone() wrapper to hide
 // that behind. ARM64 clone() takes the same argument order.
 fn sys_clone(flags i64, stack i64, ptid i64, ctid i64, tls i64) i64 {
-	$if (TARGET == "arm64") {
+	$if (TARGET != "x86_64") {
 		return syscall(SYS_CLONE_N, flags, stack, ptid, ctid, tls);
 	}
 	return syscall(SYS_CLONE, flags, stack, ptid, ctid, tls);
@@ -142,7 +142,7 @@ fn sys_arch_prctl(code i64, addr i64) i64 {
 }
 
 fn sys_futex(uaddr *i64, op i64, val i64, timeout i64) i64 {
-	$if (TARGET == "arm64") {
+	$if (TARGET != "x86_64") {
 		return syscall(SYS_FUTEX_N, uaddr as i64, op, val, timeout, 0, 0);
 	}
 	return syscall(SYS_FUTEX, uaddr as i64, op, val, timeout, 0, 0);
@@ -151,7 +151,7 @@ fn sys_futex(uaddr *i64, op i64, val i64, timeout i64) i64 {
 // Gives up the rest of this thread's timeslice, so a spin-wait doesn't
 // starve another thread of the core it needs to make progress.
 fn sys_sched_yield() {
-	$if (TARGET == "arm64") {
+	$if (TARGET != "x86_64") {
 		syscall(SYS_SCHED_YIELD_N, 0, 0, 0, 0, 0, 0);
 		return;
 	}
@@ -170,7 +170,7 @@ fn sys_sched_yield() {
 // confirmed with `strace -f` showing a bare exit(1) (not exit_group) while
 // four pool-worker threads kept running.
 fn sys_exit(code i64) {
-	$if (TARGET == "arm64") {
+	$if (TARGET != "x86_64") {
 		syscall(SYS_EXIT_GROUP_N, code, 0, 0, 0, 0, 0);
 	} $else {
 		syscall(SYS_EXIT_GROUP, code, 0, 0, 0, 0, 0);
@@ -178,28 +178,28 @@ fn sys_exit(code i64) {
 }
 
 fn sys_fork() i64 {
-	$if (TARGET == "arm64") {
+	$if (TARGET != "x86_64") {
 		return syscall(SYS_CLONE_N, 17, 0, 0, 0, 0);
 	}
 	return syscall(SYS_FORK, 0, 0, 0);
 }
 
 fn sys_execve(path *u8, argv *u8, envp *u8) i64 {
-	$if (TARGET == "arm64") {
+	$if (TARGET != "x86_64") {
 		return syscall(SYS_EXECVE_N, path as i64, argv as i64, envp as i64);
 	}
 	return syscall(SYS_EXECVE, path as i64, argv as i64, envp as i64);
 }
 
 fn sys_wait4(pid i64, status *u8) i64 {
-	$if (TARGET == "arm64") {
+	$if (TARGET != "x86_64") {
 		return syscall(SYS_WAIT4_N, pid, status as i64, 0, 0);
 	}
 	return syscall(SYS_WAIT4, pid, status as i64, 0, 0);
 }
 
 fn sys_unlink(path *u8) i64 {
-	$if (TARGET == "arm64") {
+	$if (TARGET != "x86_64") {
 		return syscall(SYS_UNLINKAT_N, AT_FDCWD, path as i64, 0);
 	}
 	return syscall(SYS_UNLINK, path as i64, 0, 0);
@@ -250,28 +250,28 @@ fn sys_getenv(name str) str {
 }
 
 fn sys_getpid() i64 {
-	$if (TARGET == "arm64") {
+	$if (TARGET != "x86_64") {
 		return syscall(SYS_GETPID_N, 0, 0, 0);
 	}
 	return syscall(SYS_GETPID, 0, 0, 0);
 }
 
 fn sys_stat(path *u8, buf *u8) i64 {
-	$if (TARGET == "arm64") {
+	$if (TARGET != "x86_64") {
 		return syscall(SYS_NEWFSTATAT_N, AT_FDCWD, path as i64, buf as i64, 0);
 	}
 	return syscall(SYS_STAT, path as i64, buf as i64, 0);
 }
 
 fn sys_getdents(fd i64, buf *u8, n i64) i64 {
-	$if (TARGET == "arm64") {
+	$if (TARGET != "x86_64") {
 		return syscall(SYS_GETDENTS_N, fd, buf as i64, n);
 	}
 	return syscall(SYS_GETDENTS, fd, buf as i64, n);
 }
 
 fn sys_dup2(old i64, new i64) i64 {
-	$if (TARGET == "arm64") {
+	$if (TARGET != "x86_64") {
 		return syscall(SYS_DUP3_N, old, new, 0);
 	}
 	return syscall(SYS_DUP2, old, new, 0);
@@ -279,7 +279,7 @@ fn sys_dup2(old i64, new i64) i64 {
 
 // TIOCGETS succeeds on a terminal: 0 on a tty, -1 elsewhere.
 fn sys_isatty() i64 {
-	$if (TARGET == "arm64") {
+	$if (TARGET != "x86_64") {
 		return syscall(SYS_IOCTL_N, 0, 0x5401, 0);
 	}
 	return syscall(SYS_IOCTL, 0, 0x5401, 0);

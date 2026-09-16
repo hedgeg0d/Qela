@@ -15,7 +15,7 @@ fn heap_morecore(nu i64) *Header {
 	if (n < 4096) { n = 4096; }
 	var bytes i64 = n * sizeof(Header);
 	var r i64 = 0;
-	$if (TARGET == "arm64") {
+	$if (TARGET != "x86_64") {
 		r = syscall(222, 0, bytes, 3, 34, -1, 0);
 	} $else {
 		r = syscall(9, 0, bytes, 3, 34, -1, 0);
