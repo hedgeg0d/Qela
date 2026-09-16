@@ -1,0 +1,114 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: select-ok
+// select: cases poll in source order, the first ready one wins; a select
+// with nothing ready blocks (with deadlock detection) until a sender makes
+// progress; a closed channel is always ready; break inside a case body
+// exits the select.
+import "std/chan.qela";
+import "std/io.qela";
+
+var ch Chan(i64);
+var done Chan(bool);
+var rv Chan(i64);
+
+fn sender() {
+	var i i64 = 0;
+	while (i < 3) {
+		ch <- 10 + i;
+		coro_yield();
+		i = i + 1;
+	}
+}
+
+fn main() int {
+	chan_init(&ch, 2);
+	chan_init(&done, 1);
+	chan_init(&rv, 0);
+	// Send case: ch empty, done not ready -- the send fires.
+	var n i64 = 0;
+	select {
+	case <-done:
+		n = 100;
+	case ch <- 42:
+		n = 200;
+	default:
+		n = 300;
+	}
+	if (n != 200) { return 1; }
+	// Receive-into-var fires next; the value is the one just sent.
+	var got i64 = -1;
+	select {
+	case <-done:
+		got = 100;
+	case got = <-ch:
+	}
+	if (got != 42) { return 2; }
+	// Blocking: nothing ready, no default -- the coroutine sender's first
+	// value arrives, then the second send waits for room while this select
+	// picks the third.
+	spawn sender();
+	var sum i64 = 0;
+	var i i64 = 0;
+	while (i < 3) {
+		var v i64 = -1;
+		select {
+		case <-done:
+			v = 1000;
+		case v = <-ch:
+		}
+		sum = sum + v;
+		i = i + 1;
+	}
+	if (sum != 33) { return 3; }
+	// Rendezvous: a receiver parked on the cap-0 channel makes the send
+	// ready; the handoff value crosses.
+	spawn recv_worker();
+	var sv i64 = 0;
+	select {
+	case rv <- 77:
+		sv = 1;
+	case <-done:
+		sv = 2;
+	default:
+		sv = 3;
+	}
+	if (sv != 1) { return 4; }
+	// A closed channel is always ready: the case fires with the zero value.
+	chan_close(&done);
+	var b bool = true;
+	select {
+	case b = <-done:
+	default:
+	}
+	if (b) { return 5; }
+	// break inside a case body exits the select, not the outer loop.
+	ch <- 5;
+	var guard i64 = 0;
+	while (guard == 0) {
+		select {
+		case got = <-ch:
+			break;
+		}
+		guard = 1;
+	}
+	if (guard != 1) { return 6; }
+	// continue re-polls the select: the closed channel fires twice, then
+	// the loop's own condition stops it.
+	var hits i64 = 0;
+	while (hits < 2) {
+		select {
+		case <-done:
+			hits = hits + 1;
+			continue;
+		}
+	}
+	if (hits != 2) { return 7; }
+	print("select-ok\n");
+	return 0;
+}
+
+fn recv_worker() {
+	<-rv;
+	coro_yield();
+}

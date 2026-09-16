@@ -1,23 +1,60 @@
 # Where the project stands
 
-Updated 2026-08-08. Read `BOOTSTRAP.md` first; it constrains everything below.
+Updated 2026-08-10. Read `BOOTSTRAP.md` first; it constrains everything below.
 
 ## Numbers
 
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **488 440 B** |
+| **S2 — the shipped compiler, Qela compiled by itself** | **612 432 B** |
 | stage1 sources | 20 608 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
 
-Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 124-test corpus under S2, the embedded stdlib resolving outside the source tree,
+Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 146-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
 backtrace, interpolation and the repl, the compiler flags (`-g`,
 `--backtrace`, `--no-bounds-checks`, `--dump-std`), and a scripted language
 server conversation.
 
 ## Done
+
+**`select` over channels (2026-08-10).** `select { case <-ch: ... case x =
+<-ch: ... case ch <- v: ... default: ... }` polls the channel scheduler the
+way it already waits: each case becomes a non-blocking `chan_try_recv` /
+`chan_try_send` in source order (the first ready case wins), the body runs
+and breaks out, and a select with nothing ready and no default falls into
+`chan_select_block` -- the same deadlock-detecting wait a blocking
+send/receive uses. A closed channel counts as ready with a zeroed value,
+Go's rule. `break` inside a case body exits the select; `continue` follows
+Go too -- it continues the loop *enclosing* the select, via a hidden
+`_$sc` flag and a trailing `if (_$sc) { continue; }` that sits outside the
+select's own polling loop. Documented divergences: send values are
+re-evaluated on every poll, `case x = <-ch:` needs `x` already declared
+(no `:=`), and case order is deterministic rather than random. The whole
+thing is a parse-time desugar in `srcql/parse.qela` plus three functions
+in `std/chan.qela` (`chan_try_recv`, `chan_try_send`,
+`chan_select_block`). Pinned by `tests/select.qela`.
+
+**Generators (2026-08-10).** `fn counter(lo i64, hi i64) *Gen(i64) {
+yield i; }` -- a function whose body contains `yield` is rewritten at
+parse time into a spawner plus a hidden `_$gen<N>` coroutine body
+(`std/gen.qela`, `Gen(T)`): the spawner arena-allocates the Gen, spawns
+the body with `coro_spawn` (which now returns the coroutine id), advances
+it to the first yield and returns the pointer; the body stores each
+yielded value in `g.val` and switches back to whoever resumed it (directed
+switches, unlike `coro_yield`'s round-robin), and `gen_finish` marks both
+the Gen and the coroutine slot done so the scheduler forgets it.
+`for x in gen(1, 6)` desugars to `while (gen_next(&g, &x))`. The body
+moves to the hidden function with parameter references rebound onto fresh
+clones (two functions must never share a `Var` -- regalloc and codegen
+keep per-function state on it) and every `return` rewritten to
+`gen_finish`. Limits: at most 4 one-word parameters, `*Gen(T)` return
+type, `return v` rejected, factory functions that return `*Gen(T)`
+without yielding are left alone, `interpreted`/`dynamic` generators are
+rejected. A generator may consume another generator (the sub-generator's
+parent tracking follows the nesting). The two features together cost
++19 848 B in S2 (592 584 -> 612 432). Pinned by `tests/gen.qela`.
 
 **The interpreter: `qela irun` (2026-08-08).** A fourth way to run a
 program, and the first that emits nothing at all. `srcql/interp.qela` walks
@@ -829,8 +866,9 @@ builtins to support them.
 
 ## Not done
 
-Item 1 is mostly done and kept here for what remains of it; 2 has not been
-started.
+Item 1 is kept here for what remains of it. Item 2 (backends) is done:
+ARM64 and RISC-V both reach the self-hosting fixed point, and the full
+writeups live in this file.
 
 ### 1. Emitted code size (M4)
 
@@ -890,7 +928,12 @@ Both closed off, measured rather than assumed (see above):
 x86 codegen has stopped moving on the remaining levers. Next size lever is
 ARM64 (below), or accept the ratio and spend budget on wow/byte elsewhere.
 
-### 2. ARM64 backend
+### 2. Backends
+
+**ARM64** — done (2026-08-06). **RISC-V** — done (2026-08-07):
+`S2_riscv64 == S3_riscv64` under qemu-riscv64 (777 640 B), corpus 120/120.
+Both writeups are in this file. The full parity text below is kept
+for the record:
 
 Full parity with x86 (2026-08-06): the entire 124-test corpus passes under
 both targets (`QEMU=qemu-aarch64 TARGET=arm64 tools/run-tests.sh`), and
@@ -917,7 +960,8 @@ stack padding until promotion's changed frame layout put something load-
 bearing there instead; fixed by sizing the buffer (now `[10]i64`, shared by
 both targets, the unused x86 tail always zero and harmless to scan) instead
 of chasing frame layouts. The full writeup is above. RISC-V is
-not started.
+done too: `S2_riscv64 == S3_riscv64` under qemu-riscv64 (777 640 B), the
+corpus 120/120, verified on real hardware as well -- same writeup.
 
 **Verified on real ARM64 hardware, not just qemu (2026-08-06).** Four bugs
 qemu-aarch64's user-mode emulation never exposed, found running on an actual
