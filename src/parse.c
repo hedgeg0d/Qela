@@ -51,6 +51,120 @@ static bool consume(Token **t, const char *s) {
 	return true;
 }
 
+typedef struct CTDef CTDef;
+struct CTDef {
+	CTDef *next;
+	Str    name;
+	Str    val;
+};
+
+static CTDef *ct_defs;
+
+static Str ct_def_get(Str name) {
+	for (CTDef *d = ct_defs; d; d = d->next)
+		if (str_eq(d->name, name)) return d->val;
+	return (Str){0, 0};
+}
+
+void comptime_def_set(Str name, Str val) {
+	for (CTDef *d = ct_defs; d; d = d->next) {
+		if (str_eq(d->name, name)) { d->val = val; return; }
+	}
+	CTDef *d = anew(CTDef);
+	d->name = name;
+	d->val = val;
+	d->next = ct_defs;
+	ct_defs = d;
+}
+
+static Token *skip_balanced(Token *t) {
+	int depth = 1;
+	while (depth > 0) {
+		if (eq(t, "{")) depth++;
+		else if (eq(t, "}")) {
+			depth--;
+			if (depth == 0) return t;
+		}
+		t = t->next;
+	}
+	return t;
+}
+
+static bool ct_truthy(Str v) {
+	if (v.n == 0) return false;
+	if (str_eq(v, S("0"))) return false;
+	if (str_eq(v, S("false"))) return false;
+	return true;
+}
+
+static bool eval_comptime_cond(Token **t) {
+	bool neg = false;
+	if (eq(*t, "!")) {
+		neg = true;
+		*t = (*t)->next;
+	}
+	if ((*t)->kind != TK_IDENT) error_at((*t)->pos, "expected a comptime variable name");
+	Str name = (*t)->text;
+	*t = (*t)->next;
+	Str val = ct_def_get(name);
+	if (eq(*t, "==") || eq(*t, "!=")) {
+		if (neg) error_at((*t)->pos, "cannot combine '!' with '==' or '!='");
+		bool want_eq = eq(*t, "==");
+		*t = (*t)->next;
+		if ((*t)->kind != TK_STR) error_at((*t)->pos, "expected a string after == or !=");
+		Str rhs = (*t)->str;
+		*t = (*t)->next;
+		bool eqv = str_eq(val, rhs);
+		return want_eq ? eqv : !eqv;
+	}
+	bool truthy = ct_truthy(val);
+	return neg ? !truthy : truthy;
+}
+
+static bool is_comptime_if(Token *t) { return eq(t, "$") && eq(t->next, "if"); }
+
+static void parse_comptime_if(Token **t) {
+	Token *tok = (*t)->next->next;
+	tok = expect(tok, "(");
+	bool cnd = eval_comptime_cond(&tok);
+	tok = expect(tok, ")");
+	tok = expect(tok, "{");
+	Token *a_start = tok;
+	Token *a_close = skip_balanced(tok);
+	Token *after_a = a_close->next;
+	Token *rest = after_a;
+	Token *b_start = NULL;
+	Token *b_close = NULL;
+	if (eq(after_a, "$") && eq(after_a->next, "else")) {
+		Token *btok = after_a->next->next;
+		btok = expect(btok, "{");
+		b_start = btok;
+		b_close = skip_balanced(btok);
+		rest = b_close->next;
+	}
+	if (cnd) {
+		if (a_start == a_close) { *t = rest; return; }
+		Token *p = a_start;
+		while (p->next != a_close) p = p->next;
+		p->next = rest;
+		*t = a_start;
+		return;
+	}
+	if (b_start) {
+		if (b_start == b_close) { *t = rest; return; }
+		Token *p = b_start;
+		while (p->next != b_close) p = p->next;
+		p->next = rest;
+		*t = b_start;
+		return;
+	}
+	*t = rest;
+}
+
+static void resolve_comptime(Token **t) {
+	while (is_comptime_if(*t)) parse_comptime_if(t);
+}
+
 static Node *node(NodeKind kind, isize pos) {
 	Node *n = anew(Node);
 	*n = (Node){.kind = kind, .pos = pos};
@@ -550,9 +664,11 @@ static Node *block(Token **t) {
 	enter_scope();
 	Node head = {0};
 	Node *tail = &head;
+	resolve_comptime(t);
 	while (!eq(*t, "}")) {
 		if ((*t)->kind == TK_EOF) error_at((*t)->pos, "unclosed block");
 		tail->next = stmt(t);
+		resolve_comptime(t);
 		tail = tail->next;
 	}
 	leave_scope();
@@ -1015,7 +1131,9 @@ Unit parse(Token *tok) {
 	enter_scope();
 	Func head = {0};
 	Func *tail = &head;
-	while (tok->kind != TK_EOF) {
+	while (1) {
+		resolve_comptime(&tok);
+		if (tok->kind == TK_EOF) break;
 		if (eq(tok, "struct")) {
 			struct_decl(&tok);
 			continue;

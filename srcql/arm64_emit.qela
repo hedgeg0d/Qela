@@ -466,6 +466,28 @@ fn arm64_memcpy(dst int, src int, size i64) {
 }
 
 
+fn arm64_add_strref(id int) {
+	var f *StrFixup = arena_alloc(sizeof(StrFixup), 8) as *StrFixup;
+	f.at = code.n;
+	f.id = id;
+	if (strrefs_tail as i64 == 0) { strrefs_head = f; } else { strrefs_tail.next = f; }
+	strrefs_tail = f;
+	arm64_movz(X0, 0, 0);
+	arm64_movk(X0, 0, 1);
+}
+
+
+fn arm64_add_dataref(v *Var) {
+	var f *DataFixup = arena_alloc(sizeof(DataFixup), 8) as *DataFixup;
+	f.at = code.n;
+	f.varp = v;
+	if (datarefs_tail as i64 == 0) { datarefs_head = f; } else { datarefs_tail.next = f; }
+	datarefs_tail = f;
+	arm64_movz(X0, 0, 0);
+	arm64_movk(X0, 0, 1);
+}
+
+
 fn arm64_lower_op(op *IrOp) {
 	if (op.kind == IR_MOV && op.dst.kind == OP_ACC && op.src0.kind == OP_IMM) {
 		arm64_mov_imm64(X0, op.src0.off);
@@ -570,6 +592,14 @@ fn arm64_lower_op(op *IrOp) {
 		arm64_st_local(op.dst.off, X0);
 		if (op.aux > 8) { arm64_st_local(op.dst.off - 8, X1); }
 		arm64_sub_imm(X0, X29, op.dst.off);
+		return;
+	}
+	if (op.kind == IR_MOV && op.dst.kind == OP_ACC && op.src0.kind == OP_STR) {
+		arm64_add_strref(op.src0.off as int);
+		return;
+	}
+	if (op.kind == IR_MOV && op.dst.kind == OP_ACC && op.src0.kind == OP_GLOBAL) {
+		arm64_add_dataref(op.src0.off as *Var);
 		return;
 	}
 	if (op.kind == IR_RET) {
@@ -730,6 +760,14 @@ fn arm64_lower_op(op *IrOp) {
 		arm64_cmp_imm(op2_reg(op.src0.reg), op.src1.off);
 		return;
 	}
+	if (op.kind == IR_CMP && op.src0.kind == OP_MEM && op.src1.kind == OP_IMM) {
+		if (op.src0.ty.size == 1) { b4(0x39400000 | (X0 << 5) | X9); }
+		else if (op.src0.ty.size == 2) { b4(0x79400000 | (X0 << 5) | X9); }
+		else if (op.src0.ty.size == 4) { b4(0xb9400000 | (X0 << 5) | X9); }
+		else { b4(0xf9400000 | (X0 << 5) | X9); }
+		arm64_cmp_imm(X9, op.src1.off);
+		return;
+	}
 	if (op.kind == IR_CMP && op.src0.kind == OP_ACC && op.src1.kind == OP_STACKSLOT) {
 		arm64_ld_local(X9, op.src1.off);
 		arm64_cmp_reg(X0, X9);
@@ -771,10 +809,5 @@ fn arm64_lower_op(op *IrOp) {
 		}
 		return;
 	}
-	fmt_i64_to_fd(2, op.kind as i64); write_str(2, " ");
-	fmt_i64_to_fd(2, op.dst.kind as i64); write_str(2, " ");
-	fmt_i64_to_fd(2, op.src0.kind as i64); write_str(2, " ");
-	fmt_i64_to_fd(2, op.src1.kind as i64); write_str(2, " aux=");
-	fmt_i64_to_fd(2, op.aux); write_str(2, "\n");
 	die("internal: arm64_lower_op: unhandled IR shape");
 }

@@ -285,6 +285,34 @@ let TARGET_X86_64 = 0;
 let TARGET_ARM64  = 1;
 var opt_target int = 0;
 
+struct ComptimeDef;
+struct ComptimeDef { next *ComptimeDef, name str, val str, }
+
+var comptime_defs *ComptimeDef;
+
+fn comptime_get(name str) str {
+	var d *ComptimeDef = comptime_defs;
+	while (d as i64 != 0) {
+		if (str_eq(d.name, name)) { return d.val; }
+		d = d.next;
+	}
+	var e str;
+	return e;
+}
+
+fn comptime_set(name str, val str) {
+	var d *ComptimeDef = comptime_defs;
+	while (d as i64 != 0) {
+		if (str_eq(d.name, name)) { d.val = val; return; }
+		d = d.next;
+	}
+	var nd *ComptimeDef = arena_alloc(sizeof(ComptimeDef), 8) as *ComptimeDef;
+	nd.name = name;
+	nd.val = val;
+	nd.next = comptime_defs;
+	comptime_defs = nd;
+}
+
 // SysV AMD64 and AAPCS64 both pass an aggregate by reference once it is
 // bigger than two registers' worth (16 bytes); a future target with a
 // different cutoff (e.g. Windows x64's 8) only has to change this function.
