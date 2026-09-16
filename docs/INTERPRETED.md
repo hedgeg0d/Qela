@@ -136,6 +136,13 @@ bytes").
 
 ### The foreign-globals/foreign-calls ABI
 
+**The call half is done** (2026-08-08) — `eval fn` functions are callable
+from `eval`'d and `interpreted`/`dynamic` code today, over the same ABI.
+The get/set half (reading/writing an `eval var` global) is still open; see
+"What's implemented" below for exactly how the call half works and what's
+left. The design below is kept as-written for the get/set half, which
+still needs it.
+
 For `interpreted` code (or `eval`'d code generally) to read/write the
 host's own state, or call the host's own functions, rather than only
 operating on values passed in and returned — because otherwise this
@@ -362,23 +369,72 @@ ABI); the local `mmap`(RW)→copy→`mprotect`(RX)→call-natively optimization
 described in "Call-site mechanics" above is still open, tracked alongside
 item 4 below.
 
-What it cannot do yet, precisely: an `eval`'d call (or an `interpreted`/
-`dynamic` function) cannot read or write the *host's* own globals or call
-the host's own functions (no `eval_get`/`eval_set`/foreign-call bridging
-over the ABI yet — `eval var`/`eval fn` parse and record the allowlist but
-nothing consults it at runtime; also flagged as needing `type.qela` name-
-resolution changes, a materially bigger job than anything above — see
-`docs/TASKS.md`); `dynamic` does not actually run any faster than
-`interpreted` (previous paragraph); `parse_ast`/`run_ast` and AST
-inspection do not exist (item 5); and the self-copy is not yet embedded
-at compile time (the correction above).
+**`eval fn` host-call bridging — also done** (2026-08-08). An `eval`'d or
+`interpreted`/`dynamic` call to a name that isn't defined locally no
+longer just fails: `type_call` (`srcql/type.qela`), gated behind a new
+`type_abi_mode` flag that `cmd_abi_server` alone sets, tags the call node
+`foreign` instead of erroring (same restrictions as everywhere else —
+non-aggregate, non-float, ≤6 args). At interpret time, `ip_call_node`
+(`srcql/interp.qela`) recognizes a `foreign` call and, instead of running
+it locally, marshals the evaluated arguments and asks the *host* over the
+same two ABI fds, blocking for the answer — a genuinely new direction on
+the wire: the child, not just the host, can be the requester. The host
+side needed a real dispatcher: whenever a program pulls in the ABI client
+(detected by `find_func("abi_spawn") != 0`, since `eval fn` itself doesn't
+signal anything at parse time), `parse()` synthesizes
+`__eval_call_dispatch(name str, args *i64) i64` — one `if
+(str_eq(name, "..."))` per `eval fn`-tagged function, always present
+(even as a trivial always-"not found" stub) so linking never depends on
+whether any `eval fn` actually exists. `eval()` and
+`__interp_call_dispatch` both now wait for their real response through
+a new shared `abi_wait_result` (`std/abiconn.qela`) that answers any
+interleaved host-call request inline before continuing to wait — the
+`eval()`/interpreted-call machinery didn't need to change beyond calling
+this instead of a bare `abi_recv_frame`.
+
+Two real bugs surfaced building this, both worth recording:
+
+1. **The ABI protocol moved off fd 0/1 onto fixed fds 3/4**
+   (`ABI_FD_HOST_TO_CHILD`/`ABI_FD_CHILD_TO_HOST`, `std/abiwire.qela`).
+   It had to: the fork-validate-then-commit safety net (borrowed from the
+   repl, see the repl entry above) mutes the validation
+   fork's stdout so a bad line's side effects aren't visible twice — fine
+   when stdout is a terminal, fatal when stdout *is* the ABI channel. A
+   foreign call made during validation wrote its request into `/dev/null`
+   and then blocked forever reading a reply that could never arrive,
+   hanging the whole host. Dedicated fds mean the interpreted program's
+   own `write_str(STDOUT, ...)` and the protocol never collide again,
+   validation-muting included.
+2. **`abi_wait_result` used the caller's small result buffer for the
+   *incoming* frame too.** `eval()`'s and `__interp_call_dispatch`'s
+   result buffers are 8 bytes — plenty for the final `i64` answer, far
+   too small for a host-call request (a name plus 48 bytes of packed
+   arguments). `abi_recv_frame` correctly refused to read a frame larger
+   than the caller's stated capacity and returned an error *before even
+   reading the kind byte* — which `eval()` reported as "the subprocess
+   died," a misleading symptom for an oversized-buffer bug. Fixed with an
+   internal 512-byte scratch buffer inside `abi_wait_result` for
+   receiving, only copying into the caller's small buffer for the actual
+   final response.
+
+What it cannot do yet, precisely: `eval var` (reading/writing a host
+*global*, as opposed to calling a host *function*) still parses and
+records the allowlist but nothing consults it at runtime — the call half
+above is the template, but a global read/write needs a different
+dispatcher shape (`eval_get`/`eval_set` by name) and a different type.qela
+hook (an unresolved bare identifier, not a call); `dynamic` does not
+actually run any faster than `interpreted` — every call still round-trips
+over the ABI, the local `mmap`/`mprotect` JIT path is unbuilt;
+`parse_ast`/`run_ast` and AST inspection do not exist (item 5); and the
+self-copy is not yet embedded at compile time (the correction above).
 
 ## Size measurements (real numbers, not estimates)
 
-Baseline: `qela` (S2) = 517,480 bytes, 49.4% of the 1 MiB budget (up from
+Baseline: `qela` (S2) = 521,872 bytes, 49.8% of the 1 MiB budget (up from
 501,488 before this round of work: six new syscall wrappers, four new
-grammar modifiers/fields, the wire protocol plus `--abi-server`, and the
-`ABI_REQ_CALL` handler for call-site trampolines, ~16 KB total.
+grammar modifiers/fields, the wire protocol plus `--abi-server`, the
+`ABI_REQ_CALL` handler for call-site trampolines, and the `type_abi_mode`/
+foreign-call/dispatcher-generation machinery, ~20 KB total.
 `std/eval.qela`, `std/abiwire.qela`, `std/abiconn.qela` and
 `std/interpcall.qela` do not count against this budget: they ship in the
 *output* of programs that import them, never inside `qela` itself.)
@@ -486,10 +542,12 @@ that, don't assume gzip-level ratios from a from-scratch LZSS.
    can be restricted under some hardening policies (SELinux, some
    container runtimes) — needs a real error message, not a silent
    failure, when it's unavailable.
-8. **Test plan — three of six done.** `tools/bootstrap.sh`'s "eval() over
+8. **Test plan — four of six done.** `tools/bootstrap.sh`'s "eval() over
    the abi subprocess" step covers bare `eval`, including cross-call
    session state; "interpreted/dynamic call-site trampolines" covers both
-   under AOT and under `qela irun` in the same test. Still needed: one
-   using `eval var`/`eval fn` shared state, one using `--interpreted`, one
-   using `--jit`/whatever it's named — each blocked on the item above it
+   under AOT and under `qela irun` in the same test; "eval fn: host
+   functions callable from eval'd source" covers the foreign-call
+   bridging. Still needed: one using `eval var` shared *state* (get/set,
+   not yet built), one using `--interpreted`, one using `--jit`/whatever
+   it's named — each blocked on the item above it
    that doesn't exist yet.
