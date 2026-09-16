@@ -1,0 +1,36 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: port=9091 mask=2130706433 ratio=2.5 enabled=1 scale=-4
+//
+// -D rewrites the initializer of a top-level `let`, so a build can set a
+// constant from the command line without touching the source. The value is
+// anything the lexer takes as a literal -- decimal, 0x hex, a float, a
+// negative, true/false -- coerced to the type the declaration already has,
+// which keeps every use of the constant typed as before. Here the flags
+// come from the source itself, so the corpus exercises the same path a
+// `-D NAME=VALUE` on the command line takes. Without any of them the
+// defaults written below are what the program would use.
+import "std/io.qela";
+
+$flag -D PORT=9091
+$flag -D MASK=0x7f000001
+$flag -D RATIO=2.5
+$flag -D ENABLED=true
+$flag -D SCALE=-4
+
+let PORT = 8080;
+let MASK = 0;
+let RATIO = 1.0;
+let ENABLED = false;
+let SCALE = 0;
+
+fn main() int {
+	if (PORT != 9091) { println("port not overridden"); return 1; }
+	if (MASK != 2130706433) { println("hex not parsed"); return 2; }
+	if (SCALE != -4) { println("negative not overridden"); return 5; }
+	if (ENABLED != 1) { println("true did not become 1"); return 4; }
+	// The float is checked by its printed form: comparing floats with !=
+	// draws a warning, and the value is what this test is about.
+	println("port=${PORT} mask=${MASK} ratio=${RATIO} enabled=${ENABLED} scale=${SCALE}");
+	return 0;
+}
