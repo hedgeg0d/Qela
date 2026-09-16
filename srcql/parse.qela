@@ -755,6 +755,26 @@ fn call_args(t **Token, n *Node) *Node {
 }
 
 fn parse_primary(t **Token) *Node {
+	if (tok_eq(*t, "[")) {
+		var p i64 = (*t).pos;
+		*t = (*t).next;
+		var n *Node = new_node(ND_ARRLIT, p);
+		var head Node;
+		var tail *Node = &head;
+		var cnt int = 0;
+		while (!tok_eq(*t, "]")) {
+			if (cnt > 0) { tok_expect(t, ","); }
+			if (tok_eq(*t, "]")) { break; }
+			var e *Node = parse_assign(t);
+			tail.next = e;
+			tail = e;
+			cnt = cnt + 1;
+		}
+		tok_expect(t, "]");
+		n.args = head.next;
+		n.nargs = cnt;
+		return n;
+	}
 	if (tok_consume(t, "(")) {
 		var p i64 = (*t).pos;
 		var n *Node = parse_expr(t);
@@ -1314,6 +1334,9 @@ fn parse_decl(t **Token) *Node {
 	var dyn_zero *Node = 0 as *Node;
 	if (tok_consume(t, "=")) {
 		var rhs *Node = parse_assign(t);
+		if (rhs.kind == ND_ARRLIT && ty as i64 != 0 && ty.kind == TY_ARRAY) {
+			rhs.ty = ty;
+		}
 		var v *Var = declare_var(name, ty, p);
 		if (is_dyn) {
 			// A with-initializer local skips the usual "zeroed at
@@ -1794,6 +1817,61 @@ fn gen_elem_of(ty *Type) *Type {
 // The element type of a `Chan(T)` or `*Chan(T)` -- the loop variable's type
 // for `for x in ch`. Unlike a Gen, a Chan(T) *value* iterates fine: the
 // channel is a plain struct, the loop just takes its address.
+fn iter_prefix(ty *Type) str {
+	var nm str = ty.name;
+	var b Buf;
+	var i i64 = 0;
+	while (i < nm.len && nm.ptr[i] != '(') {
+		var c u8 = nm.ptr[i];
+		if (c >= 'A' && c <= 'Z') { c = (c as i64 + 32) as u8; }
+		buf_u8(&b, c);
+		i = i + 1;
+	}
+	return buf_str(&b);
+}
+
+fn iter_protocol_call(coll *Node, pos i64) *Node {
+	var ty *Type = coll.ty;
+	if (ty as i64 == 0) { return 0 as *Node; }
+	if (ty.kind == TY_PTR) { ty = ty.base; }
+	if (ty.kind != TY_STRUCT) { return 0 as *Node; }
+	if (ty.name.len == 0) { return 0 as *Node; }
+	var pre str = iter_prefix(ty);
+	if (pre.len == 0) { return 0 as *Node; }
+
+	var ib Buf;
+	fmt_str(&ib, pre);
+	fmt_str(&ib, "_iter");
+	var fname str = buf_str(&ib);
+	if (find_func(fname) as i64 == 0) {
+		var vb Buf;
+		fmt_str(&vb, pre);
+		fmt_str(&vb, "_view");
+		fname = buf_str(&vb);
+		if (find_func(fname) as i64 == 0) { return 0 as *Node; }
+	}
+	var f *Func = find_func(fname);
+	if (f.nparams <= f.nct) { return 0 as *Node; }
+	var want *Type = func_param(f, f.nct).ty;
+	var recv *Node = coll;
+	if (want.kind == TY_PTR && coll.ty.kind != TY_PTR) {
+		if (!is_addr_expr(coll)) { return 0 as *Node; }
+		var ad *Node = new_node(ND_ADDR, pos);
+		ad.lhs = coll;
+		recv = ad;
+	}
+	if (want.kind != TY_PTR && coll.ty.kind == TY_PTR) {
+		var dr *Node = new_node(ND_DEREF, pos);
+		dr.lhs = coll;
+		recv = dr;
+	}
+	var call *Node = new_node(ND_CALL, pos);
+	call.name = fname;
+	call.args = recv;
+	call.nargs = 1;
+	return call;
+}
+
 fn chan_elem_of(ty *Type) *Type {
 	if (ty as i64 == 0) { return 0 as *Type; }
 	var tm *Tmpl = tmpl_find("Chan");
@@ -2163,6 +2241,14 @@ fn parse_stmt_inner(t **Token) *Node {
 				// the generator and ends the loop when it is done.
 				var gc *Node = lo;
 				add_type(gc);
+				if (gen_elem_of(gc.ty) as i64 == 0 && chan_elem_of(gc.ty) as i64 == 0) {
+					var pit *Node = iter_protocol_call(gc, np);
+					if (pit as i64 != 0) {
+						add_type(pit);
+						lo = pit;
+						gc = pit;
+					}
+				}
 				var elem *Type = gen_elem_of(gc.ty);
 				if (elem as i64 != 0) {
 					if (gc.ty.kind != TY_PTR) {
