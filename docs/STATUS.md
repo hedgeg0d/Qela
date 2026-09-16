@@ -1166,6 +1166,14 @@ ARM64 (below), or accept the ratio and spend budget on wow/byte elsewhere.
 Both writeups are in this file. The full parity text below is kept
 for the record:
 
+ARM64 codegen got one more density pass since (2026-08-14): push/pop
+pooling stages the stack machine's expression temporaries in scratch
+registers instead of the 4+4-byte SP pair wherever no call intervenes —
+S2_arm64 went 953 184 -> 868 736 B with the fixed point intact, and the
+arm64 corpus under qemu is unchanged. The writeup is above.
+The same idea is still open for RISC-V, where `c.sdsp`/`c.ldsp` already
+halved the pair's cost; pooling would buy ~2 bytes per eligible pair.
+
 Full parity with x86 (2026-08-06): the entire 124-test corpus passes under
 both targets (`QEMU=qemu-aarch64 TARGET=arm64 tools/run-tests.sh`), and
 self-hosting still reaches a fixed point with register promotion turned on
