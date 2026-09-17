@@ -16,6 +16,9 @@ import "blob.qela";
 // mirrors `keywords[]` in src/lex.c; both must agree. The function
 // returns the keyword text, or "" if nothing is close enough.
 
+struct Scope;
+struct VarScope;
+
 var keywords [23]str;
 var keywords_inited bool = false;
 
@@ -82,24 +85,119 @@ fn lev_dist(a str, b str) i64 {
 	return prev[b.len];
 }
 
-fn did_you_mean(name str) str {
-	keywords_setup();
-	var best str;
-	var best_d i64 = 3;   // threshold: only suggest ≤ 2 edits
-	var k i64 = 0;
-	while (k < 22) {
-		var d i64 = lev_dist(name, keywords[k]);
-		if (d > 0 && d <= 2 && d < best_d) {
-			best = keywords[k];
-			best_d = d;
-		}
-		k = k + 1;
-	}
-	return best;
+// A "did you mean?" accumulator shared by every suggestion walk.
+struct Sugg {
+	best   str,
+	best_d i64,
 }
 
-struct Scope;
-struct VarScope;
+fn sugg_try(s *Sugg, name str, cand str) {
+	if (cand.len >= 2 && cand.ptr[0] == '_' && cand.ptr[1] == '$') { return; }
+	var d i64 = lev_dist(name, cand);
+	// One retry case-insensitively: `Int64` for `i64` is a two-edit typo
+	// only when case is ignored, and it is the classic spelling mistake.
+	if (d > 2) { d = lev_dist(str_lower(name), str_lower(cand)); }
+	if (d > 0 && d <= 2 && d < s.best_d) {
+		s.best = cand;
+		s.best_d = d;
+	}
+}
+
+fn did_you_mean(name str) str {
+	keywords_setup();
+	var s Sugg;
+	s.best_d = 3;
+	var k i64 = 0;
+	while (k < 22) {
+		sugg_try(&s, name, keywords[k]);
+		k = k + 1;
+	}
+	return s.best;
+}
+
+// Builtin scalar names, mirrored from type_lookup so a typo in `i64` or
+// `str` gets a suggestion too.
+var type_names [19]str;
+var type_names_inited bool = false;
+
+fn type_names_setup() {
+	if (type_names_inited) { return; }
+	type_names_inited = true;
+	type_names[0]  = "void";
+	type_names[1]  = "bool";
+	type_names[2]  = "type";
+	type_names[3]  = "i8";
+	type_names[4]  = "i16";
+	type_names[5]  = "i32";
+	type_names[6]  = "i64";
+	type_names[7]  = "u8";
+	type_names[8]  = "u16";
+	type_names[9]  = "u32";
+	type_names[10] = "u64";
+	type_names[11] = "int";
+	type_names[12] = "uint";
+	type_names[13] = "usize";
+	type_names[14] = "f32";
+	type_names[15] = "f64";
+	type_names[16] = "float";
+	type_names[17] = "double";
+	type_names[18] = "str";
+}
+
+fn suggest_type(name str) str {
+	type_names_setup();
+	var s Sugg;
+	s.best_d = 3;
+	var i i64 = 0;
+	while (i < 19) {
+		sugg_try(&s, name, type_names[i]);
+		i = i + 1;
+	}
+	var n *Named = named_types;
+	while (n as i64 != 0) {
+		sugg_try(&s, name, n.name);
+		n = n.next;
+	}
+	var tm *Tmpl = tmpls;
+	while (tm as i64 != 0) {
+		sugg_try(&s, name, tm.name);
+		tm = tm.next;
+	}
+	return s.best;
+}
+
+// Closest field of a struct / enum variant. Called from type.qela, where
+// the member lists live.
+fn suggest_member(names *Member, name str) str {
+	var s Sugg;
+	s.best_d = 3;
+	while (names as i64 != 0) {
+		sugg_try(&s, name, names.name);
+		names = names.next;
+	}
+	return s.best;
+}
+
+fn suggest_variant(vs *Variant, name str) str {
+	var s Sugg;
+	s.best_d = 3;
+	while (vs as i64 != 0) {
+		sugg_try(&s, name, vs.name);
+		vs = vs.next;
+	}
+	return s.best;
+}
+
+// "error: msg" followed by "hint: did you mean 'sug'?" when a candidate is
+// close enough; a plain error otherwise.
+fn error_suggest(pos i64, msg str, sug str) {
+	if (sug.len == 0) { error_at(pos, msg); }
+	var b Buf;
+	fmt_str(&b, "did you mean '");
+	fmt_str(&b, sug);
+	fmt_str(&b, "'?");
+	error_hint_at(pos, msg, buf_str(&b));
+}
 
 // ── global state ──
 
@@ -124,6 +222,33 @@ var multi_assign_seq int = 0;
 var gen_seq int = 0;
 var try_head *Node;
 var try_tail *Node;
+
+// A bare unknown name: the closest variable (any enclosing scope, then
+// globals) or function. Variables win ties because they are in scope here.
+fn suggest_name(name str) str {
+	var s Sugg;
+	s.best_d = 3;
+	var sc *Scope = scope_root;
+	while (sc as i64 != 0) {
+		var vs *VarScope = sc.vars;
+		while (vs as i64 != 0) {
+			sugg_try(&s, name, vs.name);
+			vs = vs.next;
+		}
+		sc = sc.next;
+	}
+	var g *Var = global_vars;
+	while (g as i64 != 0) {
+		sugg_try(&s, name, g.name);
+		g = g.next;
+	}
+	var f *Func = all_funcs;
+	while (f as i64 != 0) {
+		sugg_try(&s, name, f.name);
+		f = f.next;
+	}
+	return s.best;
+}
 
 struct LamCap {
 	next  *LamCap,
@@ -843,7 +968,7 @@ fn parse_type(t **Token) *Type {
 		fmt_str(&ub, "unknown type '");
 		fmt_str(&ub, (*t).text);
 		fmt_str(&ub, "'");
-		error_at((*t).pos, buf_str(&ub));
+		error_suggest((*t).pos, buf_str(&ub), suggest_type((*t).text));
 	}
 	*t = (*t).next;
 	return ty;
