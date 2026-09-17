@@ -26,7 +26,8 @@ for src in tests/*.qela; do
 	want_out=$(sed -n 's|^// expect-out: ||p' "$src")
 	[ -z "$want_exit" ] && want_exit=0
 
-	if grep -q '^// expect-compile-error' "$src"; then
+	if grep -q '^// expect-compile-error' "$src" &&
+	   ! grep -q '^// expect-compile-error arm64' "$src"; then
 		if "$QELA" "$src" -o "$bin" >/dev/null 2>&1; then
 			printf 'FAIL %s: compiled, but was expected to be rejected\n' "$name"
 			fail=$((fail + 1))

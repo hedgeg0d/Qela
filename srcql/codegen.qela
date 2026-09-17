@@ -281,10 +281,16 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) {
 	if (hidden >= 0) {
 		ir_lea_slot_acc(hidden, n.pos);
 		ir_push_acc(n.pos);
-		if (sys) { dest[nd] = sys_reg(ri); } else { dest[nd] = call_reg(ri); }
+		if (marshall && opt_target == TARGET_ARM64) {
+			// AAPCS64 carries the sret pointer in x8, off the integer
+			// argument sequence, so it does not consume an x-register.
+			dest[nd] = X8;
+		} else {
+			if (sys) { dest[nd] = sys_reg(ri); } else { dest[nd] = call_reg(ri); }
+			ri = ri + 1;
+		}
 		src[nd] = 0;
 		nd = nd + 1;
-		ri = ri + 1;
 	}
 
 	var a *Node = n.args;
@@ -379,7 +385,8 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) {
 		nd = nd - 1;
 		if (fmm[nd] >= 0) {
 			ir_pop_acc(n.pos);
-			gpr_to_xmm(fmm[nd], RAX, fsz[nd]);
+			if (opt_target == TARGET_ARM64) { arm64_fmov_from_gpr(fmm[nd], X0, fsz[nd]); }
+			else { gpr_to_xmm(fmm[nd], RAX, fsz[nd]); }
 		} else if (src[nd] == 0) {
 			ir_pop_reg(dest[nd], n.pos);
 		} else {
@@ -621,10 +628,18 @@ fn gen_call(n *Node) {
 			depth = depth - (overflow_pushed as int);
 		}
 	}
-	// A marshalled call's float result comes back in xmm0 (SysV), but Qela
-	// reads its own results from rax.
+	// A marshalled call's float result comes back in xmm0 (SysV) / d0 or s0
+	// (AAPCS64), but Qela reads its own results from the accumulator.
 	if (marshall && is_float(n.ty)) {
-		xmm_to_gpr(RAX, 0, n.ty.size);
+		if (opt_target == TARGET_ARM64) { arm64_fmov_to_gpr(X0, 0, n.ty.size); }
+		else { xmm_to_gpr(RAX, 0, n.ty.size); }
+	}
+	// A marshalled sret callee writes through x8 and leaves the accumulator
+	// dead; Qela's own ABI hands the buffer address back in the accumulator,
+	// and the consumer reads it from there. Reload the hidden buffer's
+	// address so that consumer stays unchanged.
+	if (marshall && ret_mem && opt_target == TARGET_ARM64) {
+		ir_lea_slot_acc(hidden, n.pos);
 	}
 	if (is_aggregate(n.ty) && !ret_mem) {
 		ir_store2(n.tmp.offset as i64, n.ty.size as i64, n.pos);
@@ -2263,10 +2278,11 @@ fn gen_asm_operands(a *Node) {
 
 fn gen_epilogue(pos i64) {
 	gen_restore();
-	// An exported extern function returns a float in xmm0 (SysV), where the
-	// body left it in rax.
+	// An exported extern function returns a float in xmm0 (SysV) / d0 or s0
+	// (AAPCS64), where the body left it in the accumulator.
 	if (gen_fn.extern && gen_fn.ret as i64 != 0 && is_float(gen_fn.ret)) {
-		gpr_to_xmm(0, RAX, gen_fn.ret.size);
+		if (opt_target == TARGET_ARM64) { arm64_fmov_from_gpr(0, X0, gen_fn.ret.size); }
+		else { gpr_to_xmm(0, RAX, gen_fn.ret.size); }
 	}
 	if (!gen_frameless && opt_target == TARGET_ARM64) { arm64_leave_frame(); }
 	else if (!gen_frameless) { b1(0xc9); }
@@ -2336,6 +2352,45 @@ fn gen_extern_params(f *Func) {
 }
 
 
+// AAPCS64, the ARM64 half of the same marshalling. A C caller hands the
+// exported extern its integer words in x0..x7 and its scalar floats in
+// s0..s7/d0..d7 on *separate* counters; Qela stages parameters internally
+// into the same x0..x7 (floats ride the GPRs), so the integer half needs no
+// work at all -- only the floats move out of the FP register file into
+// their frame slots, and an sret pointer arrives in x8 rather than the
+// first argument register. No re-staging pass is needed (unlike x86):
+// loading one integer parameter's register can never clobber a later one,
+// and the FP file is never written. Aggregate floats (a struct of floats,
+// AAPCS64's HFA) are not marshalled.
+fn gen_extern_params_arm64(f *Func) {
+	var ri int = 0;
+	var fi int = 0;
+	if (f.ret_slot as i64 != 0) {
+		arm64_st_local(f.ret_slot.offset as i64, X8);
+	}
+	var i int = 0;
+	while (i < f.nparams) {
+		var v *Var = func_param(f, i);
+		if (v.arg_stack) { i = i + 1; continue; }
+		if (is_float(v.ty)) {
+			arm64_fmov_to_gpr(X0, fi, v.ty.size);
+			fi = fi + 1;
+			if (v.has_reg) { arm64_mov_reg(v.reg, X0); }
+			else { arm64_st_local(v.offset as i64, X0); }
+		} else if (is_aggregate(v.ty) && !v.by_ref && v.ty.size > 8) {
+			arm64_st_local(v.offset as i64, call_reg(ri));
+			arm64_st_local((v.offset as i64) - 8, call_reg(ri + 1));
+			ri = ri + 2;
+		} else {
+			if (v.has_reg) { arm64_mov_reg(v.reg, call_reg(ri)); }
+			else { arm64_st_local(v.offset as i64, call_reg(ri)); }
+			ri = ri + 1;
+		}
+		i = i + 1;
+	}
+}
+
+
 fn gen_func(f *Func) {
 	// An extern declaration has no body; the symbol comes from the linker
 	// (only valid under -c, which skips this whole path).
@@ -2384,8 +2439,8 @@ fn gen_func(f *Func) {
 
 		var ri int = 0;
 		if (f.extern) {
-			if (opt_target == TARGET_ARM64) { die("error: -target arm64 does not support extern functions yet"); }
-			gen_extern_params(f);
+			if (opt_target == TARGET_ARM64) { gen_extern_params_arm64(f); }
+			else { gen_extern_params(f); }
 		} else {
 			if (f.ret_slot as i64 != 0) {
 				if (opt_target == TARGET_ARM64) { arm64_st_local(f.ret_slot.offset as i64, call_reg(ri)); }
@@ -2549,7 +2604,6 @@ fn layout_globals(globals *Var) {
 // below is still on the stack when the walker reads it.
 fn gen_panic_stub(msg_id int, msg_len i64) {
 	if (opt_target == TARGET_ARM64) {
-		if (opt_object) { die("error: -target arm64 does not support -c yet"); }
 		arm64_gen_panic_stub(msg_id, msg_len);
 		return;
 	}
@@ -2858,7 +2912,8 @@ fn codegen(u *Unit, img *Image) {
 					var ci i64 = 0;
 					while (ci < assert_sites.n) {
 						if (assert_msgs.p[ci] == msg) {
-							buf_patch32(&code, assert_sites.p[ci], sa - (assert_sites.p[ci] + 4));
+							if (opt_target == TARGET_ARM64) { arm64_patch_call(&code, assert_sites.p[ci], sa - assert_sites.p[ci]); }
+							else { buf_patch32(&code, assert_sites.p[ci], sa - (assert_sites.p[ci] + 4)); }
 						}
 						ci = ci + 1;
 					}
