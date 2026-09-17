@@ -1,26 +1,31 @@
 // stage1-only
 // expect-exit: 0
-// expect-out: 4-1-6-1
-// vec_of([1, 2, 3]) is the vec literal: the slice parameter binds T from
-// the array literal's element type (unify accepts an array where a slice
-// is declared, and coerce wraps it), and the result is a growable Vec.
-import "std/fmt.qela";
+// expect-out: 10 4
+// expect-out: 2
+// expect-out: 10
+// vec[a, b, c]: a Vec literal with the element type inferred from the
+// first element, rewritten at type time into vec_init + one vec_push
+// per element -- the ordinary Vec API on the other side.
+import "std/io.qela";
 import "std/vec.qela";
 
 fn main() int {
-	var v = vec_of([1, 2, 3]);
+	var v = vec[1, 2, 3];
 	v.push(4);
-	var a [2]i64 = [5, 6];
-	var w = vec_of(a);
-	var o = fmt_begin();
-	o = fmt_put_i64(o, v.len);
-	o = fmt_put_str(o, "-");
-	o = fmt_put_i64(o, v[0]);
-	o = fmt_put_str(o, "-");
-	o = fmt_put_i64(o, w[1]);
-	o = fmt_put_str(o, "-");
-	o = fmt_put_i64(o, 3 in v);
-	var r = fmt_result(o);
-	sys_write(1, r.ptr, r.len);
+	var t i64 = 0;
+	for x in v {
+		t = t + x;
+	}
+	println("${t} ${v.len}");
+	var w = vec["a", "b"];
+	println("${w.len}");
+	var u = vec[vec[1, 2], vec[3, 4]];
+	var s i64 = 0;
+	for inner in u {
+		for x in inner {
+			s = s + x;
+		}
+	}
+	println("${s}");
 	return 0;
 }
