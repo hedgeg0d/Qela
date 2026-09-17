@@ -1941,6 +1941,13 @@ fn gen_expr(n *Node) {
 		if (str_eq(n.name, "gc_data_base") || str_eq(n.name, "gc_data_end")) {
 			if (opt_target == TARGET_RISCV64) { riscv_gen_gc_bound(n, str_eq(n.name, "gc_data_base")); return; }
 			if (opt_target == TARGET_ARM64) { gen_gc_bound(n, str_eq(n.name, "gc_data_base")); return; }
+			if (opt_pie) {
+				rip_ref(0x8d, RAX);
+				if (str_eq(n.name, "gc_data_base")) { ilist_push(&gc_base_refs, code.n); }
+				else { ilist_push(&gc_end_refs, code.n); }
+				b4(0);
+				return;
+			}
 			rex_w(0, RAX);
 			b1(0xb8);
 			if (str_eq(n.name, "gc_data_base")) { ilist_push(&gc_base_refs, code.n); }
@@ -1963,6 +1970,12 @@ fn gen_expr(n *Node) {
 		if (str_eq(n.name, "coro_entry_addr")) {
 			if (opt_target == TARGET_RISCV64) { riscv_gen_coro_entry_addr(); return; }
 			if (opt_target == TARGET_ARM64) { gen_coro_entry_addr(); return; }
+			if (opt_pie) {
+				rip_ref(0x8d, RAX);
+				ilist_push(&coro_stub_refs, code.n);
+				b4(0);
+				return;
+			}
 			rex_w(0, RAX);
 			b1(0xb8);
 			ilist_push(&coro_stub_refs, code.n);
@@ -3241,6 +3254,11 @@ fn gen_panic_stub(msg_id int, msg_len i64) {
 		fmt_str(&nb, ".Lstrd");
 		fmt_i64(&nb, msg_id as i64);
 		push_reloc(at, buf_str(&nb), REL_PCREL32);
+	} else if (opt_pie) {
+		rip_ref(0x8d, RSI);
+		ilist_push(&panic_msg_at, code.n);
+		ilist_push(&panic_msg_ids, msg_id as i64);
+		b4(0);
 	} else if (base_is_wide()) {
 		b1(0x48); b1(0xbe);
 		ilist_push(&panic_msg_at, code.n);
@@ -3284,7 +3302,9 @@ fn reset_code() {
 	panic_msg_at.n = 0;
 	panic_msg_ids.n = 0;
 	bt_base_refs.n = 0;
+	bt_off_refs.n = 0;
 	bt_jmps.n = 0;
+	pie_table_site = -1;
 	coro_switch_refs.n = 0;
 	coro_switch_at = -1;
 	coro_stub_refs.n = 0;
@@ -3455,6 +3475,12 @@ fn emit_code(u *Unit, main_fn *Func, panic_id int, hdr i64) {
 	} else if (top_asm_head as i64 == 0 && entry_name.len == 0) {
 		// rbp is not guaranteed zero at process entry; the backtrace
 		// walker needs a sentinel main returns into.
+		if (opt_pie) {
+			// The RELATIVE fixups must run before anything reads a string
+			// or a global; no custom entry may replace this stub, since
+			// nothing else would apply them.
+			gen_pie_prologue(hdr);
+		}
 		if (opt_backtrace) {
 			b1(0x48); b1(0x31); b1(0xed);     // xor rbp, rbp
 		}
@@ -3563,9 +3589,10 @@ fn emit_code(u *Unit, main_fn *Func, panic_id int, hdr i64) {
 		else { gen_coro_stub(); }
 		var si i64 = 0;
 		while (si < coro_stub_refs.n) {
-			var abs i64 = opt_base + hdr + coro_stub_at;
+			var abs i64 = eff_base() + hdr + coro_stub_at;
 			if (opt_target == TARGET_RISCV64) { riscv_patch_auipc_addi(coro_stub_refs.p[si], abs); }
 			else if (opt_target == TARGET_ARM64) { arm64_patch_movz_movk_addr(coro_stub_refs.p[si], abs); }
+			else if (opt_pie) { buf_patch32(&code, coro_stub_refs.p[si], abs - hdr - (coro_stub_refs.p[si] + 4)); }
 			else {
 				var kk i64 = 0;
 				while (kk < 8) {
@@ -3640,9 +3667,20 @@ fn codegen(u *Unit, img *Image) {
 	s = u.strs;
 	while (s as i64 != 0) {
 		if (!s.keep && !opt_object) { s = s.next; continue; }
-		str_off[s.id] = rodata.n;
-		buf_u64(&rodata, 0);
-		buf_u64(&rodata, s.s.len);
+		if (opt_pie) {
+			// A PIE keeps its string headers in the RW segment: their ptr
+			// field holds an image address the entry stub (or, for the
+			// len-half, nothing at all) must be able to fix at runtime
+			// without an mprotect over the text. The offset indexes gdata
+			// instead of rodata.
+			str_off[s.id] = gdata.n;
+			buf_u64(&gdata, 0);
+			buf_u64(&gdata, s.s.len);
+		} else {
+			str_off[s.id] = rodata.n;
+			buf_u64(&rodata, 0);
+			buf_u64(&rodata, s.s.len);
+		}
 		s = s.next;
 	}
 
@@ -3747,6 +3785,9 @@ fn codegen(u *Unit, img *Image) {
 	riscv_image_hdr = hdr;
 
 	var main_fn *Func = find_func("main");
+	if (opt_pie && (entry_name.len != 0 || top_asm_head as i64 != 0)) {
+		die("error: --pie does not work with 'entry name;' or top-level asm (the fixup stub is suppressed)");
+	}
 	if (main_fn as i64 == 0 && top_asm_head as i64 == 0 && entry_name.len == 0) {
 		die("error: no 'main' function");
 	}
@@ -3810,9 +3851,70 @@ fn codegen(u *Unit, img *Image) {
 		bytes_off[panic_id] = rodata.n;
 		buf_bytes(&rodata, pmsg.ptr, pmsg.len);
 	}
+
+	// The PIE fixup table: u64 count, then one {slot, target} pair per
+	// data slot that holds an image address the entry stub has to add the
+	// runtime base to. Slots and targets are image offsets, so the walk
+	// is one add per word. It covers every string header (their ptr field
+	// holds the bytes' offset; the runtime value needs the base added)
+	// and the embedded-compiler pointer. The string pairs are filled in
+	// below once dbase is known -- rodata's own length, which dbase
+	// depends on, includes this table.
+	var pie_table_off i64 = -1;
+	var pie_str_pair i64 = -1;
+	var pie_embed_pair i64 = -1;
+	if (opt_pie) {
+		pie_table_off = rodata.n;
+		var pcnt i64 = 0;
+		var ps *StrLit = u.strs;
+		while (ps as i64 != 0) {
+			if (!ps.nullhdr && ps.keep) { pcnt = pcnt + 1; }
+			ps = ps.next;
+		}
+		if (embed_blob_off >= 0) { pcnt = pcnt + 1; }
+		buf_u64(&rodata, pcnt);
+		pie_str_pair = rodata.n;
+		ps = u.strs;
+		while (ps as i64 != 0) {
+			if (!ps.nullhdr && ps.keep) {
+				buf_u64(&rodata, 0);
+				buf_u64(&rodata, 0);
+			}
+			ps = ps.next;
+		}
+		if (embed_blob_off >= 0) {
+			pie_embed_pair = rodata.n;
+			buf_u64(&rodata, 0);
+			buf_u64(&rodata, 0);
+		}
+	}
 	while ((rodata.n & 7) != 0) { buf_u8(&rodata, 0); }
 
-	var dbase i64 = opt_base + SEG_GAP + hdr + code.n + rodata.n;
+	var dbase i64 = eff_base() + SEG_GAP + hdr + code.n + rodata.n;
+	if (opt_pie) {
+		var pp i64 = pie_str_pair;
+		var ps2 *StrLit = u.strs;
+		while (ps2 as i64 != 0) {
+			if (!ps2.nullhdr && ps2.keep) {
+				var k6 i64 = 0;
+				while (k6 < 8) {
+					rodata.p[pp + k6] = ((dbase + str_off[ps2.id]) >> (k6 * 8)) as u8;
+					rodata.p[pp + 8 + k6] = ((hdr + code.n + bytes_off[ps2.id]) >> (k6 * 8)) as u8;
+					k6 = k6 + 1;
+				}
+				pp = pp + 16;
+			}
+			ps2 = ps2.next;
+		}
+	}
+	if (pie_embed_pair >= 0) {
+		var k5 i64 = 0;
+		while (k5 < 8) {
+			rodata.p[pie_embed_pair + k5] = ((dbase + embed_ptrv.data_off) >> (k5 * 8)) as u8;
+			rodata.p[pie_embed_pair + 8 + k5] = ((dbase + embed_blob_off) >> (k5 * 8)) as u8;
+			k5 = k5 + 1;
+		}
+	}
 	embed_patch(dbase);
 	if (opt_target == TARGET_RISCV64) {
 		var bi i64 = 0;
@@ -3837,8 +3939,21 @@ fn codegen(u *Unit, img *Image) {
 			ei = ei + 1;
 		}
 	} else {
-		patch_abs(&gc_base_refs, dbase);
-		patch_abs(&gc_end_refs, dbase + gdata.n + bss_size);
+		if (opt_pie) {
+			var pbi i64 = 0;
+			while (pbi < gc_base_refs.n) {
+				buf_patch32(&code, gc_base_refs.p[pbi], dbase - hdr - (gc_base_refs.p[pbi] + 4));
+				pbi = pbi + 1;
+			}
+			var pei i64 = 0;
+			while (pei < gc_end_refs.n) {
+				buf_patch32(&code, gc_end_refs.p[pei], dbase + gdata.n + bss_size - hdr - (gc_end_refs.p[pei] + 4));
+				pei = pei + 1;
+			}
+		} else {
+			patch_abs(&gc_base_refs, dbase);
+			patch_abs(&gc_end_refs, dbase + gdata.n + bss_size);
+		}
 	}
 	if (tls_stub_at != -1 && opt_target == TARGET_RISCV64) {
 		var tabs2 i64 = dbase + tls_template_off;
@@ -3856,10 +3971,14 @@ fn codegen(u *Unit, img *Image) {
 		}
 	} else if (tls_stub_at != -1) {
 		var tabs i64 = dbase + tls_template_off;
-		var tkk i64 = 0;
-		while (tkk < 8) {
-			code.p[tls_stub_src_at + tkk] = ((tabs >> (tkk * 8)) & 255) as u8;
-			tkk = tkk + 1;
+		if (opt_pie) {
+			buf_patch32(&code, tls_stub_src_at, tabs - hdr - (tls_stub_src_at + 4));
+		} else {
+			var tkk i64 = 0;
+			while (tkk < 8) {
+				code.p[tls_stub_src_at + tkk] = ((tabs >> (tkk * 8)) & 255) as u8;
+				tkk = tkk + 1;
+			}
 		}
 	}
 
@@ -3873,9 +3992,10 @@ fn codegen(u *Unit, img *Image) {
 			emsg("extern '"); emsg(af.name);
 			emsg("' is not linked (extern needs -c and the linker)"); efail(af.pos);
 		}
-		var abs2 i64 = opt_base + hdr + at.addr;
+		var abs2 i64 = eff_base() + hdr + at.addr;
 		if (opt_target == TARGET_RISCV64) { riscv_patch_auipc_addi(af.at, abs2); }
 		else if (opt_target == TARGET_ARM64) { arm64_patch_movz_movk_addr(af.at, abs2); }
+		else if (opt_pie) { buf_patch32(&code, af.at, abs2 - hdr - (af.at + 4)); }
 		else {
 			var j i64 = 0;
 			while (j < 8) {
@@ -3907,7 +4027,7 @@ fn codegen(u *Unit, img *Image) {
 		var afn *Func = find_func(ar.name);
 		var aval i64 = 0;
 		if (afn as i64 != 0) {
-			aval = opt_base + hdr + afn.addr;
+			aval = eff_base() + hdr + afn.addr;
 		} else {
 			var gv *Var = find_global(ar.name);
 			if (gv as i64 == 0) {
@@ -3930,20 +4050,23 @@ fn codegen(u *Unit, img *Image) {
 
 	var sf *StrFixup = strrefs_head;
 	while (sf as i64 != 0) {
-		var sf_addr i64 = opt_base + hdr + code.n + str_off[sf.id];
+		var sf_addr i64 = eff_base() + hdr + code.n + str_off[sf.id];
+		if (opt_pie) { sf_addr = dbase + str_off[sf.id]; }
 		if (opt_target == TARGET_RISCV64) { riscv_patch_auipc_addi(sf.at, sf_addr); }
 		else if (opt_target == TARGET_ARM64) { arm64_patch_movz_movk_addr(sf.at, sf_addr); }
+		else if (opt_pie) { buf_patch32(&code, sf.at, sf_addr - hdr - (sf.at + 4)); }
 		else if (base_is_wide()) { patch64(&code, sf.at, sf_addr); }
 		else { buf_patch32(&code, sf.at, sf_addr); }
 		sf = sf.next;
 	}
 
-	var rodata_vaddr i64 = opt_base + hdr + code.n;
+	var rodata_vaddr i64 = eff_base() + hdr + code.n;
 	var pm i64 = 0;
 	while (pm < panic_msg_at.n) {
 		var pm_addr i64 = rodata_vaddr + bytes_off[panic_msg_ids.p[pm]];
 		if (opt_target == TARGET_RISCV64) { riscv_patch_auipc_addi(panic_msg_at.p[pm], pm_addr); }
 		else if (opt_target == TARGET_ARM64) { arm64_patch_movz_movk_addr(panic_msg_at.p[pm], pm_addr); }
+		else if (opt_pie) { buf_patch32(&code, panic_msg_at.p[pm], pm_addr - hdr - (panic_msg_at.p[pm] + 4)); }
 		else if (base_is_wide()) { patch64(&code, panic_msg_at.p[pm], pm_addr); }
 		else { buf_patch32(&code, panic_msg_at.p[pm], pm_addr); }
 		pm = pm + 1;
@@ -3954,14 +4077,32 @@ fn codegen(u *Unit, img *Image) {
 		}
 		var bi2 i64 = 0;
 		while (bi2 < bt_base_refs.n) {
-			buf_patch32(&code, bt_base_refs.p[bi2], rodata_vaddr + bt_table_off);
+			if (opt_pie) {
+				buf_patch32(&code, bt_base_refs.p[bi2], rodata_vaddr + bt_table_off - hdr - (bt_base_refs.p[bi2] + 4));
+			} else {
+				buf_patch32(&code, bt_base_refs.p[bi2], rodata_vaddr + bt_table_off);
+			}
 			bi2 = bi2 + 1;
+		}
+		var boi i64 = 0;
+		while (boi < bt_off_refs.n) {
+			buf_patch32(&code, bt_off_refs.p[boi], bt_table_off);
+			boi = boi + 1;
 		}
 	}
 	s = u.strs;
 	while (s as i64 != 0) {
 		var abs i64 = rodata_vaddr + bytes_off[s.id];
 		if (s.nullhdr || (!s.keep && !opt_object)) { s = s.next; continue; }
+		if (opt_pie) {
+			var kp i64 = 0;
+			while (kp < 8) {
+				gdata.p[str_off[s.id] + kp] = ((abs >> (kp * 8)) & 255) as u8;
+				kp = kp + 1;
+			}
+			s = s.next;
+			continue;
+		}
 		var k i64 = 0;
 		while (k < 8) {
 			rodata.p[str_off[s.id] + k] = ((abs >> (k * 8)) & 255) as u8;
@@ -3976,9 +4117,14 @@ fn codegen(u *Unit, img *Image) {
 			riscv_patch_auipc_addi(df.at, dbase + df.varp.data_off);
 		}
 		else if (opt_target == TARGET_ARM64) { arm64_patch_movz_movk_addr(df.at, dbase + df.varp.data_off); }
+		else if (opt_pie) { buf_patch32(&code, df.at, dbase + df.varp.data_off - hdr - (df.at + 4)); }
 		else if (base_is_wide()) { patch64(&code, df.at, dbase + df.varp.data_off); }
 		else { buf_patch32(&code, df.at, dbase + df.varp.data_off); }
 		df = df.next;
+	}
+
+	if (opt_pie && pie_table_site >= 0) {
+		buf_patch32(&code, pie_table_site, code.n + pie_table_off - pie_table_site - 4);
 	}
 
 	img.code = code;
