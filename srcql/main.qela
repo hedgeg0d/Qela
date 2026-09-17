@@ -7,6 +7,7 @@ import "codegen.qela";
 import "elf.qela";
 import "fmt.qela";
 import "fmtgen.qela";
+import "jmgen.qela";
 import "lsp.qela";
 import "doc.qela";
 import "../std/io.qela";
@@ -91,6 +92,7 @@ fn reset_compile() {
 	all_funcs = null;
 	funcs_tail = null;
 	fmtgen_reset();
+	jmgen_reset();
 	macro_list = null;
 	macro_tail = null;
 	top_asm_head = null;
