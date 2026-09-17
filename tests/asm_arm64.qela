@@ -1,0 +1,8 @@
+// stage1-only
+// arm64-only
+// expect-exit: 42
+// Raw bytes execute and the X0-result convention works: movz x0, #42.
+fn main() int {
+	var r i64 = asm(0x40, 0x05, 0x80, 0xd2);
+	return r as int;
+}

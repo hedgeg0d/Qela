@@ -1,0 +1,18 @@
+// stage1-only
+// arm64-only
+// expect-exit: 1
+// `$name` in asm operands loads the symbol's address into X0 (a MOVZ+MOVK
+// pair on this target) and `$rel name` emits a `bl` -- the same patches
+// the compiler applies to call targets, open to the source.
+var g i64 = 7;
+
+fn target() i64 {
+	return 0;
+}
+
+fn main() int {
+	var p i64 = asm($g);
+	var q i64 = &g as i64;
+	asm($rel target);
+	return (p == q) as int;
+}

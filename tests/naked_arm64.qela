@@ -1,0 +1,14 @@
+// stage1-only
+// arm64-only
+// expect-exit: 42
+// A naked function is bare bytes: no prologue, no epilogue, no implicit
+// ret. It cannot take parameters or have locals, return, defer or call --
+// the body is asm plus bare stores, and it must end with its own ret.
+fn naked weird_entry() int {
+	asm(0x40, 0x05, 0x80, 0xd2);      // mov x0, #42
+	asm(0xc0, 0x03, 0x5f, 0xd6);      // ret
+}
+
+fn main() int {
+	return weird_entry();
+}
