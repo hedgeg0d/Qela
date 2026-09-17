@@ -867,9 +867,10 @@ var riscv_image_hdr i64 = 0;   // EHDR+PHDR bytes before the code, set by codege
 
 fn riscv_patch_auipc_addi(at i64, addr i64) {
 	// The AUIPC's own address is `at` (code.n coordinates), its absolute
-	// position opt_base + riscv_image_hdr + at; the immediate is the
-	// PC-relative delta.
-	var pc i64 = opt_base + riscv_image_hdr + at;
+	// position eff_base() + riscv_image_hdr + at; the immediate is the
+	// PC-relative delta. Under --pie eff_base() is zero and addr is an
+	// image offset, so the delta is base-independent.
+	var pc i64 = eff_base() + riscv_image_hdr + at;
 	var delta i64 = addr - pc;
 	var hi i64 = (delta + 0x800) >> 12;
 	var lo i64 = delta - (hi << 12);
@@ -877,6 +878,41 @@ fn riscv_patch_auipc_addi(at i64, addr i64) {
 	var w1 i64 = buf_read32(&code, at + 4);
 	buf_patch32(&code, at, w0 | ((hi & 0xfffff) << 12));
 	buf_patch32(&code, at + 4, w1 | ((lo & 0xfff) << 20));
+}
+
+// AUIPC+ADDI resolving the image base: the delta is the site's own
+// position, negated, which does not depend on the load address. The site
+// is captured after the AUIPC lands -- b4() flushes any pending IR before
+// appending, so a pre-emission code.n would compute the wrong delta.
+fn riscv_pc_rel_base(rd int, hdr i64) {
+	riscv_auipc(rd);
+	var site i64 = code.n - 4;
+	var delta i64 = -(hdr + site);
+	var hi i64 = (delta + 0x800) >> 12;
+	var lo i64 = delta - (hi << 12);
+	buf_patch32(&code, site, buf_read32(&code, site) | ((hi & 0xfffff) << 12));
+	riscv_addi(rd, rd, lo);
+}
+
+// A PIE's entry stub: find the runtime base (the stub sits at code
+// offset 0, so the AUIPC's own position is known at emission), load the
+// fixup table rip-relative, and add the base to every slot it lists.
+fn riscv_gen_pie_prologue(hdr i64) {
+	riscv_pc_rel_base(S1, hdr);             // s1 = the runtime base
+	riscv_auipc_addi(S2);                   // s2 = the fixup table (patched)
+	pie_table_site = code.n - 8;            // the auipc word
+	riscv_ld_at(T0, S2, 0);                 // t0 = entry count
+	riscv_addi(S3, S2, 8);                  // s3 = first entry
+	var loop_at i64 = code.n;
+	riscv_b(32, T0, ZERO, 0, 0x63);         // beq t0, zero, done (7 body words + the tail jump)
+	riscv_ld_at(T1, S3, 0);                 // t1 = slot
+	riscv_ld_at(T2, S3, 8);                 // t2 = target
+	riscv_r(0, T1, S1, 0, T1, 0x33);        // add t1, t1, s1
+	riscv_r(0, T2, S1, 0, T2, 0x33);        // add t2, t2, s1
+	riscv_s(0, T2, T1, 3, 0x23);            // sd t2, 0(t1)
+	riscv_addi(S3, S3, 16);
+	riscv_addi(T0, T0, -1);
+	riscv_b(loop_at - code.n, ZERO, ZERO, 0, 0x63);  // j loop
 }
 
 fn riscv_add_strref(id int) {
@@ -1348,7 +1384,11 @@ fn riscv_bt_walker() {
 	riscv_mov_reg(A4, ZERO);                  // i
 	var scan_at i64 = code.n;
 	riscv_i(0, A2, 2, A5, 0x03);              // lw a5, 0(a2): delta
-	riscv_li64(T2, opt_base);
+	if (opt_pie) {
+		riscv_pc_rel_base(T2, riscv_image_hdr);  // t2 = the runtime base
+	} else {
+		riscv_li64(T2, opt_base);
+	}
 	riscv_r(0, T2, A5, 0, A5, 0x33);          // a5 = a5 + t2 (start addr)
 	riscv_b(0, A5, T0, 6, 0x63);              // bltu t0, a5, endscan
 	var endscan_at i64 = code.n - 4;

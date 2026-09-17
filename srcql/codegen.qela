@@ -2641,6 +2641,9 @@ fn add_callref_arm64(name str, pos i64) {
 // trailing 8-byte absolute slot -- A64 has no single mov-immediate, and a
 // LDR-literal slot confuses qemu's linear block decoder.
 fn add_absref_arm64(name str, pos i64) {
+	if (opt_pie) {
+		error_at(pos, "$name in asm embeds an absolute address, which a PIE cannot carry; use $rel");
+	}
 	var f *CallFixup = arena_alloc(sizeof(CallFixup), 8) as *CallFixup;
 	f.name = name;
 	f.pos = pos;
@@ -3439,6 +3442,7 @@ fn emit_code(u *Unit, main_fn *Func, panic_id int, hdr i64) {
 		// entry and the kernel leaves argc/argv at [sp]/[sp+8]. With
 		// backtraces on, s0 starts zero: the walker's frame chain stops
 		// there (main's prologue stores it as its own chain head).
+		if (opt_pie) { riscv_gen_pie_prologue(hdr); }
 		if (opt_backtrace) { riscv_mov_reg(S0, ZERO); }
 		if (tls_block_size > 8) {
 			// The stub clobbers a0-a7, so argc/argv load after the JAL,
@@ -3458,6 +3462,7 @@ fn emit_code(u *Unit, main_fn *Func, panic_id int, hdr i64) {
 		// main's return value is already in X0, which is also exit_group's
 		// first argument on AAPCS64, so unlike x86 no move is needed before
 		// the syscall.
+		if (opt_pie) { arm64_gen_pie_prologue(hdr); }
 		if (opt_backtrace) { die("error: --target arm64 does not support --backtrace yet"); }
 		if (tls_block_size > 8) {
 			// The stub clobbers X0-X7, so argc/argv load after the BL, not
@@ -3783,6 +3788,7 @@ fn codegen(u *Unit, img *Image) {
 	if (gdata.n + bss_size > 0) { nph = 2; }
 	var hdr i64 = EHDR_SZ + PHDR_SZ * (nph as i64);
 	riscv_image_hdr = hdr;
+	arm64_image_hdr = hdr;
 
 	var main_fn *Func = find_func("main");
 	if (opt_pie && (entry_name.len != 0 || top_asm_head as i64 != 0)) {
@@ -4124,7 +4130,13 @@ fn codegen(u *Unit, img *Image) {
 	}
 
 	if (opt_pie && pie_table_site >= 0) {
-		buf_patch32(&code, pie_table_site, code.n + pie_table_off - pie_table_site - 4);
+		if (opt_target == TARGET_RISCV64) {
+			riscv_patch_auipc_addi(pie_table_site, hdr + code.n + pie_table_off);
+		} else if (opt_target == TARGET_ARM64) {
+			arm64_patch_movz_movk_addr(pie_table_site, hdr + code.n + pie_table_off);
+		} else {
+			buf_patch32(&code, pie_table_site, code.n + pie_table_off - pie_table_site - 4);
+		}
 	}
 
 	img.code = code;

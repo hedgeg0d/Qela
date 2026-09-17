@@ -2397,9 +2397,6 @@ fn pie_check() {
 	if (opt_base != ELF_BASE) {
 		die("error: --pie and --base do not combine");
 	}
-	if (opt_target != TARGET_X86_64) {
-		die("error: --pie currently supports x86_64 only");
-	}
 }
 
 fn parse_addr(s str) i64 {
