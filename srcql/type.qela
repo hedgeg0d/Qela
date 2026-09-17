@@ -1554,6 +1554,8 @@ fn type_indirect_call(n *Node) {
 	n.args = head.next;
 	n.ty = ft.base;
 	if (is_aggregate(n.ty)) { n.tmp = alloc_temp(n.ty); }
+	n.clo_code = alloc_temp(ty_i64);
+	n.clo_env = alloc_temp(ty_i64);
 }
 
 fn type_syscall(n *Node) {
@@ -1865,7 +1867,7 @@ fn add_type(n *Node) {
 			type_cast_from_dyn(n);
 			return;
 		}
-		if (!is_numeric(n.ty) && n.ty.kind != TY_VOID) {
+		if (!is_numeric(n.ty) && n.ty.kind != TY_VOID && n.ty.kind != TY_FUNC) {
 			error_at(n.pos, "unsupported cast target");
 		}
 		// A slice/array/str-to-pointer cast would silently take the low
