@@ -1,0 +1,54 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: slept true
+// expect-out: unix true
+// expect-out: server got ping
+// expect-out: client got pong
+// expect-out: echo 0 hello proc
+import "std/io.qela";
+import "std/str.qela";
+import "std/time.qela";
+import "std/net.qela";
+import "std/proc.qela";
+
+fn main() int {
+	var t0 i64 = time_ms();
+	sleep_ms(20);
+	var dt i64 = time_ms() - t0;
+	println("slept ${dt >= 15 && dt < 500}");
+	println("unix ${time_unix() > 1700000000}");
+
+	var srv i64 = net_listen(18099);
+	if (srv < 0) { println("listen failed ${srv}"); return 1; }
+	var pid i64 = sys_fork();
+	if (pid == 0) {
+		sleep_ms(50);
+		var c i64 = net_connect("127.0.0.1", 18099);
+		net_send(c, "ping");
+		var b [64]u8;
+		var got i64 = net_recv(c, &b[0], 64);
+		var s str;
+		s.ptr = &b[0];
+		s.len = got;
+		println("client got ${s}");
+		net_close(c);
+		sys_exit(0);
+	}
+	var cl i64 = net_accept(srv);
+	var buf [64]u8;
+	var n i64 = net_recv(cl, &buf[0], 64);
+	var msg str;
+	msg.ptr = &buf[0];
+	msg.len = n;
+	println("server got ${msg}");
+	net_send(cl, "pong");
+	net_close(cl);
+	net_close(srv);
+	var raw i64 = 0;
+	sys_wait4(pid, &raw as *u8);
+
+	var code i64 = 0;
+	var out str = proc_capture("/bin/echo", ["hello", "proc"], &code);
+	println("echo ${code} ${str_trim(out)}");
+	return 0;
+}
