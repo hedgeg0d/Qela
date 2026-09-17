@@ -1,0 +1,18 @@
+// stage1-only
+// expect-exit: 42
+// $flag directives: compiler flags set in the source, applied to the
+// whole unit. -D feeds comptime conditions, and --pie needs no command
+// line here -- the runner compiles this file without it, yet the binary
+// still comes out position-independent.
+$flag --pie
+$flag -D MODE=42
+fn main() int {
+	var n i64 = 0;
+	$if (MODE == "42") {
+	n = 42;
+	}
+	$if (MODE == "7") {
+	n = 7;
+	}
+	return n;
+}
