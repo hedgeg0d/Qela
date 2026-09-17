@@ -1,0 +1,77 @@
+// expect-exit: 1
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+fn add2(a int, b int) int { return a + b; }
+fn fact(n int) int { if (n <= 1) { return 1; } return n * fact(n - 1); }
+fn zero() int { return 3; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn wide_make(a int, b int, c int) Wide { return Wide{a: a, b: b, c: c}; }
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 5;
+    var v1 int = 7;
+    var v2 int = 10;
+    var sv0 str = "abc";
+    var sv1 str = "abc";
+    var fv double = 0.3;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    v0 = true;
+    v2, v1 = v1, v2;
+    a[((-(((false * v1) as double) as i64)) & 3)] = a[(((v0 as i16) as u8) & 3)];
+    if ((a[(v2 & 3)] >= ((!(("zz")[0..2])[1]) & p.y))) {
+        if ((str_eq(("qwerty")[0..3], (("abc")[0..2])[0..2]) <= true)) {
+            sv0 = sv1;
+            a[(false & 3)] = 2;
+        } else {
+            v0 <<= (-false);
+            return (a[(false & 3)] > (((0 << 373) as double) <= (p.y as double)));
+        }
+        i1 = 0;
+        while ((i1 < 2)) {
+            i1 = (i1 + 1);
+            v1, v2 = v2, v1;
+            v0 = ((((false as i8) != (!189)) == (add2(-331, 10) != ('e' % ((-655 & 15) + 1)))) - (fv as i64));
+            e = E.B(fact(((((v0 | -843) > '\n') * ((3 as i8) - (-359 / ((v0 & 15) + 1)))) & 15)));
+        }
+    } else {
+        v2 %= ((((127 <= add2(-286, (0 / ((true & 15) + 1)))) as u16) & 15) + 1);
+        return (!((('\t' as u8) as u32) * (!(!408))));
+    }
+    v1 = (-((!(sv1).len) << ((-750 as i16) >= v1)));
+    v0 ^= (sv0).len;
+    v1 += (-'e');
+    w = Wide{a: (false << ((!('\n' as u32)) & ("xyz").len)), b: ((((v0 | true) + 3) * ((true as i16) as i32)) / (((((-874 % ((v2 & 15) + 1)) & (174 == '3')) as i32) & 15) + 1)), c: true};
+    n = Nest{tag: (add2(true, a[((!-1) & 3)]) as i32), p: Pair{x: (!(str_eq("qwerty", "hello") == (!str_eq(("xyzzy")[0..2], "aa")))), y: ((((fv * fv) + 1.5) as i64) & (!((-144 > false) + (-444))))}};
+    n.tag = ((((-536 >> false) as u8) > (str_eq((sv0)[0..2], ("abcd")[1..3]) == (2 ^ 100))) as u16);
+    v1 *= (("foobar")[1..6])[0];
+    var ob Buf;
+    fmt_i64(&ob, v1);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return (((a[('\n' & 3)] >= 'e') <= zero()) / ((((-('0' as i16)) as u32) & 15) + 1));
+}

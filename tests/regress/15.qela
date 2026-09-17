@@ -1,0 +1,62 @@
+// expect-exit: 0
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+fn add2(a int, b int) int { return a + b; }
+fn zero() int { return 3; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn wide_sum(w Wide) int { return w.a + w.b + w.c; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn main() int {
+    var v0 int = 5;
+    var v1 int = 3;
+    var v2 int = 1;
+    var sv0 str = "hi";
+    var sv1 str = "no";
+    var fv double = 0.1;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    b = Bag{p: (false >> (('c' > (4 > '\t')) != ((-56 as i32) >> ('g' <= -1)))), q: v2, r: ((2.0 as i64) as u16), s: 127};
+    i0 = 0;
+    while ((i0 < 3)) {
+        i0 = (i0 + 1);
+        w = Wide{a: (((("abcd")[1..3])[1] * ((-true) % ((('f' ^ true) & 15) + 1))) as u32), b: v0, c: add2((((("hello")[2..5]).len as u32) ^ (('a' as i32) as i8)), (((830 + 'g') <= (false - v2)) * -318))};
+        n.p.x = ((((true == -1) as i8) as i32) + v0);
+    }
+    v1, v0 = (wide_sum(w) as i32), ((((fv / 0.25) <= (v2 as double)) == (!a[(v0 & 3)])) == p.x);
+    fv = (fv - ((v2 as u16) as double));
+    sv1 = ("foobar")[3..5];
+    v1 *= ((false & ((sv0)[0..2])[1]) != -46);
+    v1, v0 = p.y, ((zero() as u16) <= p.x);
+    a[(a[(a[((370 > ('3' + 'f')) & 3)] & 3)] & 3)] = (("abcd")[0..3]).len;
+    a[((!(((-3) > (false as i32)) > (!(-660 as u32)))) & 3)] = ((((fv as i64) & ('e' == false)) as double) == (10.5 / -1.5));
+    v0 >>= ((((255 ^ v2) as i32) & add2((true * 255), (3 >= false))) % ((add2(add2((-1 << 'g'), ('\n' <= '3')), ((true == 'f') as u32)) & 15) + 1));
+    var ob Buf;
+    fmt_i64(&ob, v2);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return (-0.5 == -1.5);
+}

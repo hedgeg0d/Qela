@@ -1,0 +1,93 @@
+// expect-exit: 253
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+fn zero() int { return 3; }
+fn add2(a int, b int) int { return a + b; }
+fn mul2(a int, b int) int { return a * b; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn wide_swap(w Wide) Wide { return Wide{a: w.b, b: w.a, c: w.c}; }
+fn wide_sum(w Wide) int { return w.a + w.b + w.c; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 6;
+    var v1 int = 0;
+    var v2 int = 8;
+    var sv0 str = "no";
+    var sv1 str = "42";
+    var fv double = 1.7;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    v0, v1 = v1, v0;
+    v0, v2 = v2, v0;
+    match (e) {
+        A => {
+            return (mul2(((0.3 != fv) as i16), (-255)) % (((((("abc")[0..3]).len as u8) ^ mul2((v2 as u32), a[(v2 & 3)])) & 15) + 1));
+        }
+        B(mb0) => {
+            return (fv < ((str_eq(("foobar")[3..6], "42") as u16) as double));
+        }
+        C(mb0, mb1) => {
+            return (zero() - mb1);
+        }
+    }
+    v1 = ((("qwerty").len >= (-(v1 as i16))) as u16);
+    v0 = (((("hello")[1] as i16) ^ opt_d(D.None)) << (((sv0).len <= (-667 * -936)) as u8));
+    if (((-(((1 >> 232) == zero()) >= (!(v2 & 1)))) == (!a[((p.x >> v2) & 3)]))) {
+        v2 = (!p.x);
+    } else {
+        e = E.C(((-(('b' == -745) as i32)) > a[(((v1 as u8) as i16) & 3)]), (str_eq(("abc")[0..3], (("hello")[0..4])[0..2]) == ((("xyz")[0..2])[1] >= 255)));
+        v1 = tag_e(e);
+    }
+    match (e) {
+        A => {
+            return (((fv + (10.5 / 2.5)) + (v0 as double)) as i64);
+        }
+        B(mb0) => {
+            return ((!(!(-1 * '0'))) % ((100 & 15) + 1));
+        }
+        C(mb0, mb1) => {
+            return ('1' - mb1);
+        }
+    }
+    i0 = 0;
+    while ((i0 < 4)) {
+        v0 = (-((str_eq((sv0)[0..2], ("qwerty")[0..2]) ^ (("xyz")[0..3]).len) < ("aa")[0]));
+        a[i0] = (("hello")[1..5]).len;
+        i0 = (i0 + 1);
+    }
+    var ob Buf;
+    fmt_i64(&ob, v2);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return ((("qwerty")[1..4])[0..2])[0];
+}

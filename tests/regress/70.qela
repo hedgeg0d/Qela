@@ -1,0 +1,78 @@
+// expect-exit: 0
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+fn min2(a int, b int) int { if (a < b) { return a; } else { return b; } }
+fn fact(n int) int { if (n <= 1) { return 1; } return n * fact(n - 1); }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn wide_sum(w Wide) int { return w.a + w.b + w.c; }
+fn wide_make(a int, b int, c int) Wide { return Wide{a: a, b: b, c: c}; }
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 3;
+    var v1 int = 6;
+    var v2 int = 10;
+    var sv0 str = "hello";
+    var sv1 str = "foobar";
+    var fv double = 0.125;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    n = Nest{tag: 0, p: Pair{x: (((-(-726 as i16)) % ((-457 & 15) + 1)) as i32), y: ((((false as double) + fv) != fv) * v1)}};
+    fv = 10.5;
+    p = pair_swap(p);
+    match (e) {
+        A => {
+            return (!(sv0).len);
+        }
+        B(mb0) => {
+            return (366 != str_eq(sv0, "no"));
+        }
+        C(mb0, mb1) => {
+            return ((255 & (((false != 63) * (255 < false)) - (-(fv as i64)))) - mb1);
+        }
+    }
+    p.y = ((-(a[('2' & 3)] as u16)) >= opt_d(D.Some(((v2 | -35) == (-1 + v2)))));
+    p.x = (min2((wide_sum(w) >> (false < -831)), (sv0)[0]) / (((((3.75 > -1.5) as double) == ((v2 as double) - (-253 as double))) & 15) + 1));
+    v0 = 1;
+    e = E.C(str_eq(("abcd")[1..4], "zz"), (!(('c' - (v2 as u16)) % ((p.x & 15) + 1))));
+    match (e) {
+        A => {
+            return 'f';
+        }
+        B(mb0) => {
+            return ((-((!(sv0)[1]) | (('0' << -1) as u16))) & mb0);
+        }
+        C(mb0, mb1) => {
+            return p.y;
+        }
+    }
+    v1 /= (((((('d' as i32) <= true) >= wide_sum(w)) as i16) & 15) + 1);
+    var ob Buf;
+    fmt_i64(&ob, v0);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return (min2((-1.5 as i64), ((127 - 239) << (0 as i16))) >> ((str_eq("hello", ("abcd")[0..4]) & (-600 >> 0)) / ((((-208 as i8) < (true as u16)) & 15) + 1)));
+}

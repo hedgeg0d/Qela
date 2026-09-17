@@ -1,0 +1,60 @@
+// expect-exit: 1
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = -43;
+fn sub2(a int, b int) int { return a - b; }
+fn min2(a int, b int) int { if (a < b) { return a; } else { return b; } }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn wide_sum(w Wide) int { return w.a + w.b + w.c; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn main() int {
+    var v0 int = 4;
+    var v1 int = 1;
+    var v2 int = 3;
+    var sv0 str = "no";
+    var sv1 str = "xyz";
+    var fv double = 1.5;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    gv = (((!true) + ((true + 2) >= (false != 2))) == ((!(!'c')) as i32));
+    v1 = ((((gv as double) != (fv * 2.0)) as i8) - (((sv0)[0..2]).len > str_eq(("hello")[2..4], "abc")));
+    v1 = (((pair_sum(p) + (10.5 <= -0.5)) << ((fv - 0.125) as i64)) + ((fv + (true as double)) >= fv));
+    v1 = (((gv <= (-gv)) < ((sv1)[0..2])[0]) << (("foobar")[1..4]).len);
+    n.p.x = pair_sum(Pair{x: (-a[((true - false) & 3)]), y: (((-true) << 10) % ((((3 != v2) as i32) & 15) + 1))});
+    gv %= (((-((-(sv1)[0]) as u16)) & 15) + 1);
+    v1 = (((("xyz")[0..2])[0..2])[0..2]).len;
+    v1 = ((!((609 >= v1) % ((true & 15) + 1))) | v2);
+    e = E.B((((a[(false & 3)] as double) / 100.0) <= (((937 != gv) as double) / 0.1)));
+    v2 = -931;
+    v1 /= ((((((-401) | ('\t' < 'f')) + a[((v1 + 'g') & 3)]) ^ (2 / ((((-947 / ((1 & 15) + 1)) / (('2' & 15) + 1)) & 15) + 1))) & 15) + 1);
+    var ob Buf;
+    fmt_i64(&ob, v0);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return ((((42 | 'g') != (gv - 100)) & ((-746 + gv) % (((--905) & 15) + 1))) as u8);
+}

@@ -1,0 +1,98 @@
+// expect-exit: 44
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = 16;
+fn gcd2(a int, b int) int { while (b != 0) { var t int = a % b; a = b; b = t; } return a; }
+fn min2(a int, b int) int { if (a < b) { return a; } else { return b; } }
+fn mix5(a int, b int, c int, d int, e int) int { return a + b - c + d - e; }
+fn add2(a int, b int) int { return a + b; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn bag_sum(b Bag) int { return b.p + b.q + b.r + b.s; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 3;
+    var v1 int = 0;
+    var v2 int = 1;
+    var sv0 str = "xyz";
+    var sv1 str = "42";
+    var fv double = 0.3;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    e = E.B(((mix5(('3' as i16), (true as u32), add2(false, false), (sv0)[1], (-127)) as i16) + ((a[(gv & 3)] % (((true * 3) & 15) + 1)) / (((-(true & gv)) & 15) + 1))));
+    match (e) {
+        A => {
+            return (!(((1 == 411) < (2 >= true)) as i16));
+        }
+        B(mb0) => {
+            return (191 & mb0);
+        }
+        C(mb0, mb1) => {
+            return (441 - mb1);
+        }
+    }
+    match (e) {
+        A => {
+            return (((a[(10 & 3)] <= (-708 as u16)) / (((-opt_d(D.Some(false))) & 15) + 1)) as i16);
+        }
+        B(mb0) => {
+            return ((-2.0 - (0.1 / -2.0)) as i64);
+        }
+        C(mb0, mb1) => {
+            return ((3 as i16) - mb1);
+        }
+    }
+    gv, v2 = v2, gv;
+    p = pair_swap(p);
+    i0 = 0;
+    while ((i0 < 1)) {
+        i0 = (i0 + 1);
+        n.p.x = (((-(true + '\n')) == ('c' as i16)) % (((true != (sv0).len) & 15) + 1));
+        b = Bag{p: mix5(a[((-(-512 as i8)) & 3)], (((-1 as double) / 0.5) as i64), 127, (237 + ((fv + -2.0) < (0.25 / 1.5))), 1), q: (bag_sum(b) ^ (bag_sum(b) + (!a[(0 & 3)]))), r: (((!(true & 'c')) as double) as i64), s: ((-(sv1).len) <= v1)};
+        v1 = (((gv >> (-705 / ((-958 & 15) + 1))) as i32) < v0);
+    }
+    n.tag = tag_e(e);
+    sv0 = "hi";
+    e = E.B(((((true ^ -575) / (((fv > fv) & 15) + 1)) as u8) - (p.y as i8)));
+    if ((((gcd2((('c' as i8) & 15), ((660 << 847) & 15)) <= tag_e(e)) as i16) < ((((true as double) * (-2.0 / 1.7)) / 1.5) as i64))) {
+        v1, gv = ((((-127) % (((-759 >= false) & 15) + 1)) as u16) != str_eq(sv1, "abcd")), ((("no")[0..2]).len as u32);
+    } else {
+        gv = 0;
+        n.tag = ((127 as u8) >> (sv0)[0]);
+        return ((((873 >> true) < (true as i16)) < ((!'b') ^ (!v0))) / (((((-129 | 723) > (false != 1)) ^ (-a[(true & 3)])) & 15) + 1));
+    }
+    var ob Buf;
+    fmt_i64(&ob, v1);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return ("aa").len;
+}

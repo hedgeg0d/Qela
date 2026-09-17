@@ -1,0 +1,139 @@
+// expect-exit: 0
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = -43;
+fn mix5(a int, b int, c int, d int, e int) int { return a + b - c + d - e; }
+fn twice(n int) int { return n + n; }
+fn gcd2(a int, b int) int { while (b != 0) { var t int = a % b; a = b; b = t; } return a; }
+fn mul2(a int, b int) int { return a * b; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn wide_make(a int, b int, c int) Wide { return Wide{a: a, b: b, c: c}; }
+fn wide_swap(w Wide) Wide { return Wide{a: w.b, b: w.a, c: w.c}; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn main() int {
+    var v0 int = 1;
+    var v1 int = 5;
+    var v2 int = 2;
+    var sv0 str = "abc";
+    var sv1 str = "zz";
+    var fv double = 1.5;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    e = E.B(((p.y > p.x) as u16));
+    a[((('d' & str_eq("abcd", sv0)) >> ("aa").len) & 3)] = mul2(gv, (((fv - fv) + (1.0 * -1.5)) > fv));
+    v0 = ((gv as u8) <= (-(true == (-1 * v2))));
+    if (((pair_sum(Pair{x: ((true | 'g') & 744), y: gcd2((100 & 15), ((0 - gv) & 15))}) != ((!a[(false & 3)]) * 42)) <= a[(pair_sum(p) & 3)])) {
+        match (e) {
+            A => {
+                return (false >= ((-('\n' / ((83 & 15) + 1))) > (v2 ^ twice(v2))));
+            }
+            B(mb0) => {
+                return (p.x | mb0);
+            }
+            C(mb0, mb1) => {
+                return (((!((false << 2) >> ('e' / ((true & 15) + 1)))) >= (-false)) - mb1);
+            }
+        }
+        match (e) {
+            A => {
+                return (127 & (((-447 < 100) % ((-334 & 15) + 1)) - ((false == gv) > (-795 < 'b'))));
+            }
+            B(mb0) => {
+                return (true > v2);
+            }
+            C(mb0, mb1) => {
+                return pair_sum(p);
+            }
+        }
+    } else {
+        e = E.C(((!a[((-398 % ((-846 & 15) + 1)) & 3)]) < (a[((1 | true) & 3)] << ((true as i16) <= ('c' == -873)))), (-((sv1).len & 'g')));
+        if ((a[(v2 & 3)] == ("xyz").len)) {
+            a[(((("xyz")[0..2])[0..2]).len & 3)] = ((-v0) | (!((fv / 10.5) < 10.5)));
+            v0 = ((true as i16) ^ 42);
+            return ((-((1 <= false) % ((-618 & 15) + 1))) << 'e');
+        } else {
+            gv = gv;
+            a[(true & 3)] = ((0.125 / 1.7) as i64);
+            return twice(((!('b' > -78)) as i32));
+        }
+    }
+    v0 = (((fv / 0.125) > fv) > ((true + (("abcd")[1..4]).len) >> (-(false >= 'f'))));
+    i0 = 0;
+    while ((i0 < 4)) {
+        if (((((p.x as double) as i64) as i16) <= ((((0 as i8) as i8) as double) as i64))) {
+            gv = gv;
+            if ((((gv * ((10 - 797) <= (v2 + true))) >= (mix5(('\n' as u16), (127 as u16), (-431 | 0), v2, (v0 as u8)) == ((2 as u16) | ('a' >= 255)))) >= v1)) {
+                v2 = (363 == (!(gv / (((-2.0 as i64) & 15) + 1))));
+                i3 = 0;
+                while ((i3 < 1)) {
+                    i3 = (i3 + 1);
+                    match (e) {
+                        A => {
+                            return false;
+                        }
+                        B(mb0) => {
+                            return (sv1)[0];
+                        }
+                        C(mb0, mb1) => {
+                            return ((((127 * v2) > (100 == false)) as i16) % (((((true != -8) / ((('a' == 92) & 15) + 1)) | 255) & 15) + 1));
+                        }
+                    }
+                    v1, v2 = ((((true ^ '3') % (((true >> false) & 15) + 1)) as i32) != (!(-("hello")[1]))), ((a[((((((("xyzzy")[2..4])[0..2])[0..2])[0..2])[0..2]).len & 3)] | ((42 as i32) < (-true))) != (v0 as i8));
+                }
+            } else {
+                gv &= gv;
+            }
+        } else {
+            e = E.C(((!-1) + ((str_eq(sv0, ((sv0)[0..2])[0..2]) * ('a' & v2)) as i8)), gv);
+            if ((((0.5 <= (-1.5 / 0.125)) == ((fv / 0.3) == (-0.5 - (-938 as double)))) >= ((((0.5 * fv) as i64) as u32) != (v0 as u8)))) {
+                e = E.B(((((1 as u32) >= '\n') - -123) / ((((-('b' % ((v2 & 15) + 1))) * pair_sum(p)) & 15) + 1)));
+                v2 = (sv1)[0];
+                return ((a[(42 & 3)] == ("zz")[1]) != ((10 as u8) | (a[(gv & 3)] ^ (3 % (('\n' & 15) + 1)))));
+            } else {
+                p.x = ((145 as i16) >= ((('1' ^ v2) * (true as u8)) as i32));
+                return (p.x < (false as i16));
+            }
+        }
+        a[i0] = ((str_eq(("qwerty")[2..4], "abc") << ((false as i32) * (v1 * gv))) * (((gv - '3') != (gv as u32)) ^ ((false as u16) >= gv)));
+        i0 = (i0 + 1);
+    }
+    a[((((-(42 == gv)) as u16) >= (!(-false))) & 3)] = tag_e(e);
+    sv0 = sv1;
+    sv1 = "hi";
+    i0 = 0;
+    while ((i0 < 3)) {
+        i0 = (i0 + 1);
+        n.tag = (gv % ((((v2 as u8) as u16) & 15) + 1));
+    }
+    p = pair_swap(p);
+    var ob Buf;
+    fmt_i64(&ob, v0);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return a[((-'g') & 3)];
+}

@@ -1,0 +1,68 @@
+// expect-exit: 0
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = -10;
+fn max2(a int, b int) int { if (a > b) { return a; } else { return b; } }
+fn mul2(a int, b int) int { return a * b; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn wide_sum(w Wide) int { return w.a + w.b + w.c; }
+fn wide_swap(w Wide) Wide { return Wide{a: w.b, b: w.a, c: w.c}; }
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn main() int {
+    var v0 int = 6;
+    var v1 int = 8;
+    var v2 int = 10;
+    var sv0 str = "abc";
+    var sv1 str = "aa";
+    var fv double = -0.5;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    v0, gv = gv, v0;
+    v0, v2 = v2, v0;
+    e = E.C(((((true * true) | (!v0)) == (true << (10 > 2))) >> (100 <= gv)), ((mul2(p.x, ('0' >> '1')) as i32) | (("foobar")[3..6]).len));
+    v0 = ((('3' / (((3 as u8) & 15) + 1)) as u32) != (!((true as i16) + p.x)));
+    p.y = (str_eq("foobar", "42") as i32);
+    gv /= (((-(-((100 >= gv) << (456 as u32)))) & 15) + 1);
+    v1 = a[((-815 <= a[((100 * 716) & 3)]) & 3)];
+    if (((((mul2(true, gv) - (-866 <= -853)) ^ mul2(('b' + 385), false)) | pair_sum(Pair{x: ((gv * '0') as i8), y: (("aa")[1] as i8)})) <= opt_d(D.None))) {
+        n.p.x = ((-gv) != tag_e(e));
+    } else {
+        p.y = wide_sum(w);
+    }
+    var ob Buf;
+    fmt_i64(&ob, v2);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return ((((gv >> 478) > ('b' / ((v2 & 15) + 1))) >= ((0.125 * fv) <= 1.0)) as i16);
+}
