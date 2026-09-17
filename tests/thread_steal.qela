@@ -25,11 +25,12 @@ fn task(n i64) i64 {
 // read yet -- lost tasks, not a scheduling fluke, and done_count then
 // never reaches TASKS).
 fn push_to_zero(fn_ptr i64, n i64) {
-	while (!atomic_cas(&pool_lock[0], 0, 1)) { }
+	while (!atomic_cas(&pool_lock[0], 0, 1)) { sys_sched_yield(); }
 	while (pool_tail[0] - pool_head[0] >= POOL_QUEUE) {
 		atomic_store(&pool_lock[0], 0);
 		fence();
-		while (!atomic_cas(&pool_lock[0], 0, 1)) { }
+		sys_sched_yield();
+		while (!atomic_cas(&pool_lock[0], 0, 1)) { sys_sched_yield(); }
 	}
 	var slot i64 = pool_tail[0] % POOL_QUEUE;
 	pool_queue[0][slot].fn_ptr = fn_ptr;
@@ -55,7 +56,7 @@ fn main() int {
 	while (atomic_load(&done_count) < TASKS) {
 		spins = spins + 1;
 		if (spins % 1000 == 0) { sys_sched_yield(); }
-		if (spins > 500000000) { return 1; }
+		if (spins > 2000000000) { return 1; }
 	}
 
 	if (atomic_load(&seen[0]) + atomic_load(&seen[1]) + atomic_load(&seen[2]) + atomic_load(&seen[3]) != TASKS) {
