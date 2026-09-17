@@ -4,7 +4,11 @@ fn main() int {
 	$if (TARGET == "arm64") {
 		syscall(64, 1, msg.ptr, msg.len);
 	} $else {
+		$if (TARGET != "x86_64") {
+		syscall(64, 1, msg.ptr, msg.len);
+	} $else {
 		syscall(1, 1, msg.ptr, msg.len);
+	}
 	}
 	return 0;
 }
