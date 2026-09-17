@@ -29,6 +29,12 @@ let GC_CHUNK  = 1048576;
 let GC_HEADER = 32;
 let GC_MAX_THREADS = 64;
 
+// gc_save_regs spills every callee-saved register: x86's RBX/R12-R15 (padded
+// to 6), ARM64's x19-x28 (10) -- sized for the larger of the two so one
+// struct layout serves both targets; the unused tail on x86 stays zeroed and
+// gc_mark_range over zero words is a no-op.
+let GC_NREGS = 10;
+
 // Every block carries: size, mark flag, and links for the all-blocks list
 // and the free list.
 struct GcBlock;
@@ -43,7 +49,7 @@ struct GcThread {
 	active       i64,
 	stack_base   i64,
 	sp           i64,
-	regs         [6]i64,
+	regs         [10]i64,
 	at_safepoint i64,
 }
 
@@ -260,9 +266,9 @@ fn gc_collect() {
 
 	gc_lock();
 
-	var regs [6]i64;
+	var regs [10]i64;
 	gc_save_regs(&regs[0]);
-	gc_mark_range(&regs[0] as i64, (&regs[0] as i64) + 48);
+	gc_mark_range(&regs[0] as i64, (&regs[0] as i64) + GC_NREGS * 8);
 
 	var here i64 = 0;
 	var sp i64 = &here as i64;
@@ -274,7 +280,7 @@ fn gc_collect() {
 	var ti int = 0;
 	while (ti < GC_MAX_THREADS) {
 		if (gc_threads[ti].active != 0 && (gc_my_slot < 0 || (ti as i64) != gc_my_slot)) {
-			gc_mark_range(&gc_threads[ti].regs[0] as i64, (&gc_threads[ti].regs[0] as i64) + 48);
+			gc_mark_range(&gc_threads[ti].regs[0] as i64, (&gc_threads[ti].regs[0] as i64) + GC_NREGS * 8);
 			gc_mark_range(gc_threads[ti].sp, gc_threads[ti].stack_base + 8);
 		}
 		ti = ti + 1;
