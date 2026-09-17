@@ -1,0 +1,33 @@
+// expect-exit: 0
+// expect-out: ok 2 1 7
+// stage1-only
+// The interpreted/dynamic registration blob used to emit types newest
+// first, so a struct referring to another struct failed with unknown type.
+// The blob now keeps definition order and the program prints ok 2 1 7.
+import "std/eval.qela";
+import "std/io.qela";
+
+struct B {
+	x i64,
+}
+
+struct A {
+	b *B,
+	n i64,
+}
+
+var glob B;
+
+fn mk() A {
+	glob.x = 1;
+	var a A;
+	a.b = &glob;
+	a.n = 2;
+	return a;
+}
+
+fn main() int {
+	var a A = mk();
+	println("ok ${a.n} ${a.b.x} ${eval("3 + 4")}");
+	return 0;
+}
