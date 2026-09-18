@@ -6215,6 +6215,39 @@ fn parse(tok *Token) *Unit {
 		all_funcs = head.next;
 	}
 
+	if (find_func("abi_spawn") as i64 != 0 && find_func("__eval_has_dispatch") as i64 == 0) {
+		var hb Buf;
+		fmt_str(&hb, "fn __eval_has_dispatch(__name str) bool { if (__name.len < 0) { return false; }");
+		var hf *Func = all_funcs;
+		while (hf as i64 != 0) {
+			if (hf.eval_export && hf.nct == 0) {
+				fmt_str(&hb, " if (str_eq(__name, \"");
+				fmt_str(&hb, hf.name);
+				fmt_str(&hb, "\")) { return true; }");
+			}
+			hf = hf.next;
+		}
+		var hv *Var = global_vars;
+		while (hv as i64 != 0) {
+			if (hv.eval_export) {
+				fmt_str(&hb, " if (str_eq(__name, \"");
+				fmt_str(&hb, hv.name);
+				fmt_str(&hb, "\")) { return true; }");
+			}
+			hv = hv.next;
+		}
+		fmt_str(&hb, " return false; }");
+
+		var hfile int = diag_add_file("<eval-has-dispatch>", buf_str(&hb));
+		var htoks *Token = lex(buf_str(&hb), (hfile as i64) << FILE_SHIFT);
+		var hnf *Func = parse_function(&htoks, false);
+		if (funcs_tail as i64 == 0) { head.next = hnf; }
+		else { funcs_tail.next = hnf; }
+		funcs_tail = hnf;
+		if (head.next as i64 == 0) { head.next = all_funcs; }
+		all_funcs = head.next;
+	}
+
 	if (find_func("abi_spawn") as i64 != 0 && find_func("__eval_set_dispatch") as i64 == 0) {
 		var sb Buf;
 		fmt_str(&sb, "fn __eval_set_dispatch(__name str, __p *u8) { if (__name.ptr as i64 == __p as i64) { return; }");

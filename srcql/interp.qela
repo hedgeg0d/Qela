@@ -621,8 +621,11 @@ fn ip_foreign_set(name str, v i64) {
 // marshals the value over the ABI per the type. A read materialises a
 // copy at a fresh temp (an aggregate-typed expression evaluates to its
 // address), a write marshals the local copy back.
-fn ip_foreign_get_into(name str, dst i64, ty *Type) {
-	if (ip_abi_validating) { return; }
+fn ip_foreign_get_into(name str, dst i64, ty *Type, pos i64) {
+	if (ip_abi_validating) {
+		if (!ip_foreign_ask(name)) { ip_foreign_missing("variable", name, pos); }
+		return;
+	}
 	abi_send_frame(ABI_FD_CHILD_TO_HOST, 4 as u8, name.ptr, name.len);
 	var total i64 = abi_peek_len(ABI_FD_HOST_TO_CHILD);
 	if (total < 0) { ip_panic("interpreter: the host process died answering a foreign global read\n"); }
@@ -632,12 +635,13 @@ fn ip_foreign_get_into(name str, dst i64, ty *Type) {
 		ip_panic("interpreter: the host process died answering a foreign global read\n");
 	}
 	if (kind == 2) { ip_panic("interpreter: the host rejected a foreign global read\n"); }
+	if (kind == 3) { ip_foreign_missing("variable", name, pos); }
 	abi_unmarshal_value(pb, dst, ty);
 }
 
 fn ip_foreign_var_materialize(v *Var) i64 {
 	var dst i64 = ip_temp(v.ty.size as i64);
-	ip_foreign_get_into(v.name, dst, v.ty);
+	ip_foreign_get_into(v.name, dst, v.ty, v.pos);
 	return dst;
 }
 
@@ -898,7 +902,7 @@ fn ip_ev_call(n *Node) i64 { return ip_call_node(n); }
 fn ip_ev_syscall(n *Node) i64 { return ip_syscall(n); }
 
 fn ip_ev_funcaddr(n *Node) i64 {
-	if (n.foreign) { return ip_foreign_get(n.name); }
+	if (n.foreign) { return ip_foreign_get(n.name, n.pos); }
 	// There is no code address to hand out, so a function value is the
 	// *Func itself; ip_call_node casts it back for an indirect call.
 	var f *Func = find_func(n.name);
@@ -1114,14 +1118,40 @@ fn abi_marshal_value(b *Buf, addr i64, ty *Type) {
 	buf_u64(b, v);
 }
 
-fn ip_foreign_get(name str) i64 {
-	if (ip_abi_validating) { return 0; }
+// Asks the host whether it declares a name. Reading nothing and calling
+// nothing, so the validating pass may ask it too: that is what turns a typo
+// into a diagnostic instead of a zero.
+fn ip_foreign_ask(name str) bool {
+	abi_send_frame(ABI_FD_CHILD_TO_HOST, 6 as u8, name.ptr, name.len);
+	var rbuf [8]u8;
+	var kind u8 = 0;
+	var rn i64 = abi_recv_frame(ABI_FD_HOST_TO_CHILD, &kind, &rbuf[0], 8);
+	if (rn < 0) { ip_panic("interpreter: the host process died answering a name probe\n"); }
+	return kind != 3;
+}
+
+fn ip_foreign_missing(kind_word str, name str, pos i64) {
+	var b Buf;
+	fmt_str(&b, "undefined ");
+	fmt_str(&b, kind_word);
+	fmt_str(&b, " '");
+	fmt_str(&b, name);
+	fmt_str(&b, "'");
+	error_at(pos, buf_str(&b));
+}
+
+fn ip_foreign_get(name str, pos i64) i64 {
+	if (ip_abi_validating) {
+		if (!ip_foreign_ask(name)) { ip_foreign_missing("function", name, pos); }
+		return 0;
+	}
 	abi_send_frame(ABI_FD_CHILD_TO_HOST, 4 as u8, name.ptr, name.len);
 	var rbuf [8]u8;
 	var kind u8 = 0;
 	var rn i64 = abi_recv_frame(ABI_FD_HOST_TO_CHILD, &kind, &rbuf[0], 8);
 	if (rn < 0) { ip_panic("interpreter: the host process died answering a foreign global read\n"); }
 	if (kind == 2) { ip_panic("interpreter: the host rejected a foreign global read\n"); }
+	if (kind == 3) { ip_foreign_missing("function", name, pos); }
 	return *(&rbuf[0] as *i64);
 }
 
@@ -1144,7 +1174,10 @@ fn ip_foreign_call(n *Node, dst i64) i64 {
 	if (ip_abi_validating) {
 		// The fork only checks that the call does not crash; returning the
 		// destination keeps an aggregate result safe to dereference (the
-		// value in it is junk, which is fine).
+		// value in it is junk, which is fine). The name is still asked
+		// about, because a call to something the host does not declare has
+		// to be an error and not a zero.
+		if (!ip_foreign_ask(n.name)) { ip_foreign_missing("function", n.name, n.pos); }
 		return dst;
 	}
 	var msg str = buf_str(&b);
@@ -1158,6 +1191,7 @@ fn ip_foreign_call(n *Node, dst i64) i64 {
 		ip_panic("interpreter: the host process died answering a foreign call\n");
 	}
 	if (kind == 2) { ip_panic("interpreter: the host rejected a foreign call\n"); }
+	if (kind == 3) { ip_foreign_missing("function", n.name, n.pos); }
 	if (is_aggregate(n.ty)) {
 		abi_unmarshal_value(pb, dst, n.ty);
 		return dst;
