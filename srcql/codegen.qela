@@ -724,14 +724,14 @@ fn gen_addr(n *Node) {
 			if (n.varp.by_ref) { rbp_mem(0x8b, RAX, n.varp.offset as i64); }
 			else { rbp_mem(0x8d, RAX, n.varp.offset as i64); }
 		}
-		else if (n.varp.by_ref) { ld_local(RAX, n.varp.offset as i64); }
-		else { lea_local(RAX, n.varp.offset as i64); }
+		else if (n.varp.by_ref) { ir_load_var(n.varp, type_ptr(ty_i64), n.pos); }
+		else { ir_lea_slot_acc(n.varp.offset as i64, n.pos); }
 		return;
 	}
 	if (k == ND_DEREF) { gen_expr(n.lhs); return; }
 	if (k == ND_MEMBER) {
 		if (n.lhs.ty.kind == TY_PTR) { gen_expr(n.lhs); } else { gen_addr(n.lhs); }
-		add_rax_imm(n.member.offset as i64);
+		ir_add_acc_imm(n.member.offset as i64, n.pos);
 		return;
 	}
 	if (k == ND_INDEX) {
