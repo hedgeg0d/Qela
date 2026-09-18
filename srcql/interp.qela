@@ -1,0 +1,1064 @@
+import "comp.qela";
+import "diag.qela";
+import "lex.qela";
+import "parse.qela";
+import "type.qela";
+import "../std/io.qela";
+
+// A tree-walking interpreter for the typed AST: `qela irun prog.qela` runs
+// the program in this process instead of emitting an ELF for it. Not a
+// codegen backend -- it consumes what parse() produces and never touches
+// the IR, so codegen.qela and elf.qela stay out of the path entirely.
+//
+// This file is stage1-only (see the $if in main.qela): stage0 has no floats,
+// no match and none of the coro/atomic intrinsics, so the whole language is
+// available here and nowhere else in srcql/.
+//
+// The interpreted program's pointers are real addresses in this process.
+// That is what makes the standard library work unchanged: `syscall` is a
+// forwarded call, so arena/str/buf/io/fmt need no interpreter support at
+// all. The price is that a wild pointer corrupts the interpreter; bounds
+// checks stay on unless the user turns them off.
+
+let IP_STACK = 64 * 1024 * 1024;
+let IP_MAX_DEFERS = 1024;
+
+// The globals region: every global and every string literal, laid out the
+// way layout_globals/codegen's string table lay them out into .data, so
+// Var.data_off keeps its compiled meaning and gc_data_base/gc_data_end are
+// just this block's bounds.
+var ip_data i64 = 0;
+var ip_data_end i64 = 0;
+
+// The frame stack: one region, growing down, so the collector's
+// conservative scan of the interpreted program's own stack still works.
+var ip_stack_lo i64 = 0;
+var ip_sp i64 = 0;
+var ip_fp i64 = 0;
+
+var ip_unit *Unit;
+var ip_fn *Func;
+var ip_retdst i64 = 0;
+var ip_ret i64 = 0;
+var ip_returning bool = false;
+var ip_broke bool = false;
+var ip_continued bool = false;
+
+var ip_defers [1024]*Node;
+var ip_ndefer int = 0;
+
+// ip_intrinsic reports through these: a call it handled leaves
+// ip_was_intrinsic set and its result in ip_intrinsic_val.
+var ip_was_intrinsic bool = false;
+var ip_intrinsic_val i64 = 0;
+
+var ip_asm_warned [256]i64;
+var ip_asm_nwarned int = 0;
+
+// ── raw memory ──
+
+fn ip_ld64(a i64) i64 { var p *i64 = a as *i64; return *p; }
+fn ip_st64(a i64, v i64) { var p *i64 = a as *i64; *p = v; }
+
+fn ip_memcpy(dst i64, src i64, n i64) {
+	if (dst == src) { return; }
+	var d *u8 = dst as *u8;
+	var s *u8 = src as *u8;
+	var i i64 = 0;
+	while (i < n) { d[i] = s[i]; i = i + 1; }
+}
+
+fn ip_memzero(dst i64, n i64) {
+	var d *u8 = dst as *u8;
+	var i i64 = 0;
+	while (i < n) { d[i] = 0; i = i + 1; }
+}
+
+fn ip_load(a i64, t *Type) i64 {
+	var sz int = t.size;
+	if (sz == 8) { return ip_ld64(a); }
+	if (sz == 1) {
+		var p *u8 = a as *u8;
+		if (t.is_unsigned || t.kind == TY_BOOL) { return *p as i64; }
+		return ((*p) as i8) as i64;
+	}
+	if (sz == 2) {
+		var p *u16 = a as *u16;
+		if (t.is_unsigned) { return *p as i64; }
+		return ((*p) as i16) as i64;
+	}
+	if (sz == 4) {
+		var p *u32 = a as *u32;
+		// An f32 in flight is its own 32-bit pattern, never sign-extended.
+		if (t.is_unsigned || is_float(t)) { return *p as i64; }
+		return ((*p) as i32) as i64;
+	}
+	return ip_ld64(a);
+}
+
+fn ip_store(a i64, t *Type, v i64) {
+	var sz int = t.size;
+	if (sz == 8) { ip_st64(a, v); return; }
+	if (sz == 1) { var p *u8 = a as *u8; *p = (v & 255) as u8; return; }
+	if (sz == 2) { var p *u16 = a as *u16; *p = (v & 0xffff) as u16; return; }
+	if (sz == 4) { var p *u32 = a as *u32; *p = (v & 0xffffffff) as u32; return; }
+	ip_st64(a, v);
+}
+
+// ── float bit punning ──
+//
+// Values travel as i64. A float value is the bit pattern of its own type,
+// exactly as codegen keeps it in the accumulator: f32 arithmetic therefore
+// widens to f64, computes, and narrows back.
+
+fn ip_f64(b i64) f64 { var x i64 = b; var p *f64 = &x as *f64; return *p; }
+fn ip_bits64(x f64) i64 { var v f64 = x; var p *i64 = &v as *i64; return *p; }
+
+fn ip_f32(b i64) f32 { var x u32 = (b & 0xffffffff) as u32; var p *f32 = &x as *f32; return *p; }
+fn ip_bits32(x f32) i64 { var v f32 = x; var p *u32 = &v as *u32; return (*p) as i64; }
+
+fn ip_fval(b i64, t *Type) f64 {
+	if (t.size == 4) { return ip_f32(b) as f64; }
+	return ip_f64(b);
+}
+
+fn ip_fbits(x f64, t *Type) i64 {
+	if (t.size == 4) { return ip_bits32(x as f32); }
+	return ip_bits64(x);
+}
+
+// ── diagnostics ──
+
+fn ip_str_by_id(id i64) str {
+	var s *StrLit = ip_unit.strs;
+	while (s as i64 != 0) {
+		if ((s.id as i64) == id) { return s.s; }
+		s = s.next;
+	}
+	var e str;
+	return e;
+}
+
+// The compiled panic stub writes the message to fd 2 and exits 134; an
+// interpreted panic has to look the same from outside, so the corpus can
+// hold both to one expectation.
+fn ip_panic(msg str) {
+	write_str(STDERR, msg);
+	sys_exit(134);
+}
+
+// ── frames ──
+
+fn ip_temp(size i64) i64 {
+	ip_sp = ip_sp - ((size + 15) & ~15);
+	if (ip_sp < ip_stack_lo) { die("error: interpreter stack overflow"); }
+	return ip_sp;
+}
+
+// A frame is stack_size bytes below fp for the locals, plus the stack
+// argument area above it: a local sits at fp - Var.offset, a stack-passed
+// parameter at fp + Var.offset (offsets from 16 up), matching the two
+// conventions parse.qela hands out.
+fn ip_enter(f *Func) i64 {
+	var need i64 = (f.stack_size as i64) + 16 + 8 * (f.n_stack_args as i64);
+	need = (need + 15) & ~15;
+	ip_sp = ip_sp - need;
+	if (ip_sp < ip_stack_lo) { die("error: interpreter stack overflow"); }
+	return ip_sp + (f.stack_size as i64);
+}
+
+fn ip_var_addr(v *Var) i64 {
+	// One interpreter, one thread, so a tvar is an ordinary global with a
+	// slot of its own. When threads arrive this becomes a per-context block.
+	if (v.is_global || v.is_tls) { return ip_data + v.data_off; }
+	if (v.arg_stack) {
+		var a i64 = ip_fp + (v.offset as i64);
+		if (v.by_ref) { return ip_ld64(a); }
+		return a;
+	}
+	if (v.by_ref) { return ip_ld64(ip_fp - (v.offset as i64)); }
+	return ip_fp - (v.offset as i64);
+}
+
+fn ip_slot(v *Var) i64 { return ip_fp - (v.offset as i64); }
+
+// ── globals and string literals ──
+
+var ip_lay i64 = 0;
+
+fn ip_lay_align(a i64) {
+	ip_lay = (ip_lay + a - 1) & ~(a - 1);
+}
+
+// Two passes with the same walk: the first measures, the second writes.
+// Sizes come out identical because nothing here depends on an address.
+fn ip_layout(u *Unit, write bool) {
+	ip_lay = 0;
+	var v *Var = u.globals;
+	while (v as i64 != 0) {
+		if (v.extern && !v.has_init) {
+			error_at(v.pos, "interpreter: an extern global has no definition to run against");
+		}
+		ip_lay_align(v.ty.align as i64);
+		if (write) {
+			v.data_off = ip_lay;
+			ip_memzero(ip_data + ip_lay, v.ty.size as i64);
+			if (v.init != 0) {
+				var init i64 = v.init;
+				if (v.ty.kind == TY_FLOAT && v.ty.size == 4) {
+					init = ip_bits32(ip_f64(init) as f32);
+				}
+				ip_store(ip_data + ip_lay, v.ty, init);
+			}
+		}
+		ip_lay = ip_lay + (v.ty.size as i64);
+		v = v.next;
+	}
+
+	// Each literal is its bytes plus a NUL, then the 16-byte {ptr, len}
+	// header an ND_STRLIT evaluates to. StrLit.off carries the header.
+	var s *StrLit = u.strs;
+	while (s as i64 != 0) {
+		var bytes i64 = ip_lay;
+		if (write) {
+			ip_memcpy(ip_data + bytes, s.s.ptr as i64, s.s.len);
+			ip_store(ip_data + bytes + s.s.len, ty_u8, 0);
+		}
+		ip_lay = ip_lay + s.s.len + 1;
+		ip_lay_align(8);
+		if (write) {
+			s.off = ip_data + ip_lay;
+			ip_st64(ip_data + ip_lay, ip_data + bytes);
+			ip_st64(ip_data + ip_lay + 8, s.s.len);
+		}
+		ip_lay = ip_lay + 16;
+		s = s.next;
+	}
+	ip_lay_align(16);
+}
+
+// ── expressions ──
+
+fn ip_addr(n *Node) i64 {
+	var k int = n.kind;
+	if (k == ND_VAR) { return ip_var_addr(n.varp); }
+	if (k == ND_DEREF) { return ip_eval(n.lhs); }
+	if (k == ND_MEMBER) {
+		var base i64 = 0;
+		if (n.lhs.ty.kind == TY_PTR) { base = ip_eval(n.lhs); }
+		else { base = ip_addr(n.lhs); }
+		return base + (n.member.offset as i64);
+	}
+	if (k == ND_INDEX) { return ip_index_addr(n); }
+	// An aggregate-valued expression already evaluates to its address, so
+	// anything else addressable (a call result, a literal, a match arm)
+	// arrives here already materialised.
+	if (is_aggregate(n.ty)) { return ip_eval(n); }
+	error_at(n.pos, "interpreter: expression is not addressable");
+	return 0;
+}
+
+fn ip_index_addr(n *Node) i64 {
+	var lt *Type = n.lhs.ty;
+	var idx i64 = 0;
+	var base i64 = 0;
+	var len i64 = -1;
+
+	if (lt.kind == TY_SLICE) {
+		var hdr i64 = ip_addr(n.lhs);
+		base = ip_ld64(hdr);
+		len = ip_ld64(hdr + 8);
+	} else if (lt.kind == TY_ARRAY) {
+		base = ip_addr(n.lhs);
+		len = lt.len;
+	} else {
+		base = ip_eval(n.lhs);
+	}
+	idx = ip_eval(n.rhs);
+
+	if (len >= 0 && !opt_no_bounds && !n.nobounds) {
+		// Unsigned compare, so a negative index trips the same check.
+		if ((idx as u64) >= (len as u64)) { ip_panic("index out of bounds\n"); }
+	}
+	return base + idx * (lt.base.size as i64);
+}
+
+fn ip_binop(n *Node) i64 {
+	var k int = n.kind;
+	var lt *Type = n.lhs.ty;
+
+	if (is_float(lt)) {
+		var a f64 = ip_fval(ip_eval(n.lhs), lt);
+		var b f64 = ip_fval(ip_eval(n.rhs), n.rhs.ty);
+		if (k == ND_ADD) { return ip_fbits(a + b, n.ty); }
+		if (k == ND_SUB) { return ip_fbits(a - b, n.ty); }
+		if (k == ND_MUL) { return ip_fbits(a * b, n.ty); }
+		if (k == ND_DIV) { return ip_fbits(a / b, n.ty); }
+		if (k == ND_EQ) { return (a == b) as i64; }
+		if (k == ND_NE) { return (a != b) as i64; }
+		if (k == ND_LT) { return (a < b) as i64; }
+		if (k == ND_LE) { return (a <= b) as i64; }
+		error_at(n.pos, "interpreter: operator not defined for floats");
+	}
+
+	// Right side first, then left: the order gen_binop emits, so a call
+	// with a side effect on either side happens in the same sequence here.
+	var rt *Type = n.rhs.ty;
+	var ptr_diff bool = k == ND_SUB && lt.kind == TY_PTR && rt.kind == TY_PTR;
+	var b i64 = ip_eval(n.rhs);
+	if (!ptr_diff && lt.kind == TY_PTR && rt.kind != TY_PTR) {
+		b = b * (lt.base.size as i64);
+	}
+	var a i64 = ip_eval(n.lhs);
+	var t *Type = n.ty;
+	var uns bool = t.is_unsigned || t.kind == TY_PTR;
+
+	if (k == ND_SUB && ptr_diff) { return (a - b) / (lt.base.size as i64); }
+	if (k == ND_ADD) { return ip_narrow(a + b, t); }
+	if (k == ND_SUB) { return ip_narrow(a - b, t); }
+	if (k == ND_MUL) { return ip_narrow(a * b, t); }
+	if (k == ND_DIV) {
+		if (b == 0) { ip_panic("division by zero\n"); }
+		if (uns) { return ip_narrow((((a as u64) / (b as u64)) as i64), t); }
+		return ip_narrow(a / b, t);
+	}
+	if (k == ND_MOD) {
+		if (b == 0) { ip_panic("division by zero\n"); }
+		if (uns) { return ip_narrow((((a as u64) % (b as u64)) as i64), t); }
+		return ip_narrow(a % b, t);
+	}
+	if (k == ND_BITAND) { return a & b; }
+	if (k == ND_BITOR)  { return a | b; }
+	if (k == ND_BITXOR) { return a ^ b; }
+	if (k == ND_SHL) { return ip_narrow(a << b, t); }
+	if (k == ND_SHR) {
+		if (uns) { return (((a as u64) >> b) as i64); }
+		return a >> b;
+	}
+
+	// A comparison reads the operands' signedness, not the result's: the
+	// result is bool, which would make every compare unsigned.
+	var cuns bool = lt.is_unsigned || lt.kind == TY_PTR;
+	if (k == ND_EQ) { return (a == b) as i64; }
+	if (k == ND_NE) { return (a != b) as i64; }
+	if (k == ND_LT) {
+		if (cuns) { return ((a as u64) < (b as u64)) as i64; }
+		return (a < b) as i64;
+	}
+	if (k == ND_LE) {
+		if (cuns) { return ((a as u64) <= (b as u64)) as i64; }
+		return (a <= b) as i64;
+	}
+	error_at(n.pos, "interpreter: invalid expression");
+	return 0;
+}
+
+// Truncate to the type's width, then sign- or zero-extend back to 64 bits,
+// which is what CAST_TRUNC does in the compiled path.
+fn ip_narrow(v i64, t *Type) i64 {
+	if (t.kind == TY_BOOL) { return (v != 0) as i64; }
+	var sz int = t.size;
+	if (sz >= 8 || is_float(t) || is_aggregate(t)) { return v; }
+	if (sz == 1) {
+		if (t.is_unsigned) { return v & 255; }
+		return ((v & 255) as u8 as i8) as i64;
+	}
+	if (sz == 2) {
+		if (t.is_unsigned) { return v & 0xffff; }
+		return ((v & 0xffff) as u16 as i16) as i64;
+	}
+	if (t.is_unsigned) { return v & 0xffffffff; }
+	return ((v & 0xffffffff) as u32 as i32) as i64;
+}
+
+fn ip_cast(n *Node) i64 {
+	var v i64 = ip_eval(n.lhs);
+	var st *Type = n.lhs.ty;
+	var dt *Type = n.ty;
+	// n.val == 1 marks a bit reinterpret, not a numeric conversion.
+	if (n.val == 1) { return v; }
+	if (dt.kind == TY_BOOL) { return (v != 0) as i64; }
+	if (is_float(st) && is_float(dt)) {
+		if (st.size == dt.size) { return v; }
+		return ip_fbits(ip_fval(v, st), dt);
+	}
+	if (is_float(dt)) {
+		if (st.is_unsigned) { return ip_fbits((v as u64) as f64, dt); }
+		return ip_fbits(v as f64, dt);
+	}
+	if (is_float(st)) {
+		var f f64 = ip_fval(v, st);
+		if (dt.is_unsigned) { return ip_narrow((f as u64) as i64, dt); }
+		return ip_narrow(f as i64, dt);
+	}
+	return ip_narrow(v, dt);
+}
+
+fn ip_structlit(n *Node) i64 {
+	var base i64 = ip_slot(n.tmp);
+	var nmembers int = 0;
+	var m *Member = n.ty.members;
+	while (m as i64 != 0) { nmembers = nmembers + 1; m = m.next; }
+	if (n.nargs < nmembers) { ip_memzero(base, n.ty.size as i64); }
+
+	var a *Node = n.args;
+	while (a as i64 != 0) {
+		var dst i64 = base + (a.member.offset as i64);
+		if (is_aggregate(a.member.ty)) {
+			ip_memcpy(dst, ip_eval(a.lhs), a.member.ty.size as i64);
+		} else {
+			ip_store(dst, a.member.ty, ip_eval(a.lhs));
+		}
+		a = a.next;
+	}
+	return base;
+}
+
+fn ip_enumlit(n *Node) i64 {
+	var base i64 = ip_slot(n.tmp);
+	ip_st64(base, n.variant.tag as i64);
+	var f *Member = n.variant.fields;
+	var a *Node = n.args;
+	while (a as i64 != 0) {
+		var dst i64 = base + (f.offset as i64);
+		if (is_aggregate(f.ty)) { ip_memcpy(dst, ip_eval(a), f.ty.size as i64); }
+		else { ip_store(dst, f.ty, ip_eval(a)); }
+		f = f.next;
+		a = a.next;
+	}
+	return base;
+}
+
+fn ip_assign(n *Node) i64 {
+	if (is_aggregate(n.lhs.ty)) {
+		var dst i64 = ip_addr(n.lhs);
+		ip_memcpy(dst, ip_eval(n.rhs), n.lhs.ty.size as i64);
+		return dst;
+	}
+	var a i64 = ip_addr(n.lhs);
+	var v i64 = ip_eval(n.rhs);
+	ip_store(a, n.lhs.ty, v);
+	return v;
+}
+
+fn ip_opassign(n *Node) i64 {
+	var a i64 = ip_addr(n.lhs);
+	var t *Type = n.lhs.ty;
+	var cur i64 = ip_load(a, t);
+	var rhs i64 = ip_eval(n.rhs);
+	var r i64 = 0;
+
+	if (is_float(t)) {
+		var x f64 = ip_fval(cur, t);
+		var y f64 = ip_fval(rhs, n.rhs.ty);
+		if (n.val == ND_ADD) { r = ip_fbits(x + y, t); }
+		else if (n.val == ND_SUB) { r = ip_fbits(x - y, t); }
+		else if (n.val == ND_MUL) { r = ip_fbits(x * y, t); }
+		else if (n.val == ND_DIV) { r = ip_fbits(x / y, t); }
+		else { error_at(n.pos, "interpreter: operator not defined for floats"); }
+		ip_store(a, t, r);
+		return r;
+	}
+
+	// A pointer's compound assignment scales by the pointee, whatever the
+	// operator -- gen_opassign scales on the left operand's type alone.
+	if (t.kind == TY_PTR && t.base.size != 1) { rhs = rhs * (t.base.size as i64); }
+	var uns bool = t.is_unsigned || t.kind == TY_PTR;
+	if (n.val == ND_ADD) { r = cur + rhs; }
+	else if (n.val == ND_SUB) { r = cur - rhs; }
+	else if (n.val == ND_MUL) { r = cur * rhs; }
+	else if (n.val == ND_DIV) {
+		if (rhs == 0) { ip_panic("division by zero\n"); }
+		if (uns) { r = ((cur as u64) / (rhs as u64)) as i64; } else { r = cur / rhs; }
+	} else if (n.val == ND_MOD) {
+		if (rhs == 0) { ip_panic("division by zero\n"); }
+		if (uns) { r = ((cur as u64) % (rhs as u64)) as i64; } else { r = cur % rhs; }
+	}
+	else if (n.val == ND_BITAND) { r = cur & rhs; }
+	else if (n.val == ND_BITOR)  { r = cur | rhs; }
+	else if (n.val == ND_BITXOR) { r = cur ^ rhs; }
+	else if (n.val == ND_SHL) { r = cur << rhs; }
+	else if (n.val == ND_SHR) {
+		if (uns) { r = ((cur as u64) >> rhs) as i64; } else { r = cur >> rhs; }
+	} else { error_at(n.pos, "interpreter: unsupported compound assignment"); }
+
+	r = ip_narrow(r, t);
+	ip_store(a, t, r);
+	return r;
+}
+
+fn ip_slice_expr(n *Node) i64 {
+	// A slice expression materialises a {ptr, len} header in its own temp.
+	var base i64 = ip_slot(n.tmp);
+	var lt *Type = n.lhs.ty;
+	var src i64 = 0;
+	var srclen i64 = 0;
+
+	if (lt.kind == TY_SLICE) {
+		var hdr i64 = ip_addr(n.lhs);
+		src = ip_ld64(hdr);
+		srclen = ip_ld64(hdr + 8);
+	} else if (lt.kind == TY_ARRAY) {
+		src = ip_addr(n.lhs);
+		srclen = lt.len;
+	} else {
+		error_at(n.pos, "interpreter: cannot slice this operand");
+	}
+
+	// Bounds are n.rhs (start) and n.then (end); either may be absent.
+	var lo i64 = 0;
+	if (n.rhs as i64 != 0) { lo = ip_eval(n.rhs); }
+	var hi i64 = srclen;
+	if (n.then as i64 != 0) { hi = ip_eval(n.then); }
+
+	if (!opt_no_bounds) {
+		if ((hi as u64) > (srclen as u64)) { ip_panic("index out of bounds\n"); }
+		if ((lo as u64) > (hi as u64)) { ip_panic("index out of bounds\n"); }
+	}
+	ip_st64(base, src + lo * (n.ty.base.size as i64));
+	ip_st64(base + 8, hi - lo);
+	return base;
+}
+
+fn ip_eval(n *Node) i64 {
+	if (n as i64 == 0) { return 0; }
+	var k int = n.kind;
+
+	if (k == ND_NUM) { return n.val; }
+	if (k == ND_COMPTIME) { return n.val; }
+	if (k == ND_SIZEOF) { return n.typeval.size as i64; }
+	if (k == ND_STRLIT) {
+		var s *StrLit = ip_unit.strs;
+		while (s as i64 != 0) {
+			if ((s.id as i64) == n.val) { return s.off; }
+			s = s.next;
+		}
+		error_at(n.pos, "interpreter: unknown string literal");
+	}
+	if (k == ND_VAR) {
+		var a i64 = ip_var_addr(n.varp);
+		if (is_aggregate(n.ty)) { return a; }
+		return ip_load(a, n.ty);
+	}
+	if (k == ND_ADDR) { return ip_addr(n.lhs); }
+	if (k == ND_DEREF) {
+		var a i64 = ip_eval(n.lhs);
+		if (is_aggregate(n.ty)) { return a; }
+		return ip_load(a, n.ty);
+	}
+	if (k == ND_MEMBER || k == ND_INDEX) {
+		var a i64 = ip_addr(n);
+		if (is_aggregate(n.ty)) { return a; }
+		return ip_load(a, n.ty);
+	}
+	if (k == ND_SLICE) { return ip_slice_expr(n); }
+	if (k == ND_STRUCTLIT) { return ip_structlit(n); }
+	if (k == ND_ENUMLIT) { return ip_enumlit(n); }
+	if (k == ND_CAST) { return ip_cast(n); }
+	if (k == ND_ASSIGN) { return ip_assign(n); }
+	if (k == ND_OPASSIGN) { return ip_opassign(n); }
+	if (k == ND_COMMA) { ip_eval(n.lhs); return ip_eval(n.rhs); }
+	if (k == ND_NOT) { return (ip_eval(n.lhs) == 0) as i64; }
+	if (k == ND_BITNOT) { return ip_narrow(~ip_eval(n.lhs), n.ty); }
+	if (k == ND_NEG) {
+		if (is_float(n.ty)) { return ip_fbits(-ip_fval(ip_eval(n.lhs), n.ty), n.ty); }
+		return ip_narrow(-ip_eval(n.lhs), n.ty);
+	}
+	if (k == ND_AND) {
+		if (ip_eval(n.lhs) == 0) { return 0; }
+		return (ip_eval(n.rhs) != 0) as i64;
+	}
+	if (k == ND_OR) {
+		if (ip_eval(n.lhs) != 0) { return 1; }
+		return (ip_eval(n.rhs) != 0) as i64;
+	}
+	if (k == ND_ADD || k == ND_SUB || k == ND_MUL || k == ND_DIV ||
+	    k == ND_MOD || k == ND_BITAND || k == ND_BITOR || k == ND_BITXOR ||
+	    k == ND_SHL || k == ND_SHR || k == ND_EQ || k == ND_NE ||
+	    k == ND_LT || k == ND_LE) {
+		return ip_binop(n);
+	}
+	if (k == ND_CALL) { return ip_call_node(n); }
+	if (k == ND_SYSCALL) { return ip_syscall(n); }
+	if (k == ND_FUNCADDR) {
+		// There is no code address to hand out, so a function value is the
+		// *Func itself; ip_call_node casts it back for an indirect call.
+		var f *Func = find_func(n.name);
+		if (f as i64 == 0) { error_at(n.pos, "interpreter: undefined function"); }
+		return f as i64;
+	}
+	if (k == ND_ASSERT) { ip_assert(n); return 0; }
+	if (k == ND_ASM || k == ND_ASMREF) {
+		ip_warn_asm(n.pos);
+		return 0;
+	}
+	if (k == ND_ZERO) {
+		var a i64 = ip_slot(n.varp);
+		ip_memzero(a, n.varp.ty.size as i64);
+		return 0;
+	}
+	if (k == ND_IF || k == ND_FOR || k == ND_BLOCK || k == ND_MATCH ||
+	    k == ND_EXPRSTMT || k == ND_RET || k == ND_BREAK || k == ND_CONT ||
+	    k == ND_DEFER) {
+		ip_stmt(n);
+		return 0;
+	}
+	error_at(n.pos, "interpreter: unsupported expression");
+	return 0;
+}
+
+// ── asm, naked, entry: ignored, once per site ──
+
+fn ip_warn_once(pos i64, msg str) {
+	var i int = 0;
+	while (i < ip_asm_nwarned) {
+		if (ip_asm_warned[i] == pos) { return; }
+		i = i + 1;
+	}
+	if (ip_asm_nwarned < 256) {
+		ip_asm_warned[ip_asm_nwarned] = pos;
+		ip_asm_nwarned = ip_asm_nwarned + 1;
+	}
+	warn_at(pos, msg);
+}
+
+fn ip_warn_asm(pos i64) {
+	ip_warn_once(pos, "interpreter: ignoring asm, it has no meaning without machine code");
+}
+
+fn ip_assert(n *Node) {
+	if (ip_eval(n.cond) != 0) { return; }
+	ip_panic(ip_str_by_id(n.args.val));
+}
+
+fn ip_syscall(n *Node) i64 {
+	var a [7]i64;
+	var i int = 0;
+	while (i < 7) { a[i] = 0; i = i + 1; }
+	var arg *Node = n.args;
+	i = 0;
+	while (arg as i64 != 0 && i < 7) {
+		a[i] = ip_eval(arg);
+		arg = arg.next;
+		i = i + 1;
+	}
+	return sys_call6(a[0], &a[1]);
+}
+
+// ── calls ──
+
+fn ip_call_node(n *Node) i64 {
+	var f *Func = 0 as *Func;
+	if (n.varp as i64 != 0) {
+		// Indirect: the value is the *Func ND_FUNCADDR handed out.
+		var target i64 = ip_load(ip_var_addr(n.varp), n.varp.ty);
+		if (target == 0) { ip_panic("call through a null function pointer\n"); }
+		f = target as *Func;
+	} else {
+		ip_intrinsic(n);
+		if (ip_was_intrinsic) { return ip_intrinsic_val; }
+		f = find_func(n.name);
+		if (f as i64 == 0) { error_at(n.pos, "interpreter: undefined function"); }
+	}
+
+	var dst i64 = 0;
+	if (is_aggregate(n.ty)) {
+		if (n.tmp as i64 != 0) { dst = ip_slot(n.tmp); }
+		else { dst = ip_temp(n.ty.size as i64); }
+	}
+	return ip_call(f, n.args, dst, n.pos);
+}
+
+fn ip_call(f *Func, args *Node, dst i64, pos i64) i64 {
+	if (f.extern) { error_at(pos, "interpreter: cannot call an extern function"); }
+	if (f.naked) {
+		ip_warn_once(f.pos, "interpreter: a naked function has no body to run, returning 0");
+		return 0;
+	}
+	if (f.body as i64 == 0) { error_at(pos, "interpreter: function has no body"); }
+
+	// Arguments evaluate in the caller's frame, so they are collected
+	// before the callee's frame exists. Fourteen is parse.qela's own cap.
+	var vals [14]i64;
+	var i int = 0;
+	var a *Node = args;
+	while (a as i64 != 0 && i < f.nparams) {
+		vals[i] = ip_eval(a);
+		// An aggregate over 16 bytes crosses by pointer, and the callee
+		// must not be able to write through it into the caller's storage:
+		// the caller stages a copy in the argument's own temp, exactly as
+		// gen_args does.
+		if (is_aggregate(a.ty) && abi_by_ref(a.ty.size) && a.tmp as i64 != 0) {
+			var stage i64 = ip_slot(a.tmp);
+			ip_memcpy(stage, vals[i], a.ty.size as i64);
+			vals[i] = stage;
+		}
+		a = a.next;
+		i = i + 1;
+	}
+	var given int = i;
+
+	var save_fp i64 = ip_fp;
+	var save_sp i64 = ip_sp;
+	var save_fn *Func = ip_fn;
+	var save_dst i64 = ip_retdst;
+	var save_ret i64 = ip_ret;
+	var save_r bool = ip_returning;
+	var save_b bool = ip_broke;
+	var save_c bool = ip_continued;
+	var save_nd int = ip_ndefer;
+
+	ip_fp = ip_enter(f);
+	ip_fn = f;
+	ip_retdst = dst;
+	ip_returning = false;
+	ip_broke = false;
+	ip_continued = false;
+
+	i = 0;
+	while (i < given) {
+		var p *Var = func_param(f, i);
+		var slot i64 = 0;
+		if (p.arg_stack) { slot = ip_fp + (p.offset as i64); }
+		else { slot = ip_fp - (p.offset as i64); }
+		if (p.by_ref) {
+			// The callee reads the aggregate through the pointer, so the
+			// slot holds the address the caller evaluated, not the bytes.
+			ip_st64(slot, vals[i]);
+		} else if (is_aggregate(p.ty)) {
+			ip_memcpy(slot, vals[i], p.ty.size as i64);
+		} else {
+			ip_store(slot, p.ty, vals[i]);
+		}
+		i = i + 1;
+	}
+
+	ip_block(f.body);
+
+	var r i64 = 0;
+	if (ip_returning) { r = ip_ret; }
+	else if (is_aggregate(f.ret)) { r = dst; }
+
+	ip_fp = save_fp;
+	ip_sp = save_sp;
+	ip_fn = save_fn;
+	ip_retdst = save_dst;
+	ip_ret = save_ret;
+	ip_returning = save_r;
+	ip_broke = save_b;
+	ip_continued = save_c;
+	ip_ndefer = save_nd;
+	return r;
+}
+
+// ── intrinsics ──
+
+fn ip_intrinsic(n *Node) *Func {
+	ip_was_intrinsic = false;
+	ip_intrinsic_val = 0;
+	var nm str = n.name;
+
+	if (str_eq(nm, "gc_data_base")) { ip_was_intrinsic = true; ip_intrinsic_val = ip_data; return 0 as *Func; }
+	if (str_eq(nm, "gc_data_end")) { ip_was_intrinsic = true; ip_intrinsic_val = ip_data_end; return 0 as *Func; }
+	if (str_eq(nm, "gc_save_regs")) {
+		// Nothing of the interpreted program lives in a machine register:
+		// every root is a frame slot in the interpreter's own stack region,
+		// which the collector already scans.
+		ip_eval(n.args);
+		ip_was_intrinsic = true;
+		return 0 as *Func;
+	}
+	if (str_eq(nm, "fence")) { ip_was_intrinsic = true; return 0 as *Func; }
+	if (str_eq(nm, "atomic_load")) {
+		ip_was_intrinsic = true;
+		ip_intrinsic_val = ip_ld64(ip_eval(n.args));
+		return 0 as *Func;
+	}
+	if (str_eq(nm, "atomic_store")) {
+		var a i64 = ip_eval(n.args);
+		ip_st64(a, ip_eval(n.args.next));
+		ip_was_intrinsic = true;
+		return 0 as *Func;
+	}
+	if (str_eq(nm, "atomic_add")) {
+		var a i64 = ip_eval(n.args);
+		var old i64 = ip_ld64(a);
+		ip_st64(a, old + ip_eval(n.args.next));
+		ip_was_intrinsic = true;
+		ip_intrinsic_val = old;
+		return 0 as *Func;
+	}
+	if (str_eq(nm, "atomic_cas")) {
+		var a i64 = ip_eval(n.args);
+		var want i64 = ip_eval(n.args.next);
+		var new i64 = ip_eval(n.args.next.next);
+		ip_was_intrinsic = true;
+		if (ip_ld64(a) == want) { ip_st64(a, new); ip_intrinsic_val = 1; }
+		return 0 as *Func;
+	}
+	if (str_eq(nm, "coro_switch") || str_eq(nm, "coro_entry_addr")) {
+		error_at(n.pos, "interpreter: coroutines are not supported yet (they switch machine stacks)");
+	}
+	if (str_eq(nm, "thread_clone")) {
+		error_at(n.pos, "interpreter: thread_clone is not supported yet");
+	}
+	if (str_eq(nm, "tls_init")) {
+		// The single TLS block is part of the data segment already.
+		ip_was_intrinsic = true;
+		return 0 as *Func;
+	}
+	return 0 as *Func;
+}
+
+// ── statements ──
+
+fn ip_run_defers(base int) {
+	while (ip_ndefer > base) {
+		ip_ndefer = ip_ndefer - 1;
+		var d *Node = ip_defers[ip_ndefer];
+		// A defer body runs to completion: a break or return inside it must
+		// not hijack the unwind that is already in progress.
+		var save_r bool = ip_returning;
+		var save_b bool = ip_broke;
+		var save_c bool = ip_continued;
+		ip_returning = false;
+		ip_broke = false;
+		ip_continued = false;
+		ip_stmt(d.lhs);
+		ip_returning = save_r;
+		ip_broke = save_b;
+		ip_continued = save_c;
+	}
+}
+
+fn ip_block(n *Node) {
+	var base int = ip_ndefer;
+	var s *Node = n.body;
+	while (s as i64 != 0) {
+		if (ip_returning || ip_broke || ip_continued) { break; }
+		ip_stmt(s);
+		s = s.next;
+	}
+	ip_run_defers(base);
+}
+
+fn ip_for(n *Node) {
+	if (n.init as i64 != 0) {
+		// `for x in <expr>` hoists the collection, so the init is a chain.
+		var s *Node = n.init;
+		while (s as i64 != 0) { ip_stmt(s); s = s.next; }
+	}
+	while (true) {
+		if (n.cond as i64 != 0) {
+			if (ip_eval(n.cond) == 0) { break; }
+		}
+		ip_stmt(n.body);
+		if (ip_returning) { break; }
+		if (ip_broke) { ip_broke = false; break; }
+		ip_continued = false;
+		if (n.step as i64 != 0) { ip_stmt(n.step); }
+	}
+}
+
+fn ip_match(n *Node) {
+	var sub i64 = ip_addr(n.cond);
+	ip_st64(ip_slot(n.tmp), sub);
+	var tag i64 = ip_ld64(sub);
+	var arm *Node = n.body;
+	while (arm as i64 != 0) {
+		var hit bool = arm.name.len == 0;
+		if (!hit) { hit = (arm.variant.tag as i64) == tag; }
+		if (hit) {
+			var f *Member = 0 as *Member;
+			if (arm.variant as i64 != 0) { f = arm.variant.fields; }
+			var b *Node = arm.args;
+			while (b as i64 != 0) {
+				var src i64 = sub + (f.offset as i64);
+				var dst i64 = ip_slot(b.varp);
+				if (is_aggregate(f.ty)) { ip_memcpy(dst, src, f.ty.size as i64); }
+				else { ip_store(dst, f.ty, ip_load(src, f.ty)); }
+				f = f.next;
+				b = b.next;
+			}
+			ip_stmt(arm.body);
+			return;
+		}
+		arm = arm.next;
+	}
+}
+
+fn ip_stmt(n *Node) {
+	if (n as i64 == 0) { return; }
+	if (ip_returning || ip_broke || ip_continued) { return; }
+	var k int = n.kind;
+
+	// Every statement releases whatever temporaries its expressions took;
+	// frames nest below them, so the discipline stays LIFO.
+	var mark i64 = ip_sp;
+
+	if (k == ND_BLOCK) { ip_block(n); ip_sp = mark; return; }
+	if (k == ND_EXPRSTMT) { ip_eval(n.lhs); ip_sp = mark; return; }
+	if (k == ND_IF) {
+		if (ip_eval(n.cond) != 0) { ip_sp = mark; ip_stmt(n.then); }
+		else { ip_sp = mark; ip_stmt(n.els); }
+		return;
+	}
+	if (k == ND_FOR) { ip_for(n); ip_sp = mark; return; }
+	if (k == ND_MATCH) { ip_match(n); ip_sp = mark; return; }
+	if (k == ND_BREAK) { ip_broke = true; return; }
+	if (k == ND_CONT) { ip_continued = true; return; }
+	if (k == ND_DEFER) {
+		if (ip_ndefer >= IP_MAX_DEFERS) { error_at(n.pos, "interpreter: too many live defers"); }
+		ip_defers[ip_ndefer] = n;
+		ip_ndefer = ip_ndefer + 1;
+		return;
+	}
+	if (k == ND_RET) {
+		var v i64 = 0;
+		if (n.lhs as i64 != 0) {
+			v = ip_eval(n.lhs);
+			if (is_aggregate(n.lhs.ty) && ip_retdst != 0) {
+				ip_memcpy(ip_retdst, v, n.lhs.ty.size as i64);
+				v = ip_retdst;
+			}
+		}
+		ip_ret = v;
+		ip_returning = true;
+		return;
+	}
+	ip_eval(n);
+	ip_sp = mark;
+}
+
+// ── driver ──
+
+fn ip_find_main() *Func {
+	var f *Func = find_func("main");
+	if (f as i64 == 0) { die("error: no main function"); }
+	return f;
+}
+
+fn ip_run(u *Unit, argc int, argv **u8) int {
+	ip_unit = u;
+
+	ip_layout(u, false);
+	var dsize i64 = ip_lay;
+	if (dsize < 16) { dsize = 16; }
+	var d i64 = sys_mmap_anon(dsize);
+	if (d < 0 && d > -4096) { die("error: interpreter cannot map the data segment"); }
+	ip_data = d;
+	ip_data_end = d + dsize;
+	ip_layout(u, true);
+
+	var s i64 = sys_mmap_anon(IP_STACK);
+	if (s < 0 && s > -4096) { die("error: interpreter cannot map the frame stack"); }
+	ip_stack_lo = s;
+	ip_sp = s + IP_STACK;
+
+	if (entry_name.len != 0) {
+		ip_warn_once(0, "interpreter: 'entry' is ignored, running main");
+	}
+	if (top_asm_head as i64 != 0) { ip_warn_asm(top_asm_head.pos); }
+
+	var f *Func = ip_find_main();
+	var args *Node = 0 as *Node;
+	if (f.nparams == 2) { args = ip_argv_nodes(argc, argv); }
+	return (ip_call(f, args, 0, f.pos) & 255) as int;
+}
+
+// main(argc, argv) receives the real argument vector: two literal nodes
+// carrying the values the entry stub would have loaded off the stack.
+fn ip_argv_nodes(argc int, argv **u8) *Node {
+	var a *Node = arena_alloc(sizeof(Node), 8) as *Node;
+	a.kind = ND_NUM;
+	a.val = argc as i64;
+	a.ty = ty_i64;
+	var b *Node = arena_alloc(sizeof(Node), 8) as *Node;
+	b.kind = ND_NUM;
+	b.val = argv as i64;
+	b.ty = type_ptr(type_ptr(ty_u8));
+	a.next = b;
+	return a;
+}
+
+fn ip_reset() {
+	ip_data = 0;
+	ip_data_end = 0;
+	ip_stack_lo = 0;
+	ip_sp = 0;
+	ip_fp = 0;
+	ip_fn = 0 as *Func;
+	ip_retdst = 0;
+	ip_ret = 0;
+	ip_returning = false;
+	ip_broke = false;
+	ip_continued = false;
+	ip_ndefer = 0;
+	ip_asm_nwarned = 0;
+	ip_was_intrinsic = false;
+}
+
+fn cmd_irun(argc int, argv **u8) int {
+	if (argc >= 3 && (str_eq(str_from_cstr(argv[2]), "-h") ||
+	    str_eq(str_from_cstr(argv[2]), "--help"))) {
+		return cmd_help();
+	}
+	if (argc < 3) {
+		eprint("usage: qela irun <file.qela> [args]\n");
+		return 2;
+	}
+
+	var input str;
+	var have_input bool = false;
+	var i int = 2;
+	while (i < argc) {
+		var a str = str_from_cstr(argv[i]);
+		if (have_input) { break; }
+		if (str_eq(a, "--no-bounds-checks")) { opt_no_bounds = true; }
+		else if (str_eq(a, "--no-warn")) { opt_warn = false; }
+		else if (str_eq(a, "-D")) {
+			i = i + 1;
+			if (i == argc) { die("error: -D needs NAME=VALUE"); }
+			var d str = str_from_cstr(argv[i]);
+			var eq i64 = str_find(d, '=');
+			if (eq < 0) { die("error: -D needs NAME=VALUE"); }
+			comptime_set(str_slice(d, 0, eq), str_slice(d, eq + 1, d.len));
+		} else if (str_eq(a, "-")) { input = a; have_input = true; }
+		else if (a.len > 0 && a.ptr[0] == '-') { die("error: unknown option"); }
+		else { input = a; have_input = true; }
+		i = i + 1;
+	}
+	if (!have_input) {
+		eprint("usage: qela irun <file.qela> [args]\n");
+		return 2;
+	}
+
+	// Everything from the input file on is the interpreted program's own
+	// argv, with the file itself as argv[0], the way `qela run` does it.
+	var nargs int = argc - (i - 1);
+	var cargv *i64 = arena_alloc((nargs as i64 + 1) * 8, 8) as *i64;
+	var j int = 0;
+	while (j < nargs) {
+		cargv[j] = argv[i - 1 + j] as i64;
+		j = j + 1;
+	}
+	cargv[nargs] = 0;
+
+	ip_reset();
+	reset_compile();
+	opt_interp = true;
+	diag_setup();
+	var unit *Unit = 0 as *Unit;
+	if (is_dir(input)) {
+		unit = parse_dir(input);
+	} else {
+		var src str;
+		var name str = input;
+		if (str_eq(input, "-")) { name = "<stdin>"; src = read_stdin(); }
+		else { src = read_file(input); }
+		var file int = diag_add_file(name, src);
+		set_module_dir(name);
+		unit = parse(lex(src, (file as i64) << FILE_SHIFT));
+	}
+	return ip_run(unit, nargs, cargv as **u8);
+}
