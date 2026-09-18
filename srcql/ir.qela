@@ -27,6 +27,10 @@ let IR_CAST  = 12; // dst = convert src0 to dst.ty; <aux: cast kind>
 let IR_MEMCPY = 13; // copy <aux> bytes from the address in src0 to the
                     // destination address on the staging stack, consuming it;
                     // the destination address is left in the accumulator
+let IR_MEMCPYDST = 25; // copy <aux> bytes from the address in src0 to the
+                    // frame slot in dst, which is the destination buffer
+                    // itself (gen_args' by-ref argument staging); the slot's
+                    // address is left in the accumulator
 let IR_SYSCALL = 14; // <aux: syscall number>; arguments already staged
 let IR_ASM   = 15; // inline asm; <aux: the asm Node's address>
 let IR_ASSERT = 16; // a bounds/assert site; <aux: index into the assert-site list>
