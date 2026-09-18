@@ -1,0 +1,78 @@
+packed struct Gdtr {
+	limit u16,
+	base  u64,
+}
+
+packed struct Tss {
+	rsv0  u32,
+	rsp0  u64,
+	rsp1  u64,
+	rsp2  u64,
+	rsv1  u64,
+	ist1  u64,
+	ist2  u64,
+	ist3  u64,
+	ist4  u64,
+	ist5  u64,
+	ist6  u64,
+	ist7  u64,
+	rsv2  u64,
+	rsv3  u16,
+	iomap u16,
+}
+
+var gdt [64]u8;
+var tss Tss;
+
+fn gset(sel i64, lo u16, acc u8, gran u8) {
+	var gp *u8 = &gdt[sel];
+	gp[0] = (lo & 255) as u8;
+	gp[1] = (lo >> 8) as u8;
+	gp[2] = 0 as u8;
+	gp[3] = 0 as u8;
+	gp[4] = 0 as u8;
+	gp[5] = acc;
+	gp[6] = gran;
+	gp[7] = 0 as u8;
+}
+
+fn gdt_init() {
+	var i i64 = 0;
+	while (i < 64) {
+		gdt[i] = 0 as u8;
+		i = i + 1;
+	}
+	gset(0x08, 0, 0x9a as u8, 0x20 as u8);
+	gset(0x10, 0, 0x92 as u8, 0 as u8);
+	gset(0x18, 0, 0xf2 as u8, 0 as u8);
+	gset(0x20, 0, 0xfa as u8, 0x20 as u8);
+	var tb i64 = &tss as i64;
+	var tp *u8 = &tss as *u8;
+	var ti i64 = 0;
+	while (ti < 104) {
+		tp[ti] = 0 as u8;
+		ti = ti + 1;
+	}
+	tss.rsp0 = ((&kstack[0] as i64) + 16384) as u64;
+	tss.iomap = 0xffff as u16;
+	var gp *u8 = &gdt[0x28];
+	gp[0] = 103 as u8;
+	gp[1] = 0 as u8;
+	gp[2] = (tb & 255) as u8;
+	gp[3] = ((tb >> 8) & 255) as u8;
+	gp[4] = ((tb >> 16) & 255) as u8;
+	gp[5] = 0x89 as u8;
+	gp[6] = 0 as u8;
+	gp[7] = ((tb >> 24) & 255) as u8;
+	var i2 i64 = 0;
+	while (i2 < 4) {
+		gp[8 + i2] = ((tb >> (32 + i2 * 8)) & 255) as u8;
+		i2 = i2 + 1;
+	}
+	var g Gdtr;
+	g.limit = 63 as u16;
+	g.base = (&gdt[0] as i64) as u64;
+	lgdt(&g as i64);
+	asm(0x48, 0xc7, 0xc0, 0x28, 0, 0, 0);
+	asm(0x0f, 0x00, 0xd8);
+}

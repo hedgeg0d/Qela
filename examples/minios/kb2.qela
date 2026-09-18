@@ -1,0 +1,19 @@
+fn kb_head_get() i64 {
+	return kb_head;
+}
+
+fn kb_shift_get() i64 {
+	return kb_shift;
+}
+
+fn kb_shift_set(v i64) {
+	kb_shift = v;
+}
+
+fn kb_q_get(i i64) i64 {
+	return kb_q[i];
+}
+
+fn kb_q_set(i i64, v u8) {
+	kb_q[i] = v;
+}
