@@ -26,6 +26,7 @@ fn main() int {
 	var spins i64 = 0;
 	while (atomic_load(&done) == 0) {
 		spins = spins + 1;
+		if (spins % 1000 == 0) { sys_sched_yield(); }
 		if (spins > 100000000) { return 3; }
 	}
 	if (atomic_load(&seen) != 99) { return 4; }
