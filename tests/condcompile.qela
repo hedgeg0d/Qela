@@ -1,4 +1,5 @@
 // expect-exit: 0
+// x86-only
 // expect-out: cond compile ok
 // stage1-only
 // $if blocks are evaluated at compile time against a comptime variable
