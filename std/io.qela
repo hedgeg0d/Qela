@@ -73,8 +73,13 @@ fn read_line() str {
 fn write_file(path str, data *u8, n i64) {
 	var fd i64 = sys_open_exec(cstr(path));
 	if (fd < 0) {
-		eprint("error: cannot write ");
+		// The most common silent cause: the output path is the input
+		// directory itself (qela some_dir -o some_dir). Name the cause
+		// rather than leave the user guessing at errno.
+		eprint("error: cannot write '");
 		eprint(path);
+		eprint("'");
+		if (is_dir(path)) { eprint(": it is a directory"); }
 		eprint("\n");
 		sys_exit(1);
 	}
