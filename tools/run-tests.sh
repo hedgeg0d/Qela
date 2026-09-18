@@ -10,7 +10,7 @@ QELA="${QELA:-./qela}"
 TARGET="${TARGET:-x86_64}"
 QEMU="${QEMU:-}"
 if [ "$TARGET" = "arm64" ]; then
-	QELA="$QELA -target arm64"
+	QELA="$QELA --target arm64"
 fi
 OUT="tests/out"
 mkdir -p "$OUT"
