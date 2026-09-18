@@ -73,6 +73,26 @@ fn __dyn_jit_call(name str, args *i64) i64 {
 	return fp(args[0], args[1], args[2], args[3], args[4], args[5]);
 }
 
+// The marshalled-signature variant: the child compiled the function with a
+// rewritten signature (a hidden _$ret out-pointer, returns rewritten to
+// stores), so the result comes back through the out-pointer, which the
+// trampoline packed as the last slot. Returns 1 when the jit path ran;
+// -1 when it could not (not self-contained, or the signature was rejected)
+// and the caller must fall back to __interp_call_marshalled with the
+// payload it already built.
+fn __dyn_jit_call_marshalled(name str, args *i64) i64 {
+	abi_spawn();
+	var ptr i64 = dyn_find(name);
+	if (ptr == 0) {
+		ptr = interp_jit_compile(name);
+		dyn_store(name, ptr);
+	}
+	if (ptr == -1) { return -1; }
+	var fp fn(i64, i64, i64, i64, i64, i64) i64 = *(&ptr as *fn(i64, i64, i64, i64, i64, i64) i64);
+	fp(args[0], args[1], args[2], args[3], args[4], args[5]);
+	return 1;
+}
+
 fn __interp_call_dispatch(name str, args *i64) i64 {
 	abi_spawn();
 
@@ -80,7 +100,7 @@ fn __interp_call_dispatch(name str, args *i64) i64 {
 	buf_u8(&b, name.len as u8);
 	buf_bytes(&b, name.ptr, name.len);
 	var i i64 = 0;
-	while (i < 6) {
+	while (i < 14) {
 		buf_u64(&b, args[i]);
 		i = i + 1;
 	}
@@ -103,4 +123,24 @@ fn __interp_call_dispatch(name str, args *i64) i64 {
 		sys_exit(1);
 	}
 	return *(&rbuf[0] as *i64);
+}
+
+// The marshalled call: `msg` is the full request payload (name, then the
+// type-directed argument bytes) and the response payload is the marshalled
+// return value, received into the arena and returned as a str for the
+// trampoline to decode by its own return type.
+fn __interp_call_marshalled(msg str) str {
+	abi_spawn();
+	abi_send_frame(abi_in, ABI_REQ_CALL as u8, msg.ptr, msg.len);
+	var kind u8 = 0;
+	var r str = abi_wait_result_payload(&kind);
+	if (kind == 0) {
+		eprint("interpreted: the qela subprocess died while calling\n");
+		sys_exit(1);
+	}
+	if (kind == (ABI_RESP_ERR as u8)) {
+		eprint("interpreted: the call raised an error at runtime\n");
+		sys_exit(1);
+	}
+	return r;
 }
