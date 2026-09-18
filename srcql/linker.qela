@@ -1,0 +1,459 @@
+import "comp.qela";
+import "diag.qela";
+import "funcs.qela";
+import "../std/fmt.qela";
+import "../std/io.qela";
+
+// A static linker for relocatable objects: `qela main.qela foo.o bar.a`
+// merges the objects' .text/.rodata/.data/.bss into the image and resolves
+// their relocations against each other and against Qela's own symbols, so
+// an extern-based FFI build needs no external ld. x86_64 only for now.
+//
+// The objects land after Qela's own code and data, so every Qela-internal
+// rel32/abs32 patch stays untouched. Only R_X86_64_64/PC32/PLT32/32/32S
+// are handled; a GOTPCREL (a PIC build) is an error -- compile the C side
+// with -fno-pic.
+
+let LK_CODE   = 0;
+let LK_RODATA = 1;
+let LK_DATA   = 2;
+let LK_BSS    = 3;
+
+struct LnkSec {
+	kind int,
+	off  i64,
+	size i64,
+}
+
+struct LnkSym {
+	next    *LnkSym,
+	name    str,
+	kind    int,     // LK_* of the section the symbol lives in
+	off     i64,     // offset inside that section
+	has_abs bool,
+	abs     i64,
+}
+
+struct LnkRel {
+	next    *LnkRel,
+	kind    int,     // ELF relocation type
+	sec     int,     // LK_* of the section that holds the slot
+	secoff  i64,     // slot offset inside the dst buffer
+	symsec  int,     // LK_* of the symbol's section, or -1
+	symoff  i64,     // symbol offset inside its section
+	symabs  bool,
+	symabv  i64,
+	symname str,
+	addend  i64,
+}
+
+var lnk_syms *LnkSym;
+var lnk_nrels int = 0;
+var lnk_rels *LnkRel;
+var lnk_gdata0 i64 = 0;
+var lnk_hdrv i64 = 0;
+
+fn lnk_hdr() i64 { return lnk_hdrv; }
+
+fn lnk_set_hdr(h i64) { lnk_hdrv = h; }
+
+fn lnk_dbase() i64 {
+	return eff_base() + SEG_GAP + lnk_hdrv + code.n + rodata.n;
+}
+
+// Section vaddrs in the final image: code then rodata sit right after the
+// header, data (and bss) after them with the segment gap.
+fn lnk_sym_vaddr(kind int, off i64) i64 {
+	if (kind == LK_CODE) { return eff_base() + lnk_hdr() + off; }
+	if (kind == LK_RODATA) { return eff_base() + lnk_hdr() + code.n + off; }
+	if (kind == LK_DATA) { return lnk_dbase() + off; }
+	return lnk_dbase() + gdata.n + off;
+}
+
+fn lnk_add_sym(name str, kind int, off i64) {
+	var s *LnkSym = arena_alloc(sizeof(LnkSym), 8) as *LnkSym;
+	s.name = name;
+	s.kind = kind;
+	s.off = off;
+	s.next = lnk_syms;
+	lnk_syms = s;
+}
+
+fn lnk_add_abs(name str, v i64) {
+	var s *LnkSym = arena_alloc(sizeof(LnkSym), 8) as *LnkSym;
+	s.name = name;
+	s.has_abs = true;
+	s.abs = v;
+	s.next = lnk_syms;
+	lnk_syms = s;
+}
+
+// The vaddr of a symbol defined by a linked object, or -1.
+fn lnk_sym_vaddr_of(name str) i64 {
+	var s *LnkSym = lnk_syms;
+	while (s as i64 != 0) {
+		if (str_eq(s.name, name)) {
+			if (s.has_abs) { return s.abs; }
+			return lnk_sym_vaddr(s.kind, s.off);
+		}
+		s = s.next;
+	}
+	return -1;
+}
+
+// A symbol resolved against the merged objects first, then Qela's own
+// functions and globals. Returns its vaddr, or -1.
+fn lnk_resolve(name str) i64 {
+	var s *LnkSym = lnk_syms;
+	while (s as i64 != 0) {
+		if (str_eq(s.name, name)) {
+			if (s.has_abs) { return s.abs; }
+			return lnk_sym_vaddr(s.kind, s.off);
+		}
+		s = s.next;
+	}
+	var f *Func = find_func(name);
+	if (f as i64 != 0) { return eff_base() + lnk_hdr() + f.addr; }
+	var g *Var = find_global(name);
+	if (g as i64 != 0) { return lnk_dbase() + g.data_off; }
+	return -1;
+}
+
+// ── ELF reading ──
+
+fn lnk_u16(p *u8, off i64) int {
+	return (p[off] as int) | ((p[off + 1] as int) << 8);
+}
+
+fn lnk_u32(p *u8, off i64) i64 {
+	return (p[off] as i64) | ((p[off + 1] as i64) << 8) |
+	       ((p[off + 2] as i64) << 16) | ((p[off + 3] as i64) << 24);
+}
+
+fn lnk_u64(p *u8, off i64) i64 {
+	return lnk_u32(p, off) | (lnk_u32(p, off + 4) << 32);
+}
+
+fn lnk_align(v *i64, al i64) {
+	if (al < 1) { al = 1; }
+	if (al > 16) { al = 16; }
+	var m i64 = al - 1;
+	*v = (*v + m) & ~m;
+}
+
+fn lnk_append(b *Buf, src *u8, off i64, n i64) {
+	var i i64 = 0;
+	while (i < n) {
+		buf_u8(b, src[off + i]);
+		i = i + 1;
+	}
+}
+
+// Reads one relocatable object and merges it into the image.
+fn lnk_object(data *u8, len i64, _path str) {
+	if (len < 64) { error_at(0, "object too small"); }
+	if (data[0] != 0x7f || data[1] != 'E' || data[2] != 'L' || data[3] != 'F' ||
+	    data[4] != 2) { error_at(0, "not an ELF64 object"); }
+	if (lnk_u16(data, 16) != 1) {
+		error_at(0, "only relocatable ELF64 objects can be linked");
+	}
+	if (lnk_u16(data, 18) != EM_X86_64) {
+		error_at(0, "linked objects must be x86_64 (--target must match)");
+	}
+
+	var shoff i64 = lnk_u64(data, 40);
+	var shentsz int = lnk_u16(data, 58);
+	var shnum int = lnk_u16(data, 60);
+	if (shnum == 0) { shnum = lnk_u64(data, 60) as int; }
+	if (shoff + (shnum as i64) * (shentsz as i64) > len) {
+		error_at(0, "object section headers are truncated");
+	}
+
+	// Map object section index -> merged (kind, dst offset). The table is
+	// local to this object; a symbol's shndx indexes it, and relocation
+	// sections reference their target section through sh_info.
+	var local_kind [128]int;
+	var local [128]LnkSec;
+	var nlocal int = 0;
+	var symtab_off i64 = -1;
+	var symtab_n int = 0;
+	var strtab *u8 = null;
+	var strtab_n i64 = 0;
+	var si int = 0;
+	while (si < shnum) {
+		var so i64 = shoff + (si as i64) * 64;
+		var stype i64 = lnk_u32(data, so + 4);
+		var soff i64 = lnk_u64(data, so + 24);
+		var ssize i64 = lnk_u64(data, so + 32);
+		var slink i64 = lnk_u32(data, so + 40);
+		if (stype == 2 && symtab_off < 0) {
+			symtab_off = soff;
+			symtab_n = (ssize / 24) as int;
+			var tso i64 = shoff + (slink as i64) * 64;
+			strtab = data + lnk_u64(data, tso + 24);
+			strtab_n = lnk_u64(data, tso + 32);
+			si = si + 1;
+			continue;
+		}
+		if (stype != 1 && stype != 8) { si = si + 1; continue; }
+		if (ssize == 0) { si = si + 1; continue; }
+		var sflags i64 = lnk_u64(data, so + 8);
+		var salign i64 = lnk_u64(data, so + 48);
+		var kind int = -1;
+		if ((sflags & 4) != 0) { kind = LK_CODE; }
+		else if ((sflags & 2) != 0) {
+			if (stype == 8) { kind = LK_BSS; }
+			else { kind = LK_DATA; }
+		} else if ((sflags & 1) != 0) { kind = LK_RODATA; }
+		if (kind < 0) { si = si + 1; continue; }
+		if (nlocal >= 128) { error_at(0, "too many sections in a linked object"); }
+		var off i64 = 0;
+		if (kind == LK_CODE) {
+			off = code.n;
+			lnk_align(&off, salign);
+			lnk_append(&code, data, soff, ssize);
+		} else if (kind == LK_RODATA) {
+			off = rodata.n;
+			lnk_align(&off, salign);
+			lnk_append(&rodata, data, soff, ssize);
+		} else if (kind == LK_DATA) {
+			off = gdata.n;
+			lnk_align(&off, salign);
+			lnk_append(&gdata, data, soff, ssize);
+		} else {
+			// bss_size is the distance from the pre-link data start to
+			// the bss end; foreign .data appended above moved the bss
+			// region forward with it.
+			var abs i64 = gdata.n + bss_size;
+			lnk_align(&abs, salign);
+			bss_size = (abs + ssize) - lnk_gdata0;
+			off = abs - lnk_gdata0;
+		}
+		local_kind[nlocal] = si;
+		local[nlocal].kind = kind;
+		local[nlocal].off = off;
+		local[nlocal].size = ssize;
+		nlocal = nlocal + 1;
+		si = si + 1;
+	}
+
+	// Symbols: name, section (or absolute), value, bind. Local symbols
+	// matter too -- relocations reference them directly.
+	var sym_sec_set [512]bool;
+	var sym_sec [512]LnkSec;
+	var sym_global [512]bool;
+	var sym_abs [512]bool;
+	var sym_abv [512]i64;
+	var sym_name [512]str;
+	var sym_off [512]i64;
+	var si2 int = 0;
+	while (si2 < symtab_n) {
+		if (si2 >= 512) { error_at(0, "too many symbols in a linked object"); }
+		var e i64 = symtab_off + (si2 as i64) * 24;
+		var stname i64 = lnk_u32(data, e);
+		var stinfo u8 = data[e + 4];
+		var stshndx int = lnk_u16(data, e + 6);
+		var stval i64 = lnk_u64(data, e + 8);
+		var bind int = (stinfo >> 4) as int;
+		var is_glob bool = bind == 1 || bind == 2;
+		var nm str;
+		if (stname < strtab_n) {
+			nm = str_from_cstr(strtab + stname);
+		}
+		sym_name[si2] = nm;
+		if (stshndx == 0xfff1) {
+			sym_abs[si2] = true;
+			sym_abv[si2] = stval;
+			sym_global[si2] = is_glob;
+		} else if (stshndx != 0) {
+			var k int = 0;
+			while (k < nlocal) {
+				if (local_kind[k] == stshndx) { break; }
+				k = k + 1;
+			}
+			if (k < nlocal) {
+				sym_sec_set[si2] = true;
+				sym_sec[si2] = local[k];
+				sym_off[si2] = stval;
+				sym_global[si2] = is_glob;
+			}
+		}
+		if (is_glob && nm.len > 0) {
+			if (sym_abs[si2]) { lnk_add_abs(nm, sym_abv[si2]); }
+			else if (sym_sec_set[si2]) { lnk_add_sym(nm, sym_sec[si2].kind, sym_sec[si2].off + stval); }
+		}
+		si2 = si2 + 1;
+	}
+
+	// Relocations, collected for resolution after every object is loaded
+	// (an early object can reference a later one's symbols).
+	var si3 int = 0;
+	while (si3 < shnum) {
+		var so i64 = shoff + (si3 as i64) * 64;
+		var stype i64 = lnk_u32(data, so + 4);
+		if (stype != 4) { si3 = si3 + 1; continue; }
+		var rsec int = lnk_u32(data, so + 44) as int;
+		var k3 int = 0;
+		while (k3 < nlocal) {
+			if (local_kind[k3] == rsec) { break; }
+			k3 = k3 + 1;
+		}
+		if (k3 >= nlocal) { si3 = si3 + 1; continue; }
+		var rsect LnkSec = local[k3];
+		var roff i64 = lnk_u64(data, so + 24);
+		var rsize i64 = lnk_u64(data, so + 32);
+		var rn i64 = rsize / 24;
+		var ri i64 = 0;
+		while (ri < rn) {
+			if (lnk_nrels >= 1024) { error_at(0, "too many relocations"); }
+			var e i64 = roff + ri * 24;
+			var rinfo i64 = lnk_u64(data, e + 8);
+			var rsym int = (rinfo >> 32) as int;
+			var rtype int = (rinfo & 0xffffffff) as int;
+			var addend i64 = lnk_u64(data, e + 16);
+			if (rsym < symtab_n) {
+				var r *LnkRel = arena_alloc(sizeof(LnkRel), 8) as *LnkRel;
+				r.kind = rtype;
+				r.sec = rsect.kind;
+				r.secoff = rsect.off + lnk_u64(data, e);
+				r.symname = sym_name[rsym];
+				r.addend = addend;
+				if (sym_abs[rsym]) { r.symabs = true; r.symabv = sym_abv[rsym]; }
+				else if (sym_sec_set[rsym]) {
+					r.symsec = sym_sec[rsym].kind;
+					r.symoff = sym_sec[rsym].off + sym_off[rsym];
+				} else {
+					r.symsec = -1;
+				}
+				r.next = lnk_rels;
+				lnk_rels = r;
+				lnk_nrels = lnk_nrels + 1;
+			}
+			ri = ri + 1;
+		}
+		si3 = si3 + 1;
+	}
+}
+
+// A .a archive: link each member (every member is a relocatable object).
+// The 60-byte member headers carry decimal sizes; the symbol index member
+// is named "/" and is skipped.
+fn lnk_archive(data *u8, len i64, _path str) {
+	if (len < 8 || data[0] != '!' || data[1] != '<' || data[2] != 'a' || data[3] != 'r' ||
+	    data[4] != 'c' || data[5] != 'h' || data[6] != '>' || data[7] != '\n') {
+		error_at(0, "not an ar archive");
+	}
+	var i i64 = 8;
+	while (i + 60 <= len) {
+		var nm_end i64 = i;
+		while (nm_end < i + 16 && data[nm_end] != '/' && data[nm_end] != ' ') { nm_end = nm_end + 1; }
+		var nm str;
+		nm.ptr = data + i;
+		nm.len = nm_end - i;
+		var sz i64 = 0;
+		var k i64 = i + 48;
+		while (k < i + 58 && data[k] >= '0' && data[k] <= '9') {
+			sz = sz * 10 + ((data[k] - '0') as i64);
+			k = k + 1;
+		}
+		var body i64 = i + 60;
+		if (body + sz > len) { error_at(0, "archive member is truncated"); }
+		var skip bool = nm.len == 1 && nm.ptr[0] == '/';
+		if (nm.len > 0 && !skip) {
+			lnk_object(data + body, sz, "");
+		}
+		i = body + sz;
+		if ((sz & 1) != 0) { i = i + 1; }
+	}
+}
+
+fn link_load(hdr i64) {
+	lnk_hdrv = hdr;
+	lnk_gdata0 = gdata.n;
+	var i int = 0;
+	while (i < link_npaths) {
+		var p str = link_paths[i];
+		var raw str = read_file(p);
+		if (raw.len == 0) {
+			var eb Buf;
+			fmt_str(&eb, "cannot read object '");
+			fmt_str(&eb, p);
+			fmt_str(&eb, "'");
+			error_at(0, buf_str(&eb));
+		}
+		if (raw.len >= 8 && raw.ptr[0] == '!' && raw.ptr[1] == '<') {
+			lnk_archive(raw.ptr, raw.len, p);
+		} else {
+			lnk_object(raw.ptr, raw.len, p);
+		}
+		i = i + 1;
+	}
+}
+
+fn lnk_patch_abs(kind int, off i64, v i64) {
+	var p *u8 = null;
+	if (kind == LK_CODE) { p = code.p; }
+	else if (kind == LK_RODATA) { p = rodata.p; }
+	else if (kind == LK_DATA) { p = gdata.p; }
+	if (p as i64 == 0) { error_at(0, "relocation into a bss section"); }
+	var j i64 = 0;
+	while (j < 8) {
+		p[off + j] = ((v >> (j * 8)) & 255) as u8;
+		j = j + 1;
+	}
+}
+
+fn lnk_patch32(kind int, off i64, v i64) {
+	var p *u8 = null;
+	if (kind == LK_CODE) { p = code.p; }
+	else if (kind == LK_RODATA) { p = rodata.p; }
+	else if (kind == LK_DATA) { p = gdata.p; }
+	if (p as i64 == 0) { error_at(0, "relocation into a bss section"); }
+	var j i64 = 0;
+	while (j < 4) {
+		p[off + j] = ((v >> (j * 8)) & 255) as u8;
+		j = j + 1;
+	}
+}
+
+fn link_apply(hdr i64, _dbase i64) {
+	lnk_hdrv = hdr;
+	var r *LnkRel = lnk_rels;
+	while (r as i64 != 0) {
+		var s i64 = 0;
+		if (r.symabs) { s = r.symabv; }
+		else if (r.symsec >= 0) { s = lnk_sym_vaddr(r.symsec, r.symoff); }
+		else {
+			s = lnk_resolve(r.symname);
+			if (s < 0) {
+				var eb Buf;
+				fmt_str(&eb, "undefined symbol '");
+				fmt_str(&eb, r.symname);
+				fmt_str(&eb, "' in a linked object");
+				error_at(0, buf_str(&eb));
+			}
+		}
+		s = s + r.addend;
+		var p i64 = lnk_sym_vaddr(r.sec, r.secoff);
+		var rtype int = r.kind;
+		if (rtype == 1) {          // R_X86_64_64
+			lnk_patch_abs(r.sec, r.secoff, s);
+		} else if (rtype == 2 || rtype == 4) {  // PC32 / PLT32
+			// V = S + A - P: the consumer adds the field address, and
+			// the -4 addend of a call slot cancels the +4 the CPU uses.
+			lnk_patch32(r.sec, r.secoff, s - p);
+		} else if (rtype == 10 || rtype == 11) {  // 32 / 32S
+			if (base_is_wide()) {
+				error_at(0, "a linked object's 32-bit relocation does not fit with --base");
+			}
+			lnk_patch32(r.sec, r.secoff, s);
+		} else {
+			var eb Buf;
+			fmt_str(&eb, "unsupported relocation type ");
+			fmt_i64(&eb, rtype as i64);
+			fmt_str(&eb, " in a linked object (compile the C side with -fno-pic)");
+			error_at(0, buf_str(&eb));
+		}
+		r = r.next;
+	}
+}
