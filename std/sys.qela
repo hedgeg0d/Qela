@@ -8,6 +8,7 @@ let SYS_CLOSE = 3;
 let SYS_STAT  = 4;
 let SYS_MMAP  = 9;
 let SYS_EXIT   = 60;
+let SYS_EXIT_GROUP = 231;
 let SYS_FORK   = 57;
 let SYS_EXECVE = 59;
 let SYS_WAIT4  = 61;
@@ -30,6 +31,7 @@ let SYS_CLOSE_N = 57;
 let SYS_NEWFSTATAT_N = 79;
 let SYS_MMAP_N  = 222;
 let SYS_EXIT_N   = 93;
+let SYS_EXIT_GROUP_N = 94;
 let SYS_EXECVE_N = 221;
 let SYS_WAIT4_N  = 260;
 let SYS_UNLINKAT_N = 35;
@@ -156,11 +158,22 @@ fn sys_sched_yield() {
 	syscall(SYS_SCHED_YIELD, 0, 0, 0, 0, 0, 0);
 }
 
+// exit_group, not exit: this ends the whole process, not just the calling
+// thread. A program that has spawned real OS threads (thread_clone,
+// thread_pool_init/go) and then hits any of this module's early-exit paths
+// (die(), a file error, ...) would otherwise only kill the calling thread --
+// every other thread (a pool worker's own infinite loop, in particular)
+// keeps running forever, holding stdout/stderr open and the process alive
+// as far as anything waiting on it (a shell's `$(...)`, `wait4`) can tell.
+// Found by exactly that: a corpus test hung forever under a plain foreground
+// run once its debug-log write hit a permission error and called die(),
+// confirmed with `strace -f` showing a bare exit(1) (not exit_group) while
+// four pool-worker threads kept running.
 fn sys_exit(code i64) {
 	$if (TARGET == "arm64") {
-		syscall(SYS_EXIT_N, code, 0, 0, 0, 0, 0);
+		syscall(SYS_EXIT_GROUP_N, code, 0, 0, 0, 0, 0);
 	} $else {
-		syscall(SYS_EXIT, code, 0, 0, 0, 0, 0);
+		syscall(SYS_EXIT_GROUP, code, 0, 0, 0, 0, 0);
 	}
 }
 
