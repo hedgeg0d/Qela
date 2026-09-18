@@ -1,0 +1,46 @@
+// expect-exit: 0
+// expect-out: 3 4 5 6
+// expect-out: quad ok
+// expect-out: bound ok
+// expect-out: widen ok
+// stage1-only
+// Four type parameters and constraints: struct Quad(A, B, C, D) with all
+// four arguments used, and `T: str` / `T: i64` constraints admitting the
+// exact type or an implicit widening (u8 widens to i64; a str argument to
+// an i64-constrained parameter is rejected).
+import "std/io.qela";
+
+struct Quad(A, B, C, D) { a A, b B, c C, d D, }
+
+struct Labeled(V: str) { label str, v V, }
+
+struct Wide(V: i64) { v V, }
+
+fn sum4(comptime T: type, q *Quad(T, T, T, T)) T {
+	return q.a + q.b + q.c + q.d;
+}
+
+fn first(comptime T: type, q *Quad(T, i64, str, T)) T {
+	return q.a;
+}
+
+fn main() int {
+	var q Quad(i64, i64, str, i64);
+	q.a = 3; q.b = 4; q.c = "x"; q.d = 5;
+	if (q.a != 3 || q.b != 4 || q.c.len != 1 || q.d != 5) { return 1; }
+	if (first(&q) != 3) { return 3; }
+	var qu Quad(i64, i64, i64, i64);
+	qu.a = 3; qu.b = 4; qu.c = 5; qu.d = 6;
+	if (sum4(&qu) != 18) { return 2; }
+	write_str(STDOUT, "3 4 5 6\n");
+	write_str(STDOUT, "quad ok\n");
+	var l = Labeled(str){label: "n", v: "m"};
+	if (l.label.len != 1 || !str_eq(l.v, "m")) { return 4; }
+	var w = Wide(i64){v: 8};
+	if (w.v != 8) { return 5; }
+	var wu = Wide(u8){v: 9};
+	if (wu.v != 9) { return 6; }
+	write_str(STDOUT, "bound ok\n");
+	write_str(STDOUT, "widen ok\n");
+	return 0;
+}
