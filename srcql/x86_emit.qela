@@ -102,6 +102,10 @@ var bss_size i64;
 
 var depth int;
 
+// Re-entrancy guard for the flush-on-emit rule below: while ir_flush() is
+// lowering ops, the primitives it calls must not try to flush again.
+var ir_flushing bool = false;
+
 
 var calls_head *CallFixup;
 
@@ -172,9 +176,21 @@ var opt_backtrace bool = false;
 var opt_object bool = false;
 
 
-fn b1(v i64) { buf_u8(&code, (v & 255) as u8); }
+// Every native byte goes through b1/b4, so this is the whole-function
+// buffering point (M8 phase 2): the frontend emits IR ops and does not lower
+// them itself; the first native byte after a buffered run flushes it in order.
+// Whole-IR functions therefore lower at their first native boundary (the
+// epilogue or trampoline) or at gen_func's explicit flush -- byte order is
+// unchanged either way.
+fn b1(v i64) {
+	if (!ir_flushing && ir_head as i64 != 0) { ir_flush(); }
+	buf_u8(&code, (v & 255) as u8);
+}
 
-fn b4(v i64) { buf_u32(&code, v); }
+fn b4(v i64) {
+	if (!ir_flushing && ir_head as i64 != 0) { ir_flush(); }
+	buf_u32(&code, v);
+}
 
 
 fn rex_w(reg int, rm int) {
@@ -1952,11 +1968,14 @@ fn x86_lower_op(op *IrOp) {
 }
 
 
-fn x86_lower_all() {
+fn ir_flush() {
+	if (ir_flushing) { return; }
+	ir_flushing = true;
 	var op *IrOp = ir_head;
 	while (op as i64 != 0) {
 		x86_lower_op(op);
 		op = op.next;
 	}
 	ir_reset();
+	ir_flushing = false;
 }
