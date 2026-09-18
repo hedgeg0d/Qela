@@ -295,18 +295,34 @@ step "eval fn: host functions callable from eval'd source"
 cat > "$tmp2/evalfn.qela" <<'EOF'
 import "std/eval.qela";
 import "std/io.qela";
+struct Pair { a i64, b i64 }
 eval fn apply_discount(price i64) i64 {
 	return price - 10;
 }
+eval fn ulen(s str) i64 {
+	return s.len;
+}
+eval fn ucat(a str, b str) str {
+	var r str;
+	r.ptr = a.ptr;
+	r.len = a.len + b.len;
+	return r;
+}
+eval fn usum(p Pair, x f64) f64 {
+	return (p.a + p.b) as f64 + x;
+}
 fn main() int {
 	var r i64 = eval("apply_discount(100)");
-	write_str(STDOUT, "r=${r}\n");
+	var l i64 = eval("ulen(\"hello\")");
+	var c i64 = eval("ucat(\"ab\", \"cd\").len");
+	var s i64 = eval("(usum(Pair{a: 3, b: 4}, 0.5) as i64)");
+	write_str(STDOUT, "r=${r} l=${l} c=${c} s=${s}\n");
 	return 0;
 }
 EOF
 ( cd "$tmp2" &&
   "$root/$OUT/s2" evalfn.qela -o evalfn &&
-  [ "$(QELAPATH="$root/$OUT/s2" ./evalfn)" = "r=90" ] ) ||
+  [ "$(QELAPATH="$root/$OUT/s2" ./evalfn)" = "r=90 l=5 c=4 s=7" ] ) ||
 	fail "eval fn does not bridge a host function to eval'd source"
 printf '    ok\n'
 
