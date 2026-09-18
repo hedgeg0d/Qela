@@ -2375,6 +2375,16 @@ fn cmd_repl(argc int, argv **u8) int {
 
 }
 
+fn base_check() {
+	if (!base_is_wide()) { return; }
+	if (opt_target == TARGET_ARM64) {
+		die("error: a --base above 4 GiB needs a 64-bit movz sequence arm64 does not emit yet");
+	}
+	if (opt_backtrace) {
+		die("error: --backtrace and a --base above 4 GiB do not work together");
+	}
+}
+
 fn parse_addr(s str) i64 {
 	var v i64 = 0;
 	var i i64 = 0;
@@ -2484,6 +2494,7 @@ fn main(argc int, argv **u8) int {
 			else if (str_eq(t, "riscv64")) { opt_target = TARGET_RISCV64; }
 			else { die("error: --target must be x86_64, arm64 or riscv64"); }
 			target_set = true;
+			base_check();
 		} else if (str_eq(a, "-D")) {
 			i = i + 1;
 			if (i == argc) { die("error: -D needs NAME=VALUE"); }
@@ -2496,10 +2507,12 @@ fn main(argc int, argv **u8) int {
 			if (i == argc) { die("error: --base needs an address"); }
 			opt_base = parse_addr(str_from_cstr(argv[i]));
 			if ((opt_base & 4095) != 0) { die("error: --base must be page aligned"); }
+			base_check();
 		} else if (str_eq(a, "--no-bounds-checks")) {
 			opt_no_bounds = true;
 		} else if (str_eq(a, "--backtrace")) {
 			opt_backtrace = true;
+			base_check();
 		} else if (str_eq(a, "--no-warn")) {
 			opt_warn = false;
 		} else if (str_eq(a, "--interpreted")) {
