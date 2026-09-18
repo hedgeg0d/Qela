@@ -260,3 +260,76 @@ fn str_int(s str) i64 {
 	var ok bool = false;
 	return str_to_int(s, &ok);
 }
+
+// Split s on every occurrence of sep (an empty sep yields an empty slice).
+// The pieces are str slices into s, so nothing is copied; only the slice
+// array itself is arena-allocated. A trailing separator keeps an empty
+// piece: str_split("a,", ",") is ["a", ""].
+fn str_split(s str, sep str) []str {
+	return str_split_n(s, sep, -1);
+}
+
+// str_split_n caps the result at n pieces; the last piece takes the rest of
+// s. A negative n splits without a cap.
+fn str_split_n(s str, sep str, n i64) []str {
+	var cnt i64 = 1;
+	if (n >= 0 && n < cnt) { cnt = n; }
+	if (sep.len == 0) {
+		if (n == 1) {
+			var one []str;
+			one.ptr = arena_alloc(sizeof(str), 8) as *str;
+			one.len = 1;
+			one.ptr[0] = s;
+			return one;
+		}
+		var empty []str;
+		empty.len = 0;
+		return empty;
+	}
+	if (s.len == 0) {
+		if (n == 0) {
+			var empty []str;
+			empty.len = 0;
+			return empty;
+		}
+		var one []str;
+		one.ptr = arena_alloc(sizeof(str), 8) as *str;
+		one.len = 1;
+		one.ptr[0] = s;
+		return one;
+	}
+	var i i64 = 0;
+	while (i + sep.len <= s.len) {
+		if (n >= 0 && cnt >= n) { break; }
+		var j i64 = 0;
+		while (j < sep.len && s.ptr[i + j] == sep.ptr[j]) { j = j + 1; }
+		if (j == sep.len) { cnt = cnt + 1; i = i + sep.len; }
+		else { i = i + 1; }
+	}
+	if (n >= 0 && cnt > n) { cnt = n; }
+	if (cnt == 0) {
+		var empty []str;
+		empty.len = 0;
+		return empty;
+	}
+	var out []str;
+	out.ptr = arena_alloc(cnt * sizeof(str), 8) as *str;
+	out.len = cnt;
+	var start i64 = 0;
+	var k i64 = 0;
+	i = 0;
+	while (i + sep.len <= s.len && k < cnt - 1) {
+		var j i64 = 0;
+		while (j < sep.len && s.ptr[i + j] == sep.ptr[j]) { j = j + 1; }
+		if (j == sep.len) {
+			out.ptr[k] = str_slice(s, start, i);
+			k = k + 1;
+			start = i + sep.len;
+			i = i + sep.len;
+		} else {
+			i = i + 1;
+		}
+	}
+	out.ptr[k] = str_slice(s, start, s.len);
+	return out;
+}

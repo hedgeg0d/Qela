@@ -1,0 +1,38 @@
+// expect-exit: 0
+import "std/str.qela";
+
+fn main() int {
+	var fails int = 0;
+	var p []str = str_split("a,b,c", ",");
+	if (p.len != 3) { fails = fails + 1; }
+	if (!str_eq(p.ptr[0], "a") || !str_eq(p.ptr[1], "b") || !str_eq(p.ptr[2], "c")) { fails = fails + 1; }
+
+	p = str_split("a,,c", ",");
+	if (p.len != 3 || !str_eq(p.ptr[1], "")) { fails = fails + 1; }
+
+	p = str_split("a,", ",");
+	if (p.len != 2 || !str_eq(p.ptr[1], "")) { fails = fails + 1; }
+
+	p = str_split(",a", ",");
+	if (p.len != 2 || !str_eq(p.ptr[0], "")) { fails = fails + 1; }
+
+	p = str_split("", ",");
+	if (p.len != 1 || !str_eq(p.ptr[0], "")) { fails = fails + 1; }
+
+	p = str_split("no-sep-here", ";");
+	if (p.len != 1 || !str_eq(p.ptr[0], "no-sep-here")) { fails = fails + 1; }
+
+	p = str_split("a.b.c.d", ".");
+	if (p.len != 4 || !str_eq(p.ptr[3], "d")) { fails = fails + 1; }
+
+	p = str_split_n("a,b,c", ",", 2);
+	if (p.len != 2 || !str_eq(p.ptr[1], "b,c")) { fails = fails + 1; }
+
+	p = str_split_n("a,b,c", ",", 1);
+	if (p.len != 1 || !str_eq(p.ptr[0], "a,b,c")) { fails = fails + 1; }
+
+	p = str_split_n("a,b,c", ",", 0);
+	if (p.len != 0) { fails = fails + 1; }
+
+	return fails;
+}
