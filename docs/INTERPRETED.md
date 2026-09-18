@@ -1,9 +1,14 @@
 # Runtime metaprogramming: per-block `interpreted`/`dynamic`, `eval`, and the global flags
 
-Started as planning notes from a design conversation; a real first slice is
-now implemented (see "What's implemented" below) — `eval()`, and
+Started as planning notes from a design conversation; the whole design is
+now implemented (see "What's implemented" below) — `eval()`,
 `interpreted`/`dynamic` functions callable with ordinary call syntax from
-AOT code, both over the same ABI subprocess. Read `docs/BOOTSTRAP.md` and
+AOT code (`dynamic` with a real native JIT, `mmap`/`mprotect`, not just the
+call mechanism), `eval var`/`eval fn` foreign-globals bridging in both
+directions, `--interpreted`/`--jit` global flags, and `parse_ast`/
+`run_ast`, all over the same ABI subprocess. What's left is edges, not
+missing mechanisms — see "What it cannot do yet" under "What's
+implemented" for the precise list. Read `docs/BOOTSTRAP.md` and
 `docs/STATUS.md` first for the compiler's current shape; read
 `srcql/interp.qela`'s own comments for what the tree-walking interpreter
 already does (`qela irun`).
@@ -518,24 +523,111 @@ compiled form never touches those locals directly either way), but worth
 fixing properly if this becomes annoying: `count_reads` would need to
 walk `interp_body` instead of (or in addition to) `body` when one is set.
 
-What it cannot do yet, precisely: `dynamic` does not actually run any
-faster than `interpreted` — every call still round-trips over the ABI,
-the local `mmap`/`mprotect` JIT path is unbuilt; `parse_ast`/`run_ast`
-and AST inspection do not exist (item 5); and the self-copy is not yet
-embedded at compile time (the correction above).
+**`dynamic`'s real native JIT — done** (2026-08-08), and it turned out to
+need surprisingly little new machinery on top of everything above. On
+first call, the host asks the child to compile the function (a *fresh*
+reparse from a signature reconstructed the same way the bundle-generation
+fix does — see "one interpreted/dynamic function calling another" above,
+same reason: the source might carry no explicit modifier if `--jit`
+supplied it) with `opt_object = true`, the same mode `-c` already uses,
+specifically because that mode makes codegen emit a relocation list
+(`Image.relocs`) instead of silently patching addresses that don't exist
+yet. Self-containment is then a factual question, not a guess:
+`o_rela_count(img.relocs) == 0` means the function's own `.text` makes
+zero references to anything outside itself — verified empirically with
+`readelf -r` on `-c` output for a plain function (empty `.rela.text`), one
+reading a global (`.rela.text` gains an entry for the global's symbol),
+and one calling another function (`.rela.text` gains an entry for the
+callee) — this is the *same* relocation list a real `-c` build's
+correctness already depends on, not a new hand-rolled check, which is
+what makes trusting it as an execution-safety gate reasonable. (The
+object's `.rodata`/`.data.rel.ro` are *not* part of the check — object
+mode unconditionally reserves a panic-string slot for every compile,
+self-contained or not, so those sections are never actually empty; only
+`.rela.text`, the code's own outgoing references, matters.) If
+self-contained, the bytes cross the ABI once, `mmap(RW)` → copy →
+`mprotect(RX)` (`sys_mprotect`, new in `std/sys.qela`), cached behind a
+`{name, code_ptr}` list (`std/interpcall.qela`), and every call after
+that is a local indirect call through a `fn(i64×6) i64`-typed pointer —
+verified with `strace -e mprotect`: exactly one `PROT_READ|EXEC`
+`mprotect` per JIT'd function, never touched again. Confirmed by testing,
+not assumed: a genuinely self-contained `dynamic` function runs at the
+JIT'd address; a non-self-contained one gets a clean rejection and
+**falls back to the `interpreted` call path automatically** — `dynamic`
+was originally going to hard-fail when it couldn't be JIT'd, which would
+have made `--jit` on a whole real program (where `main` alone almost
+always calls something) fail outright; falling back instead is what
+makes the global flag actually usable rather than a toy.
+
+Two real bugs on the way, on top of the fd/buffer ones documented
+earlier in this section:
+
+- The isolated single-function reparse initially reused the *original*,
+  already-modifier-tagged source text verbatim, which re-triggered
+  `interp_synthesize_trampoline` on the reparse and tried to JIT-compile
+  the function's own *trampoline* (a call to `__dyn_jit_call`) instead of
+  its real body — correctly rejected as non-self-contained, for the
+  wrong function. Fixed by reconstructing a clean, explicit signature
+  (name, params, return type) programmatically and slicing only the
+  body's own braces from the source, exactly mirroring how the
+  bundle-generation fix already solved the analogous problem for
+  `interpreted`.
+- The isolated compile fork inherited `type_abi_mode = true` from the
+  long-lived server process, so an undefined name inside the function
+  being JIT-checked (an ordinary "not self-contained, rejected" case)
+  instead fell through the foreign-call fallback and produced a
+  confusing "host call ABI takes only scalar arguments" error instead of
+  a plain "undefined function." Fixed by setting `type_abi_mode = false`
+  at the top of the isolated fork — this compile is a genuine standalone
+  unit, not an ABI-server session, and should reject unresolved names
+  exactly like the `-c` path already does.
+
+**`parse_ast`/`run_ast` — done**, scoped to a single expression for now
+(not statements or declarations — `parse_ast` rejects anything that
+doesn't classify as a bare expression, the same classification `eval`
+already uses internally). `parse_ast(src) *Ast` fork-validates, parses
+and type-checks the expression once on the child (wrapped as `__abi_result
+= (src);`, the same trick `eval`'s `EXPR` path already used) and caches
+the resulting `Node` behind an incrementing handle
+(`AstEntry`/`ast_store`/`ast_find` in `srcql/main.qela`); `*Ast` itself is
+a tiny arena-allocated struct on the host side holding just that handle
+(`struct Ast { id i64 }` in `std/eval.qela`) — deliberately not a raw
+`*Node`, matching the design's original "opaque, don't expose internal
+layout" intent. `run_ast(a) i64` fork-validates and replays `ip_stmt` on
+the *same cached node* — callable any number of times, and because it
+re-reads whatever `eval var`-tagged globals it touches fresh each time,
+"parse once, run repeatedly against changing state" (the original
+motivation — "cache a parsed form and run it repeatedly with different
+bindings") is real and verified: `parse_ast("price * 2")` then
+`run_ast(a)` gives `20` when `price == 10`, then `eval("price = 100;")`,
+then `run_ast(a)` on the *same handle* gives `200` — no reparse. AST
+inspection/mutation (walking or editing the cached tree from host code)
+does not exist — deliberately out of scope, same reasoning the original
+design gave: "its own real sub-effort — a stable, ergonomic AST API is
+more design work than the ABI plumbing itself."
+
+What's left, precisely — edges, not missing mechanisms: the self-copy is
+not embedded at compile time, `abi_spawn()` still resolves the child via
+`$QELAPATH`/`$PATH` (the correction earlier in this document); `eval
+var`/`eval fn`/`dynamic` are all restricted to non-aggregate, non-float,
+≤8-byte scalars (checked at parse time with a real error, not a silent
+truncation); a self-recursive `dynamic` function always falls back to
+`interpreted` (a call to itself is a relocation like any other call);
+`parse_ast` is expression-only; and there is no AST inspection/mutation
+API. None of these are safety gaps — every one of them is a clean,
+reported rejection or fallback, never silent wrong behavior.
 
 ## Size measurements (real numbers, not estimates)
 
-Baseline: `qela` (S2) = 526,816 bytes, 50.2% of the 1 MiB budget (up from
-501,488 before this round of work: six new syscall wrappers, four new
-grammar modifiers/fields, the wire protocol plus `--abi-server`, the
-`ABI_REQ_CALL` handler for call-site trampolines, the `type_abi_mode`/
-foreign-call/dispatcher-generation machinery, `eval var` get/set, the
-combined-registration fix, and the `--interpreted`/`--jit` flags,
-~24 KB total — crossing the halfway mark of the 1 MiB budget.
-`std/eval.qela`, `std/abiwire.qela`, `std/abiconn.qela` and
-`std/interpcall.qela` do not count against this budget: they ship in the
-*output* of programs that import them, never inside `qela` itself.)
+Baseline: `qela` (S2) = 535,064 bytes, 51.0% of the 1 MiB budget (up from
+501,488 before this whole round of work: six new syscall wrappers, four
+new grammar modifiers/fields, the wire protocol plus `--abi-server`, call
+and foreign-globals bridging, the `--interpreted`/`--jit` flags, the real
+`dynamic` JIT, and `parse_ast`/`run_ast` — ~34 KB total, crossing the
+halfway mark of the 1 MiB budget with real headroom left. `std/eval.qela`,
+`std/abiwire.qela`, `std/abiconn.qela` and `std/interpcall.qela` do not
+count against this budget: they ship in the *output* of programs that
+import them, never inside `qela` itself.)
 
 Self-copy (whole binary embedded in the *output*, cost does not touch
 `qela` itself):
@@ -569,87 +661,82 @@ that, don't assume gzip-level ratios from a from-scratch LZSS.
 
 ## Open questions / next steps for implementation
 
-1. **The ABI's wire format — done except the JIT half.** A length-prefixed
-   binary protocol (`std/abiwire.qela`, `[u32 total_len][u8 kind][payload]`)
-   over a plain pipe pair (`sys_pipe2`) on fixed fds 3/4, bidirectional:
-   host→child carries "run this source" (kind 1) and, now, child→host
-   carries "call this host function" (kind 3), "read this host global"
-   (kind 4), and "write this host global" (kind 5) — see "What's
-   implemented" above for how the child ended up as a requester too, not
-   just the host. Two response kinds (`ok` / `error`) both ways. Not done:
-   "compile this AST, give me code bytes" (needed for `dynamic`'s actual
-   JIT, item 4) and a marshalling convention for values that aren't a bare
-   `i64` or a fixed 6-slot argument array (structs, strings) — every
-   message shape built so far only ever carries "a source string," "an
-   i64," or "a name plus up to six packed `i64` args."
-2. **Child process lifecycle — decided and implemented for `eval`.** One
-   child per host process, spawned lazily on first `eval()` call
-   (`abi_spawn()` in `std/eval.qela`), kept alive for the host's lifetime
-   — not re-forked per call. If the child dies mid-run, `eval()` reports
-   the error and calls `sys_exit(1)` rather than silently respawning: a
-   dead interpreter subprocess means the session state (every `var`/`fn`
-   defined so far) is gone, and silently starting a fresh, empty session
-   under the same variable names would be a correctness trap, not a
-   convenience. This still needs re-deciding once `interpreted`/`dynamic`
-   call-site trampolines (item 4) share the same child — a `dynamic`
-   function that already JIT'd locally doesn't need the child to still be
-   alive to keep working, so the "hard error" policy above may turn out to
-   be `eval`/`interpreted`-specific rather than global.
-3. **Grammar — done.** `fn interpreted name(...)`/`fn dynamic name(...)`/
-   `fn frozen name(...)` are contextual modifiers, mutually exclusive with
-   each other and with `naked`, parsed in `parse_function`
-   (`srcql/parse.qela`) the same place `naked` already is. `eval var
-   name T;`/`eval fn name(...)` at top level set `Var.eval_export`/
-   `Func.eval_export` (`srcql/comp.qela`). None of the four new words
-   (`interpreted`, `dynamic`, `frozen`, `eval`) were added to
-   `srcql/lex.qela`'s `is_keyword` table — same choice already made for
-   `comptime` — so they stay ordinary identifiers everywhere except these
-   exact syntactic positions; `tests/match.qela`'s `fn eval(op Op) int`
-   (an unrelated user function literally named `eval`) still compiles
-   because of this. `extern fn interpreted`/`extern fn dynamic` is a
-   compile error (an extern function is C-linked, not tree-walked or
-   JIT'd). Since no call-site trampoline exists yet (item 4), an AOT
-   compile of a function actually marked `interpreted`/`dynamic` errors
-   at `srcql/codegen.qela`'s `gen_func` with a message pointing at `qela
-   irun`, which already runs such a function correctly today — every
-   function is interpreted there regardless of the annotation. `frozen`
-   and `eval_export` are otherwise inert until items 1/2/4 exist: a program
-   using them compiles as ordinary AOT code today.
-4. **Call-site trampolines — done, but not via codegen.qela.** Turned out
-   not to need new codegen: `interpreted`/`dynamic` functions get a
-   *synthesized replacement body* at parse time (see "What's implemented"
-   above) that ordinary codegen compiles like any other function calling
-   a runtime helper. Still open: the actual JIT half. Right now `dynamic`
-   is just `interpreted` under another name — every call round-trips over
-   the ABI. The local `mmap`(RW)→write→`mprotect`(RX) sequence after a
-   one-time compile round trip, so calls after the first run at native
-   speed with no ABI involvement, is unbuilt; it needs the child to answer
-   "compile this, give me code bytes" (a new ABI message — `-c`'s object
-   output is the natural source for those bytes) and the host to load and
-   jump to them, which likely *does* need real codegen work (a
-   self-patching trampoline, or an indirect call through a pointer filled
-   in after first JIT) since "run these bytes" isn't expressible as an
-   ordinary call the way the `interpreted` half turned out to be.
-5. **The `*Ast` API surface**, including whether `*Ast` is a local pointer
-   or a handle into the child's memory (see "Call-site mechanics") — scope
-   as its own design pass once (1)–(4) are settled.
-6. **`sys_readlink`, `memfd_create`, `fexecve`, and pipe/socketpair
-   wrappers — done**, in `std/sys.qela`: `sys_readlink`,
-   `sys_memfd_create`, `sys_fexecve` (via `execveat` + `AT_EMPTY_PATH`,
-   there is no bare `fexecve` syscall), `sys_pipe2`, `sys_socketpair`.
-7. **W^X on hardened kernels.** `mprotect(RW→RX)` for the `dynamic` path
-   can be restricted under some hardening policies (SELinux, some
-   container runtimes) — needs a real error message, not a silent
-   failure, when it's unavailable.
-8. **Test plan — all six done**, though "`--jit`" currently exercises the
-   same call mechanism as `--interpreted` rather than a distinct JIT path
-   (see item 4). `tools/bootstrap.sh`: "eval() over the abi subprocess"
-   (bare `eval`, cross-call session state); "interpreted/dynamic
-   call-site trampolines" (both under AOT and `qela irun`); "eval fn:
-   host functions callable from eval'd source"; "eval var: host globals
-   readable and writable from eval'd source" (including the double-write
-   regression); "interpreted functions calling each other" (both under
-   AOT and `qela irun` — this one caught a real bug, see "What's
-   implemented" above); "--interpreted and --jit global flags". A
-   dedicated `dynamic`-is-actually-faster test still needs the JIT half
-   to exist first.
+All eight items below are done. What follows is a record of how each
+resolved, kept for anyone re-deriving or extending this later — not a
+todo list anymore.
+
+1. **The ABI's wire format.** A length-prefixed binary protocol
+   (`std/abiwire.qela`, `[u32 total_len][u8 kind][payload]`) over a plain
+   pipe pair (`sys_pipe2`) on fixed fds 3/4, bidirectional: host→child
+   carries "run this source" (1), "call this function" (2, used both
+   directions — see below), "compile this function, give me code bytes"
+   (6), "parse this expression" (7), "run this cached ast" (8);
+   child→host additionally carries "call this host function" (3), "read
+   this host global" (4), "write this host global" (5) — the child ended
+   up a requester too, not just the host. Two response kinds (`ok` /
+   `error`) both ways. Values only ever cross as a source string, a bare
+   `i64`, a name plus up to six packed `i64` args, or (for the JIT path)
+   raw code bytes — no struct/string marshalling convention exists, and
+   every scalar restriction below traces back to that.
+2. **Child process lifecycle.** One child per host process, spawned
+   lazily on first need (`abi_spawn()`, `std/abiconn.qela`), kept alive
+   for the host's lifetime. If it dies, the caller reports the error and
+   exits rather than silently respawning — a dead child means the whole
+   session (every registered `interpreted`/`dynamic` function, every
+   cached `*Ast`) is gone, and quietly starting a fresh empty one under
+   the same names would be a correctness trap, not a convenience. The
+   JIT path doesn't need this decision revisited: once a `dynamic`
+   function has its native address cached, the child's continued
+   liveness stops mattering to it entirely.
+3. **Grammar.** `fn interpreted`/`fn dynamic`/`fn frozen` — contextual
+   modifiers, mutually exclusive with each other and with `naked`,
+   parsed where `naked` already is. `eval var`/`eval fn` — an export-side
+   allowlist. None of the four new words joined `lex.qela`'s keyword
+   table (same choice as `comptime`), so they stay ordinary identifiers
+   everywhere except these exact positions — `tests/match.qela`'s
+   unrelated `fn eval(op Op) int` still compiles because of this.
+4. **Call-site trampolines, and the real JIT.** Turned out not to need
+   new codegen for the call mechanism itself: `interpreted`/`dynamic`
+   functions get a *synthesized replacement body* at parse time that
+   ordinary codegen compiles like any other function calling a runtime
+   helper — the real body moves to `Func.interp_body`, which `qela irun`
+   and the ABI server both prefer over `Func.body` when it's set. The
+   actual JIT *did* need something new, but not hand-written trampoline
+   codegen: compiling in `-c` mode (`opt_object = true`) makes the
+   existing object-writer's relocation list (`Image.relocs`) the
+   authoritative "does this reference anything outside itself" signal —
+   confirmed empirically with `readelf -r` — so self-containment is a
+   factual check (`o_rela_count(img.relocs) == 0`), not a hand-rolled AST
+   walk that could miss a case. Self-contained → the bytes cross the ABI
+   once, `mmap`(RW)→copy→`mprotect`(RX), cached, every later call a local
+   indirect call, no ABI. Not self-contained → clean rejection, automatic
+   fallback to the `interpreted` call path (not a hard failure — without
+   this, `--jit` on any real program would fail outright the moment
+   `main` called anything, which it almost always does).
+5. **The `*Ast` API surface.** `*Ast` is a tiny opaque handle
+   (`struct Ast { id i64 }`, `std/eval.qela`) over an incrementing ID the
+   child maps to a cached, already-parsed-and-typed `Node`
+   (`AstEntry`/`ast_store`/`ast_find`, `srcql/main.qela`) — a handle into
+   the child's own bookkeeping, not a raw pointer into its memory, and
+   nowhere close to exposing the compiler's internal node layout. Scoped
+   to a single expression for now (`parse_ast` rejects anything that
+   isn't one); no accessor/mutator API for inspecting or editing a cached
+   tree from host code — deliberately out of scope, per the original
+   framing of this as "its own real sub-effort."
+6. **`sys_readlink`, `memfd_create`, `fexecve`, pipe/socketpair, and
+   `mprotect` wrappers**, all in `std/sys.qela`.
+7. **W^X on hardened kernels.** `sys_mprotect`'s return value is checked;
+   a denied `RW→RX` transition is a reported error
+   (`interp_jit_compile` in `std/interpcall.qela`), not a silent
+   miscompile or a jump into non-executable memory. It isn't a graceful
+   fallback to `interpreted` the way a self-containment rejection is —
+   that would be a reasonable follow-up if this turns out to matter in
+   practice.
+8. **Test plan**, `tools/bootstrap.sh`: "eval() over the abi subprocess";
+   "interpreted/dynamic call-site trampolines"; "eval fn: host functions
+   callable from eval'd source"; "eval var: host globals readable and
+   writable from eval'd source" (including the double-write regression);
+   "interpreted functions calling each other" (caught a real bug — see
+   "What's implemented" above); "--interpreted and --jit global flags";
+   "dynamic: real native jit, and a clean fallback when it can't";
+   "parse_ast/run_ast: parse once, run repeatedly against fresh state".
