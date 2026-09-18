@@ -50,7 +50,7 @@ fn chan_init(comptime T: type, c *Chan(T), cap i64) {
 }
 
 fn chan_lock(comptime T: type, c *Chan(T)) {
-	while (!atomic_cas(&c.lock, 0, 1)) { }
+	while (!atomic_cas(&c.lock, 0, 1)) { sys_sched_yield(); }
 }
 
 fn chan_unlock(comptime T: type, c *Chan(T)) {

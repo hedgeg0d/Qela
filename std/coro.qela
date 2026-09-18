@@ -34,7 +34,7 @@ tvar cur_coro int = 0;
 var coro_stack_lock i64 = 0;
 
 fn coro_alloc_stack() *u8 {
-	while (!atomic_cas(&coro_stack_lock, 0, 1)) { }
+	while (!atomic_cas(&coro_stack_lock, 0, 1)) { sys_sched_yield(); }
 	var p *u8 = arena_alloc(CORO_STACK, 16);
 	atomic_store(&coro_stack_lock, 0);
 	return p;
