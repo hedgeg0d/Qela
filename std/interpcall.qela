@@ -14,7 +14,7 @@ struct DynEntry {
 	ptr  i64,
 	next *DynEntry,
 }
-var dyn_cache *DynEntry = 0 as *DynEntry;
+var dyn_cache *DynEntry = null;
 
 fn dyn_find(name str) i64 {
 	var e *DynEntry = dyn_cache;
