@@ -132,7 +132,7 @@ fn lambda_collect(n *Node, out **Type) {
 }
 
 fn infer_lambda_ret(f *Func) *Type {
-	var found *Type = 0 as *Type;
+	var found *Type = null;
 	lambda_collect(f.body, &found);
 	if (found as i64 == 0) { return ty_void; }
 	return found;
@@ -273,7 +273,7 @@ fn type_lookup(name str) *Type {
 		if (str_eq(n.name, name)) { return n.ty; }
 		n = n.next;
 	}
-	return 0 as *Type;
+	return null;
 }
 
 fn is_integer(t *Type) bool {
@@ -482,7 +482,7 @@ var cur_fn_typing *Func;
 fn type_set_fn(f *Func) { cur_fn_typing = f; }
 
 fn alloc_temp(ty *Type) *Var {
-	if (cur_fn_typing as i64 == 0) { return 0 as *Var; }
+	if (cur_fn_typing as i64 == 0) { return null; }
 	var v *Var = arena_alloc(sizeof(Var), 8) as *Var;
 	v.ty = ty;
 	v.next = cur_fn_typing.locals;
@@ -657,7 +657,7 @@ fn clone_var(v *Var) *Var {
 	var c *Var = arena_alloc(sizeof(Var), 8) as *Var;
 	*c = *v;
 	c.ty = tsubst(v.ty);
-	c.next = 0 as *Var;
+	c.next = null;
 	var_map_old[nvar_map] = v;
 	var_map_new[nvar_map] = c;
 	nvar_map = nvar_map + 1;
@@ -790,7 +790,7 @@ fn monomorphize_call(n *Node, f *Func) {
 	var i int = 0;
 	while (i < nct) {
 		subst_vars[i] = func_param(f, i).ty;
-		subst_concretes[i] = 0 as *Type;
+		subst_concretes[i] = null;
 		i = i + 1;
 	}
 	subst_n = nct;
@@ -889,7 +889,7 @@ fn type_match(n *Node) {
 			if (has_default) { error_at(arm.pos, "duplicate '_' arm"); }
 			has_default = true;
 		} else {
-			var v *Variant = 0 as *Variant;
+			var v *Variant = null;
 			var tag int = enum_tag_of(st, arm.name, &v);
 			if (tag < 0) {
 				emsg("this enum has no variant named '"); emsg(arm.name); emsg("'"); efail(arm.pos);
@@ -1133,7 +1133,7 @@ fn type_assign(n *Node) {
 }
 
 fn type_enumlit(n *Node) {
-	var v *Variant = 0 as *Variant;
+	var v *Variant = null;
 	if (enum_tag_of(n.ty, n.name, &v) < 0) {
 		emsg("this enum has no variant named '"); emsg(n.name); emsg("'"); efail(n.pos);
 	}
@@ -1144,7 +1144,7 @@ fn type_enumlit(n *Node) {
 	var a *Node = n.args;
 	while (a as i64 != 0) {
 		var nxt *Node = a.next;
-		a.next = 0 as *Node;
+		a.next = null;
 		if (fm as i64 == 0) {
 			emsg("too many values for '"); emsg(n.name); emsg("'"); efail(n.pos);
 		}
@@ -1177,7 +1177,7 @@ fn type_enumlit(n *Node) {
 fn type_structlit(n *Node) {
 	var a *Node = n.args;
 	while (a as i64 != 0) {
-		var m *Member = 0 as *Member;
+		var m *Member = null;
 		var k *Member = n.ty.members;
 		while (k as i64 != 0) {
 			if (str_eq(k.name, a.name)) { m = k; }
@@ -1294,7 +1294,7 @@ fn type_intrinsic(n *Node) bool {
 		var nv0 *Node = exp0.next;
 		var exp *Node = intrinsic_i64_arg(exp0);
 		var nv *Node = intrinsic_i64_arg(nv0);
-		p.next = exp; exp.next = nv; nv.next = 0 as *Node;
+		p.next = exp; exp.next = nv; nv.next = null;
 		n.args = p;
 		n.ty = ty_bool;
 		return true;
@@ -1306,7 +1306,7 @@ fn type_intrinsic(n *Node) bool {
 			error_at(p.pos, "atomic_add's first argument must be a pointer");
 		}
 		var d *Node = intrinsic_i64_arg(p.next);
-		p.next = d; d.next = 0 as *Node;
+		p.next = d; d.next = null;
 		n.args = p;
 		n.ty = ty_i64;
 		return true;
@@ -1326,7 +1326,7 @@ fn type_intrinsic(n *Node) bool {
 			error_at(p.pos, "atomic_store's first argument must be a pointer");
 		}
 		var v *Node = intrinsic_i64_arg(p.next);
-		p.next = v; v.next = 0 as *Node;
+		p.next = v; v.next = null;
 		n.args = p;
 		n.ty = ty_void;
 		return true;
@@ -1345,7 +1345,7 @@ fn type_intrinsic(n *Node) bool {
 		if (n.nargs != 2) { error_at(n.pos, "an out takes a port and a value"); }
 		var op0 *Node = intrinsic_i64_arg(n.args);
 		var op1 *Node = intrinsic_i64_arg(n.args.next);
-		op0.next = op1; op1.next = 0 as *Node;
+		op0.next = op1; op1.next = null;
 		n.args = op0;
 		n.ty = ty_void;
 		return true;
@@ -1378,7 +1378,7 @@ fn type_intrinsic(n *Node) bool {
 		if (n.nargs != 2) { error_at(n.pos, "wrmsr takes a register number and a value"); }
 		var w0 *Node = intrinsic_i64_arg(n.args);
 		var w1 *Node = intrinsic_i64_arg(n.args.next);
-		w0.next = w1; w1.next = 0 as *Node;
+		w0.next = w1; w1.next = null;
 		n.args = w0;
 		n.ty = ty_void;
 		return true;
@@ -1391,7 +1391,7 @@ fn type_intrinsic(n *Node) bool {
 		var a1 *Node = intrinsic_i64_arg(n.args.next);
 		var a2 *Node = intrinsic_i64_arg(n.args.next.next);
 		var a3 *Node = intrinsic_i64_arg(n.args.next.next.next);
-		a0.next = a1; a1.next = a2; a2.next = a3; a3.next = 0 as *Node;
+		a0.next = a1; a1.next = a2; a2.next = a3; a3.next = null;
 		n.args = a0;
 		n.ty = ty_i64;
 		return true;
@@ -1412,12 +1412,12 @@ fn type_intrinsic(n *Node) bool {
 	}
 	if (str_eq(n.name, "interp_coro_spawn") || str_eq(n.name, "interp_coro_switch")) {
 		var a *Node = n.args;
-		var head *Node = 0 as *Node;
-		var tail *Node = 0 as *Node;
+		var head *Node = null;
+		var tail *Node = null;
 		while (a as i64 != 0) {
 			var nxt *Node = a.next;
 			var v *Node = intrinsic_i64_arg(a);
-			v.next = 0 as *Node;
+			v.next = null;
 			if (head as i64 == 0) { head = v; } else { tail.next = v; }
 			tail = v;
 			a = nxt;
@@ -1524,7 +1524,7 @@ fn type_call(n *Node) {
 	var a *Node = n.args;
 	while (a as i64 != 0) {
 		var nxt *Node = a.next;
-		a.next = 0 as *Node;
+		a.next = null;
 		var pv *Var = func_param(f, i);
 		var want *Type = pv.ty;
 		if (n.dotcall && i == 0) { a = dot_receiver(a, want, n.pos); }
@@ -1544,7 +1544,8 @@ fn type_call(n *Node) {
 		} else {
 			a = to_value(a);
 			reject_aggregate(a, want, a.pos);
-			if ((want.kind == TY_PTR) != (a.ty.kind == TY_PTR)) {
+			if ((want.kind == TY_PTR) != (a.ty.kind == TY_PTR) &&
+			    !(a.kind == ND_NUM && a.val == 0)) {
 				emsg("argument must have type '"); emsg_ty(want); emsg("'"); efail(a.pos);
 			}
 			reject_float_mismatch(a, want, a.pos);
@@ -1588,7 +1589,7 @@ fn type_indirect_call(n *Node) {
 	var pm *Member = ft.members;
 	while (a as i64 != 0) {
 		var nxt *Node = a.next;
-		a.next = 0 as *Node;
+		a.next = null;
 		var want *Type = pm.ty;
 		if (is_aggregate(want)) {
 			if (!same_type(want, a.ty)) {
@@ -1597,7 +1598,8 @@ fn type_indirect_call(n *Node) {
 		} else {
 			a = to_value(a);
 			reject_aggregate(a, want, a.pos);
-			if ((want.kind == TY_PTR) != (a.ty.kind == TY_PTR)) {
+			if ((want.kind == TY_PTR) != (a.ty.kind == TY_PTR) &&
+			    !(a.kind == ND_NUM && a.val == 0)) {
 				emsg("argument must have type '"); emsg_ty(want); emsg("'"); efail(a.pos);
 			}
 			reject_float_mismatch(a, want, a.pos);
@@ -1620,7 +1622,7 @@ fn type_syscall(n *Node) {
 	var a *Node = n.args;
 	while (a as i64 != 0) {
 		var nxt *Node = a.next;
-		a.next = 0 as *Node;
+		a.next = null;
 		a = to_value(a);
 		if (!is_numeric(a.ty)) {
 			error_at(a.pos, "a syscall argument must be an integer or a pointer");
@@ -2037,9 +2039,9 @@ fn type_bitfield_read(n *Node, m *Member) {
 }
 
 fn bitfield_of(n *Node) *Member {
-	if (n.kind != ND_BITAND) { return 0 as *Member; }
-	if (n.member as i64 == 0) { return 0 as *Member; }
-	if (n.member.bitw == 0) { return 0 as *Member; }
+	if (n.kind != ND_BITAND) { return null; }
+	if (n.member as i64 == 0) { return null; }
+	if (n.member.bitw == 0) { return null; }
 	return n.member;
 }
 
@@ -2096,7 +2098,7 @@ fn index_call_name(ty *Type, suffix str) str {
 fn index_recv(base *Node, f *Func) *Node {
 	var want *Type = func_param(f, f.nct).ty;
 	if (want.kind == TY_PTR && base.ty.kind != TY_PTR) {
-		if (!is_addr_expr(base)) { return 0 as *Node; }
+		if (!is_addr_expr(base)) { return null; }
 		var ad *Node = node_alloc();
 		ad.kind = ND_ADDR;
 		ad.lhs = base;
@@ -2125,7 +2127,7 @@ fn index_sugar(n *Node, suffix str) bool {
 	call.name = name;
 	call.args = recv;
 	recv.next = n.rhs;
-	n.rhs.next = 0 as *Node;
+	n.rhs.next = null;
 	call.nargs = 2;
 	call.pos = n.pos;
 	add_type(call);
@@ -2150,7 +2152,7 @@ fn index_put(n *Node) bool {
 	put.args = recv;
 	recv.next = key;
 	key.next = n.rhs;
-	n.rhs.next = 0 as *Node;
+	n.rhs.next = null;
 	put.nargs = 3;
 	put.pos = n.pos;
 	add_type(put);
@@ -2165,7 +2167,7 @@ fn type_maplit(n *Node) {
 	var tm *Tmpl = tmpl_find("Map");
 	if (tm as i64 == 0) { error_at(n.pos, "a map literal needs std/map.qela imported"); }
 	var vty *Type = to_value(n.args.rhs).ty;
-	var mty *Type = generic_instance(tm, vty, 0 as *Type);
+	var mty *Type = generic_instance(tm, vty, null);
 	var tmp *Var = alloc_temp(mty);
 	if (tmp as i64 == 0) { error_at(n.pos, "a map literal needs a function scope"); }
 
@@ -2189,7 +2191,7 @@ fn type_maplit(n *Node) {
 		put.kind = ND_CALL; put.name = "map_put"; put.args = ad2; put.nargs = 3; put.pos = a.pos;
 		ad2.next = a.lhs;
 		a.lhs.next = a.rhs;
-		a.rhs.next = 0 as *Node;
+		a.rhs.next = null;
 		add_type(put);
 		var cm *Node = node_alloc();
 		cm.kind = ND_COMMA; cm.lhs = chain; cm.rhs = put; cm.ty = put.ty;
@@ -2210,7 +2212,7 @@ fn type_maplit(n *Node) {
 
 fn type_arrlit(n *Node) {
 	if (n.nargs == 0) { error_at(n.pos, "an array literal needs at least one element"); }
-	var elem *Type = 0 as *Type;
+	var elem *Type = null;
 	if (n.ty as i64 != 0 && n.ty.kind == TY_ARRAY) {
 		if (n.ty.len != n.nargs as i64) {
 			error_at(n.pos, "this array literal has the wrong number of elements");
@@ -2225,12 +2227,12 @@ fn type_arrlit(n *Node) {
 	var tmp *Var = alloc_temp(arrty);
 	if (tmp as i64 == 0) { error_at(n.pos, "an array literal needs a function scope"); }
 
-	var chain *Node = 0 as *Node;
+	var chain *Node = null;
 	var a *Node = n.args;
 	var i i64 = 0;
 	while (a as i64 != 0) {
 		var nxt *Node = a.next;
-		a.next = 0 as *Node;
+		a.next = null;
 
 		var idx *Node = node_alloc();
 		idx.kind = ND_NUM; idx.val = i; idx.ty = ty_i64; idx.typed = true; idx.pos = n.pos;

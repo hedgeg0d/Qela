@@ -25,8 +25,8 @@ struct Ast {
 	parent *Ast,
 	index  i64,
 }
-var abi_asts *Ast = 0 as *Ast;
-var abi_asts_tail *Ast = 0 as *Ast;
+var abi_asts *Ast = null;
+var abi_asts_tail *Ast = null;
 var abi_respawned bool = false;
 
 // A recorded ast_set: (handle, index, replacement handle). The replay
@@ -39,8 +39,8 @@ struct AstSet {
 	child  *Ast,
 	next   *AstSet,
 }
-var abi_sets *AstSet = 0 as *AstSet;
-var abi_sets_tail *AstSet = 0 as *AstSet;
+var abi_sets *AstSet = null;
+var abi_sets_tail *AstSet = null;
 
 // The ast request kinds live here (not in eval.qela) because the respawn
 // replay uses them too.
@@ -136,7 +136,7 @@ fn abi_respawn() bool {
 // so a shipped binary can spawn its own child without qela installed.
 // Zero in a program that was not compiled with the embed (e.g. under
 // `qela irun`, where no codegen runs) -- the spawn falls back then.
-var __qela_embedded *u8 = 0 as *u8;
+var __qela_embedded *u8 = null;
 var __qela_embedded_len i64 = 0;
 
 fn abi_path_exists(p str) bool {

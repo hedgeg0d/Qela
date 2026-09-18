@@ -28,7 +28,7 @@ fn sum_of(head *Node) i64 {
 fn worker(arg i64) i64 {
 	tls_init();
 	gc_thread_enter();
-	var head *Node = 0 as *Node;
+	var head *Node = null;
 	var i i64 = 0;
 	while (i < ROUNDS) {
 		var n *Node = gc_alloc(sizeof(Node)) as *Node;
