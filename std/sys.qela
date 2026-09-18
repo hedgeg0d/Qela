@@ -461,14 +461,21 @@ fn sys_dup2(old i64, new i64) i64 {
 }
 
 /// TIOCGETS with a real termios buffer: 0 on a tty, a negative errno elsewhere.
-fn sys_isatty() i64 {
+/// Whether a descriptor is a terminal (TIOCGETS succeeds on a tty).
+/// Diagnostics go to stderr and must ask about *that* descriptor: with
+/// stdin on a terminal and stderr in a file, a check of stdin colours the
+/// file while the terminal sees nothing.
+fn sys_isatty_fd(fd i64) i64 {
 	var tio [64]u8;
 	$if (TARGET != "x86_64") {
-		return syscall(SYS_IOCTL_N, 0, 0x5401, &tio[0] as i64);
+		return syscall(SYS_IOCTL_N, fd, 0x5401, &tio[0] as i64);
 	} $else {
-		return syscall(SYS_IOCTL, 0, 0x5401, &tio[0] as i64);
+		return syscall(SYS_IOCTL, fd, 0x5401, &tio[0] as i64);
 	}
 }
+
+/// The common case: the interpreter's own prompts, which are about stdin.
+fn sys_isatty() i64 { return sys_isatty_fd(0); }
 
 /// Resolves a symlink into buf; returns length or an errno.
 fn sys_readlink(path *u8, buf *u8, n i64) i64 {
