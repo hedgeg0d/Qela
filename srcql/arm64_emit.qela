@@ -269,6 +269,11 @@ fn arm64_add_call(name str, pos i64) {
 	b4(0x94000000);
 }
 
+fn arm64_add_call_fn(f *Func, pos i64) {
+	arm64_add_call(f.name, pos);
+	if (calls_tail as i64 != 0) { calls_tail.fptr = f; }
+}
+
 fn buf_read32(b *Buf, at i64) i64 {
 	var p *u8 = b.p + at;
 	return (*p as i64) | ((*(p + 1) as i64) << 8) | ((*(p + 2) as i64) << 16) | ((*(p + 3) as i64) << 24);
@@ -1499,7 +1504,7 @@ fn arm64_lower_op(op *IrOp) {
 		return;
 	}
 	if (op.kind == IR_CALL && op.src0.kind == OP_FUNC) {
-		arm64_add_call((op.src0.off as *Func).name, op.pos);
+		arm64_add_call_fn(op.src0.off as *Func, op.pos);
 		return;
 	}
 	if (op.kind == IR_CALL && op.src0.kind == OP_VREG) {

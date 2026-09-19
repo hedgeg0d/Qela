@@ -1,0 +1,50 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: i64 5
+// expect-out: str 3
+// expect-out: f64 2.5
+// expect-out: u8 9
+// expect-out: overload ok
+// Overloads: two or more functions with one name dispatch on the argument
+// types -- exact matches win, then implicit widening; ties keep the first
+// declared. A call nothing matches still reports the first declaration's
+// usual type error, so a single function behaves exactly as before.
+import "std/io.qela";
+import "std/fmt.qela";
+
+fn show(x i64) {
+	write_str(STDOUT, "i64 ");
+	var b Buf;
+	fmt_i64(&b, x);
+	write_str(STDOUT, buf_str(&b));
+	write_str(STDOUT, "\n");
+}
+
+fn show(s str) {
+	write_str(STDOUT, "str ");
+	write_str(STDOUT, s);
+	write_str(STDOUT, "\n");
+}
+
+fn show(x f64) {
+	write_str(STDOUT, "f64 ");
+	if (x == 2.5) { write_str(STDOUT, "2.5\n"); }
+	else { write_str(STDOUT, "??\n"); }
+}
+
+fn show(x u8) {
+	write_str(STDOUT, "u8 ");
+	var b Buf;
+	fmt_i64(&b, x as i64);
+	write_str(STDOUT, buf_str(&b));
+	write_str(STDOUT, "\n");
+}
+
+fn main() int {
+	show(5);
+	show("3");
+	show(2.5);
+	show(9 as u8);
+	write_str(STDOUT, "overload ok\n");
+	return 0;
+}
