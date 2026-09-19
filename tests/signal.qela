@@ -1,0 +1,31 @@
+// stage1-only
+// interp-skip
+// expect-exit: 0
+// expect-out: 0-0-42
+// sig_set installs a handler, sig_raise delivers; the handler runs on the
+// interrupted stack and its return lands in the naked rt_sigreturn
+// restorer, which pops the kernel's frame and resumes main.
+import "std/fmt.qela";
+import "std/signal.qela";
+
+var got i64 = 0;
+
+fn handler() {
+	got = 42;
+}
+
+fn main() int {
+	var rc i64 = sig_set(SIGUSR1, handler);
+	var rr i64 = sig_raise(SIGUSR1);
+	var i i64 = 0;
+	while (got == 0 && i < 1000000) { i = i + 1; }
+	var o = fmt_begin();
+	o = fmt_put_i64(o, rc);
+	o = fmt_put_str(o, "-");
+	o = fmt_put_i64(o, rr);
+	o = fmt_put_str(o, "-");
+	o = fmt_put_i64(o, got);
+	var r = fmt_result(o);
+	sys_write(1, r.ptr, r.len);
+	return 0;
+}

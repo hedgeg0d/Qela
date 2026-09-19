@@ -29,6 +29,23 @@ let SYS_PIPE2 = 293;
 let SYS_SOCKETPAIR = 53;
 let SYS_MPROTECT = 10;
 let SYS_UNAME   = 63;
+let SYS_MKDIR  = 83;
+let SYS_RMDIR  = 84;
+let SYS_RENAME = 82;
+let SYS_GETCWD = 79;
+let SYS_RT_SIGACTION = 13;
+let SYS_KILL   = 62;
+let SYS_RT_SIGRETURN = 15;
+let SIG_DFL = 0;
+let SIG_IGN = 1;
+let SIGUSR1 = 10;
+let SIGUSR2 = 12;
+let SIGALRM = 14;
+let SIGTERM = 15;
+let SIGINT  = 2;
+let SA_RESTORER = 0x04000000;
+let SA_RESTART  = 0x10000000;
+let SA_NODEFER  = 0x40000000;
 
 $if (TARGET != "x86_64") {
 let SYS_READ_N  = 63;
@@ -46,6 +63,13 @@ let SYS_GETPID_N = 172;
 let SYS_GETDENTS_N = 61;
 let SYS_DUP3_N = 24;
 let SYS_IOCTL_N = 29;
+let SYS_MKDIR_N = 34;
+let SYS_RMDIR_N = 21;
+let SYS_RENAME_N = 82;
+let SYS_GETCWD_N = 17;
+let SYS_RT_SIGACTION_N = 134;
+let SYS_KILL_N = 129;
+let SYS_RT_SIGRETURN_N = 139;
 let SYS_MUNMAP_N = 215;
 let SYS_CLONE_N = 220;
 let SYS_FUTEX_N = 98;
@@ -142,6 +166,67 @@ fn sys_munmap(addr i64, n i64) i64 {
 		return syscall(SYS_MUNMAP_N, addr, n, 0);
 	}
 	return syscall(SYS_MUNMAP, addr, n, 0);
+}
+
+// A full mmap: an anonymous mapping is sys_mmap_anon(0, n, rw, anon,
+// -1, 0); a file mapping passes the fd and offset. Returns the mapping
+// address or a negative errno.
+fn sys_mmap(addr i64, len i64, prot i64, flags i64, fd i64, off i64) i64 {
+	$if (TARGET != "x86_64") {
+		return syscall(SYS_MMAP_N, addr, len, prot, flags, fd, off);
+	}
+	return syscall(SYS_MMAP, addr, len, prot, flags, fd, off);
+}
+
+fn sys_mkdir(path *u8) i64 {
+	$if (TARGET != "x86_64") {
+		return syscall(SYS_MKDIR_N, path as i64, 0, 0);
+	}
+	return syscall(SYS_MKDIR, path as i64, 0, 0);
+}
+
+fn sys_rmdir(path *u8) i64 {
+	$if (TARGET != "x86_64") {
+		return syscall(SYS_RMDIR_N, path as i64, 0, 0);
+	}
+	return syscall(SYS_RMDIR, path as i64, 0, 0);
+}
+
+fn sys_rename(old *u8, new *u8) i64 {
+	$if (TARGET != "x86_64") {
+		return syscall(SYS_RENAME_N, old as i64, new as i64, 0);
+	}
+	return syscall(SYS_RENAME, old as i64, new as i64, 0);
+}
+
+fn sys_getcwd(buf *u8, n i64) i64 {
+	$if (TARGET != "x86_64") {
+		return syscall(SYS_GETCWD_N, buf as i64, n, 0);
+	}
+	return syscall(SYS_GETCWD, buf as i64, n, 0);
+}
+
+// The rt_sigaction layout is the same on every target: handler, flags,
+// restorer, then the 8-byte kernel sigset. act may be null to read only.
+fn sys_rt_sigaction(sig i64, act *u8, old *u8) i64 {
+	$if (TARGET != "x86_64") {
+		return syscall(SYS_RT_SIGACTION_N, sig, act as i64, old as i64, 8);
+	}
+	return syscall(SYS_RT_SIGACTION, sig, act as i64, old as i64, 8);
+}
+
+fn sys_kill(pid i64, sig i64) i64 {
+	$if (TARGET != "x86_64") {
+		return syscall(SYS_KILL_N, pid, sig, 0);
+	}
+	return syscall(SYS_KILL, pid, sig, 0);
+}
+
+fn sys_sigreturn() i64 {
+	$if (TARGET != "x86_64") {
+		return syscall(SYS_RT_SIGRETURN_N, 0, 0, 0);
+	}
+	return syscall(SYS_RT_SIGRETURN, 0, 0, 0);
 }
 
 // Raw x86-64 clone() argument order: flags, child stack top, parent tid
