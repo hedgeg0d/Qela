@@ -1,0 +1,73 @@
+// expect-exit: 0
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = 50;
+fn min2(a int, b int) int { if (a < b) { return a; } else { return b; } }
+fn diff4(a int, b int, c int, d int) int { return a - b - c - d; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn wide_swap(w Wide) Wide { return Wide{a: w.b, b: w.a, c: w.c}; }
+fn wide_sum(w Wide) int { return w.a + w.b + w.c; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 0x1;
+    var v1 int = 5;
+    var v2 int = 2;
+    var sv0 str = "xyzzy";
+    var sv1 str = "zz";
+    var fv double = 100.0;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    e = E.B((p.y | (((true * true) << (false * 42)) + str_eq(sv1, ("abcd")[1..4]))));
+    sv1 = ("hello")[2..5];
+    p.y = (((gv if (v2 != (str_eq("no", "xyz") if (((((v1 in a) if (((((fv * 3.75) * (false as double)) as i64) & (((-112 >> gv) in a) == ((100 & 3) % ((('1' + 0xffffffffffffff4f) & 15) + 1)))) >= (fv > (0.3 - ((fv * fv) / 0.3)))) else gv) << ((('b' <= 0xa) <= (2 ^ 'c')) && ((2 ^ 'c') < (fv < fv)))) as u32) != (gv in 0..(((((-1 in 0..((gv & 0xf) + 1)) as u32) > (((100 if ((((((("""ab
+cd""")[2..4])[0..2]).len * 255) * (opt_d(D.None) as i16)) / (('g' & 15) + 1)) > opt_d(D.None)) else v1) >= (gv in a)) && ((gv in a) > 'e'))) & 0xf) + 1))) else (p.x if ((gv | (((("abcd")[0..3])[0..2])[0..2])[1]) != -1) else (-('f' >> false))))) else (813 if (gv <= (-((v0 < opt_d(D.None)) >= ((-110) & (0 in 0..((-346 & 15) + 1)))))) else 0)) & a[(false & 3)]) != (((true - v0) in 0..((p.x & 15) + 1)) ^ ((fv - 0.125) as i64)));
+    v2 = (a[(((3 if ((p.x ^ ((min2(true, 'b') in 0..((wide_sum(w) & 15) + 0x1)) / ((((true <= 0) as i16) & 15) + 1))) == p.x) else 100) in 0..(((v0 in a) & 15) + 1)) & 3)] - ((((((("xyz" + "no"))[0..2] + sv1) + "xyzzy") + (("xyzzy")[2..4] + ("""x
+yz""")[1..3])))[1] % (((sv1).len & 15) + 1)));
+    p = pair_swap(p);
+    v1 = (((((!true) > (999 >> v0)) && ((999 >> v0) >= ('3' < 'd'))) in 0..((((gv & 785) as i8) & 15) + 1)) + true);
+    match (e) {
+        A => {
+            return '\n';
+        }
+        B(mb0) => {
+            return (((((683 >= 283) ^ (true == 'e')) in 0..(((0xffffffffffffffff >> (false in 0..((v2 & 15) + 1))) & 15) + 1)) - (str_eq((("zz" + ((sv0)[0..2])[0..2]) + "abc"), ("abcd")[0..2]) / (((v1 if ((((false if ((((((!'\t') + (gv > -1)) >= (gv | (false / ((0x313 & 15) + 1)))) && ((gv | (false / ((0x313 & 15) + 1))) >= 100)) in a) <= ((!(!(10 % ((v2 & 15) + 1)))) != (opt_d(D.Some(true)) < gv))) else (-482 == 0)) % ((true & 0xf) + 0x1)) ^ ((-873 < (0xfffffffffffffefe as u16)) as u32)) <= ((-(("xyz")[0..3])[1]) as u16)) else (1 != false)) & 0xf) + 1))) - mb0);
+        }
+        C(mb0, mb1) => {
+            return (((-('c' in a)) <= ((('d' <= 0x264) && (0x264 < 42)) << (2 & 127))) == a[(((true as u32) if (((((false >= gv) in a) < 0x69) - (!((fv / 100.0) as i64))) < ((((!'\t') / ((str_eq(sv0, ("abcd")[1..4]) & 15) + 1)) in 0..(((str_eq("abcd", (((sv1 + (("42" + (((sv0 + (((sv1)[0..2] + ("abc")[0..3]))[0..2]))[0..2])[0..2]) + (("""ab
+cd""")[1..4])[0..2])))[0..2] + (("foobar")[0..6])[0..2])) in a) & 15) + 1)) in 0..(((((false if (true <= ((((fv - fv) / 2.0) as i64) as u32)) else -206) >= true) == (-427 as u8)) & 15) + 1))) else (0.3 as i64)) & 3)]);
+        }
+    }
+    e = E.B(((!127) << '0'));
+    write_str(STDOUT, "${v1=}\n");
+    return min2((((-515 >= '\t') > (true as i32)) <= (a[(179 & 3)] as i32)), '1');
+}

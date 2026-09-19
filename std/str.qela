@@ -1,5 +1,6 @@
 import "arena.qela";
 
+/// Returns whether two strings hold the same bytes.
 fn str_eq(a str, b str) bool {
 	if (a.len != b.len) { return false; }
 	var i i64 = 0;
@@ -10,12 +11,14 @@ fn str_eq(a str, b str) bool {
 	return true;
 }
 
+/// Returns the length of a NUL-terminated string.
 fn str_len_cstr(p *u8) i64 {
 	var n i64 = 0;
 	while (p[n] != 0) { n = n + 1; }
 	return n;
 }
 
+/// Wraps a NUL-terminated pointer as a str without copying.
 fn str_from_cstr(p *u8) str {
 	var s str;
 	s.ptr = p;
@@ -23,6 +26,7 @@ fn str_from_cstr(p *u8) str {
 	return s;
 }
 
+/// Returns a substring view over [lo, hi), sharing the storage.
 fn str_slice(s str, lo i64, hi i64) str {
 	var r str;
 	r.ptr = s.ptr + lo;
@@ -30,6 +34,7 @@ fn str_slice(s str, lo i64, hi i64) str {
 	return r;
 }
 
+/// Returns the index of byte c, or -1 when absent.
 fn str_find(s str, c u8) i64 {
 	var i i64 = 0;
 	while (i < s.len) {
@@ -39,6 +44,7 @@ fn str_find(s str, c u8) i64 {
 	return -1;
 }
 
+/// Copies s into fresh arena memory with a trailing NUL.
 fn str_dup(s str) str {
 	var p *u8 = arena_alloc(s.len + 1, 1);
 	var i i64 = 0;
@@ -50,11 +56,12 @@ fn str_dup(s str) str {
 	return r;
 }
 
-// NUL-terminated copy, for paths handed to a syscall.
+/// Returns a NUL-terminated copy, for paths handed to a syscall.
 fn cstr(s str) *u8 {
 	return str_dup(s).ptr;
 }
 
+/// Builds a one-byte string from a character.
 fn str_from_char(c u8) str {
 	var p *u8 = arena_alloc(1, 1);
 	p[0] = c;
@@ -64,6 +71,7 @@ fn str_from_char(c u8) str {
 	return r;
 }
 
+/// Returns the last index of byte c, or -1 when absent.
 fn str_rfind(s str, c u8) i64 {
 	var i i64 = s.len;
 	while (i > 0) {
@@ -73,6 +81,7 @@ fn str_rfind(s str, c u8) i64 {
 	return -1;
 }
 
+/// Returns the index of the first occurrence of sub, or -1.
 fn str_index(s str, sub str) i64 {
 	if (sub.len == 0) { return 0; }
 	if (sub.len > s.len) { return -1; }
@@ -89,40 +98,48 @@ fn str_index(s str, sub str) i64 {
 	return -1;
 }
 
+/// Returns whether s contains sub anywhere.
 fn str_contains(s str, sub str) bool {
 	return str_index(s, sub) >= 0;
 }
 
+/// Returns whether s begins with prefix p.
 fn str_starts_with(s str, p str) bool {
 	if (p.len > s.len) { return false; }
 	return str_eq(str_slice(s, 0, p.len), p);
 }
 
+/// Returns whether s ends with suffix p.
 fn str_ends_with(s str, p str) bool {
 	if (p.len > s.len) { return false; }
 	return str_eq(str_slice(s, s.len - p.len, s.len), p);
 }
 
+/// Returns whether c is a space, tab, newline or carriage return.
 fn str_is_space(c u8) bool {
 	return c == ' ' || c == 9 as u8 || c == 10 as u8 || c == 13 as u8;
 }
 
+/// Removes leading whitespace.
 fn str_trim_left(s str) str {
 	var i i64 = 0;
 	while (i < s.len && str_is_space(s.ptr[i])) { i = i + 1; }
 	return str_slice(s, i, s.len);
 }
 
+/// Removes trailing whitespace.
 fn str_trim_right(s str) str {
 	var n i64 = s.len;
 	while (n > 0 && str_is_space(s.ptr[n - 1])) { n = n - 1; }
 	return str_slice(s, 0, n);
 }
 
+/// Removes leading and trailing whitespace.
 fn str_trim(s str) str {
 	return str_trim_left(str_trim_right(s));
 }
 
+/// Concatenates a and b into a fresh string.
 fn str_cat(a str, b str) str {
 	var p *u8 = arena_alloc(a.len + b.len + 1, 1);
 	var i i64 = 0;
@@ -136,6 +153,7 @@ fn str_cat(a str, b str) str {
 	return r;
 }
 
+/// Returns s repeated n times.
 fn str_repeat(s str, n i64) str {
 	if (n <= 0) { return ""; }
 	var p *u8 = arena_alloc(s.len * n + 1, 1);
@@ -152,6 +170,7 @@ fn str_repeat(s str, n i64) str {
 	return r;
 }
 
+/// Returns a copy of s with uppercase letters lowered.
 fn str_lower(s str) str {
 	var d str = str_dup(s);
 	var i i64 = 0;
@@ -164,6 +183,7 @@ fn str_lower(s str) str {
 	return d;
 }
 
+/// Returns a copy of s with lowercase letters uppercased.
 fn str_upper(s str) str {
 	var d str = str_dup(s);
 	var i i64 = 0;
@@ -176,6 +196,7 @@ fn str_upper(s str) str {
 	return d;
 }
 
+/// Compares a and b lexicographically: negative, zero or positive.
 fn str_cmp(a str, b str) i64 {
 	var n i64 = a.len;
 	if (b.len < n) { n = b.len; }
@@ -192,6 +213,7 @@ fn str_cmp(a str, b str) i64 {
 	return 0;
 }
 
+/// Counts non-overlapping occurrences of sub in s.
 fn str_count(s str, sub str) i64 {
 	if (sub.len == 0) { return 0; }
 	var n i64 = 0;
@@ -207,6 +229,7 @@ fn str_count(s str, sub str) i64 {
 	return n;
 }
 
+/// Replaces every occurrence of old with new in a fresh string.
 fn str_replace(s str, old str, new str) str {
 	if (old.len == 0) { return s; }
 	var hits i64 = str_count(s, old);
@@ -234,6 +257,7 @@ fn str_replace(s str, old str, new str) str {
 	return r;
 }
 
+/// Parses an integer from s, setting ok only on a full valid parse.
 fn str_to_int(s str, ok *bool) i64 {
 	var t str = str_trim(s);
 	*ok = false;
@@ -256,6 +280,7 @@ fn str_to_int(s str, ok *bool) i64 {
 	return v;
 }
 
+/// Parses an integer from s, returning 0 when it does not parse.
 fn str_int(s str) i64 {
 	var ok bool = false;
 	return str_to_int(s, &ok);
@@ -265,12 +290,14 @@ fn str_int(s str) i64 {
 // The pieces are str slices into s, so nothing is copied; only the slice
 // array itself is arena-allocated. A trailing separator keeps an empty
 // piece: str_split("a,", ",") is ["a", ""].
+/// Splits s on sep into non-copying slices, keeping no limit.
 fn str_split(s str, sep str) []str {
 	return str_split_n(s, sep, -1);
 }
 
 // str_split_n caps the result at n pieces; the last piece takes the rest of
 // s. A negative n splits without a cap.
+/// Splits s on sep, at most n pieces with the last taking the remainder.
 fn str_split_n(s str, sep str, n i64) []str {
 	var cnt i64 = 1;
 	if (n >= 0 && n < cnt) { cnt = n; }

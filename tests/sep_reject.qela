@@ -1,0 +1,7 @@
+// stage1-only
+// expect-compile-error
+// A separator must sit between digits: a trailing one is not a number.
+fn main() int {
+	var a i64 = 1_;
+	return a as int;
+}

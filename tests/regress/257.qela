@@ -1,0 +1,94 @@
+// expect-exit: 254
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/str.qela";
+var gv int = 29;
+fn diff4(a int, b int, c int, d int) int { return a - b - c - d; }
+fn sub2(a int, b int) int { return a - b; }
+fn min2(a int, b int) int { if (a < b) { return a; } else { return b; } }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn bag_sum(b Bag) int { return b.p + b.q + b.r + b.s; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn main() int {
+    var v0 int = 0x7;
+    var v1 int = 2;
+    var v2 int = 2;
+    var sv0 str = "abc";
+    var sv1 str = "foobar";
+    var fv double = 3.75;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0x0, p: Pair{x: 0, y: 0x0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    sv1 += "hello";
+    v1 = ('b' as u8);
+    n.p.x = (fv as i64);
+    v1 = ((((("abcd")[0..2]).len >= ((gv / ((0x2a & 15) + 1)) != ('e' / ((306 & 15) + 1)))) && (((gv / ((42 & 15) + 1)) != ('e' / ((306 & 15) + 1))) >= (gv if ((((-(gv as u16)) <= (str_eq(sv0, (("""x
+yz""")[1..4])[0..2]) as i32)) ^ (((fv == 0.5) << (v0 as i32)) as i8)) <= pair_sum(Pair{x: ((((gv in 0..((-194 & 15) + 0x1)) >> (fv as i64)) >= (tag_e(e) as i32)) && ((tag_e(e) as i32) >= p.x)), y: '2'})) else ((("""ab
+cd""")[2..5] + ("hello")[1..5])).len))) + str_eq(sv1, ("abc")[0..3]));
+    if ((((a[((v2 / ((255 & 15) + 1)) & 3)] <= ((gv in a) == ((v2 >= false) && (false < '\n')))) as i8) < false)) {
+        sv1 = (("xyz")[0..2] + sv1);
+        if (((p.y + '1') <= (((('1' as double) / -1.5) / 2.5) as i64))) {
+            v1 = (!100);
+            v2, v0 = v0, v2;
+        } else {
+            sv1 += "abc";
+            i2 = 0x0;
+            while ((i2 < 0x3)) {
+                i2 = (i2 + 1);
+                gv = ((false * 35) - ((((gv in 0..((0x193 & 15) + 1)) < (!false)) && ((!false) <= str_eq(("qwerty")[2..6], ("foobar")[3..6]))) + ((gv >> 0x28d) if (((0 * 523) as i32) < min2(-209, str_eq("no", sv1))) else 'd')));
+                if (((((!(pair_sum(p) if (((!(-(gv as i8))) << a[((pair_sum(p) <= (v1 % ((gv & 15) + 1))) & 3)]) >= ((-(-(-570 as i32))) / (((((-273 as double) >= (0.1 / 0.125)) in 0..(((('d' | false) >> (("aa" + ((("""ab
+cd""" + "42"))[0..2])[0..2]))[1]) & 15) + 0x1)) & 0xf) + 1))) else (-335 ^ 'a'))) < (-(-(160 - -648)))) && ((-(-(160 - -648))) > (((-680 != 'e') as u16) * ((0.125 >= fv) == (!-217))))) == 1)) {
+                    b = Bag{p: (((sv1 + sv0))[0..2])[1], q: ((a[((gv <= true) & 3)] + ((532 as i32) as i32)) & (-((bag_sum(b) > (((sv0)[0..2])[0..2]).len) && ((((sv0)[0..2])[0..2]).len < (false / ((100 & 15) + 1)))))), r: ((false << ((v0 < -483) & (0.1 == 0.1))) >= (-(bag_sum(b) in a))), s: ((((((sv0)[0..2])[1] <= (gv - true)) && ((gv - true) >= (-379 as u16))) as i8) - p.y)};
+                    match (e) {
+                        A => {
+                            return ((((321 as i8) as u32) in a) as i16);
+                        }
+                        B(mb0) => {
+                            return a[(("""ab
+cd""").len & 3)];
+                        }
+                        C(mb0, mb1) => {
+                            return (((((0.125 / 3.75) + fv) != 1.5) << (((-gv) >= str_eq(("abc" + ("no")[0..2]), sv0)) && (str_eq(("abc" + ("no")[0..2]), sv0) >= (('3' >= -491) != (!gv))))) ^ mb1);
+                        }
+                    }
+                    return (!v1);
+                } else {
+                    gv, v0 = (-(((164 as u32) in 0..((v0 & 15) + 0x1)) ^ false)), ((0x353 < sub2(p.x, ((!'\n') > (false == v1)))) && (sub2(p.x, ((!'\n') > (false == v1))) > (((!gv) <= (255 - 'b')) ^ ('d' == (true & gv)))));
+                    n.tag = -1;
+                    return (true + pair_sum(p));
+                }
+            }
+            return (("hello")[2..5]).len;
+        }
+    } else {
+        a[((("""x
+yz""")[1..3]).len & 3)] = a[((!((false >> 1) as u16)) & 3)];
+        return (-pair_sum(Pair{x: true, y: true}));
+    }
+    sv1 += "abc";
+    v1 = ((((false in a) as i8) as double) as i64);
+    v0, v1 = v1, v0;
+    return (tag_e(e) ^ (str_eq(("""ab
+cd""")[2..4], """ab
+cd""") in a));
+}
