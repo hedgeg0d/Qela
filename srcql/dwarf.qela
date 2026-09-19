@@ -183,11 +183,11 @@ fn dwarf_symbols(text_vaddr i64, text_size i64) {
 
 	var f *Func = gen_unit.funcs;
 	while (f as i64 != 0) {
-		if (f.nct == 0 && f.body as i64 != 0) {
+		if (f.nct == 0 && f.body as i64 != 0 && f.reachable) {
 			var end i64 = text_size;
 			var g *Func = f.next;
 			while (g as i64 != 0) {
-				if (g.nct == 0 && g.body as i64 != 0) { end = g.addr; g = null; }
+				if (g.nct == 0 && g.body as i64 != 0 && g.reachable) { end = g.addr; g = null; }
 				else { g = g.next; }
 			}
 			buf_u32(&dw_sym, dw_strtab.n);
