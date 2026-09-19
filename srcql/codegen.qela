@@ -2094,6 +2094,9 @@ fn gen_expr(n *Node) {
 		return;
 	}
 	if (k == ND_CAST) {
+		if (n.val == 2) {
+			error_at(n.pos, "`as _` must be the value itself: it takes the type of what this value is stored into or passed to");
+		}
 		gen_expr(n.lhs);
 		// An enum expression is an address (an enum is an aggregate), so
 		// a numeric or boolean cast must mean the tag -- the first word

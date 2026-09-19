@@ -527,6 +527,19 @@ fn arith_widened(n *Node) bool {
 }
 
 fn cast_to(n *Node, ty *Type) *Node {
+	// `expr as _`: the destination is what this cast was waiting for. Build the
+	// real cast here, with the type the context asks for, and let the ordinary
+	// rules check it -- add_type on the new node does exactly that, so every
+	// diagnostic a written-out cast would produce still arrives.
+	if (n.kind == ND_CAST && n.val == 2) {
+		var c *Node = node_alloc();
+		c.kind = ND_CAST;
+		c.lhs = n.lhs;
+		c.ty = ty;
+		c.pos = n.pos;
+		add_type(c);
+		return c;
+	}
 	if (n.ty as i64 == ty as i64) { return n; }
 	// Poison flows through silently: the real error is already reported.
 	if (n.ty.kind == TY_POISON || ty.kind == TY_POISON) { return n; }
@@ -2530,6 +2543,15 @@ fn add_type(n *Node) {
 	}
 
 	if (k == ND_CAST) {
+		if (n.val == 2 && n.ty as i64 == 0) {
+			// `as _` before its destination is known: for now the value has the
+			// operand's type, so nothing downstream meets a null type, and
+			// cast_to swaps in the real cast when the context says which type
+			// it wants. `val` marks the node (1 is the bit-reinterpret cast).
+			if (n.lhs as i64 != 0 && !n.lhs.typed) { add_type(n.lhs); }
+			n.ty = n.lhs.ty;
+			return;
+		}
 		if (ty_dynval_cache as i64 != 0 && n.lhs.ty as i64 == ty_dynval_cache as i64) {
 			type_cast_from_dyn(n);
 			return;
