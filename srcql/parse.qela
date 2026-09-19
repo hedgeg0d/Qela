@@ -1395,6 +1395,34 @@ fn parse_primary(t **Token) *Node {
 		tok_expect(t, ")");
 		return parse_bytes(raw, bp);
 	}
+	// `$c("expr")`: a compile-time constant. The string is lexed, parsed
+	// and folded by eval_const right here, so arithmetic, bit operations,
+	// comparisons, sizeof, casts, ternaries and references to constant
+	// globals all resolve now and nothing of the expression ships. The
+	// folded grammar is exactly what eval_const knows -- no calls, no
+	// locals, no strings (for now).
+	if (tok_eq(*t, "$") && tok_eq((*t).next, "c") && tok_eq((*t).next.next, "(")) {
+		var cp i64 = (*t).pos;
+		*t = (*t).next.next.next;
+		if ((*t).kind != TK_STR) { error_at((*t).pos, "$c needs an expression in quotes"); }
+		var src str = (*t).sval;
+		var sp i64 = (*t).pos;
+		*t = (*t).next;
+		tok_expect(t, ")");
+		// Errors inside the snippet report against the same file, at the
+		// $c token (the snippet's own offsets land near it).
+		var base i64 = cp & ~((1 as i64 << FILE_SHIFT) - 1);
+		var toks *Token = lex(src, base);
+		var e *Node = parse_assign(&toks);
+		if (toks.kind != TK_EOF) { error_at(sp, "trailing tokens after the $c expression"); }
+		add_type(e);
+		var v i64 = eval_const(e);
+		var n *Node = new_node(ND_NUM, sp);
+		n.val = v;
+		n.ty = ty_i64;
+		n.typed = true;
+		return n;
+	}
 	if (tok_consume(t, "$")) {
 		var p i64 = (*t).pos;
 		if ((*t).kind != TK_IDENT) { error_at((*t).pos, "expected a symbol after '$'"); }
@@ -5468,6 +5496,20 @@ fn trunc_to(v i64, ty *Type) i64 {
 fn eval_const(n *Node) i64 {
 	var k int = n.kind;
 	if (k == ND_NUM) { return n.val; }
+	// A reference to a constant global (`let K = 5;`) folds to its
+	// initializer; every has_init global's initializer is constant by
+	// construction (global initializers fold at declaration). A local is
+	// never a compile-time constant.
+	if (k == ND_VAR) {
+		if (n.varp as i64 != 0 && n.varp.is_global && n.varp.has_init) {
+			return n.varp.init;
+		}
+		error_at(n.pos, "this is not a compile-time constant");
+	}
+	if (k == ND_IFEXPR) {
+		if (eval_const(n.cond) != 0) { return eval_const(n.then); }
+		return eval_const(n.els);
+	}
 	if (k == ND_NEG) {
 		// A float constant negates by flipping the IEEE sign bit, not by
 		// two's-complementing the stored bits (a literal keeps its f64
