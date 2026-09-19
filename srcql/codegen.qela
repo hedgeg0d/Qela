@@ -2229,7 +2229,39 @@ fn always_returns(n *Node) bool {
 	if (n.kind == ND_IF) {
 		return always_returns(n.then) && always_returns(n.els);
 	}
+	if (n.kind == ND_MATCH) {
+		// type_match already guarantees exhaustiveness (every variant
+		// covered, or a default arm), so all arms returning is enough.
+		var arm *Node = n.body;
+		while (arm as i64 != 0) {
+			if (!always_returns(arm.body)) { return false; }
+			arm = arm.next;
+		}
+		return true;
+	}
+	if (n.kind == ND_FOR && n.cond.kind == ND_NUM && n.cond.val != 0) {
+		// A `while true` never falls through its condition; the only way
+		// out is a return (good) or a break (bad). Conservative: any break
+		// anywhere in the body means the loop might fall out.
+		return !loop_has_break(n.body);
+	}
 	return false;
+}
+
+// Subtree scan for a break statement (a `while true` with any break in its
+// body may fall out of the function without returning). A break inside a
+// nested loop belongs to that loop, so the scan stops at any ND_FOR.
+fn loop_has_break(n *Node) bool {
+	if (n as i64 == 0) { return false; }
+	if (n.kind == ND_BREAK) { return true; }
+	if (n.kind == ND_FOR) { return false; }
+	if (n.kind == ND_IF) {
+		return loop_has_break(n.then) || loop_has_break(n.els);
+	}
+	return loop_has_break(n.next) || loop_has_break(n.body) ||
+	       loop_has_break(n.lhs) || loop_has_break(n.rhs) ||
+	       loop_has_break(n.args) || loop_has_break(n.init) ||
+	       loop_has_break(n.step);
 }
 
 
@@ -2559,6 +2591,9 @@ fn gen_func(f *Func) {
 	// An extern declaration has no body; the symbol comes from the linker
 	// (only valid under -c, which skips this whole path).
 	if (f.body as i64 == 0) { return; }
+	if (f.ret.kind != TY_VOID && f.ret.kind != TY_TYPE && !f.naked && !always_returns(f.body)) {
+		error_at(f.pos, "control reaches the end of a non-void function");
+	}
 	f.addr = code.n;
 	line_mark(f.pos);
 	depth = 0;
