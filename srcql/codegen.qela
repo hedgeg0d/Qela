@@ -4,6 +4,7 @@ import "type.qela";
 import "regalloc.qela";
 import "ir.qela";
 import "x86_emit.qela";
+import "arm64_emit.qela";
 
 
 // The integer argument register for rank i on the current target -- the
@@ -2537,7 +2538,19 @@ fn emit_code(u *Unit, main_fn *Func, panic_id int, hdr i64) {
 	// Top-level asm blocks are the image's first bytes; `entry name;`
 	// suppresses the default stub too, so the entry function (usually
 	// naked) does its own setup and its own exit.
-	if (top_asm_head as i64 == 0 && entry_name.len == 0) {
+	if (top_asm_head as i64 == 0 && entry_name.len == 0 && opt_target == TARGET_ARM64) {
+		// Minimal ARM64 entry stub (M9): no backtrace sentinel, no TLS init,
+		// no argc/argv -- those need their own ARM64 native glue, not built
+		// yet. main's return value is already in X0, which is also
+		// exit_group's first argument on AAPCS64, so unlike x86 no move is
+		// needed before the syscall.
+		if (opt_backtrace) { die("error: -target arm64 does not support --backtrace yet"); }
+		if (tls_block_size > 8) { die("error: -target arm64 does not support tvar yet"); }
+		if (main_fn as i64 != 0 && main_fn.nparams == 2) { die("error: -target arm64 does not support main(argc, argv) yet"); }
+		arm64_add_call("main", 0);
+		arm64_mov_imm64(X8, SYS_ARM64_EXIT_GROUP);
+		arm64_svc();
+	} else if (top_asm_head as i64 == 0 && entry_name.len == 0) {
 		// rbp is not guaranteed zero at process entry; the backtrace
 		// walker needs a sentinel main returns into.
 		if (opt_backtrace) {
@@ -2895,7 +2908,8 @@ fn codegen(u *Unit, img *Image) {
 			emsg("extern '"); emsg(cf.name);
 			emsg("' is not linked (extern needs -c and the linker)"); efail(cf.pos);
 		}
-		buf_patch32(&code, cf.at, target.addr - (cf.at + 4));
+		if (opt_target == TARGET_ARM64) { arm64_patch_call(&code, cf.at, target.addr - cf.at); }
+		else { buf_patch32(&code, cf.at, target.addr - (cf.at + 4)); }
 		cf = cf.next;
 	}
 
