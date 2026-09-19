@@ -549,6 +549,13 @@ fn arm64_lower_op(op *IrOp) {
 		if (op.aux == UOP_LNOT) { arm64_cmp_imm(X0, 0); arm64_cset(X0, CC_EQ); return; }
 		die("internal: arm64_lower_op: IR_UNARY: unhandled unary op");
 	}
+	if (op.kind == IR_SYSCALL) {
+		// The number and arguments were already staged by gen_args into X8
+		// and x0-x5 (gen_args' first_in_rax special-case routes the number
+		// to X8 for this target); only the trap itself is IR.
+		arm64_svc();
+		return;
+	}
 	if (op.kind == IR_LOAD2) {
 		// gen_ret's register-returned aggregate: word 1 first (into X1, the
 		// second-value register), so X0 still holds the base address while
