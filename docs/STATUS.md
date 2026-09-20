@@ -68,8 +68,16 @@ interp, ffi-test on all three targets) and its own S2_arm64 measurement.
 
 S2 742 216 -> 753 456 B (+11 240 across the six). Corpus 202 -> 208.
 arm64 959 680 -> 974 488 B (92.9% of the 1 MiB budget; about 74 KB of
-headroom left -- enough for one more mid-size feature, not for full
-preemption).
+headroom left).
+
+Preemption/coroutine migration was attempted and abandoned (2026-08-16):
+a coroutine suspended inside its own call chain cannot be resumed on
+another OS thread -- the switch stub returns into a frame whose spilled
+locals belong to the old thread, and every safe-point scheme (owner
+park + CAS, direct theft, owner hand-off from a "clean" preamble)
+crashed or deadlocked under load. A real migration needs Go-style
+codegen support (restartable coroutine entry), which is beyond the
+headroom. The writeup is in docs/TASKS.md.
 
  The compiler knows what
 it is. One source of truth: `fn qela_version()` in `srcql/comp.qela`
