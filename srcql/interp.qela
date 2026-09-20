@@ -570,9 +570,14 @@ fn ip_eval(n *Node) i64 {
 	if (k == ND_COMPTIME) { return n.val; }
 	if (k == ND_SIZEOF) { return n.typeval.size as i64; }
 	if (k == ND_STRLIT) {
+		if (n.ip_cached) { return n.ip_off; }
 		var s *StrLit = ip_unit.strs;
 		while (s as i64 != 0) {
-			if ((s.id as i64) == n.val) { return s.off; }
+			if ((s.id as i64) == n.val) {
+				n.ip_off = s.off;
+				n.ip_cached = true;
+				return s.off;
+			}
 			s = s.next;
 		}
 		error_at(n.pos, "interpreter: unknown string literal");

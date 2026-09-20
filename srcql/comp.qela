@@ -210,6 +210,8 @@ struct Node {
 	pos     i64,
 	stack_tmp *Var,
 	ip_fn   *Func,
+	ip_off  i64,
+	ip_cached bool,
 }
 
 // Parameters are six separate slots: stage0 has no arrays inside structs.
