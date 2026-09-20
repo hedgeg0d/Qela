@@ -48,21 +48,26 @@ fn coro_spawn(target i64, a0 i64, a1 i64, a2 i64, a3 i64, a4 i64) {
 	var stack *u8 = coro_alloc_stack();
 	var top i64 = ((stack as i64) + CORO_STACK) & ~15;
 
-	// Eighteen words on arm64: twelve callee-saved slots (the first LDP
-	// pair populating x29/x30 with zero and the trampoline address, so the
-	// switch stub's ret lands inside it), five arguments and the target.
-	// No padding word and no alignment fixup needed: top is 16-aligned and
-	// 18*8 is a multiple of 16, so sp0 always comes out 16-aligned already
-	// -- unlike x86, BL doesn't push a return address, so there is no
-	// leftover 8-byte offset to compensate for (see gen_coro_switch_stub_arm64
-	// in srcql/arm64_emit.qela).
-	$if (TARGET == "arm64") {
+	// Eighteen words on arm64/riscv64: twelve callee-saved slots (the
+	// first LDP pair populating x29/x30 with zero and the trampoline
+	// address on arm64, so the switch stub's ret lands inside it; riscv
+	// puts the trampoline in the ra slot, p[11]), five arguments and the
+	// target. No padding word and no alignment fixup needed: top is
+	// 16-aligned and 18*8 is a multiple of 16, so sp0 always comes out
+	// 16-aligned already -- unlike x86, BL doesn't push a return address,
+	// so there is no leftover 8-byte offset to compensate for (see
+	// gen_coro_switch_stub_arm64/riscv in srcql/).
+	$if (TARGET != "x86_64") {
 		var sp0 i64 = top - 18 * 8;
 
 		var p *i64 = sp0 as *i64;
 		var i i64 = 0;
 		while (i < 12) { p[i] = 0; i = i + 1; }
-		p[1] = coro_entry_addr();
+		$if (TARGET == "arm64") {
+			p[1] = coro_entry_addr();
+		} $else {
+			p[11] = coro_entry_addr();
+		}
 		p[12] = a0;
 		p[13] = a1;
 		p[14] = a2;
