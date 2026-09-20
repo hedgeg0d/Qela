@@ -1,0 +1,10 @@
+// stage1-only
+// arm64-only
+// expect-exit: 7
+// A local declared before an asm block, read after it: the block clobbers
+// X0 freely, the local lives in a frame slot and survives.
+fn main() int {
+	var x int = 7;
+	var r i64 = asm(0x00, 0x00, 0x00, 0xca); // eor x0, x0, x0
+	return x;
+}
