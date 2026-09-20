@@ -663,7 +663,7 @@ fi
 cat > "$tmp2/nob.qela" <<'EOF'
 fn main() int {
 	var a [3]i64;
-	var x i64 = a[7];
+	var _x i64 = a[7];
 	return 0;
 }
 EOF
