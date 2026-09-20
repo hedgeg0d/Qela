@@ -66,7 +66,9 @@ fn lnk_dbase() i64 {
 fn lnk_sym_vaddr(kind int, off i64) i64 {
 	if (kind == LK_CODE) { return eff_base() + lnk_hdr() + off; }
 	if (kind == LK_RODATA) { return eff_base() + lnk_hdr() + code.n + off; }
-	if (kind == LK_DATA) { return lnk_dbase() + off; }
+	if (kind == LK_DATA) {
+		return lnk_dbase() + off;
+	}
 	return lnk_dbase() + gdata.n + off;
 }
 
@@ -115,7 +117,10 @@ fn lnk_resolve(name str) i64 {
 	var f *Func = find_func(name);
 	if (f as i64 != 0) { return eff_base() + lnk_hdr() + f.addr; }
 	var g *Var = find_global(name);
-	if (g as i64 != 0) { return lnk_dbase() + g.data_off; }
+	if (g as i64 != 0) {
+		eprint(" dbase="); fmt_i64_to_fd(2, lnk_dbase()); eprint("\n");
+		return lnk_dbase() + g.data_off;
+	}
 	return -1;
 }
 
@@ -498,10 +503,15 @@ fn lnk_patch_arm64(r *LnkRel, s i64, p i64) {
 		var w i64 = lnk_rd32(buf, r.secoff);
 		if (rtype == 274 || rtype == 275) {
 			// ADR: imm21 (bytes) or ADRP: imm21 (pages), both
-			// immlo:2 in bits 30:29 and immhi:19 in bits 23:5.
+			// immlo:2 in bits 30:29 and immhi:19 in bits 23:5. ADRP
+			// addresses page(s) - page(p): rounding DOWN to the page,
+			// exactly as the instruction's page arithmetic does -- a
+			// round-to-nearest would land one page up whenever the
+			// target's low 12 bits exceed 0x800 (any data segment whose
+			// offset past its page boundary is large).
 			var v i64 = s - p;
 			if (rtype == 275) {
-				v = ((s + 0x800) & ~0xfff) - ((p + 0x800) & ~0xfff);
+				v = (s & ~0xfff) - (p & ~0xfff);
 				v = v >> 12;
 			}
 			w = (w & 0x9f00001f) | ((v & 3) << 29) | ((v >> 2) << 5);
