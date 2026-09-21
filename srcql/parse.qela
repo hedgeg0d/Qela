@@ -120,6 +120,8 @@ var multi_assign_seq int = 0;
 // function (`_$s<N>` / `_$gen<N>`); one counter keeps every hidden name in
 // a compilation distinct.
 var gen_seq int = 0;
+var try_head *Node;
+var try_tail *Node;
 
 // Generator rewrite state, live only while one function's body is being
 // parsed. cur_gen_ret is the function's return type when it is a generator
@@ -1052,6 +1054,11 @@ fn parse_postfix(t **Token) *Node {
 	var n *Node = parse_primary(t);
 	while (true) {
 		var p i64 = (*t).pos;
+		if (tok_eq(*t, "?")) {
+			*t = (*t).next;
+			n = try_expand(n, p);
+			continue;
+		}
 		if (tok_consume(t, "[")) {
 			var lo *Node = 0 as *Node;
 			if (!tok_eq(*t, "..")) { lo = parse_expr(t); }
@@ -1472,9 +1479,98 @@ fn macro_expand(n *Node, m *Macro, args **Node, nargs int, pos i64) *Node {
 
 fn parse_stmt(t **Token) *Node {
 	parse_enter(t);
+	var saved_head *Node = try_head;
+	var saved_tail *Node = try_tail;
+	try_head = 0 as *Node;
+	try_tail = 0 as *Node;
 	var n *Node = parse_stmt_inner(t);
+	if (try_head as i64 != 0) {
+		if (n.kind == ND_FOR) {
+			error_at(n.pos, "'?' cannot be used in a loop header");
+		}
+		var last *Node = try_tail;
+		last.next = n;
+		n = try_head;
+	}
+	try_head = saved_head;
+	try_tail = saved_tail;
 	parse_leave();
 	return n;
+}
+
+fn try_push(s *Node) {
+	if (try_head as i64 == 0) { try_head = s; }
+	else { try_tail.next = s; }
+	try_tail = s;
+	while (try_tail.next as i64 != 0) { try_tail = try_tail.next; }
+}
+
+fn try_call1(name str, v *Var, pos i64) *Node {
+	var c *Node = new_node(ND_CALL, pos);
+	c.name = name;
+	var a *Node = new_node(ND_VAR, pos);
+	a.varp = v;
+	c.args = a;
+	c.nargs = 1;
+	return c;
+}
+
+fn try_expand(v *Node, pos i64) *Node {
+	if (cur_func as i64 == 0) { error_at(pos, "'?' needs a function scope"); }
+	add_type(v);
+	var ty *Type = v.ty;
+	if (ty as i64 == 0 || ty.kind != TY_ENUM || ty.tmpl as i64 == 0) {
+		error_at(pos, "'?' needs an Opt(T) or a Res(T, E) value");
+	}
+	var isopt bool = str_eq(ty.tmpl.name, "Opt");
+	if (!isopt && !str_eq(ty.tmpl.name, "Res")) {
+		error_at(pos, "'?' needs an Opt(T) or a Res(T, E) value");
+	}
+	var ret *Type = cur_func.ret;
+	if (ret as i64 == 0 || ret.kind != TY_ENUM || ret.tmpl as i64 != ty.tmpl as i64) {
+		error_at(pos, "'?' needs the enclosing function to return the same Opt or Res type");
+	}
+	if (!isopt && !same_type(ret.ga1, ty.ga1)) {
+		error_at(pos, "'?' needs the error type of the enclosing function to match");
+	}
+
+	var qb Buf;
+	fmt_str(&qb, "_$q");
+	fmt_i64(&qb, gen_seq as i64);
+	gen_seq = gen_seq + 1;
+	var qv *Var = declare_var(buf_str(&qb), ty, pos);
+
+	var ql *Node = new_node(ND_VAR, pos);
+	ql.varp = qv;
+	var qas *Node = new_node(ND_EXPRSTMT, pos);
+	qas.lhs = bin_node(ND_ASSIGN, ql, v, pos);
+	try_push(qas);
+
+	var okc *Node = try_call1("opt_is_some", qv, pos);
+	if (!isopt) { okc.name = "res_is_ok"; }
+	var notn *Node = new_node(ND_NOT, pos);
+	notn.lhs = okc;
+
+	var bad *Node = new_node(ND_ENUMLIT, pos);
+	bad.ty = ret;
+	if (isopt) { bad.name = "None"; }
+	else {
+		bad.name = "Err";
+		bad.args = try_call1("res_err", qv, pos);
+		bad.nargs = 1;
+	}
+	var rets *Node = new_node(ND_RET, pos);
+	rets.lhs = bad;
+	var blk *Node = new_node(ND_BLOCK, pos);
+	blk.body = rets;
+	var ifn *Node = new_node(ND_IF, pos);
+	ifn.cond = notn;
+	ifn.then = blk;
+	try_push(ifn);
+
+	var val *Node = try_call1("opt_val", qv, pos);
+	if (!isopt) { val.name = "res_val"; }
+	return val;
 }
 
 // Shared by `spawn f(...)` and `go f(...)`: both desugar to a call taking
