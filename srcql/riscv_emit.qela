@@ -1,0 +1,1582 @@
+// RISC-V (RV64GC) instruction emission and IR lowering. Mirrors
+// arm64_emit.qela's role: codegen.qela's frontend emits target-neutral IR
+// (srcql/ir.qela); this file turns it into RISC-V machine words when
+// opt_target == TARGET_RISCV64. Every base RV64 instruction is exactly one
+// 32-bit little-endian word, so b4() (x86_emit.qela's "flush pending IR,
+// then append a u32" primitive) doubles as this backend's only emission
+// primitive.
+//
+// Register convention (LP64): a0 is the accumulator (also the first
+// argument/return register, so a call's result and a syscall's first
+// argument need no extra move), a1 is the op2 scratch register (op2_reg's
+// RISC-V return value), t0/t1/t2 are the address/immediate scratch set,
+// s0 is the frame pointer, ra the return address, tp the TLS pointer.
+// x0 is a real zero register: `ret` is jalr x0, ra, 0, moves are addi,
+// compares against zero are branches against x0 -- several one-instruction
+// wins the other backends do not have.
+//
+// Two RISC-V facts the lowering is shaped around:
+// - No condition flags. IR_CMP emits nothing itself; the lowering keeps a
+//   pending compare (two register operands, or one register plus an
+//   immediate) and IR_BR/IR_SETCC consume it -- a branch is beq/bne/blt/...
+//   with the operands baked in, a setcc is slt/sltu/xor/seqz/snez. A float
+//   compare (FEQ/FLT/FLE) produces a 0/1 register instead, so the pending
+//   compare holds that register and the consumer branches or xors it.
+// - B-type conditional branches reach only +-4 KiB. A branch whose target
+//   overflows flips riscv_br_tramp; the whole unit re-emits (the x86 pass
+//   loop's br_grew) with every conditional branch shaped as
+//   b<inverted> +8; jal x0, <target>, whose B-type target is always in
+//   range and whose JAL reaches +-1 MiB -- everything a function can span.
+//
+// Started (2026-08-07): scalar core, control flow, calls, pointers,
+// aggregates, floats, atomics, gc_save_regs, thread_clone, the entry stub
+// and the panic stub -- enough to run the corpus's non-coro/thread tests
+// under qemu-riscv64. Coroutine switching, the TLS stub, extern
+// marshalling and promoted-register locals are not here yet.
+import "comp.qela";
+import "diag.qela";
+import "ir.qela";
+import "x86_emit.qela";
+
+let ZERO = 0;
+let RA   = 1;
+let STK  = 2;   // the stack pointer; named STK because arm64_emit owns "SP"
+let TP   = 4;
+let T0   = 5;   // scratch, the X9/X10 analog
+let T1   = 6;   // second scratch, never the register a value travels in
+let T2   = 7;   // third scratch, for a read-modify-write's immediate operand
+let S0   = 8;   // frame pointer (also called fp in the psABI)
+let S1   = 9;
+let A0   = 10;  // accumulator, LP64's first argument/return register
+let A1   = 11;  // op2 staging register
+let A2   = 12;
+let A3   = 13;
+let A4   = 14;
+let A5   = 15;
+let A6   = 16;
+let A7   = 17;  // the syscall number register (ecall reads a7)
+let S2   = 18;
+let S3   = 19;
+let S4   = 20;
+let S5   = 21;
+let S6   = 22;
+let S7   = 23;
+let S8   = 24;
+let S9   = 25;
+let S10  = 26;
+let S11  = 27;
+let T3   = 28;
+let T4   = 29;
+let T5   = 30;
+let T6   = 31;
+
+// Float scratch registers: fa0/fa1, live only for the instant of one FP
+// instruction -- float bits ride the GPRs between operations, the same
+// model x86_emit.qela and arm64_emit.qela use.
+let F10 = 10;
+let F11 = 11;
+
+let SYS_RISCV_WRITE = 64;
+let SYS_RISCV_EXIT  = 93;
+let SYS_RISCV_EXIT_GROUP = 94;
+let SYS_RISCV_MMAP  = 222;
+let SYS_RISCV_CLONE = 220;
+
+// ── raw encodings ──
+//
+// Every base form below was verified against riscv64-linux-gnu-as +
+// objdump (assembled with -march=rv64imafd so no compressed forms sneak
+// in), not hand-derived from the spec -- the ARM64 session's lesson.
+// Opcode values: R 0x33, I 0x13, load 0x03, store 0x23, branch 0x63,
+// jal 0x6f, jalr 0x67, lui 0x37, auipc 0x17, system 0x73, fence 0x0f,
+// FP load/store 0x07/0x27, FP 0x53, AMO 0x2f.
+
+fn riscv_r(f7 i64, rs2 int, rs1 int, f3 i64, rd int, op i64) {
+	b4(((f7 & 0x7f) << 25) | (rs2 << 20) | (rs1 << 15) | ((f3 & 7) << 12) | (rd << 7) | op);
+}
+
+fn riscv_i(imm i64, rs1 int, f3 i64, rd int, op i64) {
+	b4(((imm & 0xfff) << 20) | (rs1 << 15) | ((f3 & 7) << 12) | (rd << 7) | op);
+}
+
+fn riscv_s(imm i64, rs2 int, rs1 int, f3 i64, op i64) {
+	b4((((imm >> 5) & 0x7f) << 25) | (rs2 << 20) | (rs1 << 15) | ((f3 & 7) << 12) | ((imm & 0x1f) << 7) | op);
+}
+
+fn riscv_b(imm i64, rs2 int, rs1 int, f3 i64, op i64) {
+	b4((((imm >> 12) & 1) << 31) | (((imm >> 5) & 0x3f) << 25) | (rs2 << 20) | (rs1 << 15) |
+	   ((f3 & 7) << 12) | (((imm >> 1) & 0xf) << 8) | (((imm >> 11) & 1) << 7) | op);
+}
+
+fn riscv_u(imm20 i64, rd int, op i64) {
+	b4(((imm20 & 0xfffff) << 12) | (rd << 7) | op);
+}
+
+fn riscv_j(imm i64, rd int, op i64) {
+	b4((((imm >> 20) & 1) << 31) | (((imm >> 1) & 0x3ff) << 21) | (((imm >> 11) & 1) << 20) |
+	   (((imm >> 12) & 0xff) << 12) | (rd << 7) | op);
+}
+
+// ── register moves and immediates ──
+
+fn riscv_mov_reg(rd int, rn int) {
+	if (rd == rn) { return; }
+	riscv_i(0, rn, 0, rd, 0x13);        // addi rd, rn, 0
+}
+
+fn riscv_addi(rd int, rn int, imm i64) {
+	riscv_i(imm, rn, 0, rd, 0x13);
+}
+
+fn riscv_slti(rd int, rn int, imm i64) {
+	riscv_i(imm, rn, 2, rd, 0x13);
+}
+
+fn riscv_sltiu(rd int, rn int, imm i64) {
+	riscv_i(imm, rn, 3, rd, 0x13);
+}
+
+fn riscv_xori(rd int, rn int, imm i64) {
+	riscv_i(imm, rn, 4, rd, 0x13);
+}
+
+fn riscv_ori(rd int, rn int, imm i64) {
+	riscv_i(imm, rn, 6, rd, 0x13);
+}
+
+fn riscv_andi(rd int, rn int, imm i64) {
+	riscv_i(imm, rn, 7, rd, 0x13);
+}
+
+fn riscv_slli(rd int, rn int, shamt i64) {
+	riscv_i(shamt & 0x3f, rn, 1, rd, 0x13);
+}
+
+fn riscv_srli(rd int, rn int, shamt i64) {
+	riscv_i(shamt & 0x3f, rn, 5, rd, 0x13);
+}
+
+fn riscv_srai(rd int, rn int, shamt i64) {
+	riscv_i(0x400 | (shamt & 0x3f), rn, 5, rd, 0x13);
+}
+
+// Loads an arbitrary 64-bit constant. Fast paths: a signed 12-bit addi,
+// then lui+addi for any 32-bit pattern (with the sign-correction that
+// keeps addi's operand in [-2048, 2047]), then an exact two-half build for
+// the rest: the low 32 bits zero-extended through slli+srli, the high 32
+// shifted into place, OR'd together. Verified against gas for
+// 0x123456789abcdef0-shaped constants.
+fn riscv_li64(rd int, imm i64) {
+	if (imm >= -2048 && imm <= 2047) { riscv_addi(rd, ZERO, imm); return; }
+	var hi i64 = (imm + 0x800) >> 12;
+	var lo i64 = imm - (hi << 12);
+	if (hi >= -524288 && hi <= 524287) {
+		riscv_u(hi, rd, 0x37);              // lui
+		if (lo != 0) { riscv_addi(rd, rd, lo); }
+		return;
+	}
+	var lo32 i64 = imm & 0xffffffff;
+	var hi32 i64 = (imm >> 32) & 0xffffffff;
+	// The low half is built in a scratch that must survive the high half's
+	// own build -- never the destination register itself: li64(T0, big)
+	// (store_imm's shape) would clobber the low half mid-sequence.
+	var scr int = T0;
+	if (rd == T0) { scr = T1; }
+	riscv_u((lo32 + 0x800) >> 12, scr, 0x37);
+	riscv_i(lo32 - (((lo32 + 0x800) >> 12) << 12), scr, 0, scr, 0x13);
+	riscv_slli(scr, scr, 32);
+	riscv_srli(scr, scr, 32);
+	riscv_u((hi32 + 0x800) >> 12, rd, 0x37);
+	riscv_i(hi32 - (((hi32 + 0x800) >> 12) << 12), rd, 0, rd, 0x13);
+	riscv_slli(rd, rd, 32);
+	riscv_r(0, scr, rd, 6, rd, 0x33);       // or rd, rd, scr
+}
+
+// ── arithmetic ──
+
+fn riscv_alu_reg(aop int, rd int, rs1 int, rs2 int) {
+	if (aop == ALU_ADD) { riscv_r(0, rs2, rs1, 0, rd, 0x33); return; }
+	if (aop == ALU_SUB) { riscv_r(0x20, rs2, rs1, 0, rd, 0x33); return; }
+	if (aop == ALU_MUL || aop == ALU_SCALE) { riscv_r(1, rs2, rs1, 0, rd, 0x33); return; }
+	if (aop == ALU_AND) { riscv_r(0, rs2, rs1, 7, rd, 0x33); return; }
+	if (aop == ALU_OR)  { riscv_r(0, rs2, rs1, 6, rd, 0x33); return; }
+	if (aop == ALU_XOR) { riscv_r(0, rs2, rs1, 4, rd, 0x33); return; }
+	if (aop == ALU_SHL) { riscv_r(0, rs2, rs1, 1, rd, 0x33); return; }
+	die("internal: riscv_alu_reg: unhandled ALU op (SHR/DIV/MOD are handled by the caller)");
+}
+
+// ALU_SHR picks SRL (unsigned) vs SRA (signed) off the type; DIV/REM pick
+// DIVU/REMU the same way.
+fn riscv_alu_full(aop int, rd int, rs1 int, rs2 int, uns bool) {
+	if (aop == ALU_DIV) {
+		if (uns) { riscv_r(1, rs2, rs1, 5, rd, 0x33); } else { riscv_r(1, rs2, rs1, 4, rd, 0x33); }
+		return;
+	}
+	if (aop == ALU_MOD) {
+		if (uns) { riscv_r(1, rs2, rs1, 7, rd, 0x33); } else { riscv_r(1, rs2, rs1, 6, rd, 0x33); }
+		return;
+	}
+	if (aop == ALU_SHR) {
+		if (uns) { riscv_r(0, rs2, rs1, 5, rd, 0x33); } else { riscv_r(0x20, rs2, rs1, 5, rd, 0x33); }
+		return;
+	}
+	riscv_alu_reg(aop, rd, rs1, rs2);
+}
+
+// ALU with a 12-bit-sign-extended immediate; the caller decides when the
+// immediate qualifies. SRLI/SRAI/SLLI take a 6-bit shamt, not a sign-extended
+// word -- the frontend's shift counts are already masked to 6 bits.
+fn riscv_alu_imm(aop int, rd int, rs1 int, imm i64) {
+	if (aop == ALU_ADD) { riscv_addi(rd, rs1, imm); return; }
+	if (aop == ALU_AND) { riscv_andi(rd, rs1, imm); return; }
+	if (aop == ALU_OR)  { riscv_ori(rd, rs1, imm); return; }
+	if (aop == ALU_XOR) { riscv_xori(rd, rs1, imm); return; }
+	if (aop == ALU_SHL) { riscv_slli(rd, rs1, imm); return; }
+	if (aop == ALU_SHR) {
+		if ((imm & 0x40) != 0) { riscv_srai(rd, rs1, imm); } else { riscv_srli(rd, rs1, imm); }
+		return;
+	}
+	die("internal: riscv_alu_imm: unhandled ALU op");
+}
+
+// addi/subi with a split for offsets past 12 bits: an offset up to 24 bits
+// goes through a scratch instead of arm64's shifted-immediate form (RISC-V
+// has none). Stack frames are comfortably under that.
+fn riscv_add_imm(rd int, rn int, imm i64) {
+	if (imm >= -2048 && imm <= 2047) { riscv_addi(rd, rn, imm); return; }
+	riscv_li64(T0, imm);
+	riscv_r(0, T0, rn, 0, rd, 0x33);        // add rd, rn, t0
+}
+
+fn riscv_sub_imm(rd int, rn int, imm i64) {
+	// A stack-passed parameter's address comes in negated (ir_lea_arg_acc),
+	// i.e. imm < 0 means rn + |imm| -- SUB cannot encode that, so it becomes
+	// an ADD. Everything else here is a positive frame offset.
+	if (imm < 0) { riscv_add_imm(rd, rn, -imm); return; }
+	// sub rd, rn, imm is addi rd, rn, -imm when the negated immediate fits.
+	if (-imm >= -2048 && -imm <= 2047) { riscv_addi(rd, rn, -imm); return; }
+	riscv_li64(T0, imm);
+	riscv_r(0x20, T0, rn, 0, rd, 0x33);     // sub rd, rn, t0
+}
+
+// ── frame ──
+//
+// Frame geometry, deliberately different from x86/ARM64's "fp at the top,
+// locals at negative offsets": RISC-V load/store immediates are positive
+// only, so s0 points at the BOTTOM of the frame and every local sits at a
+// positive scaled offset from it, reachable in one instruction. A local
+// the frontend addresses as fp - off (v.offset) is really at
+// s0 + stack_size - off, and a stack-passed argument (frontend offset
+// -(16 + 8i)) at s0 + stack_size + 16 + 8i -- both fit the same formula
+// s0 + stack_size - off, with off negative for arguments.
+var riscv_framesz i64;
+
+fn riscv_enter_frame(stack_size i64) {
+	riscv_framesz = stack_size;
+	riscv_addi(STK, STK, -16);
+	riscv_s(8, RA, STK, 3, 0x23);           // sd ra, 8(sp)
+	riscv_s(0, S0, STK, 3, 0x23);           // sd s0, 0(sp)
+	if (stack_size != 0) { riscv_add_imm(STK, STK, -stack_size); }
+	riscv_mov_reg(S0, STK);
+}
+
+fn riscv_leave_frame() {
+	riscv_mov_reg(STK, S0);
+	if (riscv_framesz != 0) { riscv_add_imm(STK, STK, riscv_framesz); }
+	riscv_i(0, STK, 3, S0, 0x03);           // ld s0, 0(sp)
+	riscv_i(8, STK, 3, RA, 0x03);           // ld ra, 8(sp)
+	riscv_addi(STK, STK, 16);
+}
+
+fn riscv_ret() {
+	riscv_i(0, RA, 0, ZERO, 0x67);          // jalr x0, ra, 0
+}
+
+// The frontend's frame slot at fp - off: scaled LD/SD at s0 + stack_size
+// - off, one instruction when the scaled immediate fits (offsets up to
+// 32760, always true for the compiler's own frames). A reg == T1 collision
+// switches the address scratch to T2.
+fn riscv_local_off(off i64) i64 {
+	return riscv_framesz - off;
+}
+
+fn riscv_st_local(off i64, reg int) {
+	var imm i64 = riscv_local_off(off);
+	if (imm >= 0 && imm <= 32760) { riscv_s(imm, reg, S0, 3, 0x23); return; }
+	var scr int = T1;
+	if (reg == T1) { scr = T2; }
+	riscv_add_imm(scr, S0, imm);
+	riscv_s(0, reg, scr, 3, 0x23);
+}
+
+fn riscv_ld_local(reg int, off i64) {
+	var imm i64 = riscv_local_off(off);
+	if (imm >= 0 && imm <= 32760) { riscv_i(imm, S0, 3, reg, 0x03); return; }
+	var scr int = T1;
+	if (reg == T1) { scr = T2; }
+	riscv_add_imm(scr, S0, imm);
+	riscv_i(0, scr, 3, reg, 0x03);
+}
+
+fn riscv_lea_local(reg int, off i64) {
+	var imm i64 = riscv_local_off(off);
+	if (imm >= -2048 && imm <= 2047) { riscv_addi(reg, S0, imm); return; }
+	var scr int = T1;
+	if (reg == T1) { scr = T2; }
+	riscv_li64(scr, imm);
+	riscv_r(0, scr, S0, 0, reg, 0x33);      // add reg, s0, scr
+}
+
+// A local's declaration zeros its slot before any initializer runs: an
+// 8-byte-at-a-time loop over the zero register, then a byte tail. The
+// count check sits before the loop (a do-while would run once -- and store
+// a full word -- for a size under 8 bytes).
+fn riscv_memset_local(off i64, size i64) {
+	riscv_lea_local(T0, off);
+	var cnt i64 = size / 8;
+	riscv_li64(T1, cnt);
+	riscv_b(0, ZERO, T1, 0, 0x63);          // beq t1, zero, done (placeholder)
+	var done i64 = code.n - 4;
+	var loop i64 = code.n;
+	riscv_s(0, ZERO, T0, 3, 0x23);          // sd zero, 0(t0)
+	riscv_addi(T0, T0, 8);
+	riscv_addi(T1, T1, -1);
+	riscv_b(loop - code.n, ZERO, T1, 1, 0x63);  // bne t1, zero, loop
+	riscv_patch_b(&code, done, code.n - done);
+	var i i64 = cnt * 8;
+	while (i < size) {
+		riscv_s(0, ZERO, T0, 0, 0x23);      // sb zero, 0(t0)
+		riscv_addi(T0, T0, 1);
+		i = i + 1;
+	}
+}
+
+// ── loads and stores by width ──
+
+// Dereference [a0] into a0, widening by ty: LB/LH/LW sign-extend,
+// LBU/LHU/LWU zero-extend, LD for 8 bytes. Float bits ride GPRs, so a
+// 4-byte float is a plain LW.
+fn riscv_load(ty *Type) {
+	if (ty.size == 1) {
+		if (ty.is_unsigned || ty.kind == TY_BOOL) { riscv_i(0, A0, 4, A0, 0x03); }
+		else { riscv_i(0, A0, 0, A0, 0x03); }
+		return;
+	}
+	if (ty.size == 2) {
+		if (ty.is_unsigned) { riscv_i(0, A0, 5, A0, 0x03); } else { riscv_i(0, A0, 1, A0, 0x03); }
+		return;
+	}
+	if (ty.size == 4) {
+		if (ty.is_unsigned && ty.kind != TY_FLOAT) { riscv_i(0, A0, 6, A0, 0x03); }
+		else { riscv_i(0, A0, 2, A0, 0x03); }
+		return;
+	}
+	riscv_i(0, A0, 3, A0, 0x03);            // ld a0, 0(a0)
+}
+
+// Load rt from [rn + off] (off assumed a small multiple of the element
+// size -- the two-word aggregate protocol only ever uses 0 or 8).
+fn riscv_ld_at(rt int, rn int, off i64) {
+	riscv_i(off, rn, 3, rt, 0x03);
+}
+
+fn riscv_str_off(rt int, rn int, off i64) {
+	riscv_s(off, rt, rn, 3, 0x23);
+}
+
+// Store rt through the pointer in rn, at ty's width.
+fn riscv_store_at(rn int, rt int, ty *Type) {
+	if (ty.size == 1) { riscv_s(0, rt, rn, 0, 0x23); return; }
+	if (ty.size == 2) { riscv_s(0, rt, rn, 1, 0x23); return; }
+	if (ty.size == 4) { riscv_s(0, rt, rn, 2, 0x23); return; }
+	riscv_s(0, rt, rn, 3, 0x23);
+}
+
+// Store immediate v through the pointer in a0 -- mirrors
+// codegen.qela's store_imm(), materializing v into T0 first (RISC-V
+// stores have no immediate form).
+fn riscv_store_imm(ty *Type, v i64) {
+	riscv_li64(T0, v);
+	riscv_store_at(A0, T0, ty);
+}
+
+// Copy a compile-time-constant number of bytes from [src] to [dst], both
+// plain address registers (never T0, the scratch each chunk travels in) --
+// the A64-memcpy pattern: 8 bytes at a time, then a byte tail.
+fn riscv_memcpy(dst int, src int, size i64) {
+	var i i64 = 0;
+	while (i + 8 <= size) {
+		riscv_ld_at(T0, src, i);
+		riscv_str_off(T0, dst, i);
+		i = i + 8;
+	}
+	while (i < size) {
+		riscv_i(i, src, 4, T0, 0x03);       // lbu t0, i(src)
+		riscv_s(i, T0, dst, 0, 0x23);       // sb t0, i(dst)
+		i = i + 1;
+	}
+}
+
+// ── staging stack (IR_PUSH/IR_POP) ──
+//
+// RISC-V has no push/pop instructions; every push moves SP by 16 (the
+// psABI keeps SP 16-aligned at call boundaries) and wastes the other 8
+// bytes, exactly like arm64_push.
+fn riscv_push(reg int) {
+	riscv_addi(STK, STK, -16);
+	riscv_s(0, reg, STK, 3, 0x23);          // sd reg, 0(sp)
+}
+
+fn riscv_pop(reg int) {
+	riscv_i(0, STK, 3, reg, 0x03);          // ld reg, 0(sp)
+	riscv_addi(STK, STK, 16);
+}
+
+// ── control flow ──
+
+// The pending branch protocol: riscv_jump emits a placeholder and records
+// the branch id, riscv_patch_here resolves it at its IR_LABEL (forward) or
+// the trampoline (bounds). The recorded position is the JAL word in
+// trampoline mode, the B-type word otherwise; the opcode distinguishes
+// them at patch time.
+var riscv_br_n i64;
+var riscv_br_at I64List;
+var riscv_br_tramp bool = false;
+
+// Neutral condition -> B-type funct3 and whether the operands must swap
+// (CC_LE/GT/ULE/UGT have no direct encoding; b<swapped> covers them).
+fn riscv_cc(cc i64) i64 {
+	if (cc == CC_EQ)  { return 0; }
+	if (cc == CC_NE)  { return 1; }
+	if (cc == CC_LT)  { return 4; }
+	if (cc == CC_GE)  { return 5; }
+	if (cc == CC_ULT) { return 6; }
+	if (cc == CC_UGE) { return 7; }
+	if (cc == CC_LE)  { return 5; }
+	if (cc == CC_GT)  { return 4; }
+	if (cc == CC_ULE) { return 7; }
+	if (cc == CC_UGT) { return 6; }
+	die("internal: riscv_cc: unhandled condition code");
+	return 0;
+}
+
+fn riscv_cc_swap(cc i64) bool {
+	return cc == CC_LE || cc == CC_GT || cc == CC_ULE || cc == CC_UGT;
+}
+
+// B-type patch: rel in even units, +-4 KiB.
+fn riscv_patch_b(b *Buf, at i64, rel i64) {
+	var imm i64 = rel;
+	var word i64 = buf_read32(b, at);
+	buf_patch32(b, at, word | (((imm >> 12) & 1) << 31) | (((imm >> 5) & 0x3f) << 25) |
+	           (((imm >> 1) & 0xf) << 8) | (((imm >> 11) & 1) << 7));
+}
+
+fn riscv_patch_jal(b *Buf, at i64, rel i64) {
+	var imm i64 = rel;
+	var word i64 = buf_read32(b, at);
+	buf_patch32(b, at, word | (((imm >> 20) & 1) << 31) | (((imm >> 1) & 0x3ff) << 21) |
+	           (((imm >> 11) & 1) << 20) | (((imm >> 12) & 0xff) << 12));
+}
+
+// cond < 0 means an unconditional JAL; else a B-type carrying the compare's
+// own operands -- RISC-V has no flags, so rs1/rs2 are baked into the word
+// at emission, and patching only ever touches the immediate fields.
+fn riscv_jump(cond i64, rs1 int, rs2 int) i64 {
+	var id i64 = riscv_br_n;
+	riscv_br_n = riscv_br_n + 1;
+	if (cond < 0) {
+		ilist_set(&riscv_br_at, id, code.n);
+		b4(0x6f | (ZERO << 7));             // jal x0, 0
+		return id;
+	}
+	if (riscv_br_tramp) {
+		riscv_b(8, ZERO, ZERO, riscv_cc(cc_invert(cond)), 0x63);  // b<inv> +8
+		ilist_set(&riscv_br_at, id, code.n);
+		b4(0x6f | (ZERO << 7));             // jal x0, 0 (patched to the real target)
+		return id;
+	}
+	var f3 i64 = riscv_cc(cond);
+	if (riscv_cc_swap(cond)) {
+		ilist_set(&riscv_br_at, id, code.n);
+		b4(0x63 | (rs1 << 20) | (rs2 << 15) | (f3 << 12));   // rs2-field = rs1, rs1-field = rs2
+		return id;
+	}
+	ilist_set(&riscv_br_at, id, code.n);
+	b4(0x63 | (rs2 << 20) | (rs1 << 15) | (f3 << 12));
+	return id;
+}
+
+// Unconditional backward jump: a direct JAL (1 MiB range covers any
+// function).
+fn riscv_jump_back(target i64) {
+	var rel i64 = target - code.n;
+	riscv_j(rel, ZERO, 0x6f);
+}
+
+// Conditional backward branch between the pending compare's operands: a
+// B-type when in range, else an in-place trampoline (b<inv> +8; jal x0,
+// target) that forces the whole unit to re-emit in trampoline mode.
+fn riscv_jump_back_cc(cond i64, rs1 int, rs2 int, target i64) {
+	var rel i64 = target - code.n;
+	if (rel >= -4096 && rel <= 4094 && (rel & 1) == 0) {
+		if (riscv_cc_swap(cond)) { riscv_b(rel, rs1, rs2, riscv_cc(cond), 0x63); }
+		else { riscv_b(rel, rs2, rs1, riscv_cc(cond), 0x63); }
+		return;
+	}
+	riscv_b(8, ZERO, ZERO, riscv_cc(cc_invert(cond)), 0x63);
+	riscv_j(rel - 4, ZERO, 0x6f);
+	riscv_br_tramp = true;
+	br_grew = true;
+}
+
+fn riscv_patch_here(id i64) {
+	var at i64 = riscv_br_at.p[id];
+	var rel i64 = code.n - at;
+	var word i64 = buf_read32(&code, at);
+	if ((word & 0x7f) == 0x63) {
+		if (rel >= -4096 && rel <= 4094 && (rel & 1) == 0) {
+			riscv_patch_b(&code, at, rel);
+			return;
+		}
+		// The B-type immediate cannot reach: switch the whole unit to
+		// trampoline branches and re-emit (the pass loop drives it).
+		riscv_patch_b(&code, at, 0);        // placeholder self-loop if a pass cap ever trips
+		riscv_br_tramp = true;
+		br_grew = true;
+		return;
+	}
+	// A JAL: trampoline mode, or an unconditional branch. 1 MiB covers any
+	// function's control flow.
+	riscv_patch_jal(&code, at, rel);
+}
+
+// ── calls and address pairs ──
+
+// A direct call's target address is not known until every function has
+// been laid out: JAL's immediate is baked into the instruction word, so
+// the fixup records the word's position and the patch rewrites the imm20
+// in place. Object mode records an R_RISCV_JAL relocation instead.
+fn riscv_add_call(name str, pos i64) {
+	if (opt_object) {
+		var at i64 = code.n;
+		b4(0x6f | (RA << 7));
+		push_reloc(at, name, REL_RISCV_JAL);
+		return;
+	}
+	var f *CallFixup = arena_alloc(sizeof(CallFixup), 8) as *CallFixup;
+	f.at = code.n;
+	f.name = name;
+	f.pos = pos;
+	if (calls_tail as i64 == 0) { calls_head = f; } else { calls_tail.next = f; }
+	calls_tail = f;
+	b4(0x6f | (RA << 7));
+}
+
+// AUIPC+ADDI: the address pair every absolute reference uses -- AUIPC
+// loads the 20-bit page offset (PC-relative), ADDI the signed 12-bit low
+// part. The exe patches both words at finalize (the image base and the
+// word's own position are both known then); object mode records
+// R_RISCV_PCREL_HI20 + R_RISCV_PCREL_LO12_I, the same pair gcc emits.
+fn riscv_auipc(rd int) { b4(0x17 | (rd << 7)); }
+
+fn riscv_auipc_addi(rd int) {
+	riscv_auipc(rd);
+	riscv_addi(rd, rd, 0);
+}
+
+var riscv_image_hdr i64 = 0;   // EHDR+PHDR bytes before the code, set by codegen
+
+fn riscv_patch_auipc_addi(at i64, addr i64) {
+	// The AUIPC's own address is `at` (code.n coordinates), its absolute
+	// position ELF_BASE + riscv_image_hdr + at; the immediate is the
+	// PC-relative delta.
+	var pc i64 = ELF_BASE + riscv_image_hdr + at;
+	var delta i64 = addr - pc;
+	var hi i64 = (delta + 0x800) >> 12;
+	var lo i64 = delta - (hi << 12);
+	var w0 i64 = buf_read32(&code, at);
+	var w1 i64 = buf_read32(&code, at + 4);
+	buf_patch32(&code, at, w0 | ((hi & 0xfffff) << 12));
+	buf_patch32(&code, at + 4, w1 | ((lo & 0xfff) << 20));
+}
+
+fn riscv_add_strref(id int) {
+	if (opt_object) {
+		var at0 i64 = code.n;
+		riscv_auipc(A0);
+		var at1 i64 = code.n;
+		riscv_addi(A0, A0, 0);
+		push_reloc_id(at0, id as i64, REL_RISCV_PCREL_HI20);
+		push_reloc_id(at1, id as i64, REL_RISCV_PCREL_LO12_I);
+		return;
+	}
+	var f *StrFixup = arena_alloc(sizeof(StrFixup), 8) as *StrFixup;
+	f.at = code.n;
+	f.id = id;
+	if (strrefs_tail as i64 == 0) { strrefs_head = f; } else { strrefs_tail.next = f; }
+	strrefs_tail = f;
+	riscv_auipc_addi(A0);
+}
+
+fn riscv_add_dataref(v *Var) {
+	riscv_add_dataref_reg(A0, v);
+}
+
+// The same placeholder pair into an arbitrary register -- an indirect
+// call's target, which must not sit in the accumulator (a0 is the first
+// argument register, still live at the call).
+fn riscv_add_dataref_reg(reg int, v *Var) {
+	if (opt_object) {
+		var at0 i64 = code.n;
+		riscv_auipc(reg);
+		var at1 i64 = code.n;
+		riscv_addi(reg, reg, 0);
+		push_reloc(at0, v.name, REL_RISCV_PCREL_HI20);
+		push_reloc(at1, v.name, REL_RISCV_PCREL_LO12_I);
+		return;
+	}
+	var f *DataFixup = arena_alloc(sizeof(DataFixup), 8) as *DataFixup;
+	f.at = code.n;
+	f.varp = v;
+	if (datarefs_tail as i64 == 0) { datarefs_head = f; } else { datarefs_tail.next = f; }
+	datarefs_tail = f;
+	riscv_auipc_addi(reg);
+}
+
+// A function's own address as a first-class value (ND_FUNCADDR).
+fn riscv_add_funcaddr(name str, pos i64) {
+	if (opt_object) {
+		var at0 i64 = code.n;
+		riscv_auipc(A0);
+		var at1 i64 = code.n;
+		riscv_addi(A0, A0, 0);
+		push_reloc(at0, name, REL_RISCV_PCREL_HI20);
+		push_reloc(at1, name, REL_RISCV_PCREL_LO12_I);
+		return;
+	}
+	var f *CallFixup = arena_alloc(sizeof(CallFixup), 8) as *CallFixup;
+	f.at = code.n;
+	f.name = name;
+	f.pos = pos;
+	if (funcaddrs_tail as i64 == 0) { funcaddrs_head = f; } else { funcaddrs_tail.next = f; }
+	funcaddrs_tail = f;
+	riscv_auipc_addi(A0);
+}
+
+fn riscv_ecall() {
+	b4(0x73);
+}
+
+fn riscv_fence() {
+	b4(0x0ff0000f);         // fence iorw, iorw
+}
+
+// ── the pending compare ──
+
+// IR_CMP emits nothing on its own: RISC-V has no flags. The operands are
+// staged into concrete registers (or one pending immediate), and the next
+// IR_BR/IR_SETCC turns them into a branch or a slt-family result. Float
+// compares move the bits into F10/F11 and the consumer emits the actual
+// FEQ/FLT/FLE test into T0.
+var pc_mode int;        // 0 none, 1 integer, 2 float
+var pc_a int;           // first operand register
+var pc_b int;           // second operand register (ZERO unused)
+var pc_imm_valid bool;  // second operand is the pending immediate
+var pc_imm i64;
+var pc_fsz i64;         // float compare width
+
+fn riscv_cmp_operand(o IrOperand, scratch int, is_src1 bool) int {
+	if (o.kind == OP_ACC) { return A0; }
+	if (o.kind == OP_OP2) { return op2_reg(o.reg); }
+	if (o.kind == OP_VREG) { return o.reg; }
+	if (o.kind == OP_STACKSLOT) {
+		riscv_ld_local(scratch, o.off);
+		return scratch;
+	}
+	if (o.kind == OP_MEM) {
+		// [a0 + off], loaded at the operand's width. The only producer is
+		// gen_compare's addressable-load path, off always 0.
+		var ty *Type = o.ty;
+		if (o.off != 0) { riscv_li64(T2, o.off); riscv_r(0, T2, A0, 0, T2, 0x33); riscv_i(0, T2, 3, T2, 0x03); riscv_mov_reg(scratch, T2); return scratch; }
+		if (ty.size == 1) {
+			if (ty.is_unsigned || ty.kind == TY_BOOL) { riscv_i(0, A0, 4, scratch, 0x03); }
+			else { riscv_i(0, A0, 0, scratch, 0x03); }
+			return scratch;
+		}
+		if (ty.size == 2) {
+			if (ty.is_unsigned) { riscv_i(0, A0, 5, scratch, 0x03); } else { riscv_i(0, A0, 1, scratch, 0x03); }
+			return scratch;
+		}
+		if (ty.size == 4) {
+			if (ty.is_unsigned && ty.kind != TY_FLOAT) { riscv_i(0, A0, 6, scratch, 0x03); }
+			else { riscv_i(0, A0, 2, scratch, 0x03); }
+			return scratch;
+		}
+		riscv_i(0, A0, 3, scratch, 0x03);
+		return scratch;
+	}
+	if (o.kind == OP_IMM) {
+		if (is_src1) { pc_imm_valid = true; pc_imm = o.off; return ZERO; }
+		riscv_li64(scratch, o.off);
+		return scratch;
+	}
+	die("internal: riscv_cmp_operand: unhandled operand kind");
+	return ZERO;
+}
+
+fn riscv_pending_cmp(op *IrOp) {
+	pc_mode = 1;
+	pc_imm_valid = false;
+	if (op.src0.ty as i64 != 0 && is_float(op.src0.ty)) {
+		pc_mode = 2;
+		pc_fsz = op.src0.ty.size;
+		riscv_fmv_wx_to_f(F10, A0, pc_fsz);
+		riscv_fmv_wx_to_f(F11, A1, pc_fsz);
+		return;
+	}
+	pc_a = riscv_cmp_operand(op.src0, T0, false);
+	pc_b = riscv_cmp_operand(op.src1, T1, true);
+	if (pc_a == T1 && pc_b == T1) { die("internal: riscv compare scratch collision"); }
+}
+
+// The FEQ/FLT/FLE test for a float pending compare, into T0, and the cc's
+// polarity: 0 means the result register is already the condition, 1 means
+// it must be inverted. funct5 10100 with the test in the rm field (2 =
+// FEQ, 1 = FLT, 0 = FLE) and the fmt bit folded into bits [26:25].
+fn riscv_float_test(cc i64) i64 {
+	var test i64;
+	var invert i64 = 0;
+	if (cc == CC_EQ) { test = 2; }
+	else if (cc == CC_NE) { test = 2; invert = 1; }
+	else if (cc == CC_ULT) { test = 1; }
+	else if (cc == CC_UGE) { test = 1; invert = 1; }
+	else if (cc == CC_ULE) { test = 0; }
+	else if (cc == CC_UGT) { test = 0; invert = 1; }
+	else { die("internal: riscv_float_test: unhandled float cc"); return 0; }
+	var fmt i64 = 0;
+	if (pc_fsz == 8) { fmt = 1; }
+	riscv_r((0x14 << 2) | fmt, F11, F10, test, T0, 0x53);
+	return invert;
+}
+
+// ── float helpers ──
+
+// FMV.X.D / FMV.X.W: float bits out of the FP file into a GPR. funct5
+// 11100 (28), the fmt bit in [26:25], rm = 0 -- the plain riscv_r shape,
+// no OR-ing into a base word (that conflates register fields).
+fn riscv_fmv_f_to_wx(rd int, fs int, sz i64) {
+	var fmt i64 = 0;
+	if (sz == 8) { fmt = 1; }
+	riscv_r((0x1c << 2) | fmt, 0, fs, 0, rd, 0x53);
+}
+
+// FMV.D.X / FMV.W.X: GPR bits into the FP file. funct5 11110 (30).
+fn riscv_fmv_wx_to_f(fd int, rn int, sz i64) {
+	var fmt i64 = 0;
+	if (sz == 8) { fmt = 1; }
+	riscv_r((0x1e << 2) | fmt, 0, rn, 0, fd, 0x53);
+}
+
+// FADD/FSUB/FMUL/FDIV at sz, funct5 0/1/2/3, rm 7 (dynamic rounding: frm
+// defaults to round-to-nearest-even at reset). funct5 and the fmt bit share
+// bits [31:25], so the format is folded into the field directly.
+fn riscv_fpu_binop(aop int, fd int, fn_ int, fm int, sz i64) {
+	var f5 i64 = 0;
+	if (aop == ALU_FSUB) { f5 = 1; }
+	else if (aop == ALU_FMUL) { f5 = 2; }
+	else if (aop == ALU_FDIV) { f5 = 3; }
+	var fmt i64 = 0;
+	if (sz == 8) { fmt = 1; }
+	riscv_r((f5 << 2) | fmt, fm, fn_, 7, fd, 0x53);
+}
+
+fn riscv_fneg(fd int, fn_ int, sz i64) {
+	// fsgnjn rd, fn, fn: funct5 00100, the rm field = 1 selects the
+	// negating form, fmt folds into bits [26:25].
+	var fmt i64 = 0;
+	if (sz == 8) { fmt = 1; }
+	riscv_r((4 << 2) | fmt, fn_, fn_, 1, fd, 0x53);
+}
+
+// FCVT between integer (in a GPR, a real integer not a bit pattern) and
+// FP. rs2 encodes the integer width/signedness: 0 = W, 2 = L, 1 = WU,
+// 3 = LU. funct5 11000 = float -> int, 11010 = int -> float; the fmt bit
+// is the float operand's width.
+fn riscv_fcvt_to_int(rd int, fs int, dsz i64, ssz i64, uns bool) {
+	var rs2 i64 = 2;
+	if (uns) { rs2 = 3; }
+	if (ssz == 4) { rs2 = 0; }
+	if (uns && ssz == 4) { rs2 = 1; }
+	var fmt i64 = 0;
+	if (ssz == 8) { fmt = 1; }
+	riscv_r((0x18 << 2) | fmt, rs2, fs, 7, rd, 0x53);
+}
+
+fn riscv_fcvt_from_int(fd int, rn int, dsz i64, ssz i64, uns bool) {
+	var rs2 i64 = 2;
+	if (uns) { rs2 = 3; }
+	if (ssz == 4) { rs2 = 0; }
+	if (uns && ssz == 4) { rs2 = 1; }
+	var fmt i64 = 0;
+	if (dsz == 8) { fmt = 1; }
+	riscv_r((0x1a << 2) | fmt, rs2, rn, 7, fd, 0x53);
+}
+
+// FCVT.S.D / FCVT.D.S: change float precision. funct5 01000, the fmt bit
+// is the destination width. The two directions are told apart by the rs2
+// field, not the fmt alone: FCVT.S.D (narrowing) carries rs2 = 00001 --
+// funct5 0100000 with rs2 = 00000 is a reserved encoding, and qemu faults
+// it -- while the widening FCVT.D.S carries rs2 = 00000. Verified against
+// gas (0x4015f553 / 0x42058553).
+fn riscv_fcvt(fd int, fs int, dsz i64) {
+	var rs2 i64 = 0;
+	var rm i64 = 0;
+	var fmt i64 = 0;
+	if (dsz == 8) { fmt = 1; }
+	else { rs2 = 1; rm = 7; }
+	riscv_r((8 << 2) | fmt, rs2, fs, rm, fd, 0x53);
+}
+
+// Narrow a0 in place to ty's width (the ACC-in-ACC half of IR_CAST).
+// RISC-V has no write-to-W zero extension, so unsigned truncation is an
+// explicit shift pair.
+fn riscv_truncate_to(ty *Type) {
+	if (ty.size == 1) {
+		if (ty.is_unsigned || ty.kind == TY_BOOL) { riscv_andi(A0, A0, 255); }
+		else { riscv_slli(A0, A0, 56); riscv_srai(A0, A0, 56); }
+		return;
+	}
+	if (ty.size == 2) {
+		if (ty.is_unsigned) { riscv_li64(T0, 0xffff); riscv_r(0, T0, A0, 7, A0, 0x33); }
+		else { riscv_slli(A0, A0, 48); riscv_srai(A0, A0, 48); }
+		return;
+	}
+	if (ty.size == 4) {
+		if (ty.is_unsigned || ty.kind == TY_FLOAT) { riscv_slli(A0, A0, 32); riscv_srli(A0, A0, 32); }
+		else { riscv_i(0, A0, 0, A0, 0x1b); }   // addiw a0, a0, 0 sign-extends W
+	}
+}
+
+// ── atomics ──
+//
+// The AMO format puts funct5 in bits [31:27] and aq/rl in [26:25], unlike
+// riscv_r's [31:25] field -- a dedicated emitter, verified against gas
+// (lr.d = 0x1005b52f-shaped, not the amoadd the wrong shift decoded as).
+fn riscv_amo(f5 i64, aq i64, rl i64, rs2 int, rs1 int, rd int) {
+	b4(((f5 & 0x1f) << 27) | (aq << 26) | (rl << 25) | (rs2 << 20) | (rs1 << 15) | (3 << 12) | (rd << 7) | 0x2f);
+}
+
+// atomic_cas(ptr, expected, new) -> bool. LR.D/SC.D loop; the SC.D status
+// goes to a register, not flags, so the retry branch is a plain bne.
+fn riscv_gen_atomic_cas(n *Node) {
+	gen_args(n, false, false, -1, false);    // ptr->a0, expected->a1, new->a2
+	ir_flush();
+	var top i64 = code.n;
+	riscv_amo(2, 0, 0, 0, A0, T0);           // lr.d t0, (a0) -- t0 = old
+	riscv_b(0, A1, T0, 1, 0x63);             // bne t0, a1, +8 -> miss (placeholder)
+	var miss i64 = code.n - 4;
+	riscv_amo(3, 0, 0, A2, A0, T1);          // sc.d t1, a2, (a0)
+	riscv_b(top - code.n, ZERO, T1, 1, 0x63);// bne t1, zero, top
+	riscv_addi(A0, ZERO, 1);                 // success: a0 = 1
+	riscv_j(0, ZERO, 0x6f);                  // jal x0, +0 -> over (placeholder)
+	var over i64 = code.n - 4;
+	riscv_patch_b(&code, miss, code.n - miss);
+	riscv_addi(A0, ZERO, 0);                 // miss: a0 = 0
+	riscv_patch_jal(&code, over, code.n - over);
+}
+
+// atomic_add(ptr, val) -> old. LR.D/SC.D accumulate loop.
+fn riscv_gen_atomic_add(n *Node) {
+	gen_args(n, false, false, -1, false);    // ptr->a0, val->a1
+	ir_flush();
+	var top i64 = code.n;
+	riscv_amo(2, 0, 0, 0, A0, T0);           // lr.d t0, (a0)
+	riscv_r(0, A1, T0, 0, T1, 0x33);         // add t1, t0, a1
+	riscv_amo(3, 0, 0, T1, A0, T2);          // sc.d t2, t1, (a0)
+	riscv_b(top - code.n, ZERO, T2, 1, 0x63);// bne t2, zero, top
+	riscv_mov_reg(A0, T0);                   // a0 = old
+}
+
+// gc_save_regs(ptr): spill the callee-saved registers the GC must scan --
+// s1..s10 (the same ten the promotion pool will use; s0 and ra are
+// reachable through the frame chain). ptr is in a0.
+fn riscv_gen_gc_save_regs(n *Node) {
+	gen_args(n, false, false, -1, false);
+	var r int = S1;
+	var off i64 = 0;
+	while (r <= S10) {
+		riscv_str_off(r, A0, off);
+		off = off + 8;
+		r = r + 1;
+	}
+}
+
+// gc_data_base()/gc_data_end(): the .data bounds the GC scans, loaded as
+// the AUIPC+ADDI placeholder pair patched at finalize.
+fn riscv_gen_gc_bound(n *Node, is_base bool) {
+	riscv_auipc_addi(A0);
+	if (is_base) { ilist_push(&gc_base_refs, code.n - 8); }
+	else { ilist_push(&gc_end_refs, code.n - 8); }
+}
+
+// coro_entry_addr(): the coroutine trampoline's address.
+fn riscv_gen_coro_entry_addr() {
+	riscv_auipc_addi(A0);
+	ilist_push(&coro_stub_refs, code.n - 8);
+}
+
+// thread_clone(fn, arg, stack, flags) -> child tid (0 in the child).
+// The kernel (and qemu-riscv64) resume the child at the instruction after
+// ecall with a0 = 0, inheriting the register state -- so fn/arg ride t0/t1
+// (caller-saved scratch, dead for the caller across any call) and the
+// child's branch calls fn(arg) and exits; the parent never reaches the
+// child branch. The kernel's riscv sys_clone also takes fn/arg in a5/a6
+// when they are nonzero, but qemu ignores that extension, so the register
+// hand-off must work for both.
+fn gen_thread_clone_riscv(n *Node) {
+	gen_args(n, false, false, -1, false);    // fn->a0, arg->a1, stack->a2, flags->a3
+	ir_flush();
+	riscv_mov_reg(T0, A0);                   // t0 = fn
+	riscv_mov_reg(T1, A1);                   // t1 = arg
+	riscv_mov_reg(A0, A3);                   // a0 = flags
+	riscv_mov_reg(A1, A2);                   // a1 = child stack
+	riscv_addi(A2, ZERO, 0);                 // a2 = parent tid (null)
+	riscv_addi(A3, ZERO, 0);                 // a3 = tls (null)
+	riscv_addi(A4, ZERO, 0);                 // a4 = child tid (null)
+	riscv_addi(A7, ZERO, SYS_RISCV_CLONE);
+	riscv_ecall();
+	riscv_b(0, ZERO, A0, 1, 0x63);           // bne a0, zero, parent (placeholder)
+	var parent i64 = code.n - 4;
+	riscv_mov_reg(A0, T1);                   // child: a0 = arg
+	riscv_i(0, T0, 0, RA, 0x67);             // jalr ra, t0
+	riscv_addi(A7, ZERO, SYS_RISCV_EXIT);    // the child thread exits
+	riscv_ecall();
+	riscv_patch_b(&code, parent, code.n - parent);
+}
+
+// ── stubs ──
+
+// A bounds check's trip jump lives on fn_bounds and is patched to the
+// trampoline at the function's end by riscv_gen_bounds_trampoline, the
+// RISC-V half of gen_bounds_trampoline.
+fn riscv_gen_bounds_trampoline() {
+	var i i64 = 0;
+	while (i < fn_bounds.n) { riscv_patch_here(fn_bounds.p[i]); i = i + 1; }
+	ilist_push(&bounds_checks, code.n);
+	b4(0x6f | (ZERO << 7));   // placeholder jal x0, patched like a direct call
+	fn_bounds.n = 0;
+}
+
+// A bounds/assert trip: print the message to stderr, then exit(134). The
+// message's own address is unknown until the image is laid out, so it
+// loads through a placeholder AUIPC+ADDI pair recorded on
+// panic_msg_at/panic_msg_ids and patched at image finalize time.
+fn riscv_gen_panic_stub(msg_id int, msg_len i64) {
+	if (opt_object) {
+		// The message bytes get a `.Lstrd<msg_id>` symbol; the AUIPC+ADDI
+		// pair with its two relocations survives any link base.
+		var nb Buf;
+		fmt_str(&nb, ".Lstrd");
+		fmt_i64(&nb, msg_id as i64);
+		var at0 i64 = code.n;
+		riscv_auipc(A1);
+		var at1 i64 = code.n;
+		riscv_addi(A1, A1, 0);
+		push_reloc(at0, buf_str(&nb), REL_RISCV_PCREL_HI20);
+		push_reloc(at1, buf_str(&nb), REL_RISCV_PCREL_LO12_I);
+		riscv_li64(A0, 2);
+		riscv_li64(A2, msg_len);
+		riscv_li64(A7, SYS_RISCV_WRITE);
+		riscv_ecall();
+		riscv_li64(A0, 134);
+		riscv_li64(A7, SYS_RISCV_EXIT_GROUP);
+		riscv_ecall();
+		return;
+	}
+	ilist_push(&panic_msg_at, code.n);
+	ilist_push(&panic_msg_ids, msg_id as i64);
+	riscv_auipc(A1);
+	riscv_addi(A1, A1, 0);
+	riscv_li64(A0, 2);
+	riscv_li64(A2, msg_len);
+	riscv_li64(A7, SYS_RISCV_WRITE);
+	riscv_ecall();
+	riscv_li64(A0, 134);
+	riscv_li64(A7, SYS_RISCV_EXIT_GROUP);
+	riscv_ecall();
+}
+
+// ── asm-block symbol references ──
+
+// `$rel name` inside a RISC-V asm block: a jal with a zero imm20 recorded
+// on the calls chain, the same patch shape as a direct call.
+fn add_callref_riscv(name str, pos i64) {
+	b4(0x6f | (RA << 7));
+	var f *CallFixup = arena_alloc(sizeof(CallFixup), 8) as *CallFixup;
+	f.at = code.n - 4;
+	f.name = name;
+	f.pos = pos;
+	if (calls_tail as i64 == 0) { calls_head = f; } else { calls_tail.next = f; }
+	calls_tail = f;
+	if (opt_object) { push_reloc(f.at, name, REL_RISCV_JAL); }
+}
+
+// `$name` inside a RISC-V asm block: the symbol's address as an
+// AUIPC+ADDI pair (exe) or PCREL pair (object) instead of x86's trailing
+// 8-byte absolute slot.
+fn add_absref_riscv(name str, pos i64) {
+	var f *CallFixup = arena_alloc(sizeof(CallFixup), 8) as *CallFixup;
+	f.name = name;
+	f.pos = pos;
+	if (opt_object) {
+		f.at = code.n;
+		riscv_auipc(A0);
+		var at1 i64 = code.n;
+		riscv_addi(A0, A0, 0);
+		push_reloc(f.at, name, REL_RISCV_PCREL_HI20);
+		push_reloc(at1, name, REL_RISCV_PCREL_LO12_I);
+	} else {
+		riscv_auipc_addi(A0);
+		f.at = code.n - 8;
+	}
+	if (asmrefs_tail as i64 == 0) { asmrefs_head = f; } else { asmrefs_tail.next = f; }
+	asmrefs_tail = f;
+}
+
+// ── not yet ported ──
+
+fn gen_extern_params_riscv(f *Func) {
+	die("internal: extern functions are not ported to riscv64 yet");
+}
+
+fn gen_tls_init_stub_riscv() {
+	die("internal: tvar/TLS is not ported to riscv64 yet");
+}
+
+fn gen_coro_switch_stub_riscv() {
+	die("internal: coroutines are not ported to riscv64 yet");
+}
+
+fn gen_coro_stub_riscv() {
+	die("internal: coroutines are not ported to riscv64 yet");
+}
+
+// ── the lowering ──
+
+fn riscv_lower_op(op *IrOp) {
+
+	if (op.kind == IR_MOV && op.dst.kind == OP_ACC && op.src0.kind == OP_IMM) {
+		riscv_li64(A0, op.src0.off);
+		return;
+	}
+	if (op.kind == IR_MOV && op.dst.kind == OP_OP2 && op.src0.kind == OP_IMM) {
+		riscv_li64(op2_reg(op.dst.reg), op.src0.off);
+		return;
+	}
+	if (op.kind == IR_MOV && op.dst.kind == OP_OP2 && op.src0.kind == OP_ACC) {
+		riscv_mov_reg(op2_reg(op.dst.reg), A0);
+		return;
+	}
+	if (op.kind == IR_MOV && op.dst.kind == OP_ACC && op.src0.kind == OP_OP2) {
+		riscv_mov_reg(A0, op2_reg(op.src0.reg));
+		return;
+	}
+	if (op.kind == IR_MOV && op.dst.kind == OP_VREG && op.src0.kind == OP_IMM) {
+		// gen_args' argument staging: dst.reg is already the physical
+		// register call_reg(rank) resolved to.
+		riscv_li64(op.dst.reg, op.src0.off);
+		return;
+	}
+	if (op.kind == IR_LOAD && op.dst.kind == OP_VREG && op.src0.kind == OP_STACKSLOT) {
+		riscv_ld_local(op.dst.reg, op.src0.off);
+		return;
+	}
+	if (op.kind == IR_LOAD && op.dst.kind == OP_VREG && op.src0.kind == OP_VREG) {
+		riscv_mov_reg(op.dst.reg, op.src0.reg);
+		return;
+	}
+	if (op.kind == IR_LOAD && op.dst.kind == OP_ACC && op.src0.kind == OP_VREG) {
+		// A promoted local read into the accumulator.
+		riscv_mov_reg(A0, op.src0.reg);
+		return;
+	}
+	if (op.kind == IR_LOAD && op.dst.kind == OP_OP2 && op.src0.kind == OP_VREG) {
+		riscv_mov_reg(op2_reg(op.dst.reg), op.src0.reg);
+		return;
+	}
+	if (op.kind == IR_ALU && op.dst.kind == OP_VREG && op.src0.kind == OP_VREG && op.src1.kind == OP_STACKSLOT) {
+		riscv_ld_local(T0, op.src1.off);
+		riscv_alu_full(op.aux, op.dst.reg, op.src0.reg, T0, op.dst.ty as i64 != 0 && op.dst.ty.is_unsigned);
+		return;
+	}
+	if (op.kind == IR_ALU && op.dst.kind == OP_VREG && op.src0.kind == OP_VREG && op.src1.kind == OP_VREG) {
+		riscv_alu_full(op.aux, op.dst.reg, op.src0.reg, op.src1.reg, op.dst.ty as i64 != 0 && op.dst.ty.is_unsigned);
+		return;
+	}
+	if (op.kind == IR_ALU && op.dst.kind == OP_VREG && op.src0.kind == OP_VREG && op.src1.kind == OP_IMM) {
+		// A call argument's value staged with a fused imm ALU op
+		// (e.g. `f(n - 1)`), in place in its call-arg register.
+		var v i64 = op.src1.off;
+		var uns bool = op.dst.ty as i64 != 0 && op.dst.ty.is_unsigned;
+		if ((op.aux == ALU_ADD || op.aux == ALU_AND || op.aux == ALU_OR || op.aux == ALU_XOR ||
+		     op.aux == ALU_SHL || op.aux == ALU_SHR) && v >= -2048 && v <= 2047) {
+			riscv_alu_imm(op.aux, op.dst.reg, op.src0.reg, v);
+			return;
+		}
+		riscv_li64(T0, v);
+		riscv_alu_full(op.aux, op.dst.reg, op.src0.reg, T0, uns);
+		return;
+	}
+	if (op.kind == IR_MEMCPY && op.dst.kind == OP_NONE) {
+		// copy_aggregate's protocol: pop the destination from the staging
+		// stack, copy aux bytes from [a0] to it, leave the destination
+		// address in a0 as the result.
+		riscv_pop(T1);
+		riscv_memcpy(T1, A0, op.aux);
+		riscv_mov_reg(A0, T1);
+		return;
+	}
+	if (op.kind == IR_MEMCPY && op.dst.kind == OP_STACKSLOT) {
+		// gen_ret's ret_slot copy: copy aux bytes from [a0] to the pointer
+		// *stored in* the slot, then leave that pointer as the return value.
+		riscv_mov_reg(T1, A0);
+		riscv_ld_local(A0, op.dst.off);
+		riscv_memcpy(A0, T1, op.aux);
+		return;
+	}
+	if (op.kind == IR_MEMCPYDST) {
+		// gen_args' by-ref argument copy: copy aux bytes from [a0] into the
+		// local slot at dst.off, leave that slot's address in a0.
+		riscv_mov_reg(T1, A0);
+		riscv_lea_local(A0, op.dst.off);
+		riscv_memcpy(A0, T1, op.aux);
+		return;
+	}
+	if (op.kind == IR_UNARY && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC) {
+		if (op.aux == UOP_NEG) { riscv_r(0x20, A0, ZERO, 0, A0, 0x33); return; }   // sub a0, x0, a0
+		if (op.aux == UOP_BITNOT) { riscv_xori(A0, A0, -1); return; }
+		if (op.aux == UOP_LNOT) { riscv_sltiu(A0, A0, 1); return; }
+		die("internal: riscv_lower_op: IR_UNARY: unhandled unary op");
+	}
+	if (op.kind == IR_SYSCALL) {
+		// The number and arguments were already staged by gen_args into a7
+		// and a0-a6; only the trap itself is IR.
+		riscv_ecall();
+		return;
+	}
+	if (op.kind == IR_LEA && op.dst.kind == OP_OP2 && op.src0.kind == OP_STACKSLOT && op.src1.kind == OP_NONE) {
+		riscv_lea_local(op2_reg(op.dst.reg), op.src0.off);
+		return;
+	}
+	if (op.kind == IR_LOAD2) {
+		// gen_ret's register-returned aggregate: word 1 first (into a1, the
+		// second-value register), so a0 still holds the base address while
+		// it's read; word 0 last, into a0 itself.
+		if (op.aux > 8) { riscv_ld_at(A1, A0, 8); }
+		riscv_ld_at(A0, A0, 0);
+		return;
+	}
+	if (op.kind == IR_STORE2) {
+		// gen_call/gen_indirect_call's result staging: spill both words to
+		// the temp slot, hand back its address as the aggregate's lvalue.
+		riscv_st_local(op.dst.off, A0);
+		if (op.aux > 8) { riscv_st_local(op.dst.off - 8, A1); }
+		riscv_lea_local(A0, op.dst.off);
+		return;
+	}
+	if (op.kind == IR_MOV && op.dst.kind == OP_ACC && op.src0.kind == OP_STR) {
+		riscv_add_strref(op.src0.off as int);
+		return;
+	}
+	if (op.kind == IR_MOV && op.dst.kind == OP_ACC && op.src0.kind == OP_GLOBAL) {
+		riscv_add_dataref(op.src0.off as *Var);
+		return;
+	}
+	if (op.kind == IR_RET) {
+		riscv_ret();
+		return;
+	}
+	if (op.kind == IR_LEA && op.dst.kind == OP_ACC && op.src0.kind == OP_STACKSLOT && op.src1.kind == OP_NONE) {
+		// A local's address.
+		riscv_lea_local(A0, op.src0.off);
+		return;
+	}
+	if (op.kind == IR_LEA && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC && op.src1.kind == OP_NONE) {
+		// A constant offset folded into an address already in a0 (a struct
+		// member, a constant array index).
+		if (op.dst.off != 0) { riscv_add_imm(A0, A0, op.dst.off); }
+		return;
+	}
+	if (op.kind == IR_LEA && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC &&
+	    (op.src1.kind == OP_OP2 || op.src1.kind == OP_VREG)) {
+		// Array element: a0 = a0 + idx*scale, idx in the OP2 staging
+		// register or a promoted local. aux is the literal element size
+		// (1/2/4/8), not a code -- a power-of-two scale is a shift.
+		var idx int;
+		if (op.src1.kind == OP_OP2) { idx = op2_reg(op.src1.reg); } else { idx = op.src1.reg; }
+		var scale i64 = op.aux;
+		if (scale == 1 || scale == 2 || scale == 4 || scale == 8) {
+			var shift i64 = 0;
+			if (scale == 2) { shift = 1; } else if (scale == 4) { shift = 2; } else if (scale == 8) { shift = 3; }
+			riscv_slli(T0, idx, shift);
+			riscv_r(0, T0, A0, 0, A0, 0x33);
+		} else {
+			riscv_li64(T0, scale);
+			riscv_r(1, T0, idx, 0, T0, 0x33);
+			riscv_r(0, T0, A0, 0, A0, 0x33);
+		}
+		if (op.dst.off != 0) { riscv_add_imm(A0, A0, op.dst.off); }
+		return;
+	}
+	if (op.kind == IR_LEA && op.dst.kind == OP_ACC && op.src0.kind == OP_OP2 && op.src1.kind == OP_ACC) {
+		// A slice element: the base pointer sits in the OP2 staging register,
+		// the index in the accumulator. The index is shifted into T0 before
+		// a0 is overwritten -- RISC-V reads all sources before writing.
+		var base int = op2_reg(op.src0.reg);
+		var scale i64 = op.aux;
+		if (scale == 1 || scale == 2 || scale == 4 || scale == 8) {
+			var shift i64 = 0;
+			if (scale == 2) { shift = 1; } else if (scale == 4) { shift = 2; } else if (scale == 8) { shift = 3; }
+			riscv_slli(T0, A0, shift);
+			riscv_r(0, T0, base, 0, A0, 0x33);
+		} else {
+			riscv_li64(T0, scale);
+			riscv_r(1, T0, A0, 0, T0, 0x33);
+			riscv_r(0, T0, base, 0, A0, 0x33);
+		}
+		if (op.dst.off != 0) { riscv_add_imm(A0, A0, op.dst.off); }
+		return;
+	}
+	if (op.kind == IR_LOAD && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC) {
+		riscv_load(op.dst.ty);
+		return;
+	}
+	if (op.kind == IR_LOAD && op.dst.kind == OP_OP2 && op.src0.kind == OP_ACC) {
+		// A slice field copy (ND_SLICE): [a0 + off] into the OP2 staging
+		// register. Both producers are 8-byte words.
+		riscv_ld_at(op2_reg(op.dst.reg), A0, op.src0.off);
+		return;
+	}
+	if (op.kind == IR_STORE && op.dst.kind == OP_VREG && op.src0.kind == OP_ACC) {
+		// gen_args' staging fallback and gen_opassign's write-back: dest.reg
+		// is a physical call-argument register, so the store is a move.
+		riscv_mov_reg(op.dst.reg, A0);
+		return;
+	}
+	if (op.kind == IR_STORE && op.dst.kind == OP_ACC && op.src0.kind == OP_IMM) {
+		riscv_store_imm(op.dst.ty, op.src0.off);
+		return;
+	}
+	if (op.kind == IR_STORE && op.dst.kind == OP_OP2 && op.src0.kind == OP_ACC) {
+		riscv_store_at(op2_reg(op.dst.reg), A0, op.dst.ty);
+		return;
+	}
+	if (op.kind == IR_CALL && op.src0.kind == OP_FUNC) {
+		riscv_add_call((op.src0.off as *Func).name, op.pos);
+		return;
+	}
+	if (op.kind == IR_CALL && op.src0.kind == OP_VREG) {
+		riscv_i(0, op.src0.reg, 0, RA, 0x67);   // jalr ra, reg, 0
+		return;
+	}
+	if (op.kind == IR_CALL && op.src0.kind == OP_STACKSLOT) {
+		riscv_ld_local(T0, op.src0.off);
+		riscv_i(0, T0, 0, RA, 0x67);
+		return;
+	}
+	if (op.kind == IR_CALL && op.src0.kind == OP_GLOBAL) {
+		riscv_add_dataref_reg(T0, op.src0.off as *Var);
+		riscv_ld_at(T0, T0, 0);
+		riscv_i(0, T0, 0, RA, 0x67);
+		return;
+	}
+	if (op.kind == IR_FUNCADDR && op.dst.kind == OP_ACC && op.src0.kind == OP_FUNC) {
+		riscv_add_funcaddr((op.src0.off as *Func).name, op.pos);
+		return;
+	}
+	if (op.kind == IR_ASSERT) {
+		// bne a0, zero, +8 skips the stub call; the call is a jal
+		// placeholder recorded on assert_sites, patched to the message's
+		// panic stub at emit time.
+		riscv_b(8, ZERO, A0, 1, 0x63);
+		ilist_push(&assert_sites, code.n);
+		ilist_push(&assert_msgs, op.aux);
+		b4(0x6f | (RA << 7));
+		return;
+	}
+	if (op.kind == IR_LOAD && op.dst.kind == OP_ACC && op.src0.kind == OP_STACKSLOT) {
+		riscv_ld_local(A0, op.src0.off);
+		return;
+	}
+	if (op.kind == IR_LOAD && op.dst.kind == OP_OP2 && op.src0.kind == OP_STACKSLOT) {
+		riscv_ld_local(op2_reg(op.dst.reg), op.src0.off);
+		return;
+	}
+	if (op.kind == IR_STORE && op.dst.kind == OP_STACKSLOT && op.src0.kind == OP_ACC) {
+		riscv_st_local(op.dst.off, A0);
+		return;
+	}
+	if (op.kind == IR_STORE && op.dst.kind == OP_STACKSLOT && op.src0.kind == OP_OP2) {
+		riscv_st_local(op.dst.off, op2_reg(op.src0.reg));
+		return;
+	}
+	if (op.kind == IR_CAST && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC) {
+		if (op.aux == CAST_BOOL) {
+			// (a0 != 0) as 1/0: sltu a0, x0, a0
+			riscv_r(0, A0, ZERO, 3, A0, 0x33);
+			return;
+		}
+		if (op.aux == CAST_TRUNC) { riscv_truncate_to(op.dst.ty); return; }
+		if (op.aux == CAST_FTRUNC || op.aux == CAST_FEXT) {
+			// f32<->f64: the source size picks the FCVT direction, the
+			// destination size the move back out.
+			var stsz i64 = op.src0.ty.size;
+			riscv_fmv_wx_to_f(F10, A0, stsz);
+			riscv_fcvt(F10, F10, op.dst.ty.size);
+			riscv_fmv_f_to_wx(A0, F10, op.dst.ty.size);
+			return;
+		}
+		if (op.aux == CAST_ITOF) {
+			riscv_fcvt_from_int(F10, A0, op.dst.ty.size, 8, op.src0.ty.is_unsigned);
+			riscv_fmv_f_to_wx(A0, F10, op.dst.ty.size);
+			return;
+		}
+		if (op.aux == CAST_FTOI) {
+			riscv_fmv_wx_to_f(F10, A0, op.src0.ty.size);
+			riscv_fcvt_to_int(A0, F10, 8, op.src0.ty.size, op.dst.ty.is_unsigned);
+			if (op.dst.ty.size < 8) { riscv_truncate_to(op.dst.ty); }
+			return;
+		}
+		die("internal: riscv_lower_op: IR_CAST: unhandled cast");
+	}
+	if (op.kind == IR_MEMSET && op.dst.kind == OP_STACKSLOT) {
+		riscv_memset_local(op.dst.off, op.aux);
+		return;
+	}
+	if (op.kind == IR_PUSH && op.src0.kind == OP_ACC) {
+		riscv_push(A0);
+		return;
+	}
+	if (op.kind == IR_PUSH && op.src0.kind == OP_OP2) {
+		riscv_push(op2_reg(op.src0.reg));
+		return;
+	}
+	if (op.kind == IR_PUSH && op.src0.kind == OP_MEM) {
+		// gen_args' two-word aggregate staging: push [a0 + off].
+		riscv_ld_at(T0, A0, op.src0.off);
+		riscv_push(T0);
+		return;
+	}
+	if (op.kind == IR_POP && op.dst.kind == OP_ACC) {
+		riscv_pop(A0);
+		return;
+	}
+	if (op.kind == IR_POP && op.dst.kind == OP_OP2) {
+		riscv_pop(op2_reg(op.dst.reg));
+		return;
+	}
+	if (op.kind == IR_POP && op.dst.kind == OP_REG) {
+		riscv_pop(op.dst.reg);
+		return;
+	}
+	if (op.kind == IR_PUSH && op.src0.kind == OP_REG) {
+		riscv_push(op.src0.reg);
+		return;
+	}
+	if (op.kind == IR_ALU && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC && op.src1.kind == OP_OP2) {
+		var op2 int = op2_reg(op.src1.reg);
+		if (op.aux == ALU_FADD || op.aux == ALU_FSUB || op.aux == ALU_FMUL || op.aux == ALU_FDIV) {
+			// gen_binop_float's round trip: bits ride a0/a1, the op happens
+			// in f10/f11, the result lands back in a0.
+			var sz i64 = op.dst.ty.size;
+			riscv_fmv_wx_to_f(F10, A0, sz);
+			riscv_fmv_wx_to_f(F11, op2, sz);
+			riscv_fpu_binop(op.aux, F10, F10, F11, sz);
+			riscv_fmv_f_to_wx(A0, F10, sz);
+			return;
+		}
+		var uns bool = op.dst.ty.is_unsigned;
+		if (op.aux == ALU_DIV) { if (uns) { riscv_r(1, op2, A0, 5, A0, 0x33); } else { riscv_r(1, op2, A0, 4, A0, 0x33); } return; }
+		if (op.aux == ALU_MOD) { if (uns) { riscv_r(1, op2, A0, 7, A0, 0x33); } else { riscv_r(1, op2, A0, 6, A0, 0x33); } return; }
+		if (op.aux == ALU_SHR) {
+			if (uns) { riscv_r(0, op2, A0, 5, A0, 0x33); } else { riscv_r(0x20, op2, A0, 5, A0, 0x33); }
+			return;
+		}
+		riscv_alu_reg(op.aux, A0, A0, op2);
+		return;
+	}
+	if (op.kind == IR_ALU && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC && op.src1.kind == OP_IMM) {
+		var v i64 = op.src1.off;
+		var uns bool = op.dst.ty.is_unsigned;
+		if ((op.aux == ALU_ADD || op.aux == ALU_AND || op.aux == ALU_OR || op.aux == ALU_XOR ||
+		     op.aux == ALU_SHL || op.aux == ALU_SHR) && v >= -2048 && v <= 2047) {
+			riscv_alu_imm(op.aux, A0, A0, v);
+			return;
+		}
+		if (op.aux == ALU_DIV || op.aux == ALU_MOD || op.aux == ALU_SCALE) {
+			riscv_li64(T0, v);
+			if (op.aux == ALU_SCALE) { riscv_r(1, T0, A0, 0, A0, 0x33); return; }
+			if (op.aux == ALU_DIV) { if (uns) { riscv_r(1, T0, A0, 5, A0, 0x33); } else { riscv_r(1, T0, A0, 4, A0, 0x33); } return; }
+			if (uns) { riscv_r(1, T0, A0, 7, A0, 0x33); } else { riscv_r(1, T0, A0, 6, A0, 0x33); }
+			return;
+		}
+		riscv_li64(T0, v);
+		riscv_alu_reg(op.aux, A0, A0, T0);
+		return;
+	}
+	if (op.kind == IR_ALU && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC && op.src1.kind == OP_STACKSLOT) {
+		riscv_ld_local(T0, op.src1.off);
+		riscv_alu_full(op.aux, A0, A0, T0, op.dst.ty.is_unsigned);
+		return;
+	}
+	if (op.kind == IR_ALU && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC && op.src1.kind == OP_VREG) {
+		riscv_alu_full(op.aux, A0, A0, op.src1.reg, op.dst.ty.is_unsigned);
+		return;
+	}
+	if (op.kind == IR_ALU && op.dst.kind == OP_VREG && op.src0.kind == OP_VREG && op.src1.kind == OP_ACC) {
+		riscv_alu_full(op.aux, op.dst.reg, op.src0.reg, A0, op.dst.ty.is_unsigned);
+		return;
+	}
+	if (op.kind == IR_ALU && op.dst.kind == OP_STACKSLOT && op.src0.kind == OP_STACKSLOT && op.src1.kind == OP_VREG) {
+		// v op= <promoted local> as a statement, v a frame slot.
+		riscv_ld_local(T0, op.dst.off);
+		riscv_alu_full(op.aux, T0, T0, op.src1.reg, op.dst.ty.is_unsigned);
+		riscv_st_local(op.dst.off, T0);
+		return;
+	}
+	if (op.kind == IR_CMP) {
+		riscv_pending_cmp(op);
+		return;
+	}
+	if (op.kind == IR_ALU && op.dst.kind == OP_STACKSLOT && op.src0.kind == OP_STACKSLOT && op.src1.kind == OP_IMM) {
+		// v op= imm as a statement (stmt_update's fused form): read-modify-write
+		// the slot directly, no ACC involved.
+		riscv_ld_local(T0, op.dst.off);
+		var v i64 = op.src1.off;
+		if ((op.aux == ALU_ADD || op.aux == ALU_AND || op.aux == ALU_OR || op.aux == ALU_XOR) &&
+		    v >= -2048 && v <= 2047) {
+			riscv_alu_imm(op.aux, T0, T0, v);
+		} else {
+			riscv_li64(T1, v);
+			riscv_alu_full(op.aux, T0, T0, T1, op.dst.ty.is_unsigned);
+		}
+		riscv_st_local(op.dst.off, T0);
+		return;
+	}
+	if (op.kind == IR_SETCC && op.dst.kind == OP_ACC) {
+		var cc i64 = op.aux;
+		if (pc_mode == 2) {
+			var inv i64 = riscv_float_test(cc);
+			if (inv != 0) { riscv_xori(A0, T0, 1); } else { riscv_mov_reg(A0, T0); }
+			pc_mode = 0;
+			return;
+		}
+		if (pc_mode != 1) { die("internal: riscv_lower_op: IR_SETCC without a compare"); }
+		var a int = pc_a;
+		var b int = pc_b;
+		var immv i64 = pc_imm;
+		var has_imm bool = pc_imm_valid;
+		pc_mode = 0;
+		if (cc == CC_EQ || cc == CC_NE) {
+			// Equality is commutative: the pending immediate compares
+			// straight against the operand, no operand swap involved.
+			if (has_imm && immv >= -2048 && immv <= 2047) { riscv_xori(A0, a, immv); }
+			else {
+				if (has_imm) { riscv_li64(T1, immv); b = T1; }
+				riscv_r(0, b, a, 4, A0, 0x33);
+			}
+			if (cc == CC_EQ) { riscv_sltiu(A0, A0, 1); } else { riscv_r(0, A0, ZERO, 3, A0, 0x33); }
+			return;
+		}
+		var uns bool = cc == CC_ULT || cc == CC_ULE || cc == CC_UGT || cc == CC_UGE;
+		var flip bool = cc == CC_LE || cc == CC_GE || cc == CC_ULE || cc == CC_UGE;
+		var swap bool = cc == CC_LE || cc == CC_GT || cc == CC_ULE || cc == CC_UGT;
+		// LE/GT/ULE/UGT read the operands swapped; the pending immediate
+		// must be a real register before the swap, or the placeholder ZERO
+		// travels into the compare.
+		if (has_imm && !swap && immv >= -2048 && immv <= 2047 && (cc == CC_LT || cc == CC_ULT)) {
+			if (uns) { riscv_sltiu(A0, a, immv); } else { riscv_slti(A0, a, immv); }
+			if (flip) { riscv_xori(A0, A0, 1); }
+			return;
+		}
+		if (has_imm) { riscv_li64(T1, immv); b = T1; }
+		if (swap) { var base int = b; b = a; a = base; }
+		if (uns) { riscv_r(0, b, a, 3, A0, 0x33); } else { riscv_r(0, b, a, 2, A0, 0x33); }
+		if (flip) { riscv_xori(A0, A0, 1); }
+		return;
+	}
+	if (op.kind == IR_BR) {
+		var label i64 = op.dst.off;
+		if (pc_mode == 2) {
+			var inv i64 = riscv_float_test(op.aux);
+			pc_mode = 0;
+			if (ir_label_pos.p[label] >= 0) {
+				if (inv != 0) { riscv_jump_back_cc(CC_EQ, T0, ZERO, ir_label_pos.p[label]); }
+				else { riscv_jump_back_cc(CC_NE, T0, ZERO, ir_label_pos.p[label]); }
+				return;
+			}
+			var cc2 i64 = CC_NE;
+			if (inv != 0) { cc2 = CC_EQ; }
+			var id i64 = riscv_jump(cc2, T0, ZERO);
+			ilist_set(&ir_br_next, id, ir_label_br.p[label]);
+			ilist_set(&ir_label_br, label, id);
+			return;
+		}
+		if (pc_mode == 1) {
+			pc_mode = 0;
+			var a int = pc_a;
+			var b int = pc_b;
+			if (pc_imm_valid) {
+				riscv_li64(T1, pc_imm);
+				b = T1;
+				pc_imm_valid = false;
+			}
+			var cc i64 = op.aux;
+			if (ir_label_pos.p[label] >= 0) {
+				if (cc == CC_ALWAYS) { riscv_jump_back(ir_label_pos.p[label]); return; }
+				riscv_jump_back_cc(cc, a, b, ir_label_pos.p[label]);
+				return;
+			}
+			var cond i64 = -1;
+			if (cc != CC_ALWAYS) { cond = cc; }
+			var id2 i64 = riscv_jump(cond, a, b);
+			ilist_set(&ir_br_next, id2, ir_label_br.p[label]);
+			ilist_set(&ir_label_br, label, id2);
+			return;
+		}
+		// No pending compare: an unconditional branch.
+		if (ir_label_pos.p[label] >= 0) { riscv_jump_back(ir_label_pos.p[label]); return; }
+		var id3 i64 = riscv_jump(-1, ZERO, ZERO);
+		ilist_set(&ir_br_next, id3, ir_label_br.p[label]);
+		ilist_set(&ir_label_br, label, id3);
+		return;
+	}
+	if (op.kind == IR_BOUNDS) {
+		if (pc_mode != 1) { die("internal: riscv_lower_op: IR_BOUNDS without a compare"); }
+		var a int = pc_a;
+		var b int = pc_b;
+		if (pc_imm_valid) {
+			riscv_li64(T1, pc_imm);
+			b = T1;
+			pc_imm_valid = false;
+		}
+		pc_mode = 0;
+		var id i64 = riscv_jump(op.aux, a, b);
+		ilist_push(&fn_bounds, id);
+		return;
+	}
+	if (op.kind == IR_LABEL) {
+		ilist_set(&ir_label_pos, op.dst.off, code.n);
+		var id i64 = ir_label_br.p[op.dst.off];
+		while (id >= 0) {
+			riscv_patch_here(id);
+			id = ir_br_next.p[id];
+		}
+		return;
+	}
+	if (op.kind == IR_TLSADDR) {
+		die("internal: riscv_lower_op: IR_TLSADDR: tvar/TLS not ported");
+	}
+	die("internal: riscv_lower_op: unhandled IR shape");
+}
