@@ -69,6 +69,16 @@ fn vec_has(comptime T: type, v *Vec(T), x T) bool {
 	return false;
 }
 
+// The vec literal: vec_of([1, 2, 3]) copies an array literal into a fresh
+// Vec. The slice parameter also accepts any array, so `vec_of(a)` on a
+// fixed array works too.
+fn vec_of(comptime T: type, a []T) Vec(T) {
+	var v Vec(T);
+	var i i64 = 0;
+	while (i < a.len) { vec_push(&v, a[i]); i = i + 1; }
+	return v;
+}
+
 fn vec_clear(comptime T: type, v *Vec(T)) {
 	v.len = 0;
 }
