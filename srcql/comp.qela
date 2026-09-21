@@ -16,6 +16,9 @@ let TK_STR   = 4;
 let TK_PUNCT = 5;
 let TK_COMMENT = 6;
 let TK_FLOAT = 7;
+// The format spec of one interpolation part: "a=${x:08x}b" lexes the part
+// as <expr tokens> TK_FMTSPEC(":08x") "}", so the expression lexes clean.
+let TK_FMTSPEC = 8;
 
 // Positions of every file share one i64: file_id << FILE_SHIFT | offset.
 let FILE_SHIFT = 40;
@@ -156,6 +159,15 @@ let ND_ASMREF    = 55;
 let ND_ARRLIT    = 56;
 let ND_MAPLIT    = 57;
 let ND_ASMLE     = 58;
+// `x in xs` desugars into a hidden scan loop carried on ND_IN: the chain
+// in `.init` runs first (hoisted collection, zeroed result, the scan loop)
+// and `.lhs` is the result variable.
+let ND_IN        = 59;
+// `[f(x) for x in xs]` carries the same shape: `.init` builds the hidden
+// Vec and runs the collection loop, `.lhs` is vec_view(&_$v).
+let ND_ARRCOMP   = 60;
+// `a if c else b`: a conditional expression with a value.
+let ND_IFEXPR    = 61;
 
 struct Var;
 struct Node;
