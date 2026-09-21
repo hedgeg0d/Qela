@@ -1,0 +1,107 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: 1234512ab102099
+// expect-out: gen-ok
+// Generators: a *Gen(T)-returning function with `yield` runs as a
+// coroutine; `for x in gen(...)` pulls values with gen_next until the body
+// finishes. Covers parameters, early return, string elements, a nested
+// generator, a pre-declared generator variable, an empty generator, and a
+// factory that returns *Gen(T) without yielding (left alone).
+import "std/gen.qela";
+import "std/io.qela";
+import "std/fmt.qela";
+
+fn counter(lo i64, hi i64) *Gen(i64) {
+	var i i64 = lo;
+	while (i < hi) {
+		yield i;
+		i = i + 1;
+	}
+}
+
+// Early return: the loop bails at the first odd value.
+fn evens(lo i64, hi i64) *Gen(i64) {
+	var i i64 = lo;
+	while (i < hi) {
+		if ((i & 1) != 0) { return; }
+		yield i;
+		i = i + 1;
+	}
+}
+
+fn pair() *Gen(str) {
+	yield "a";
+	yield "b";
+}
+
+// A generator may itself consume another generator: the sub-generator's
+// consumer is this generator's coroutine, and its parent tracking follows.
+fn flatten() *Gen(i64) {
+	var g *Gen(i64) = counter(1, 3);
+	var v i64 = 0;
+	while (gen_next(g, &v)) { yield v * 10; }
+	yield 99;
+}
+
+fn make_counter() *Gen(i64) {
+	return counter(7, 8);
+}
+
+fn empty_gen() *Gen(i64) {
+	if (true) { return; }
+	yield 5;
+}
+
+fn main() int {
+	var s Buf;
+	// Basic iteration over the call expression.
+	for x in counter(1, 6) {
+		fmt_i64(&s, x);
+	}
+	// Over a pre-declared generator variable.
+	var g *Gen(i64) = counter(1, 3);
+	for x in g {
+		fmt_i64(&s, x);
+	}
+	// String elements.
+	for x in pair() {
+		fmt_str(&s, x);
+	}
+	// Nested generator, consumed from inside another generator's body:
+	// counter(1, 3) yields 1, 2 -- hi is exclusive -- so flatten gives
+	// 10, 20, then 99.
+	for x in flatten() {
+		fmt_i64(&s, x);
+	}
+	// Early return: evens(3, 7) yields nothing (3 is odd).
+	var n i64 = 0;
+	for x in evens(3, 7) {
+		n = n + 1;
+	}
+	if (n != 0) { return 1; }
+	// evens(4, 8): yields 4, then 5 is odd -- return.
+	var m i64 = 0;
+	for x in evens(4, 8) {
+		m = m * 10 + x;
+	}
+	if (m != 4) { return 2; }
+	// A factory returns *Gen(T) without yielding: not rewritten.
+	if (make_counter().coro == 0) { return 3; }
+	// An empty generator yields nothing.
+	var e i64 = 0;
+	for x in empty_gen() {
+		e = e + 1;
+	}
+	if (e != 0) { return 4; }
+	// The value from a generator can feed a normal expression.
+	var total i64 = 0;
+	for x in counter(1, 4) {
+		total = total + x * x;
+	}
+	if (total != 14) { return 5; }
+	print(buf_str(&s));
+	print("\n");
+	if (!str_eq(buf_str(&s), "1234512ab102099")) { return 6; }
+	print("gen-ok\n");
+	return 0;
+}
