@@ -44,6 +44,7 @@ fn main() int {
 	var spins i64 = 0;
 	while (atomic_load(&done_count) < TASKS) {
 		spins = spins + 1;
+		if (spins % 1000 == 0) { sys_sched_yield(); }
 		if (spins > 500000000) { return 1; }
 	}
 
