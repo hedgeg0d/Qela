@@ -1,0 +1,35 @@
+// interp-skip
+// expect-exit: 0
+// stage1-only
+// A str is a {ptr, len} pair: two register words. On x86-64 a str that
+// would straddle the 6-GPR budget (here: five ints fill rdi..r9, the str
+// needs two more) no longer fails to compile: SysV moves the whole pair
+// onto the stack, and Qela marshals that -- the caller pushes both words
+// high-to-low into the outgoing area and the callee reads them in place,
+// ptr nearest rbp. AAPCS64 and LP64D (eight integer registers) have the
+// same signature fit in registers, so the round trip below exercises the
+// register path there and the spill path on x86. A body-ful extern runs
+// the full marshalled round trip without any C: a mismatch in either half
+// shows up as a wrong exit code.
+extern fn ssum(a i64, b i64, c i64, d i64, e i64, s str) i64 {
+	return a + b + c + d + e + s.len;
+}
+extern fn sstride(s str, a i64, b i64, c i64, d i64, e i64) i64 {
+	return s.len + a + b + c + d + e;
+}
+extern fn sfirst(s str, a i64, b i64, c i64, d i64, e i64, f i64, g i64) i64 {
+	return s.len + a + b + c + d + e + f + g;
+}
+fn main() int {
+	var r i64 = ssum(1, 2, 3, 4, 5, "hello");
+	if (r != 20) { return 1; }
+	// The str rides a register here, but the call still crosses both ways.
+	var t i64 = sstride("world", 1, 2, 3, 4, 5);
+	if (t != 20) { return 2; }
+	// The str stays in registers while the tail of the argument list spills
+	// (five ints after it exceed the GPR budget); the marshalled register
+	// path and the scalar spill path must agree in one call.
+	var u i64 = sfirst("hi", 1, 2, 3, 4, 5, 6, 7);
+	if (u != 30) { return 3; }
+	return 0;
+}
