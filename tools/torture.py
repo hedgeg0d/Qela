@@ -3,17 +3,22 @@
 
 Generates syntactically valid Qela programs: scalar expressions (including
 division and remainder with nonzero constant divisors), function calls with
-up to four parameters including recursion, if/else and bounded while loops,
-nested loops, compound assignments, a global variable, structs small and
-large (below and above the 16-byte by-value limit), fixed-size arrays,
-enums with payloads and exhaustive match. Evaluates the expected result in
-Python, compiles with the given compiler, runs, and compares both the exit
-code and the stdout. On mismatch, shrinks and saves a minimal reproducer to
+up to four parameters including recursion, if/else and bounded while loops
+(with break/continue), nested loops, compound assignments, globals, structs
+small and large (below and above the 16-byte by-value limit, including a
+nested struct), fixed-size arrays, slices of arrays and strings, string
+literals with .len/char-index/range-slice/str_eq, f64 arithmetic with exact
+literals (plus int<->float casts and float comparisons), enums with
+payloads and exhaustive match. Evaluates the expected result in Python,
+compiles with the given compiler, runs, and compares both the exit code
+and the stdout. On mismatch, shrinks and saves a minimal reproducer to
 tests/regress/<seed>.qela.
 
 The model mirrors x86 semantics exactly: truncating division, 6-bit shift
-counts, signed wrapping. A mismatch means a real compiler bug, so the model
-must never be relaxed to make a failure go away.
+counts, signed wrapping, IEEE-754 f64 arithmetic (Python doubles and the
+compiler's SSE instructions round identically). A mismatch means a real
+compiler bug, so the model must never be relaxed to make a failure go
+away.
 """
 import argparse, os, random, subprocess, sys, tempfile
 from typing import Optional
@@ -35,6 +40,20 @@ def qwrap(v: int, bits: int, signed: bool) -> int:
 
 def wrap(v: int) -> int:
     return qwrap(v, 64, True)
+
+# ── string and float pools ──────────────────────────────────────────────
+
+# Every generated string has length >= 2: the char index is a constant 0/1
+# and the in-range slice of a variable is [0..2], so nothing can panic.
+STRINGS = ["abc", "hello", "xyz", "abcd", "qwerty", "hi", "xyzzy", "no",
+           "foobar", "42", "aa", "zz"]
+
+# Exact-binary fractions plus a few non-terminating decimals (0.1, 0.3,
+# 1.7 round to the same doubles in Python and in the compiler's parser).
+# Never 0.0: a float division would produce infinity, which the model
+# cannot compare.
+FLOATS = [0.5, 1.0, 1.5, 2.0, 2.5, 3.75, 0.25, -1.5, -0.5, 10.5, 0.125,
+          0.1, 0.3, 1.7, 100.0, -2.0]
 
 # ── helper functions: Qela text + Python mirrors ────────────────────────
 #
@@ -63,6 +82,9 @@ def _tag_e(e) -> int:
 def _opt_d(d) -> int:
     if d[0] == "None":  return 0
     return wrap(d[1][0])
+
+def _nest_sum(n) -> int:
+    return wrap(n["tag"] + n["p"]["x"] + n["p"]["y"])
 
 HELPERS = {
     "add2":   ("fn add2(a int, b int) int { return a + b; }", 2,
@@ -111,6 +133,9 @@ HELPERS = {
                 _tag_e),
     "opt_d":   ("fn opt_d(d D) int {\n\tmatch (d) {\n\t\tNone => { return 0; }\n\t\tSome(v) => { return v; }\n\t}\n}", 1,
                 _opt_d),
+    # Nest contains a 16-byte struct: nested aggregates cross by value.
+    "nest_sum": ("fn nest_sum(n Nest) int { return n.tag + n.p.x + n.p.y; }", 1,
+                 _nest_sum),
 }
 
 # ── type definitions, always emitted ────────────────────────────────────
@@ -119,6 +144,7 @@ STRUCTS = [
     ("Pair", [("x", "int"), ("y", "int")]),               # 16 bytes, by value
     ("Wide", [("a", "int"), ("b", "int"), ("c", "int")]),  # 24 bytes, by ref
     ("Bag",  [("p", "int"), ("q", "int"), ("r", "int"), ("s", "int")]),
+    ("Nest", [("tag", "int"), ("p", "Pair")]),             # nested aggregate
 ]
 ENUMS = [
     ("E", [("A", 0), ("B", 1), ("C", 2)]),
@@ -129,7 +155,8 @@ ENUMS = [
 
 def eval_expr(node, env: dict):
     """Scalar values are ints, structs are dicts, enums are
-    ("variant", [payload...]) tuples, arrays are lists."""
+    ("variant", [payload...]) tuples, arrays are lists, strings are str,
+    floats are float."""
     if not isinstance(node, tuple):
         return node
     kind = node[0]
@@ -141,6 +168,43 @@ def eval_expr(node, env: dict):
     if kind == "var":   return env[node[1]]
     if kind == "arraylit":
         return [0, 0, 0, 0]
+    if kind == "strlit":
+        return node[1]
+    if kind == "slen":
+        return len(eval_expr(node[1], env))
+    if kind == "sidx":
+        # A string's char index is a constant 0/1, always in range.
+        return ord(eval_expr(node[1], env)[node[2]])
+    if kind == "sslice":
+        return eval_expr(node[1], env)[node[2]:node[3]]
+    if kind == "seq":
+        return 1 if eval_expr(node[1], env) == eval_expr(node[2], env) else 0
+    if kind == "fnum":
+        return node[1]
+    if kind == "fvar":
+        return env[node[1]]
+    if kind == "fop":
+        a = eval_expr(node[2], env)
+        b = eval_expr(node[3], env)
+        if node[1] == "+":   return a + b
+        if node[1] == "-":   return a - b
+        if node[1] == "*":   return a * b
+        return a / b
+    if kind == "fcmp":
+        a = eval_expr(node[2], env)
+        b = eval_expr(node[3], env)
+        op = node[1]
+        if op == "==":  return 1 if a == b else 0
+        if op == "!=":  return 1 if a != b else 0
+        if op == "<":   return 1 if a < b else 0
+        if op == "<=":  return 1 if a <= b else 0
+        if op == ">":   return 1 if a > b else 0
+        return 1 if a >= b else 0
+    if kind == "fcast":
+        # cvttsd2si truncates toward zero; Python int() does the same.
+        return int(eval_expr(node[1], env))
+    if kind == "itof":
+        return float(eval_expr(node[1], env))
     lhs = eval_expr(node[1], env)
     if kind == "neg":   return wrap(-lhs)
     if kind == "not":   return 0 if lhs != 0 else 1
@@ -217,11 +281,20 @@ def exec_block(stmts, env: dict):
     return None
 
 
+# Loop control markers: distinct from any return value.
+BREAK = object()
+CONT = object()
+
+
 def exec_stmt(st, env: dict):
     kind = st[0]
     if kind == "decl":
         env[st[1]] = eval_expr(st[3], env)
         return None
+    if kind == "brk":
+        return BREAK
+    if kind == "cont":
+        return CONT
     if kind == "asgn":
         set_lvalue(st[1], eval_expr(st[2], env), env)
         return None
@@ -249,6 +322,10 @@ def exec_stmt(st, env: dict):
     if kind == "while":
         while eval_expr(st[1], env) != 0:
             r = exec_block(st[2], env)
+            if r is BREAK:
+                break
+            if r is CONT:
+                continue
             if r is not None:
                 return r
         return None
@@ -282,6 +359,30 @@ def emit(node, vars: set) -> str:
         if kind == "var":
             vars.add(node[1])
             return node[1]
+        if kind == "strlit":
+            # Qela strings use double quotes; the pool holds no escapes.
+            return '"' + node[1] + '"'
+        if kind == "slen":
+            return f"({emit(node[1], vars)}).len"
+        if kind == "sidx":
+            return f"({emit(node[1], vars)})[{node[2]}]"
+        if kind == "sslice":
+            return f"({emit(node[1], vars)})[{node[2]}..{node[3]}]"
+        if kind == "seq":
+            return f"str_eq({emit(node[1], vars)}, {emit(node[2], vars)})"
+        if kind == "fnum":
+            return repr(node[1])
+        if kind == "fvar":
+            vars.add(node[1])
+            return node[1]
+        if kind == "fop":
+            return f"({emit(node[2], vars)} {node[1]} {emit(node[3], vars)})"
+        if kind == "fcmp":
+            return f"({emit(node[2], vars)} {node[1]} {emit(node[3], vars)})"
+        if kind == "fcast":
+            return f"({emit(node[1], vars)} as i64)"
+        if kind == "itof":
+            return f"({emit(node[1], vars)} as double)"
         if kind in ("neg","not","bnot"):
             op = {"neg":"-","not":"!","bnot":"~"}[kind]
             return f"({op}{emit(node[1], vars)})"
@@ -318,6 +419,10 @@ def render_stmt(st, ind: int) -> str:
         return f"{pad}{emit(st[1], set())} {st[2]}= {emit(st[3], set())};"
     if kind == "ret":
         return f"{pad}return {emit(st[1], set())};"
+    if kind == "brk":
+        return f"{pad}break;"
+    if kind == "cont":
+        return f"{pad}continue;"
     if kind == "if":
         out = [f"{pad}if ({emit(st[1], set())}) {{"]
         out += [render_stmt(s, ind + 1) for s in st[2]]
@@ -367,7 +472,7 @@ class Program:
             exec_stmt(d, env)
         r = exec_block(self.stmts, env)
         out = ""
-        if r is None:
+        if r is None or r is BREAK or r is CONT:
             # The print sits between the statements and the return
             # expression, so an early return skips it -- mirror that.
             if self.print_var is not None:
@@ -388,6 +493,7 @@ class Program:
         if self.print_var is not None:
             out.append('import "std/fmt.qela";')
             out.append('import "std/io.qela";')
+        out.append('import "std/str.qela";')
         if self.g_init is not None:
             out.append(f"var gv int = {self.g_init};")
         for h in self.helpers:
@@ -413,12 +519,14 @@ class Program:
 # ── generator ───────────────────────────────────────────────────────────
 
 class Gen:
-    def __init__(self, rng: random.Random, max_depth: int = 4):
+    def __init__(self, rng: random.Random, max_depth: int = 4,
+                 floats: bool = True):
         self.rng = rng
         self.md = max_depth
         self.help = []          # scalar helper names usable in expressions
         self.agg = []           # struct/enum helper names usable in calls
         self.gv = False         # set when a global variable is generated
+        self.floats = floats    # False for stage0, which has no float support
 
     def leaf(self, vars_used: set, depth: int = 0) -> tuple:
         # At the depth limit only a plain scalar: calls and indexing would
@@ -436,7 +544,7 @@ class Gen:
             if self.gv and self.rng.random() < 0.5:
                 return ("var", "gv")
             return ("var", self.rng.choice(["v0", "v1", "v2"]))
-        k = self.rng.randint(0, 10)
+        k = self.rng.randint(0, 13)
         if k == 0:
             return ("int", "i64", self.rng.randint(-1000, 1000))
         if k == 1:
@@ -467,11 +575,26 @@ class Gen:
             if self.gv and self.rng.random() < 0.5:
                 return ("var", "gv")
             return ("var", self.rng.choice(["v0", "v1", "v2"]))
-        return self.agg_call(depth + 1)
+        if k == 9:
+            # string length: always in range, a u8 index is a constant 0/1
+            return ("slen", self.sexpr(0))
+        if k == 10:
+            return ("sidx", self.sexpr(0), self.rng.randint(0, 1))
+        if k == 11:
+            return ("seq", self.sexpr(0), self.sexpr(0))
+        if k == 12 and self.floats:
+            return ("fcmp", self.rng.choice(["<", "<=", ">", ">=", "==", "!="]),
+                    self.fexpr(depth + 1), self.fexpr(depth + 1))
+        if k == 13:
+            return self.agg_call(depth + 1)
+        if self.floats:
+            return ("fcast", self.fexpr(depth + 1))
+        return ("var", self.rng.choice(["v0", "v1", "v2"]))
 
     def agg_call(self, depth: int = 1) -> tuple:
         """A call whose argument is a struct, a struct literal or an enum."""
-        cand = [h for h in ("tag_e", "opt_d", "pair_sum", "wide_sum", "bag_sum")
+        cand = [h for h in ("tag_e", "opt_d", "pair_sum", "wide_sum", "bag_sum",
+                            "nest_sum")
                 if h in self.agg]
         if not cand:
             return ("int", "i64", 0)
@@ -483,6 +606,10 @@ class Gen:
                 return ("call", "opt_d", [("enumlit", "D", "None", [])])
             return ("call", "opt_d", [("enumlit", "D", "Some",
                                        [self.expr(depth, set())])])
+        if kind == "nest_sum":
+            if self.rng.random() < 0.4:
+                return ("call", "nest_sum", [self.struct_value("Nest")])
+            return ("call", "nest_sum", [("var", "n")])
         if kind == "pair_sum":
             r = self.rng.random()
             if "pair_make" in self.agg and r < 0.4:
@@ -512,6 +639,52 @@ class Gen:
         if k < 17: return self.cast(depth, vars_used)
         return self.leaf(vars_used, depth)
 
+    def sexpr(self, depth: int = 0) -> tuple:
+        """A string-typed expression. Every generated string value has
+        length >= 2, so the constant char index 0/1 and the [0..2] slice
+        of a variable can never be out of range."""
+        k = self.rng.randint(0, 3)
+        if k == 0:
+            return ("strlit", self.rng.choice(STRINGS))
+        if k == 1:
+            return ("var", self.rng.choice(["sv0", "sv1"]))
+        if k == 2:
+            # A [0..2] slice is in range for any >=2-char string, literal
+            # or variable.
+            return ("sslice", self.sexpr(depth + 1), 0, 2)
+        # A slice of a literal with constant bounds, in range and at
+        # least two chars long by construction (the pool has >=3-char
+        # strings for this); slicing a variable this way needs its
+        # length, which the generator cannot know, so literals only.
+        longs = [s for s in STRINGS if len(s) >= 3]
+        lit = self.rng.choice(longs)
+        lo = self.rng.randint(0, len(lit) - 3)
+        hi = self.rng.randint(lo + 2, len(lit))
+        return ("sslice", ("strlit", lit), lo, hi)
+
+    def fexpr(self, depth: int = 0) -> tuple:
+        """A float-typed expression. The divisor of a float division is
+        always a literal (never a computed value, which could be zero and
+        produce infinity)."""
+        if not self.floats:
+            return ("fnum", 1.0)
+        if depth >= self.md:
+            if self.rng.random() < 0.5:
+                return ("fnum", self.rng.choice(FLOATS))
+            return ("fvar", "fv")
+        k = self.rng.randint(0, 4)
+        if k == 0:
+            return ("fnum", self.rng.choice(FLOATS))
+        if k == 1:
+            return ("fvar", "fv")
+        if k == 2:
+            return ("fop", self.rng.choice(["+", "-", "*"]),
+                    self.fexpr(depth + 1), self.fexpr(depth + 1))
+        if k == 3:
+            return ("fop", "/", self.fexpr(depth + 1),
+                    ("fnum", self.rng.choice(FLOATS)))
+        return ("itof", self.expr(depth + 1, set()))
+
     def binop(self, depth: int, vused: set) -> tuple:
         op = self.rng.choice(BINOPS)
         rhs = self.expr(depth + 1, vused)
@@ -534,6 +707,12 @@ class Gen:
         return (op, self.expr(depth, set()), self.expr(depth, set()))
 
     def struct_value(self, ty: str) -> tuple:
+        if ty == "Nest":
+            return ("structlit", "Nest", [
+                ("tag", self.expr(0, set())),
+                ("p", ("structlit", "Pair", [("x", self.expr(0, set())),
+                                             ("y", self.expr(0, set()))])),
+            ])
         if ty == "Pair":
             r = self.rng.random()
             if "pair_make" in self.agg and r < 0.4:
@@ -567,7 +746,7 @@ class Gen:
         return e
 
     def stmt(self, allow_flow: bool, depth: int) -> list:
-        k = self.rng.randint(0, 11)
+        k = self.rng.randint(0, 13)
         if k < 3:
             if self.gv and self.rng.random() < 0.3:
                 tgt = ("var", "gv")
@@ -588,8 +767,8 @@ class Gen:
             return [("asgn", ("mem", ("var", "p"), self.rng.choice(["x", "y"])),
                      self.expr(0, set()))]
         if k == 5:
-            tgt = self.rng.choice(["p", "w", "b"])
-            ty = {"p": "Pair", "w": "Wide", "b": "Bag"}[tgt]
+            tgt = self.rng.choice(["p", "w", "b", "n"])
+            ty = {"p": "Pair", "w": "Wide", "b": "Bag", "n": "Nest"}[tgt]
             return [("asgn", ("var", tgt), self.struct_value(ty))]
         if k == 6:
             idx = ("&", self.expr(0, set()), ("int", "i64", 3))
@@ -598,7 +777,20 @@ class Gen:
             variant, arity = self.rng.choice([("B", 1), ("C", 2)])
             args = [self.expr(0, set()) for _ in range(arity)]
             return [("asgn", ("var", "e"), ("enumlit", "E", variant, args))]
-        if k == 8 and allow_flow:
+        if k == 8:
+            # A string or float variable assignment: the value's type
+            # must match the target's.
+            if self.rng.random() < 0.5 or not self.floats:
+                return [("asgn", ("var", self.rng.choice(["sv0", "sv1"])),
+                         self.sexpr(0))]
+            return [("asgn", ("var", "fv"), self.fexpr(0))]
+        if k == 9:
+            # A nested member write: n.tag or n.p.x.
+            if self.rng.random() < 0.5:
+                return [("asgn", ("mem", ("var", "n"), "tag"), self.expr(0, set()))]
+            return [("asgn", ("mem", ("mem", ("var", "n"), "p"), "x"),
+                     self.expr(0, set()))]
+        if k == 10 and allow_flow and depth < self.md:
             body_t = self.stmts(True, depth + 1, self.rng.randint(1, 2))
             body_f = self.stmts(True, depth + 1, self.rng.randint(1, 2))
             if self.rng.random() < 0.3:
@@ -606,10 +798,11 @@ class Gen:
             if self.rng.random() < 0.3:
                 body_f.append(("ret", self.expr(0, set())))
             return [("if", self.cond(0), body_t, body_f)]
-        if k == 9 and allow_flow:
-            # A nested loop uses its own induction variable, or the outer
-            # one's counter would be clobbered.
-            iv = "i" if depth % 2 == 0 else "j"
+        if k == 11 and allow_flow and depth < self.md:
+            # Every loop level gets its own induction variable (i0, i1,
+            # ...): reusing the outer one's counter would let an inner
+            # loop's initializer reset it and spin the outer loop.
+            iv = "i" + str(depth)
             if self.rng.random() < 0.5 and depth == 0:
                 # The elidable pattern: the loop bound equals the array
                 # length, and the index is the induction variable itself.
@@ -621,9 +814,19 @@ class Gen:
                 return [("asgn", ("var", iv), ("int", "i64", 0)),
                         ("while", ("<", ("var", iv), ("int", "i64", 4)), body)]
             bound = self.rng.randint(1, 3)
-            body = self.stmts(True, depth + 1, self.rng.randint(1, 3))
-            body.append(("asgn", ("var", iv),
-                         ("+", ("var", iv), ("int", "i64", 1))))
+            # The induction increment runs first, so a break/continue in
+            # the body can never skip it and spin the loop forever.
+            body = [("asgn", ("var", iv),
+                     ("+", ("var", iv), ("int", "i64", 1)))]
+            body += self.stmts(True, depth + 1, self.rng.randint(1, 3))
+            if self.rng.random() < 0.3:
+                ck = self.rng.random()
+                if ck < 0.35:
+                    body.append(("if", ("==", ("var", iv), ("int", "i64", 1)),
+                                 [("brk",)], []))
+                elif ck < 0.7:
+                    body.append(("if", ("!=", ("var", iv), ("int", "i64", 0)),
+                                 [("cont",)], []))
             return [("asgn", ("var", iv), ("int", "i64", 0)),
                     ("while", ("<", ("var", iv), ("int", "i64", bound)), body)]
         arms = []
@@ -639,15 +842,17 @@ class Gen:
         return out
 
 
-def generate(seed: int, stmts: int = 8, max_depth: int = 4) -> Program:
+def generate(seed: int, stmts: int = 8, max_depth: int = 4,
+           floats: bool = True) -> Program:
     rng = random.Random(seed)
-    gen = Gen(rng, max_depth)
+    gen = Gen(rng, max_depth, floats)
 
     all_scalar = ["add2","sub2","mul2","max2","min2","sum3","diff4","twice",
                   "zero","mix5","mix6","fact","gcd2"]
     gen.help = rng.sample(all_scalar, rng.randint(2, 4))
     struct_help = rng.sample(["pair_sum", "pair_swap"], rng.randint(1, 2))
-    big_help = rng.sample(["wide_sum", "wide_make", "wide_swap", "bag_sum"],
+    big_help = rng.sample(["wide_sum", "wide_make", "wide_swap", "bag_sum",
+                           "nest_sum"],
                           rng.randint(1, 2))
     enum_help = rng.sample(["tag_e", "opt_d"], rng.randint(1, 2))
     gen.agg = struct_help + big_help + enum_help
@@ -662,13 +867,28 @@ def generate(seed: int, stmts: int = 8, max_depth: int = 4) -> Program:
         ("decl", "v0", "int", ("int", "i64", rng.randint(0, 10))),
         ("decl", "v1", "int", ("int", "i64", rng.randint(0, 10))),
         ("decl", "v2", "int", ("int", "i64", rng.randint(0, 10))),
+        ("decl", "sv0", "str", ("strlit", rng.choice(STRINGS))),
+        ("decl", "sv1", "str", ("strlit", rng.choice(STRINGS))),
+    ]
+    if floats:
+        decls.append(("decl", "fv", "double", ("fnum", rng.choice(FLOATS))))
+    decls += [
         ("decl", "p", "Pair", ("structlit", "Pair", [])),
         ("decl", "w", "Wide", ("structlit", "Wide", [])),
         ("decl", "b", "Bag", ("structlit", "Bag", [])),
+        ("decl", "n", "Nest", ("structlit", "Nest", [
+            ("tag", ("int", "i64", 0)),
+            ("p", ("structlit", "Pair", [("x", ("int", "i64", 0)),
+                                         ("y", ("int", "i64", 0))])),
+        ])),
         ("decl", "e", "E", ("enumlit", "E", "A", [])),
         ("decl", "a", "[4]int", ("arraylit",)),
-        ("decl", "i", "int", ("int", "i64", 0)),
-        ("decl", "j", "int", ("int", "i64", 0)),
+        ("decl", "i0", "int", ("int", "i64", 0)),
+        ("decl", "i1", "int", ("int", "i64", 0)),
+        ("decl", "i2", "int", ("int", "i64", 0)),
+        ("decl", "i3", "int", ("int", "i64", 0)),
+        ("decl", "i4", "int", ("int", "i64", 0)),
+        ("decl", "i5", "int", ("int", "i64", 0)),
     ]
 
     body = gen.stmts(True, 0, stmts + rng.randint(0, 3))
@@ -678,6 +898,31 @@ def generate(seed: int, stmts: int = 8, max_depth: int = 4) -> Program:
 
 
 # ── compile & run ───────────────────────────────────────────────────────
+
+def supports_floats(compiler: str, tmpdir: str) -> bool:
+    """Stage0 has no float support; a quick probe decides whether the
+    generator may emit float programs at all."""
+    src = ("fn main() int { var f double = 1.5; var x int = f as int; "
+           "return x; }\n")
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".qela",
+                                         delete=False, dir=tmpdir) as sf:
+            sf.write(src); sf.flush()
+            sp = sf.name
+        bp = sp + ".bin"
+        r = subprocess.run([compiler, sp, "-o", bp],
+                           capture_output=True, timeout=10)
+        ok = os.path.isfile(bp) and os.path.getsize(bp) > 0
+        for f in [sp, bp]:
+            if os.path.exists(f):
+                try:
+                    os.unlink(f)
+                except OSError:
+                    pass
+        return ok
+    except Exception:
+        return False
+
 
 def compile_and_run(src: str, compiler: str, tmpdir: str,
                     timeout: float = 10.0) -> Optional[tuple]:
@@ -773,9 +1018,12 @@ def main():
         except OSError:
             pass
 
+    floats = supports_floats(comp, tmpdir)
+    print(f"float generation: {'on' if floats else 'off'} (probe)")
+
     for i in range(args.n):
         seed = (args.seed + i) if args.seed is not None else random.randint(0, 2**31-1)
-        prog = generate(seed, args.stmts, args.max_depth)
+        prog = generate(seed, args.stmts, args.max_depth, floats)
         src = prog.render()
         expected = prog.run()
         got = compile_and_run(src, comp, tmpdir, args.timeout)

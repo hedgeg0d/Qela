@@ -595,6 +595,24 @@ EOF
 printf '    ok\n'
 
 
+step "qela . builds a directory as one project"
+mkdir -p "$tmp2/dirproj/sub"
+cat > "$tmp2/dirproj/main.qela" <<'EOF'
+import "std/io.qela";
+fn main() int {
+	write_str(STDOUT, "dir ${two()}\n");
+	return 0;
+}
+EOF
+cat > "$tmp2/dirproj/sub/other.qela" <<'EOF'
+fn two() int { return 2; }
+EOF
+( cd "$tmp2/dirproj" &&
+  "$root/$OUT/s2" . -o dirproj &&
+  [ "$(QELAPATH="$root/$OUT/s2" ./dirproj)" = "dir 2" ] ) ||
+	fail "qela . does not build a directory as one project"
+printf '    ok\n'
+
 step "stdin compile and shebang"
 cat > "$tmp2/btcrash.qela" <<'EOF'
 fn deep(n i64) i64 {
