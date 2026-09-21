@@ -1,0 +1,241 @@
+import "comp.qela";
+import "diag.qela";
+import "funcs.qela";
+import "../std/fmt.qela";
+
+struct FmtGen {
+	next *FmtGen,
+	ty   *Type,
+	name str,
+}
+
+var fmtgen_list *FmtGen;
+var fmtgen_seq int = 0;
+var fmtgen_tmp int = 0;
+
+fn fmtgen_reset() {
+	fmtgen_list = 0 as *FmtGen;
+	fmtgen_seq = 0;
+	fmtgen_tmp = 0;
+}
+
+fn fmtgen_lookup(ty *Type) str {
+	var e *FmtGen = fmtgen_list;
+	while (e as i64 != 0) {
+		if (e.ty as i64 == ty as i64) { return e.name; }
+		e = e.next;
+	}
+	return "";
+}
+
+fn fmtgen_lit(sb *Buf, text str) {
+	fmt_str(sb, "b = fmt_put_str(b, \"");
+	fmt_str(sb, text);
+	fmt_str(sb, "\");\n");
+}
+
+fn fmtgen_id(sb *Buf, prefix str, n int) {
+	fmt_str(sb, prefix);
+	fmt_i64(sb, n as i64);
+}
+
+fn fmtgen_can(ty *Type) bool {
+	var k int = ty.kind;
+	return k == TY_BOOL || k == TY_INT || k == TY_FLOAT || k == TY_PTR ||
+	       k == TY_SLICE || k == TY_ARRAY || k == TY_STRUCT || k == TY_ENUM ||
+	       k == TY_FUNC;
+}
+
+fn fmtgen_value(sb *Buf, expr str, ty *Type, pos i64) {
+	if (ty.kind == TY_BOOL) {
+		fmt_str(sb, "b = fmt_put_bool(b, ");
+		fmt_str(sb, expr);
+		fmt_str(sb, ");\n");
+		return;
+	}
+	if (ty.kind == TY_FLOAT) {
+		var id int = fmtgen_tmp;
+		fmtgen_tmp = fmtgen_tmp + 1;
+		fmt_str(sb, "{ var ");
+		fmtgen_id(sb, "__ft", id);
+		fmt_str(sb, " f64 = ");
+		fmt_str(sb, expr);
+		fmt_str(sb, "; var ");
+		fmtgen_id(sb, "__fp", id);
+		fmt_str(sb, " *i64 = &");
+		fmtgen_id(sb, "__ft", id);
+		fmt_str(sb, " as *i64; b = fmt_put_f64_bits(b, *");
+		fmtgen_id(sb, "__fp", id);
+		fmt_str(sb, "); }\n");
+		return;
+	}
+	if (ty.kind == TY_SLICE && ty.base as i64 == ty_u8 as i64) {
+		fmt_str(sb, "b = fmt_put_str(b, ");
+		fmt_str(sb, expr);
+		fmt_str(sb, ");\n");
+		return;
+	}
+	if (ty.kind == TY_INT) {
+		fmt_str(sb, "b = fmt_put_i64(b, (");
+		fmt_str(sb, expr);
+		fmt_str(sb, ") as i64);\n");
+		return;
+	}
+	if (ty.kind == TY_PTR || ty.kind == TY_FUNC) {
+		fmt_str(sb, "b = fmt_put_hex(b, (");
+		fmt_str(sb, expr);
+		fmt_str(sb, ") as i64);\n");
+		return;
+	}
+	if (ty.kind == TY_ARRAY || ty.kind == TY_SLICE) {
+		var id int = fmtgen_tmp;
+		fmtgen_tmp = fmtgen_tmp + 1;
+		fmtgen_lit(sb, "[");
+		fmt_str(sb, "var ");
+		fmtgen_id(sb, "__fi", id);
+		fmt_str(sb, " i64 = 0;\nwhile (");
+		fmtgen_id(sb, "__fi", id);
+		fmt_str(sb, " < ");
+		if (ty.kind == TY_ARRAY) { fmt_i64(sb, ty.len); }
+		else {
+			fmt_str(sb, "(");
+			fmt_str(sb, expr);
+			fmt_str(sb, ").len");
+		}
+		fmt_str(sb, ") {\nif (");
+		fmtgen_id(sb, "__fi", id);
+		fmt_str(sb, " > 0) { ");
+		fmtgen_lit(sb, ", ");
+		fmt_str(sb, " }\n");
+		var eb Buf;
+		buf_u8(&eb, '(');
+		fmt_str(&eb, expr);
+		fmt_str(&eb, ")[");
+		fmtgen_id(&eb, "__fi", id);
+		buf_u8(&eb, ']');
+		fmtgen_value(sb, buf_str(&eb), ty.base, pos);
+		fmtgen_id(sb, "__fi", id);
+		fmt_str(sb, " = ");
+		fmtgen_id(sb, "__fi", id);
+		fmt_str(sb, " + 1;\n}\n");
+		fmtgen_lit(sb, "]");
+		return;
+	}
+	if (ty.kind == TY_STRUCT || ty.kind == TY_ENUM) {
+		var callee str = fmtgen_for(ty, pos);
+		if (callee.len == 0) {
+			fmtgen_lit(sb, "<?>");
+			return;
+		}
+		fmt_str(sb, "b = ");
+		fmt_str(sb, callee);
+		fmt_str(sb, "(b, ");
+		fmt_str(sb, expr);
+		fmt_str(sb, ");\n");
+		return;
+	}
+	fmtgen_lit(sb, "<?>");
+}
+
+fn fmtgen_struct_body(sb *Buf, ty *Type, pos i64) {
+	fmtgen_lit(sb, type_name(ty));
+	fmtgen_lit(sb, "{");
+	var m *Member = ty.members;
+	var first bool = true;
+	while (m as i64 != 0) {
+		if (!first) { fmtgen_lit(sb, ", "); }
+		first = false;
+		var lb Buf;
+		fmt_str(&lb, m.name);
+		fmt_str(&lb, ": ");
+		fmtgen_lit(sb, buf_str(&lb));
+		var eb Buf;
+		fmt_str(&eb, "v.");
+		fmt_str(&eb, m.name);
+		fmtgen_value(sb, buf_str(&eb), m.ty, pos);
+		m = m.next;
+	}
+	fmtgen_lit(sb, "}");
+}
+
+fn fmtgen_enum_body(sb *Buf, ty *Type, pos i64) {
+	fmt_str(sb, "match (v) {\n");
+	var vr *Variant = ty.variants;
+	while (vr as i64 != 0) {
+		fmt_str(sb, vr.name);
+		if (vr.nfields > 0) {
+			buf_u8(sb, '(');
+			var i int = 0;
+			var fm *Member = vr.fields;
+			while (fm as i64 != 0) {
+				if (i > 0) { fmt_str(sb, ", "); }
+				fmtgen_id(sb, "__fa", i);
+				i = i + 1;
+				fm = fm.next;
+			}
+			buf_u8(sb, ')');
+		}
+		fmt_str(sb, " => {\n");
+		fmtgen_lit(sb, vr.name);
+		if (vr.nfields > 0) {
+			fmtgen_lit(sb, "(");
+			var j int = 0;
+			var f2 *Member = vr.fields;
+			while (f2 as i64 != 0) {
+				if (j > 0) { fmtgen_lit(sb, ", "); }
+				var ab Buf;
+				fmtgen_id(&ab, "__fa", j);
+				fmtgen_value(sb, buf_str(&ab), f2.ty, pos);
+				j = j + 1;
+				f2 = f2.next;
+			}
+			fmtgen_lit(sb, ")");
+		}
+		fmt_str(sb, "}\n");
+		vr = vr.next;
+	}
+	fmt_str(sb, "}\n");
+}
+
+fn fmtgen_for(ty *Type, pos i64) str {
+	var got str = fmtgen_lookup(ty);
+	if (got.len != 0) { return got; }
+	if (!fmtgen_can(ty)) { return ""; }
+	if ((ty.kind == TY_STRUCT || ty.kind == TY_ENUM) && ty.name.len == 0) { return ""; }
+	if (find_func("fmt_put_str") as i64 == 0) { return ""; }
+
+	var nb Buf;
+	fmt_str(&nb, "__fmts");
+	fmt_i64(&nb, fmtgen_seq as i64);
+	fmtgen_seq = fmtgen_seq + 1;
+	var name str = buf_str(&nb);
+
+	var e *FmtGen = arena_alloc(sizeof(FmtGen), 8) as *FmtGen;
+	e.ty = ty;
+	e.name = name;
+	e.next = fmtgen_list;
+	fmtgen_list = e;
+
+	var sb Buf;
+	fmt_str(&sb, "fn ");
+	fmt_str(&sb, name);
+	fmt_str(&sb, "(b Buf, v ");
+	fmt_str(&sb, type_name(ty));
+	fmt_str(&sb, ") Buf {\n");
+	if (ty.kind == TY_STRUCT) { fmtgen_struct_body(&sb, ty, pos); }
+	else if (ty.kind == TY_ENUM) { fmtgen_enum_body(&sb, ty, pos); }
+	else { fmtgen_value(&sb, "v", ty, pos); }
+	fmt_str(&sb, "return b;\n}\n");
+
+	var src str = buf_str(&sb);
+	var fid int = diag_add_file("<fmt-gen>", src);
+	var toks *Token = lex(src, (fid as i64) << FILE_SHIFT);
+
+	var saved_parse *Func = cur_func;
+	var saved_typing *Func = cur_fn_typing;
+	var f *Func = parse_function(&toks, false);
+	add_func(f);
+	cur_func = saved_parse;
+	cur_fn_typing = saved_typing;
+	return name;
+}
