@@ -1,0 +1,133 @@
+// expect-exit: 7
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+fn twice(n int) int { return n + n; }
+fn diff4(a int, b int, c int, d int) int { return a - b - c - d; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn bag_sum(b Bag) int { return b.p + b.q + b.r + b.s; }
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn main() int {
+    var v0 int = 1;
+    var v1 int = 8;
+    var v2 int = 5;
+    var sv0 str = "xyzzy";
+    var sv1 str = "hi";
+    var fv double = 100.0;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    match (e) {
+        A => {
+            return tag_e(e);
+        }
+        B(mb0) => {
+            return (((((0.5 - 100.0) * (v0 as double)) >= ((100 << -157) as double)) % ((str_eq(("foobar")[0..3], sv1) & 15) + 1)) & mb0);
+        }
+        C(mb0, mb1) => {
+            return ((("xyz")[0..2])[1] & (((v0 != v0) % (((true > v1) & 15) + 1)) as u32));
+        }
+    }
+    sv0 = (((("abcd")[0..2])[0..2])[0..2])[0..2];
+    if (((-(-1 >= (-v2))) >= diff4(str_eq(sv1, (("no")[0..2])[0..2]), ('a' as u32), ((str_eq("hi", (("xyzzy")[0..2])[0..2]) as i8) == (('\t' | true) - diff4(v0, 42, 42, false))), -1))) {
+        p.y = p.y;
+        v2 = ('\n' - (((42 + v2) / (((true % ((693 & 15) + 1)) & 15) + 1)) / (((('3' << 267) as i32) & 15) + 1)));
+    } else {
+        i1 = 0;
+        while ((i1 < 3)) {
+            i1 = (i1 + 1);
+            p.x = ((100.0 / 2.0) < (true as double));
+            p.y = diff4((-a[(opt_d(D.None) & 3)]), (((("qwerty")[1..4])[0..2]).len | (!((sv0)[0..2]).len)), ((!('d' << true)) >> 255), v2);
+        }
+        n.p.x = (-(-((fv as i64) < (!true))));
+    }
+    e = E.C((twice((opt_d(D.Some(v0)) > 3)) & ("abcd")[1]), false);
+    v1 /= ((v0 & 15) + 1);
+    match (e) {
+        A => {
+            return (0.25 as i64);
+        }
+        B(mb0) => {
+            return (((0.3 / 1.0) / 100.0) <= fv);
+        }
+        C(mb0, mb1) => {
+            return ((0.25 as i64) - mb1);
+        }
+    }
+    e = E.C((((str_eq(("abc")[0..2], ("foobar")[2..5]) * (-v1)) == bag_sum(b)) as i8), ((((0.3 / 2.0) / 0.25) + fv) < 0.5));
+    if (((((('\n' as u16) / (((1 ^ '1') & 15) + 1)) == ((127 as u32) as i16)) != (v2 <= ((true <= v1) * (!100)))) < (fv as i64))) {
+        i1 = 0;
+        while ((i1 < 2)) {
+            i1 = (i1 + 1);
+            v1, v2 = v2, v1;
+            if ((((-(-(0.125 == 100.0))) | '\n') != v2)) {
+                n.p.x = (("hello")[2..5]).len;
+                sv1 = ((sv0)[0..2])[0..2];
+            } else {
+                v1 = (v0 as u16);
+                return v0;
+            }
+            p.y = (((-(!false)) << v2) as i8);
+        }
+        fv = (((p.x as double) - fv) / 2.5);
+    } else {
+        v1 = ('c' >> 3);
+        match (e) {
+            A => {
+                return str_eq(sv0, (("abc")[0..3])[0..2]);
+            }
+            B(mb0) => {
+                return (false ^ mb0);
+            }
+            C(mb0, mb1) => {
+                return ((((("hello")[2..4])[0..2]).len ^ (!(("foobar")[1..6]).len)) ^ mb1);
+            }
+        }
+    }
+    match (e) {
+        A => {
+            return (-583 >> (((fv < 2.0) << (v2 <= v2)) > ((("abc")[0..3])[0] == v2)));
+        }
+        B(mb0) => {
+            return (((("xyz")[0..3]).len as double) as i64);
+        }
+        C(mb0, mb1) => {
+            return ((sv1)[0] * mb1);
+        }
+    }
+    v1 &= (!(242 & ((10 * 3) + (100 as u32))));
+    e = E.B((!((-42) / ((((!true) as i8) & 15) + 1))));
+    var ob Buf;
+    fmt_i64(&ob, v0);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return (((('c' < false) as i32) >= false) != ((-(false / ((v2 & 15) + 1))) & (!(true ^ 'b'))));
+}

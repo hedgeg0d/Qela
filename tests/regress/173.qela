@@ -1,0 +1,67 @@
+// expect-exit: 10
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+fn twice(n int) int { return n + n; }
+fn mix6(a int, b int, c int, d int, e int, f int) int { return a - b + c - d + e - f; }
+fn zero() int { return 3; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn wide_swap(w Wide) Wide { return Wide{a: w.b, b: w.a, c: w.c}; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn main() int {
+    var v0 int = 2;
+    var v1 int = 7;
+    var v2 int = 10;
+    var sv0 str = "aa";
+    var sv1 str = "abcd";
+    var fv double = 0.25;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    fv = 100.0;
+    v1 = ((("foobar")[2..5])[0] & (((-v1) % (((fv <= -2.0) & 15) + 1)) << (mix6(-738, 127, v0, true, v1, false) & (39 < '2'))));
+    match (e) {
+        A => {
+            return v2;
+        }
+        B(mb0) => {
+            return (!v0);
+        }
+        C(mb0, mb1) => {
+            return (p.x | mb1);
+        }
+    }
+    e = E.C(mix6(v2, 42, str_eq("42", ("abc")[0..3]), -315, '3', (!(mix6(v2, true, 668, '1', v2, 10) | (508 % (('e' & 15) + 1))))), (((-(127 >= 655)) >> 'b') < ((!(("qwerty")[0..2]).len) > (('g' & v0) < 127))));
+    v0 = (!v1);
+    v1 -= false;
+    sv0 = "42";
+    v0, v1 = ((a[(v2 & 3)] * ((-753 != false) | 10)) / ((v0 & 15) + 1)), 0;
+    var ob Buf;
+    fmt_i64(&ob, v2);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return ((((fv / -2.0) as i64) > (sv0)[0]) >> (a[((-863 > 'd') & 3)] ^ (v1 < (10 > 'f'))));
+}

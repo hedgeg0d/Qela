@@ -1,0 +1,106 @@
+// expect-exit: 240
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+fn sub2(a int, b int) int { return a - b; }
+fn mix5(a int, b int, c int, d int, e int) int { return a + b - c + d - e; }
+fn max2(a int, b int) int { if (a > b) { return a; } else { return b; } }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn wide_swap(w Wide) Wide { return Wide{a: w.b, b: w.a, c: w.c}; }
+fn wide_sum(w Wide) int { return w.a + w.b + w.c; }
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 1;
+    var v1 int = 7;
+    var v2 int = 1;
+    var sv0 str = "no";
+    var sv1 str = "aa";
+    var fv double = 0.1;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    v0, v2 = ((-(!(808 != '3'))) ^ (((!717) * (!true)) > ((fv <= 0.3) << (v2 / ((100 & 15) + 1))))), ((-((2 ^ v1) != (true as i16))) << opt_d(D.Some((-(!true)))));
+    if ((v0 >= (v0 >> 171))) {
+        e = E.B(((((-27) / (((true + '2') & 15) + 1)) + ((!10) & (100 >= 'e'))) as i32));
+        i1 = 0;
+        while ((i1 < 2)) {
+            i1 = (i1 + 1);
+            i2 = 0;
+            while ((i2 < 2)) {
+                i2 = (i2 + 1);
+                sv1 = ((sv0)[0..2])[0..2];
+                n.tag = (p.y < wide_sum(w));
+                p.y = ((1 * ((false as u8) != (0.5 < fv))) < (("zz")[0..2])[1]);
+            }
+        }
+    } else {
+        fv = fv;
+        p.y = wide_sum(w);
+    }
+    v2, v0 = (((('2' & -7) * (("abcd")[0..3])[0]) >> (sv0).len) < ((mix5(100, v0, -384, v0, v0) != ('1' << 30)) as u32)), (((fv - (v1 as double)) as i64) as i32);
+    v2, v1 = (!(-(!(-203 % ((false & 15) + 1))))), (str_eq(sv0, ("foobar")[2..6]) | (((255 >> false) != (!true)) << (str_eq("qwerty", sv0) & (!238))));
+    v2 = (!(((fv as i64) + (v1 as u32)) & sub2((!v1), str_eq(("xyzzy")[1..3], sv0))));
+    v0 <<= (!((-1 + (("xyzzy")[1..5])[1]) >> ((779 as i16) >> (-42))));
+    if (((v1 <= (wide_sum(w) >= (v1 & (v0 + true)))) < ((((true >> 100) < ('g' % (('\t' & 15) + 1))) as i8) | (((255 > 2) < v0) | ((v1 as u16) as u16))))) {
+        match (e) {
+            A => {
+                return (((sv1)[1] / (((max2(619, -417) >= true) & 15) + 1)) >> wide_sum(w));
+            }
+            B(mb0) => {
+                return ((((-(!'f')) > ((!v1) + (!'g'))) + 10) ^ mb0);
+            }
+            C(mb0, mb1) => {
+                return v0;
+            }
+        }
+        v2 >>= ((-((fv > fv) != (-'2'))) >> (!str_eq("qwerty", sv1)));
+    } else {
+        v1 = (-(sub2(('2' % ((false & 15) + 1)), (v1 * -755)) / ((0 & 15) + 1)));
+        return false;
+    }
+    v2 = (((v0 != 1) / ((((false as u8) | true) & 15) + 1)) as i32);
+    if ((str_eq("zz", ("qwerty")[0..6]) >= (((('\n' | '3') & (1 == false)) * ((fv + 1.7) as i64)) > a[(v1 & 3)]))) {
+        v0, v1 = (-str_eq("xyzzy", sv0)), (((-(("hello")[0..3])[0]) / ((((v2 == true) as i16) & 15) + 1)) as i16);
+        match (e) {
+            A => {
+                return (((fv + (fv / 1.5)) as i64) & (-((255 <= v0) as i32)));
+            }
+            B(mb0) => {
+                return (wide_sum(w) + mb0);
+            }
+            C(mb0, mb1) => {
+                return ((wide_sum(w) + ((fv != ('1' as double)) as u8)) - mb1);
+            }
+        }
+        return (a[((-1 <= max2(-886, v2)) & 3)] & (!(v1 / ((opt_d(D.Some(-1)) & 15) + 1))));
+    } else {
+        e = E.B((594 ^ 'e'));
+        return (-((!-608) < (127 - true)));
+    }
+    var ob Buf;
+    fmt_i64(&ob, v0);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return (v1 as u16);
+}
