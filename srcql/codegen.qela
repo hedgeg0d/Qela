@@ -3002,12 +3002,13 @@ fn emit_code(u *Unit, main_fn *Func, panic_id int, hdr i64) {
 	// suppresses the default stub too, so the entry function (usually
 	// naked) does its own setup and its own exit.
 	if (top_asm_head as i64 == 0 && entry_name.len == 0 && opt_target == TARGET_RISCV64) {
-		// Minimal RISC-V entry stub: no backtrace sentinel, no TLS init.
-		// main's return value is already in a0, which is also exit_group's
-		// first argument on LP64, so unlike x86 no move is needed before
-		// the syscall. SP is 16-aligned at process entry and the kernel
-		// leaves argc/argv at [sp]/[sp+8].
-		if (opt_backtrace) { die("error: --target riscv64 does not support --backtrace yet"); }
+		// Minimal RISC-V entry stub. main's return value is already in a0,
+		// which is also exit_group's first argument on LP64, so unlike x86
+		// no move is needed before the syscall. SP is 16-aligned at process
+		// entry and the kernel leaves argc/argv at [sp]/[sp+8]. With
+		// backtraces on, s0 starts zero: the walker's frame chain stops
+		// there (main's prologue stores it as its own chain head).
+		if (opt_backtrace) { riscv_mov_reg(S0, ZERO); }
 		if (tls_block_size > 8) {
 			// The stub clobbers a0-a7, so argc/argv load after the JAL,
 			// not before; SP still holds the argument vector untouched.
@@ -3125,7 +3126,8 @@ fn emit_code(u *Unit, main_fn *Func, panic_id int, hdr i64) {
 		gen_bt_walker();
 		var ji i64 = 0;
 		while (ji < bt_jmps.n) {
-			buf_patch32(&code, bt_jmps.p[ji], wa - (bt_jmps.p[ji] + 4));
+			if (opt_target == TARGET_RISCV64) { riscv_patch_jal(&code, bt_jmps.p[ji], wa - bt_jmps.p[ji]); }
+			else { buf_patch32(&code, bt_jmps.p[ji], wa - (bt_jmps.p[ji] + 4)); }
 			ji = ji + 1;
 		}
 	}
@@ -3523,6 +3525,9 @@ fn codegen(u *Unit, img *Image) {
 		pm = pm + 1;
 	}
 	if (bt_table_off >= 0) {
+		if (opt_target == TARGET_RISCV64) {
+			riscv_patch_auipc_addi(bt_auipc_at, rodata_vaddr + bt_table_off);
+		}
 		var bi2 i64 = 0;
 		while (bi2 < bt_base_refs.n) {
 			buf_patch32(&code, bt_base_refs.p[bi2], rodata_vaddr + bt_table_off);
