@@ -3181,8 +3181,11 @@ fn emit_code(u *Unit, main_fn *Func, panic_id int, hdr i64) {
 	// are 4 bytes; the data segment needs 8, so a 4-mod-8 code length pads
 	// one more instruction.
 	if (opt_target == TARGET_RISCV64) {
-		while ((code.n & 3) != 0) { b4(0x13); }
-		if ((code.n & 7) == 4) { b4(0x13); }
+		// Compressed instructions leave code.n on 2-byte boundaries: pad
+		// with 2-byte c.nop words (0x0001 = c.addi x0, 0), not 4-byte nops
+		// that would never change the alignment.
+		while ((code.n & 3) != 0) { c16(0x0001); }
+		if ((code.n & 7) == 4) { c16(0x0001); c16(0x0001); }
 	} else {
 		while ((code.n & 7) != 0) { b1(0x90); }
 	}
