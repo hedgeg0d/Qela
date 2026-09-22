@@ -7,7 +7,7 @@ Updated 2026-08-14. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **674 712 B** (64.4% of the 1 MiB budget) |
+| **S2 — the shipped compiler, Qela compiled by itself** | **676 536 B** (64.5% of the 1 MiB budget) |
 | stage1 sources | ~21 900 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
 
@@ -18,6 +18,20 @@ backtrace, interpolation and the repl, the compiler flags (`-g`,
 server conversation.
 
 ## Done
+
+**Cross-thread deadlock detection (2026-08-14).** A pool world no
+longer just hangs: a channel stall consults a cross-thread registry and
+is a real deadlock only when every registered thread is parked inside
+chan_block (registration is the same contract gc_thread_enter uses:
+pool workers and go() callers auto-register, bare clone threads opt
+in). Two more real bugs fixed on the way: the interp main thread used
+the tls template itself as its block (every spawned thread copied a
+dirty template -- a child's coro_next returned slots it never spawned),
+and a doubled chan_die from two threads corrupted the message.
+S2 674 712 -> 676 536 B (+1 824). Corpus 194/194 compiled, 179/179
+under `TARGET=interp` (`tests/deadlock_crossthread.qela`,
+`tests/deadlock_slowsibling.qela` new; 50x/30x flake runs clean). Full
+writeup in this file.
 
 **Real OS threads under the interpreter (2026-08-14).** The last six
 `// interp-todo` tests run under `qela irun` now: `thread_clone`,
