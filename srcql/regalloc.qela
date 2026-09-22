@@ -17,6 +17,11 @@ let RA_FOREVER = 0x7fffffffffffff;
 // when this function's own parameters do not reach them, or the prologue
 // would overwrite an incoming argument before reading it.
 fn ra_free(i int) int {
+	// t3..t6 (x28..x31): the t0/t1/t2 scratch set is off limits -- the
+	// lowering's own memcpy/staging protocol pops into T1 and the
+	// compare paths use T0, so a promoted local in those registers would
+	// be silently overwritten (the swap-with-struct crash).
+	if (opt_target == TARGET_RISCV64) { return 28 + i; }
 	if (opt_target == TARGET_ARM64) {
 		if (i == 0) { return X16; }
 		return X17;
@@ -42,6 +47,7 @@ fn ra_argregs(f *Func) int {
 
 fn ra_nfree(f *Func) int {
 	if (!f.leaf) { return 0; }
+	if (opt_target == TARGET_RISCV64) { return 4; }
 	if (opt_target == TARGET_ARM64) { return 2; }
 	var nin int = ra_argregs(f);
 	if (nin <= 4) { return 4; }
@@ -50,6 +56,10 @@ fn ra_nfree(f *Func) int {
 }
 
 fn ra_saved(i int) int {
+	if (opt_target == TARGET_RISCV64) {
+		if (i == 0) { return 9; }
+		return 18 + i - 1;
+	}
 	if (opt_target == TARGET_ARM64) {
 		return X19 + i;
 	}
@@ -61,16 +71,18 @@ fn ra_saved(i int) int {
 }
 
 fn ra_nsaved() int {
-	if (opt_target == TARGET_ARM64) { return 10; }
+	if (opt_target == TARGET_ARM64 || opt_target == TARGET_RISCV64) { return 10; }
 	return 5;
 }
 
 fn ra_nreg(f *Func) int {
-	// RISC-V has no register pool yet: every local stays in a frame slot,
-	// correct but unoptimized. (A promotion pool would need the coroutine
-	// and GC spills to cover the same s1..s10 set it already does, but the
-	// call-staging paths are not there yet.)
-	if (opt_target == TARGET_RISCV64) { return 0; }
+	if (opt_target == TARGET_RISCV64) {
+		// Promotion cost more than it saved on RV64C: every promoted local
+		// in a non-leaf function pays a prologue/epilogue spill pair, and
+		// those 8+ bytes dwarf the register win. Keep it off until the
+		// frame save/restore pairs are 2-byte c.ldsp/c.sdsp.
+		return 0;
+	}
 	return ra_nsaved() + ra_nfree(f);
 }
 
