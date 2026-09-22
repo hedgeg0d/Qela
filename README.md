@@ -163,3 +163,7 @@ docs/       BOOTSTRAP.md, STATUS.md
 The test corpus currently contains 220 source files. `make build` regenerates
 the embedded 39-module standard library, checks the S2/S3 fixed point, runs the
 compiled and interpreted corpus, and executes the portability gates.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
