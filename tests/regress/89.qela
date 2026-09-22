@@ -1,0 +1,93 @@
+// expect-exit: 255
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/str.qela";
+var gv int = 37;
+fn gcd2(a int, b int) int { while (b != 0) { var t int = a % b; a = b; b = t; } return a; }
+fn mix5(a int, b int, c int, d int, e int) int { return a + b - c + d - e; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn wide_make(a int, b int, c int) Wide { return Wide{a: a, b: b, c: c}; }
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn main() int {
+    var v0 int = 5;
+    var v1 int = 1;
+    var v2 int = 0x9;
+    var sv0 str = """x
+yz""";
+    var sv1 str = "xyz";
+    var fv double = 100.0;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    v1, gv = gv, v1;
+    if ((v1 >= (v2 / ((((('a' as i8) as u8) == ((("hello")[1..3])[0..2])[0]) & 0xf) + 1)))) {
+        e = E.C(0x64, (a[((gv == 0xfffffffffffffc43) & 3)] as i8));
+    } else {
+        p.x = ((opt_d(D.Some(('\t' in 0..(('f' & 0xf) + 1)))) if (((((!0xff) in a) << ((v2 as i32) in a)) as i16) != 'f') else (((-true) >= (135 in a)) && ((135 in a) <= (306 <= v1)))) in a);
+    }
+    v1 = ((((255 in 0..((255 & 15) + 1)) >> (255 if ('f' == (((str_eq(sv1, sv1) in 0..((((false ^ 614) <= ('d' in a)) & 0xf) + 0x1)) > (-((v0 in 0..((3 & 15) + 1)) in a))) && ((-((v0 in 0..((0x3 & 15) + 1)) in a)) > (("""ab
+cd""")[0..5])[1]))) else false)) in 0..((((0.3 as i64) > (-924 as i32)) & 15) + 0x1)) >> ((-100) | ((str_eq("qwerty", (((((((sv1 + ("aa" + (("hello")[1..4])[0..2])) + (("xyz")[0..2] + sv1)) + sv1))[0..2] + sv0) + (("qwerty")[2..4] + ((sv1 + "qwerty"))[0..2])))[0..2]) > ('\n' <= 189)) && (('\n' <= 0xbd) <= (v2 in 0..((524 & 15) + 1))))));
+    match (e) {
+        A => {
+            return 815;
+        }
+        B(mb0) => {
+            return ((((((((((sv1)[0..2])[0..2] + sv1))[0..2]).len in 0..((('a' == gv) & 15) + 1)) as u32) < ((true * ((42 >= false) && (false <= 'd'))) % ((((true - '\t') <= p.y) & 15) + 1))) && (((true * ((42 >= false) && (false <= 'd'))) % ((((true - '\t') <= p.y) & 15) + 1)) <= (false in 0..((a[((false << 0xa) & 3)] & 15) + 1)))) * mb0);
+        }
+        C(mb0, mb1) => {
+            return ((-true) ^ mb1);
+        }
+    }
+    match (e) {
+        A => {
+            return '3';
+        }
+        B(mb0) => {
+            return (true - mb0);
+        }
+        C(mb0, mb1) => {
+            return (('f' < ((("aa")[1] / (((true == 127) & 15) + 1)) if (opt_d(D.None) >= (!(((-891 < (311 << false)) && ((0x137 << false) <= mix5(406, 2, v2, gv, v1))) in 0..((((42 in 0..((42 & 15) + 1)) ^ (3 as u8)) & 0xf) + 1)))) else (-(918 + false)))) && (((("aa")[1] / (((true == 0x7f) & 0xf) + 1)) if (opt_d(D.None) >= (!(((-891 < (311 << false)) && ((311 << false) <= mix5(406, 2, v2, gv, v1))) in 0..((((42 in 0..((0x2a & 15) + 0x1)) ^ (3 as u8)) & 15) + 1)))) else (-(918 + false))) <= (((--711) / (((0 % ((gv & 15) + 1)) & 15) + 1)) in 0..((((3 >= true) > p.x) & 15) + 1))));
+        }
+    }
+    e = E.B(((((sv0)[0..2]).len > -675) > 779));
+    match (e) {
+        A => {
+            return -51;
+        }
+        B(mb0) => {
+            return ((opt_d(D.None) in a) - mb0);
+        }
+        C(mb0, mb1) => {
+            return (((((fv / 10.5) as i64) in 0..(((-(0x2 / ((v1 & 15) + 1))) & 15) + 1)) in a) + mb1);
+        }
+    }
+    v2, v1 = v1, v2;
+    return (((p.y >= (gv < (false in 0..((-532 & 0xf) + 1)))) && ((gv < (false in 0..((-532 & 15) + 1))) > (!p.x))) in 0..((((('0' | 354) in a) in 0..((v0 & 15) + 1)) & 15) + 0x1));
+}

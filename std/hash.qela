@@ -1,5 +1,6 @@
 // Small non-cryptographic hashes: FNV-1a 64-bit and CRC-32 (IEEE 802.3).
 
+/// Hashes a string with the FNV-1a algorithm.
 fn hash_fnv1a(s str) i64 {
 	var h i64 = -3750763034362895579;
 	var i i64 = 0;
@@ -10,6 +11,7 @@ fn hash_fnv1a(s str) i64 {
 	return h;
 }
 
+/// Hashes a byte buffer with the FNV-1a algorithm.
 fn hash_fnv1a_bytes(p *u8, n i64) i64 {
 	var h i64 = -3750763034362895579;
 	var i i64 = 0;
@@ -20,6 +22,7 @@ fn hash_fnv1a_bytes(p *u8, n i64) i64 {
 	return h;
 }
 
+/// Computes the CRC-32 checksum of a string.
 fn hash_crc32(s str) i64 {
 	var c i64 = 0xffffffff;
 	var i i64 = 0;

@@ -975,7 +975,9 @@ fn type_addsub(n *Node) {
 	// `"a" + "b"`: string concatenation, the twin of `s += "b"`. Rewrites
 	// into str_cat at type time, like the opassign form.
 	if (lt.kind == TY_SLICE && lt.base as i64 == ty_u8 as i64 && n.kind == ND_ADD) {
-		if (rt as i64 != type_str() as i64) {
+		// A str is any []u8; a sliced string is a fresh slice type, so
+		// the check is structural, not pointer identity.
+		if (!(rt.kind == TY_SLICE && rt.base as i64 == ty_u8 as i64)) {
 			emsg("cannot add '"); emsg_ty(rt); emsg("' to a string with '+'"); efail(n.pos);
 		}
 		var call *Node = node_alloc();
@@ -1906,17 +1908,30 @@ fn add_type(n *Node) {
 	if (k == ND_IN) { n.ty = ty_bool; return; }
 	if (k == ND_ARRCOMP) { n.ty = n.lhs.ty; return; }
 	if (k == ND_IFEXPR) {
-		// `a if c else b`: the branches must agree. An aggregate branch
+		// `a if c else b`: the branches must agree. Two numeric branches
+		// unify through the arithmetic rules (a u16 branch with an i64
+		// one becomes i64), a bool branch coerces to an integer side,
+		// and anything else mismatched is an error. An aggregate branch
 		// is fine: its codegen leaves a pointer in the accumulator and
 		// the consumer memcpys from it, same shape as any aggregate
 		// expression.
 		if (!same_type(n.then.ty, n.els.ty)) {
-			emsg("both branches of a conditional expression must have the same type; the first has '");
-			emsg_ty(n.then.ty);
-			emsg("', the second '");
-			emsg_ty(n.els.ty);
-			emsg("'");
-			efail(n.pos);
+			if (is_integer(n.then.ty) && is_integer(n.els.ty)) {
+				var cty *Type = common(n.then.ty, n.els.ty);
+				n.then = cast_to(n.then, cty);
+				n.els = cast_to(n.els, cty);
+			} else if (n.then.ty.kind == TY_BOOL && is_integer(n.els.ty)) {
+				n.then = cast_to(n.then, n.els.ty);
+			} else if (n.els.ty.kind == TY_BOOL && is_integer(n.then.ty)) {
+				n.els = cast_to(n.els, n.then.ty);
+			} else {
+				emsg("both branches of a conditional expression must have the same type; the first has '");
+				emsg_ty(n.then.ty);
+				emsg("', the second '");
+				emsg_ty(n.els.ty);
+				emsg("'");
+				efail(n.pos);
+			}
 		}
 		n.ty = n.then.ty;
 		return;
@@ -2010,7 +2025,10 @@ fn add_type(n *Node) {
 		// Desugars to `s = str_cat(s, rhs)` at type time -- the same shape
 		// the interpolation rewrite builds, so codegen needs no new case.
 		if (lt.kind == TY_SLICE && lt.base as i64 == ty_u8 as i64 && n.val == ND_ADD as i64) {
-			if (n.rhs.ty as i64 != type_str() as i64) {
+			// Structural, like the '+' form: the rhs may be a fresh
+			// slice type, e.g. s += t[0..2].
+			var rty *Type = n.rhs.ty;
+			if (!(rty.kind == TY_SLICE && rty.base as i64 == ty_u8 as i64)) {
 				emsg("cannot append '"); emsg_ty(n.rhs.ty); emsg("' to a string with '+='"); efail(n.pos);
 			}
 			var lhs *Node = n.lhs;

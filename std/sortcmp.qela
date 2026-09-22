@@ -4,6 +4,7 @@ import "sort.qela";
 // value. Unlike sort_i64 (which the bootstrap subset must be able to
 // compile) this takes a first-class fn parameter, so it is stage1-only:
 // a comparator is `fn (i64, i64) bool` — pass the smaller first.
+/// Sorts a slice of integers using a comparator.
 fn sort_cmp(s []i64, lo i64, hi i64, cmp fn(i64, i64) bool) {
 	if (lo >= hi) { return; }
 	var pivot i64 = s[(lo + hi) / 2];

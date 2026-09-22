@@ -6,6 +6,7 @@ struct ArenaMark {
 	left i64,
 }
 
+/// Allocates size aligned bytes from a growable arena, or null on failure.
 fn arena_alloc(size i64, align i64) *u8 {
 	var pad i64 = 0;
 	if (align > 1) {
@@ -36,6 +37,7 @@ fn arena_alloc(size i64, align i64) *u8 {
 
 // Rewind point. The chunk is never unmapped, so resetting across a chunk
 // boundary is safe; bytes after a rewind keep their old contents.
+/// Saves the arena position so arena_reset can rewind to here.
 fn arena_mark() ArenaMark {
 	var m ArenaMark;
 	m.ptr = arena_ptr;
@@ -43,6 +45,7 @@ fn arena_mark() ArenaMark {
 	return m;
 }
 
+/// Rewinds the arena to a position captured by arena_mark.
 fn arena_reset(m ArenaMark) {
 	arena_ptr = m.ptr;
 	arena_left = m.left;
