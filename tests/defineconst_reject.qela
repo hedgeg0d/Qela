@@ -1,0 +1,7 @@
+// expect-compile-error
+// A -D value that does not fit the constant's type is rejected where the
+// constant is declared, rather than silently producing something else.
+$flag -D PORT=abc
+let PORT = 8080;
+
+fn main() int { return PORT; }
