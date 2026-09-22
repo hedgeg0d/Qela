@@ -184,17 +184,23 @@ fn arm64_ldur(rt int, rn int, simm9 i64) {
 }
 
 // A local's address is X29 - off. STUR/LDUR's unscaled 9-bit field covers
-// -256..255 directly; a bigger frame materialises the address in X9 first.
+// -256..255 directly; a bigger frame materialises the address in a scratch
+// register first -- X9, unless the value being stored is itself in X9, in
+// which case the address calc would clobber it before the store reads it.
 fn arm64_st_local(off i64, reg int) {
 	if (-off >= -256 && -off <= 255) { arm64_stur(reg, X29, -off); return; }
-	arm64_sub_imm(X9, X29, off);
-	arm64_stur(reg, X9, 0);
+	var scratch int = X9;
+	if (reg == X9) { scratch = X10; }
+	arm64_sub_imm(scratch, X29, off);
+	arm64_stur(reg, scratch, 0);
 }
 
 fn arm64_ld_local(reg int, off i64) {
 	if (-off >= -256 && -off <= 255) { arm64_ldur(reg, X29, -off); return; }
-	arm64_sub_imm(X9, X29, off);
-	arm64_ldur(reg, X9, 0);
+	var scratch int = X9;
+	if (reg == X9) { scratch = X10; }
+	arm64_sub_imm(scratch, X29, off);
+	arm64_ldur(reg, scratch, 0);
 }
 
 
@@ -207,11 +213,14 @@ fn arm64_sturb(rt int, rn int, simm9 i64) {
 	b4(0x38000000 | ((simm9 & 0x1ff) << 12) | (rn << 5) | rt);
 }
 
+// STUR's unscaled field is only +-255, too small for a large array's zero
+// loop; STR/STRB (immediate, unsigned offset)'s scaled fields reach 32760
+// and 4095 respectively, which every local qela can declare fits inside.
 fn arm64_memset_local(off i64, size i64) {
 	arm64_sub_imm(X9, X29, off);
 	var i i64 = 0;
-	while (i + 8 <= size) { arm64_stur(31, X9, i); i = i + 8; }
-	while (i < size) { arm64_sturb(31, X9, i); i = i + 1; }
+	while (i + 8 <= size) { arm64_str_off(31, X9, i); i = i + 8; }
+	while (i < size) { arm64_strb_off(31, X9, i); i = i + 1; }
 }
 
 
