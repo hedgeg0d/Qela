@@ -251,12 +251,22 @@ fn arm64_cset(rd int, qcc i64) {
 fn arm64_alu_reg(aop int, rd int, rn int, rm int) {
 	if (aop == ALU_ADD) { b4(0x8b000000 | (rm << 16) | (rn << 5) | rd); return; }
 	if (aop == ALU_SUB) { b4(0xcb000000 | (rm << 16) | (rn << 5) | rd); return; }
-	if (aop == ALU_MUL) { b4(0x9b007c00 | (rm << 16) | (rn << 5) | rd); return; }
+	if (aop == ALU_MUL || aop == ALU_SCALE) { b4(0x9b007c00 | (rm << 16) | (rn << 5) | rd); return; }
 	if (aop == ALU_AND) { b4(0x8a000000 | (rm << 16) | (rn << 5) | rd); return; }
 	if (aop == ALU_OR)  { b4(0xaa000000 | (rm << 16) | (rn << 5) | rd); return; }
 	if (aop == ALU_XOR) { b4(0xca000000 | (rm << 16) | (rn << 5) | rd); return; }
 	if (aop == ALU_SHL) { b4(0x9ac02000 | (rm << 16) | (rn << 5) | rd); return; }  // LSLV
 	die("internal: arm64_alu_reg: unhandled ALU op (SHR/DIV/MOD are handled by the caller, floats not wired yet)");
+}
+
+fn arm64_alu_full(aop int, rd int, rn int, rm int, uns bool) {
+	if (aop == ALU_DIV) { arm64_div(rd, rn, rm, uns); return; }
+	if (aop == ALU_MOD) { arm64_mod(rd, rn, rm, uns); return; }
+	if (aop == ALU_SHR) {
+		if (uns) { arm64_lsrv(rd, rn, rm); } else { arm64_asrv(rd, rn, rm); }
+		return;
+	}
+	arm64_alu_reg(aop, rd, rn, rm);
 }
 
 // SDIV/UDIV. MOD has no direct instruction: q = a/b (into scratch), then
@@ -522,21 +532,21 @@ fn arm64_lower_op(op *IrOp) {
 	if (op.kind == IR_ALU && op.dst.kind == OP_VREG && op.src0.kind == OP_VREG && op.src1.kind == OP_STACKSLOT) {
 		// gen_into's register-rm arm, in place: dst.reg op= [local].
 		arm64_ld_local(X9, op.src1.off);
-		arm64_alu_reg(op.aux, op.dst.reg, op.src0.reg, X9);
+		arm64_alu_full(op.aux, op.dst.reg, op.src0.reg, X9, op.dst.ty as i64 != 0 && op.dst.ty.is_unsigned);
 		return;
 	}
 	if (op.kind == IR_ALU && op.dst.kind == OP_VREG && op.src0.kind == OP_VREG && op.src1.kind == OP_VREG) {
 		// gen_into's/stmt_update's register-register arm, in place: dst.reg
 		// op= src1.reg. x86 picks between two opcode families here for byte
 		// size only; both are the same register-register operation.
-		arm64_alu_reg(op.aux, op.dst.reg, op.src0.reg, op.src1.reg);
+		arm64_alu_full(op.aux, op.dst.reg, op.src0.reg, op.src1.reg, op.dst.ty as i64 != 0 && op.dst.ty.is_unsigned);
 		return;
 	}
 	if (op.kind == IR_ALU && op.dst.kind == OP_VREG && op.src0.kind == OP_VREG && op.src1.kind == OP_IMM) {
 		// A call argument's value staged with a fused imm ALU op (e.g.
 		// `f(n - 1)`), in place in its call-arg register.
 		arm64_mov_imm64(X9, op.src1.off);
-		arm64_alu_reg(op.aux, op.dst.reg, op.src0.reg, X9);
+		arm64_alu_full(op.aux, op.dst.reg, op.src0.reg, X9, op.dst.ty as i64 != 0 && op.dst.ty.is_unsigned);
 		return;
 	}
 	if (op.kind == IR_MEMCPY && op.dst.kind == OP_NONE) {
@@ -630,10 +640,15 @@ fn arm64_lower_op(op *IrOp) {
 		var idx int;
 		if (op.src1.kind == OP_OP2) { idx = op2_reg(op.src1.reg); } else { idx = op.src1.reg; }
 		var scale i64 = op.aux;
-		var shift i64 = 0;
-		if (scale == 2) { shift = 1; } else if (scale == 4) { shift = 2; } else if (scale == 8) { shift = 3; }
-		else if (scale != 1) { die("internal: arm64_lower_op: IR_LEA: non-power-of-two element size not wired yet"); }
-		b4(0x8b000000 | (shift << 10) | (idx << 16) | (X0 << 5) | X0);
+		if (scale == 1 || scale == 2 || scale == 4 || scale == 8) {
+			var shift i64 = 0;
+			if (scale == 2) { shift = 1; } else if (scale == 4) { shift = 2; } else if (scale == 8) { shift = 3; }
+			b4(0x8b000000 | (shift << 10) | (idx << 16) | (X0 << 5) | X0);
+		} else {
+			arm64_mov_imm64(X10, scale);
+			b4(0x9b007c00 | (X10 << 16) | (idx << 5) | X10);
+			b4(0x8b000000 | (X10 << 16) | (X0 << 5) | X0);
+		}
 		if (op.dst.off != 0) { arm64_add_signed_imm(X0, X0, op.dst.off); }
 		return;
 	}
