@@ -13,6 +13,64 @@ fn elf_phdr(f *Buf, flags i64, off i64, vaddr i64, filesz i64, memsz i64) {
 	buf_u64(f, SEG_GAP);
 }
 
+// PT_PHDR over the program header table: type 6, R, align 8.
+fn elf_phdr_phdr(f *Buf, off i64, vaddr i64, size i64) {
+	buf_u32(f, 6);
+	buf_u32(f, 5);
+	buf_u64(f, off);
+	buf_u64(f, vaddr);
+	buf_u64(f, vaddr);
+	buf_u64(f, size);
+	buf_u64(f, size);
+	buf_u64(f, 8);
+}
+
+// PT_DYNAMIC over the 128-byte dynamic table: type 2, RW, align 8.
+fn elf_phdr_dyn(f *Buf, off i64, vaddr i64) {
+	buf_u32(f, 2);
+	buf_u32(f, 6);
+	buf_u64(f, off);
+	buf_u64(f, vaddr);
+	buf_u64(f, vaddr);
+	buf_u64(f, 128);
+	buf_u64(f, 128);
+	buf_u64(f, 8);
+}
+
+// One dynamic-table entry: tag, then value (a vaddr for pointer tags).
+fn pie_dyn(f *Buf, tag i64, val i64) {
+	buf_u64(f, tag);
+	buf_u64(f, val);
+}
+
+// The three section headers an ARM64 PIE carries for Android's linker:
+// SHT_NULL, SHT_DYNAMIC (offset/size matching PT_DYNAMIC, sh_link = 2)
+// and SHT_STRTAB (the one byte at strtab_off).
+fn pie_shdrs(f *Buf, dyn_off i64, strtab_off i64) {
+	var i i64 = 0;
+	while (i < 64) { buf_u8(f, 0); i = i + 1; }
+	buf_u32(f, 0);
+	buf_u32(f, 6);
+	buf_u64(f, 0);
+	buf_u64(f, 0);
+	buf_u64(f, dyn_off);
+	buf_u64(f, 128);
+	buf_u32(f, 2);
+	buf_u32(f, 0);
+	buf_u64(f, 8);
+	buf_u64(f, 0);
+	buf_u32(f, 0);
+	buf_u32(f, 3);
+	buf_u64(f, 0);
+	buf_u64(f, 0);
+	buf_u64(f, strtab_off);
+	buf_u64(f, 1);
+	buf_u32(f, 0);
+	buf_u32(f, 0);
+	buf_u64(f, 1);
+	buf_u64(f, 0);
+}
+
 let SHT_PROGBITS = 1;
 let SHT_STRTAB   = 3;
 
@@ -46,15 +104,38 @@ fn shdr_symtab(f *Buf, name i64, off i64, size i64) {
 
 fn write_elf(path str, img *Image) {
 	var text i64 = img.code.n + img.rodata.n;
-	var rw i64 = img.data.n + img.bss_size;
+	// An ARM64 PIE carries, right after rodata: a minimal GNU hash table,
+	// a one-symbol symtab, a one-byte strtab, a dynamic table naming all
+	// three and a three-entry section table. Android runs every ET_DYN
+	// through its dynamic linker, which demands the whole apparatus
+	// (PT_DYNAMIC matching a SHT_DYNAMIC section linked to a SHT_STRTAB,
+	// a PT_PHDR, a usable DT_GNU_HASH). The tables live in the RX segment:
+	// they are read-only, and placing them in the RW segment would sit
+	// them exactly where the bss globals go (layout_globals sizes bss
+	// against img.data.n, which does not know about them) -- a real bug
+	// that showed up as atomic_cas spinning on a hash word. Real kernels
+	// never look at any of it.
+	var android bool = opt_pie && opt_target == TARGET_ARM64;
 	var nph int = img.nph;
 	var hdr i64 = EHDR_SZ + PHDR_SZ * (nph as i64);
 
 	var data_off i64 = hdr + text;
 	var data_vaddr i64 = eff_base() + SEG_GAP + data_off;
+	// The tables sit right after the file-backed data, before the bss
+	// region -- codegen's layout_globals already shifted the bss offsets
+	// past them (and grew bss_size by 392), so the zero-fill and the
+	// globals never overlap. data_off is always 8-aligned (code and
+	// rodata end padded), so the offsets below are exact.
+	var dyn_off i64 = data_off + img.data.n;
+	var ghash_off i64 = dyn_off;
+	var symtab_off i64 = dyn_off + 40;
+	var strtab_off i64 = dyn_off + 64;
+	var dyn2 i64 = dyn_off + 72;
+	var sh_off i64 = dyn_off + 200;
+	var rw i64 = img.data.n + img.bss_size;
 
 	var f Buf;
-	buf_grow(&f, data_off + img.data.n);
+	buf_grow(&f, data_off + img.data.n + 392);
 
 	buf_u8(&f, 0x7f);
 	buf_u8(&f, 'E');
@@ -106,24 +187,76 @@ fn write_elf(path str, img *Image) {
 	buf_u16(&f, EHDR_SZ);
 	buf_u16(&f, PHDR_SZ);
 	buf_u16(&f, nph as i64);
+	// Android's bionic linker validates the ELF header before mapping:
+	// e_shentsize must equal sizeof(Shdr) and e_shstrndx must be nonzero.
+	// The ARM64 PIE's section table exists for that reason alone (three
+	// entries, see below); everyone else keeps the fields zero when the
+	// debug sections are absent, and the kernel never reads them.
 	if (nsh == 0) {
-		buf_u16(&f, 0);
-		buf_u16(&f, 0);
-		buf_u16(&f, 0);
+		if (android) {
+			buf_u16(&f, 64);
+			buf_u16(&f, 3);
+			buf_u16(&f, 2);
+		} else {
+			buf_u16(&f, 0);
+			buf_u16(&f, 0);
+			buf_u16(&f, 0);
+		}
 	} else {
 		buf_u16(&f, 64);
 		buf_u16(&f, nsh as i64);
 		buf_u16(&f, 7);
 	}
 
+	if (android) {
+		// PT_PHDR first -- bionic and binutils expect it before any LOAD.
+		elf_phdr_phdr(&f, EHDR_SZ, eff_base() + EHDR_SZ, (nph as i64) * PHDR_SZ);
+	}
 	elf_phdr(&f, 5, 0, eff_base(), hdr + text, hdr + text);
-	if (nph == 2) {
-		elf_phdr(&f, 6, data_off, data_vaddr, img.data.n, rw);
+	if (nph == 4 || (nph == 2 && !android)) {
+		if (android) { elf_phdr(&f, 6, data_off, data_vaddr, img.data.n + 392, rw); }
+		else { elf_phdr(&f, 6, data_off, data_vaddr, img.data.n, rw); }
+	}
+	if (android) {
+		elf_phdr_dyn(&f, dyn2, data_vaddr + img.data.n + 72);
 	}
 
 	buf_bytes(&f, img.code.p, img.code.n);
 	buf_bytes(&f, img.rodata.p, img.rodata.n);
 	buf_bytes(&f, img.data.p, img.data.n);
+	if (android) {
+		// The GNU hash (one bucket, no symbols, chain[0] end-marked),
+		// a one-null-symbol symtab, a one-byte strtab, and the dynamic
+		// table naming all three. d_ptr is a vaddr: SEG_GAP + off for
+		// this RW segment.
+		buf_u32(&f, 1);
+		buf_u32(&f, 0);
+		buf_u32(&f, 1);
+		buf_u32(&f, 0);
+		buf_u64(&f, 0);
+		buf_u32(&f, 0);
+		buf_u32(&f, 1);
+		while (f.n < symtab_off) { buf_u8(&f, 0); }
+		var si i64 = 0;
+		while (si < 24) { buf_u8(&f, 0); si = si + 1; }
+		buf_u8(&f, 0);
+		while (f.n < dyn2) { buf_u8(&f, 0); }
+		pie_dyn(&f, 0x6ffffef5, SEG_GAP + ghash_off);
+		pie_dyn(&f, 6, SEG_GAP + symtab_off);
+		pie_dyn(&f, 11, 24);
+		pie_dyn(&f, 5, SEG_GAP + strtab_off);
+		pie_dyn(&f, 10, 1);
+		pie_dyn(&f, 0, 0);
+		pie_dyn(&f, 0, 0);
+		pie_dyn(&f, 0, 0);
+		while (f.n < sh_off) { buf_u8(&f, 0); }
+		pie_shdrs(&f, dyn2, strtab_off);
+		var k6 i64 = 0;
+		while (k6 < 8) {
+			f.p[shoff_at + k6] = ((sh_off >> (k6 * 8)) & 255) as u8;
+			k6 = k6 + 1;
+		}
+	}
 
 	if (nsh != 0) {
 		var off_line i64 = f.n;
