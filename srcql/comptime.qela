@@ -37,7 +37,7 @@ fn ct_find(name str) *CTVar {
 		}
 		f = f.prev;
 	}
-	return 0 as *CTVar;
+	return null;
 }
 
 fn ct_declare(name str, val ComptimeVal) *CTVar {
@@ -75,7 +75,7 @@ fn ct_call(f *Func, args *Node) ComptimeVal {
 	var i int = 0;
 	while (a as i64 != 0) {
 		if (i >= f.nparams) { break; }
-		var pv *Var = 0 as *Var;
+		var pv *Var = null;
 		if (i == 0) { pv = f.p0; }
 		else if (i == 1) { pv = f.p1; }
 		else if (i == 2) { pv = f.p2; }
@@ -115,7 +115,7 @@ fn ct_run_stmt(s *Node) {
 	if (s.kind == ND_BLOCK) { ct_eval_block(s); return; }
 	if (s.kind == ND_IF) {
 		var c ComptimeVal = ct_eval_expr(s.cond);
-		var br *Node = 0 as *Node;
+		var br *Node = null;
 		if (c.num != 0) { br = s.then; }
 		else { br = s.els; }
 		ct_run_stmt(br);
@@ -282,7 +282,7 @@ fn ct_eval_expr(n *Node) ComptimeVal {
 
 	if (n.kind == ND_IF) {
 		var c ComptimeVal = ct_eval_expr(n.cond);
-		var branch *Node = 0 as *Node;
+		var branch *Node = null;
 		if (c.num != 0) { branch = n.then; }
 		else { branch = n.els; }
 		if (branch as i64 == 0) { return ct_void(); }

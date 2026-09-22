@@ -219,7 +219,7 @@ fn ra_eligible(v *Var) bool {
 // Vars are taken most-used first rather than in range order: a register spent
 // on a loop variable buys more than one spent on a long-lived cold value.
 fn ra_pick(reg int) bool {
-	var best *Var = 0 as *Var;
+	var best *Var = null;
 	var v *Var = ra_fn.locals;
 	while (v as i64 != 0) {
 		if (!v.has_reg && ra_eligible(v)) {
