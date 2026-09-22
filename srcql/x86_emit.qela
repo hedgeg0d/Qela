@@ -595,6 +595,7 @@ fn jump_bounds(cc i64) {
 
 fn gen_bounds_trampoline() {
 	if (fn_bounds.n == 0) { return; }
+	if (opt_target == TARGET_RISCV64) { riscv_gen_bounds_trampoline(); return; }
 	if (opt_target == TARGET_ARM64) { arm64_gen_bounds_trampoline(); return; }
 	patch_all(&fn_bounds);
 	// With backtraces on this becomes a call, so the return address left on
@@ -1105,7 +1106,7 @@ fn branch_false(n *Node, label i64) {
 	// than switching x86 to the IR form too: alu_rax_imm's immediate-0
 	// encoding is a byte longer than test_rax's, which would move every
 	// existing test's bytes and break byte-compare.
-	if (opt_target == TARGET_ARM64) { ir_cmp_acc_imm(0, n.pos); }
+	if (opt_target == TARGET_ARM64 || opt_target == TARGET_RISCV64) { ir_cmp_acc_imm(0, n.pos); }
 	else { test_rax(); }
 	ir_branch(CC_EQ, label, n.pos);
 }
@@ -1132,7 +1133,7 @@ fn branch_true(n *Node, label i64) {
 		return;
 	}
 	gen_expr(n);
-	if (opt_target == TARGET_ARM64) { ir_cmp_acc_imm(0, n.pos); }
+	if (opt_target == TARGET_ARM64 || opt_target == TARGET_RISCV64) { ir_cmp_acc_imm(0, n.pos); }
 	else { test_rax(); }
 	ir_branch(CC_NE, label, n.pos);
 }
@@ -1980,11 +1981,12 @@ fn x86_lower_op(op *IrOp) {
 
 
 fn ir_flush() {
-	if (ir_flushing) { return; }
-	ir_flushing = true;
+	if (ir_flushing) { return; }	ir_flushing = true;
 	var op *IrOp = ir_head;
 	while (op as i64 != 0) {
-		if (opt_target == TARGET_ARM64) { arm64_lower_op(op); } else { x86_lower_op(op); }
+		if (opt_target == TARGET_RISCV64) { riscv_lower_op(op); }
+		else if (opt_target == TARGET_ARM64) { arm64_lower_op(op); }
+		else { x86_lower_op(op); }
 		op = op.next;
 	}
 	ir_reset();
