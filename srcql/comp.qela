@@ -322,6 +322,8 @@ struct Unit {
 let ELF_BASE   = 0x400000;
 var opt_base i64 = 0x400000;
 var opt_pie bool = false;
+var opt_backtrace bool = false;
+var opt_no_bounds bool = false;
 
 fn base_is_wide() bool {
 	return opt_base < 0 || opt_base > 4294967295;
