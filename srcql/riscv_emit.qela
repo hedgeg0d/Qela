@@ -900,16 +900,21 @@ fn riscv_gen_atomic_add(n *Node) {
 
 // gc_save_regs(ptr): spill the callee-saved registers the GC must scan --
 // s1..s10 (the same ten the promotion pool will use; s0 and ra are
-// reachable through the frame chain). ptr is in a0.
+// reachable through the frame chain). ptr is in a0. Spilled explicitly:
+// the s-registers are not consecutively numbered (s1 = x9, s2..s10 =
+// x18..x26), so a counting loop would wander into a0-a7.
 fn riscv_gen_gc_save_regs(n *Node) {
 	gen_args(n, false, false, -1, false);
-	var r int = S1;
-	var off i64 = 0;
-	while (r <= S10) {
-		riscv_str_off(r, A0, off);
-		off = off + 8;
-		r = r + 1;
-	}
+	riscv_str_off(S1, A0, 0);
+	riscv_str_off(S2, A0, 8);
+	riscv_str_off(S3, A0, 16);
+	riscv_str_off(S4, A0, 24);
+	riscv_str_off(S5, A0, 32);
+	riscv_str_off(S6, A0, 40);
+	riscv_str_off(S7, A0, 48);
+	riscv_str_off(S8, A0, 56);
+	riscv_str_off(S9, A0, 64);
+	riscv_str_off(S10, A0, 72);
 }
 
 // gc_data_base()/gc_data_end(): the .data bounds the GC scans, loaded as
@@ -1050,16 +1055,103 @@ fn gen_extern_params_riscv(f *Func) {
 	die("internal: extern functions are not ported to riscv64 yet");
 }
 
+// Builds a fresh per-thread TLS block, the RISC-V counterpart of the
+// ARM64/x86 stubs: mmap it, copy the template in, write the self-pointer
+// at offset 0, then point tp (x4) at it -- tp is a plain GPR, writable
+// from user mode, so unlike x86's arch_prctl there is no syscall for the
+// pointer itself. mmap returns the block in a0 and the stub leaves it
+// there; the caller (the process entry stub) must not rely on a0/a1
+// across the call.
 fn gen_tls_init_stub_riscv() {
-	die("internal: tvar/TLS is not ported to riscv64 yet");
+	tls_stub_at = code.n;
+	riscv_li64(A0, 0);
+	riscv_li64(A1, tls_block_size);
+	riscv_li64(A2, 3);
+	riscv_li64(A3, 34);
+	riscv_li64(A4, -1);
+	riscv_li64(A5, 0);
+	riscv_li64(A7, SYS_RISCV_MMAP);
+	riscv_ecall();
+	riscv_mov_reg(A2, A0);               // a2 = dst (the new block)
+	riscv_auipc_addi(A1);                // a1 = template address (placeholder)
+	ilist_push(&tls_src_refs, code.n - 8);
+	riscv_li64(A3, tls_block_size / 8);
+	var loop i64 = code.n;
+	riscv_ld_at(T0, A1, 0);              // copy one 8-byte word
+	riscv_str_off(T0, A2, 0);
+	riscv_addi(A1, A1, 8);
+	riscv_addi(A2, A2, 8);
+	riscv_addi(A3, A3, -1);
+	riscv_b(loop - code.n, ZERO, A3, 1, 0x63);   // bne a3, zero, loop
+	riscv_str_off(A0, A0, 0);            // [block] = self-pointer
+	riscv_mov_reg(TP, A0);               // tp = block
+	riscv_ret();
+}
+
+// coro_switch's stub on RISC-V. The twelve callee-saved registers (the
+// RV4 promotion pool s1-s10, plus the frame pointer and the return
+// address) go on the current stack, the current sp is stored through a0,
+// the new sp loaded through a1, and the new context's registers popped --
+// the ra slot of the fresh image holds the trampoline address, so the
+// final ret lands inside it. The image is laid out by coro_spawn in
+// std/coro.qela: eighteen words (twelve saved slots, five arguments, the
+// target), the same shape arm64 uses.
+fn riscv_coro_save() {
+	riscv_addi(STK, STK, -96);
+	riscv_str_off(S1, STK, 0);
+	riscv_str_off(S2, STK, 8);
+	riscv_str_off(S3, STK, 16);
+	riscv_str_off(S4, STK, 24);
+	riscv_str_off(S5, STK, 32);
+	riscv_str_off(S6, STK, 40);
+	riscv_str_off(S7, STK, 48);
+	riscv_str_off(S8, STK, 56);
+	riscv_str_off(S9, STK, 64);
+	riscv_str_off(S10, STK, 72);
+	riscv_str_off(S0, STK, 80);
+	riscv_str_off(RA, STK, 88);
+}
+
+fn riscv_coro_restore() {
+	riscv_ld_at(S1, STK, 0);
+	riscv_ld_at(S2, STK, 8);
+	riscv_ld_at(S3, STK, 16);
+	riscv_ld_at(S4, STK, 24);
+	riscv_ld_at(S5, STK, 32);
+	riscv_ld_at(S6, STK, 40);
+	riscv_ld_at(S7, STK, 48);
+	riscv_ld_at(S8, STK, 56);
+	riscv_ld_at(S9, STK, 64);
+	riscv_ld_at(S10, STK, 72);
+	riscv_ld_at(S0, STK, 80);
+	riscv_ld_at(RA, STK, 88);
+	riscv_addi(STK, STK, 96);
 }
 
 fn gen_coro_switch_stub_riscv() {
-	die("internal: coroutines are not ported to riscv64 yet");
+	coro_switch_at = code.n;
+	riscv_coro_save();
+	riscv_str_off(STK, A0, 0);           // [a0] = current sp
+	riscv_ld_at(STK, A1, 0);             // sp = [a1]
+	riscv_coro_restore();
+	riscv_ret();
 }
 
+// The coroutine trampoline: a fresh stack holds the target above the five
+// arguments, so it drains them into a0-a4, calls the target and finishes
+// when it returns.
 fn gen_coro_stub_riscv() {
-	die("internal: coroutines are not ported to riscv64 yet");
+	coro_stub_at = code.n;
+	riscv_ld_at(A0, STK, 0);
+	riscv_ld_at(A1, STK, 8);
+	riscv_ld_at(A2, STK, 16);
+	riscv_ld_at(A3, STK, 24);
+	riscv_ld_at(A4, STK, 32);
+	riscv_ld_at(T0, STK, 40);
+	riscv_addi(STK, STK, 48);
+	riscv_i(0, T0, 0, RA, 0x67);         // jalr ra, t0
+	add_callref_riscv("coro_finish", 0);
+	b4(0x13);                            // nop: coro_finish never returns
 }
 
 // ── the lowering ──
@@ -1576,7 +1668,11 @@ fn riscv_lower_op(op *IrOp) {
 		return;
 	}
 	if (op.kind == IR_TLSADDR) {
-		die("internal: riscv_lower_op: IR_TLSADDR: tvar/TLS not ported");
+		// The same scheme as the other targets: the thread pointer out of
+		// tp, then the tvar's offset within the block.
+		var toff i64 = (op.src0.off as *Var).tls_off;
+		riscv_add_imm(A0, TP, toff);
+		return;
 	}
 	die("internal: riscv_lower_op: unhandled IR shape");
 }
