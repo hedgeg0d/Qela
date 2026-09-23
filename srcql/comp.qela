@@ -153,6 +153,7 @@ let ND_ASMREF    = 55;
 
 struct Var;
 struct Node;
+struct Func;
 
 struct Var {
 	name      str,
@@ -208,6 +209,7 @@ struct Node {
 	name    str,
 	pos     i64,
 	stack_tmp *Var,
+	ip_fn   *Func,
 }
 
 // Parameters are six separate slots: stage0 has no arrays inside structs.
