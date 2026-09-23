@@ -199,6 +199,17 @@ fn error_suggest(pos i64, msg str, sug str) {
 	error_hint_at(pos, msg, buf_str(&b));
 }
 
+// The soft twin: reports and returns, so the caller can poison the node
+// and the compile keeps going.
+fn err_soft_suggest(pos i64, msg str, sug str) {
+	if (sug.len == 0) { err_emit(pos, msg); return; }
+	var b Buf;
+	fmt_str(&b, "did you mean '");
+	fmt_str(&b, sug);
+	fmt_str(&b, "'?");
+	err_emit_hint(pos, msg, buf_str(&b));
+}
+
 // ── global state ──
 
 var scope_root *Scope;
@@ -938,7 +949,12 @@ fn parse_type(t **Token) *Type {
 			t0.base = parse_type(t);
 			return t0;
 		}
-		error_at((*t).pos, "expected type name");
+		var b Buf;
+		fmt_str(&b, "expected a type name, found '");
+		if ((*t).kind == TK_EOF) { fmt_str(&b, "end of file"); }
+		else { fmt_str(&b, (*t).text); }
+		fmt_str(&b, "'");
+		error_at((*t).pos, buf_str(&b));
 	}
 	var i int = 0;
 	while (i < ntype_vars) {
@@ -968,7 +984,9 @@ fn parse_type(t **Token) *Type {
 		fmt_str(&ub, "unknown type '");
 		fmt_str(&ub, (*t).text);
 		fmt_str(&ub, "'");
-		error_suggest((*t).pos, buf_str(&ub), suggest_type((*t).text));
+		err_soft_suggest((*t).pos, buf_str(&ub), suggest_type((*t).text));
+		*t = (*t).next;
+		return type_poison();
 	}
 	*t = (*t).next;
 	return ty;
@@ -2264,14 +2282,24 @@ fn parse_block(t **Token) *Node {
 	var head Node;
 	var tail *Node = &head;
 	resolve_comptime(t);
+	var unreachable bool = false;
 	while (!tok_eq(*t, "}")) {
-		tail.next = parse_stmt(t);
+		var st *Node = parse_stmt(t);
 		resolve_comptime(t);
+		tail.next = st;
 		// A `var ~n = ...` returns itself chained to a synthetic `defer`
 		// via `.next`; walk to the real end so the next statement appends
 		// after both instead of silently overwriting the defer.
 		while (tail.next.next as i64 != 0) { tail = tail.next; }
 		tail = tail.next;
+		// Statements after an unconditional jump can never run. A defer
+		// still registers (it runs on the way out), so it stays silent.
+		if (unreachable && st.kind != ND_DEFER) {
+			warn_at(st.pos, "statement is unreachable");
+		}
+		if (st.kind == ND_RET || st.kind == ND_BREAK || st.kind == ND_CONT) {
+			unreachable = true;
+		}
 	}
 	leave_scope();
 	tok_expect(t, "}");
