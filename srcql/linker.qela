@@ -134,6 +134,17 @@ fn lnk_u64(p *u8, off i64) i64 {
 	return lnk_u32(p, off) | (lnk_u32(p, off + 4) << 32);
 }
 
+fn lnk_rd32(p *u8, off i64) i64 {
+	return lnk_u32(p, off);
+}
+
+fn lnk_wr32(p *u8, off i64, v i64) {
+	p[off] = (v & 255) as u8;
+	p[off + 1] = ((v >> 8) & 255) as u8;
+	p[off + 2] = ((v >> 16) & 255) as u8;
+	p[off + 3] = ((v >> 24) & 255) as u8;
+}
+
 fn lnk_align(v *i64, al i64) {
 	if (al < 1) { al = 1; }
 	if (al > 16) { al = 16; }
@@ -157,8 +168,18 @@ fn lnk_object(data *u8, len i64, _path str) {
 	if (lnk_u16(data, 16) != 1) {
 		error_at(0, "only relocatable ELF64 objects can be linked");
 	}
-	if (lnk_u16(data, 18) != EM_X86_64) {
+	if (lnk_u16(data, 18) != EM_X86_64 && lnk_u16(data, 18) != EM_AARCH64 &&
+	    lnk_u16(data, 18) != EM_RISCV) {
+		error_at(0, "unsupported machine in a linked object");
+	}
+	if (opt_target == TARGET_X86_64 && lnk_u16(data, 18) != EM_X86_64) {
 		error_at(0, "linked objects must be x86_64 (--target must match)");
+	}
+	if (opt_target == TARGET_ARM64 && lnk_u16(data, 18) != EM_AARCH64) {
+		error_at(0, "linked objects must be arm64 (--target must match)");
+	}
+	if (opt_target == TARGET_RISCV64 && lnk_u16(data, 18) != EM_RISCV) {
+		error_at(0, "linked objects must be riscv64 (--target must match)");
 	}
 
 	var shoff i64 = lnk_u64(data, 40);
@@ -167,6 +188,14 @@ fn lnk_object(data *u8, len i64, _path str) {
 	if (shnum == 0) { shnum = lnk_u64(data, 60) as int; }
 	if (shoff + (shnum as i64) * (shentsz as i64) > len) {
 		error_at(0, "object section headers are truncated");
+	}
+	var shstrndx int = lnk_u16(data, 62);
+	var shstr *u8 = null;
+	var shstr_n i64 = 0;
+	if (shstrndx < shnum) {
+		var sso i64 = shoff + (shstrndx as i64) * 64;
+		shstr = data + lnk_u64(data, sso + 24);
+		shstr_n = lnk_u64(data, sso + 32);
 	}
 
 	// Map object section index -> merged (kind, dst offset). The table is
@@ -197,6 +226,17 @@ fn lnk_object(data *u8, len i64, _path str) {
 		}
 		if (stype != 1 && stype != 8) { si = si + 1; continue; }
 		if (ssize == 0) { si = si + 1; continue; }
+		// .eh_frame holds unwind tables the image never reads; merging it
+		// drags in relocations the linker does not model (pointer
+		// encodings, SET/SUB pairs on riscv).
+		var sname i64 = lnk_u32(data, so);
+		if (sname < shstr_n && shstr as i64 != 0) {
+			var nm *u8 = shstr + sname;
+			if (nm[0] == '.' && nm[1] == 'e' && nm[2] == 'h' && nm[3] == '_') {
+				si = si + 1;
+				continue;
+			}
+		}
 		var sflags i64 = lnk_u64(data, so + 8);
 		var salign i64 = lnk_u64(data, so + 48);
 		var kind int = -1;
@@ -304,6 +344,7 @@ fn lnk_object(data *u8, len i64, _path str) {
 		var rsize i64 = lnk_u64(data, so + 32);
 		var rn i64 = rsize / 24;
 		var ri i64 = 0;
+		var last *LnkRel = null;
 		while (ri < rn) {
 			if (lnk_nrels >= 1024) { error_at(0, "too many relocations"); }
 			var e i64 = roff + ri * 24;
@@ -311,6 +352,30 @@ fn lnk_object(data *u8, len i64, _path str) {
 			var rsym int = (rinfo >> 32) as int;
 			var rtype int = (rinfo & 0xffffffff) as int;
 			var addend i64 = lnk_u64(data, e + 16);
+			// R_RISCV_RELAX pairs with the previous relocation: the first
+			// copy (same slot) is dropped, the second (the paired second
+			// instruction, usually a jalr or addi) becomes LO12_I with the
+			// pair's symbol. Everything else is a normal record.
+			if (rtype == 51 && last as i64 != 0) {
+				var off2 i64 = rsect.off + lnk_u64(data, e);
+				if (off2 != last.secoff) {
+					var r2 *LnkRel = arena_alloc(sizeof(LnkRel), 8) as *LnkRel;
+					r2.kind = 27;   // R_RISCV_LO12_I
+					r2.sec = rsect.kind;
+					r2.secoff = off2;
+					r2.symname = last.symname;
+					r2.addend = last.addend;
+					r2.symabs = last.symabs;
+					r2.symabv = last.symabv;
+					r2.symsec = last.symsec;
+					r2.symoff = last.symoff;
+					r2.next = lnk_rels;
+					lnk_rels = r2;
+					lnk_nrels = lnk_nrels + 1;
+				}
+				ri = ri + 1;
+				continue;
+			}
 			if (rsym < symtab_n) {
 				var r *LnkRel = arena_alloc(sizeof(LnkRel), 8) as *LnkRel;
 				r.kind = rtype;
@@ -328,6 +393,7 @@ fn lnk_object(data *u8, len i64, _path str) {
 				r.next = lnk_rels;
 				lnk_rels = r;
 				lnk_nrels = lnk_nrels + 1;
+				last = r;
 			}
 			ri = ri + 1;
 		}
@@ -390,11 +456,15 @@ fn link_load(hdr i64) {
 	}
 }
 
+fn lnk_buf_of(kind int) *u8 {
+	if (kind == LK_CODE) { return code.p; }
+	if (kind == LK_RODATA) { return rodata.p; }
+	if (kind == LK_DATA) { return gdata.p; }
+	return null;
+}
+
 fn lnk_patch_abs(kind int, off i64, v i64) {
-	var p *u8 = null;
-	if (kind == LK_CODE) { p = code.p; }
-	else if (kind == LK_RODATA) { p = rodata.p; }
-	else if (kind == LK_DATA) { p = gdata.p; }
+	var p *u8 = lnk_buf_of(kind);
 	if (p as i64 == 0) { error_at(0, "relocation into a bss section"); }
 	var j i64 = 0;
 	while (j < 8) {
@@ -404,16 +474,127 @@ fn lnk_patch_abs(kind int, off i64, v i64) {
 }
 
 fn lnk_patch32(kind int, off i64, v i64) {
-	var p *u8 = null;
-	if (kind == LK_CODE) { p = code.p; }
-	else if (kind == LK_RODATA) { p = rodata.p; }
-	else if (kind == LK_DATA) { p = gdata.p; }
+	var p *u8 = lnk_buf_of(kind);
 	if (p as i64 == 0) { error_at(0, "relocation into a bss section"); }
 	var j i64 = 0;
 	while (j < 4) {
 		p[off + j] = ((v >> (j * 8)) & 255) as u8;
 		j = j + 1;
 	}
+}
+
+// R_AARCH64_*: 257 ABS64, 261 PREL32, 274 ADR_PREL_LO21,
+// 275 ADR_PREL_PG_HI21, 277 ADD_ABS_LO12_NC, 278..281 LDST*_ABS_LO12_NC,
+// 282 JUMP26, 283 CALL26.
+fn lnk_patch_arm64(r *LnkRel, s i64, p i64) {
+	var rtype int = r.kind;
+	if (rtype == 257) {
+		lnk_patch_abs(r.sec, r.secoff, s);
+	} else if (rtype == 261) {
+		lnk_patch32(r.sec, r.secoff, s - p);
+	} else {
+		var buf *u8 = lnk_buf_of(r.sec);
+		if (buf as i64 == 0) { error_at(0, "relocation into a bss section"); }
+		var w i64 = lnk_rd32(buf, r.secoff);
+		if (rtype == 274 || rtype == 275) {
+			// ADR: imm21 (bytes) or ADRP: imm21 (pages), both
+			// immlo:2 in bits 30:29 and immhi:19 in bits 23:5.
+			var v i64 = s - p;
+			if (rtype == 275) {
+				v = ((s + 0x800) & ~0xfff) - ((p + 0x800) & ~0xfff);
+				v = v >> 12;
+			}
+			w = (w & 0x9f00001f) | ((v & 3) << 29) | ((v >> 2) << 5);
+			lnk_wr32(buf, r.secoff, w);
+		} else if (rtype == 277) {
+			// add/adds imm12 = low 12 bits of the address.
+			w = (w & 0xffc003ff) | ((s & 0xfff) << 10);
+			lnk_wr32(buf, r.secoff, w);
+		} else if (rtype >= 278 && rtype <= 281) {
+			// ldr/str scaled by 2^scale bytes: the imm12 field holds
+			// byte_offset >> scale.
+			var scale int = rtype - 278;
+			w = (w & 0xffc003ff) | (((s >> scale) & 0xfff) << 10);
+			lnk_wr32(buf, r.secoff, w);
+		} else if (rtype == 282 || rtype == 283) {
+			// b/bl imm26 in 4-byte units.
+			w = (w & 0xfc000000) | (((s - p) >> 2) & 0x3ffffff);
+			lnk_wr32(buf, r.secoff, w);
+		} else {
+			lnk_bad_reloc(rtype);
+		}
+	}
+}
+
+// R_RISCV_*: 2 RISCV_64, 16 BRANCH, 17 JAL, 18 CALL, 19 CALL_PLT,
+// 23 PCREL_HI20, 24 PCREL_LO12_I, 25 PCREL_LO12_S, 26 HI20,
+// 27 LO12_I, 28 LO12_S.
+fn lnk_patch_riscv(r *LnkRel, s i64, p i64) {
+	var rtype int = r.kind;
+	if (rtype == 2) {
+		lnk_patch_abs(r.sec, r.secoff, s);
+		return;
+	}
+	var buf *u8 = lnk_buf_of(r.sec);
+	if (buf as i64 == 0) { error_at(0, "relocation into a bss section"); }
+	var w i64 = lnk_rd32(buf, r.secoff);
+	if (rtype == 16) {
+		// B-type branch, 13-bit signed delta in units of 2.
+		var v i64 = s - p;
+		var enc i64 = ((v >> 12) & 1) << 31 | ((v >> 5) & 0x3f) << 25 |
+		             ((v >> 1) & 0xf) << 8 | ((v >> 11) & 1) << 7;
+		w = (w & 0x01fff07f) | (enc & 0xfe000f80);
+		lnk_wr32(buf, r.secoff, w);
+	} else if (rtype == 17) {
+		// J-type jal, 21-bit signed delta in units of 2.
+		var v i64 = s - p;
+		var enc i64 = ((v >> 20) & 1) << 31 | ((v >> 1) & 0x3ff) << 21 |
+		             ((v >> 11) & 1) << 20 | ((v >> 12) & 0xff) << 12;
+		w = (w & 0x00000fff) | (enc & 0xfffff000);
+		lnk_wr32(buf, r.secoff, w);
+	} else if (rtype == 18 || rtype == 19) {
+		// CALL/CALL_PLT on the auipc half of an auipc+jalr pair. The
+		// jalr directly after it carries no relocation of its own (gcc
+		// emits only a RELAX marker, if anything), so patch its imm12
+		// with the low bits here.
+		var v i64 = s - p;
+		var imm i64 = (v + 0x800) >> 12;
+		w = (w & 0x00000fff) | ((imm & 0xfffff) << 12);
+		lnk_wr32(buf, r.secoff, w);
+		var w1 i64 = lnk_rd32(buf, r.secoff + 4);
+		w1 = (w1 & 0x000fffff) | (((s - p) & 0xfff) << 20);
+		lnk_wr32(buf, r.secoff + 4, w1);
+	} else if (rtype == 23) {
+		// A bare PCREL_HI20: its LO12 half is a separate relocation.
+		var v i64 = s - p;
+		var imm i64 = (v + 0x800) >> 12;
+		w = (w & 0x00000fff) | ((imm & 0xfffff) << 12);
+		lnk_wr32(buf, r.secoff, w);
+	} else if (rtype == 26) {
+		// Absolute auipc: imm20 of the address itself.
+		var imm i64 = (s + 0x800) >> 12;
+		w = (w & 0x00000fff) | ((imm & 0xfffff) << 12);
+		lnk_wr32(buf, r.secoff, w);
+	} else if (rtype == 24 || rtype == 27) {
+		// I-type low 12 bits (jalr/addi/ld).
+		w = (w & 0x000fffff) | ((s & 0xfff) << 20);
+		lnk_wr32(buf, r.secoff, w);
+	} else if (rtype == 25 || rtype == 28) {
+		// S-type low 12 bits (stores): imm[11:5] then imm[4:0].
+		var enc i64 = ((s >> 5) & 0x7f) << 25 | (s & 0x1f) << 7;
+		w = (w & 0x01fff07f) | (enc & 0xfe000f80);
+		lnk_wr32(buf, r.secoff, w);
+	} else {
+		lnk_bad_reloc(rtype);
+	}
+}
+
+fn lnk_bad_reloc(rtype int) {
+	var eb Buf;
+	fmt_str(&eb, "unsupported relocation type ");
+	fmt_i64(&eb, rtype as i64);
+	fmt_str(&eb, " in a linked object (compile the C side with -fno-pic)");
+	error_at(0, buf_str(&eb));
 }
 
 fn link_apply(hdr i64, _dbase i64) {
@@ -436,23 +617,26 @@ fn link_apply(hdr i64, _dbase i64) {
 		s = s + r.addend;
 		var p i64 = lnk_sym_vaddr(r.sec, r.secoff);
 		var rtype int = r.kind;
-		if (rtype == 1) {          // R_X86_64_64
-			lnk_patch_abs(r.sec, r.secoff, s);
-		} else if (rtype == 2 || rtype == 4) {  // PC32 / PLT32
-			// V = S + A - P: the consumer adds the field address, and
-			// the -4 addend of a call slot cancels the +4 the CPU uses.
-			lnk_patch32(r.sec, r.secoff, s - p);
-		} else if (rtype == 10 || rtype == 11) {  // 32 / 32S
-			if (base_is_wide()) {
-				error_at(0, "a linked object's 32-bit relocation does not fit with --base");
+		if (opt_target == TARGET_X86_64) {
+			if (rtype == 1) {          // R_X86_64_64
+				lnk_patch_abs(r.sec, r.secoff, s);
+			} else if (rtype == 2 || rtype == 4) {  // PC32 / PLT32
+				// V = S + A - P: the consumer adds the field address,
+				// and the -4 addend of a call slot cancels the +4 the
+				// CPU uses.
+				lnk_patch32(r.sec, r.secoff, s - p);
+			} else if (rtype == 10 || rtype == 11) {  // 32 / 32S
+				if (base_is_wide()) {
+					error_at(0, "a linked object's 32-bit relocation does not fit with --base");
+				}
+				lnk_patch32(r.sec, r.secoff, s);
+			} else {
+				lnk_bad_reloc(rtype);
 			}
-			lnk_patch32(r.sec, r.secoff, s);
+		} else if (opt_target == TARGET_ARM64) {
+			lnk_patch_arm64(r, s, p);
 		} else {
-			var eb Buf;
-			fmt_str(&eb, "unsupported relocation type ");
-			fmt_i64(&eb, rtype as i64);
-			fmt_str(&eb, " in a linked object (compile the C side with -fno-pic)");
-			error_at(0, buf_str(&eb));
+			lnk_patch_riscv(r, s, p);
 		}
 		r = r.next;
 	}
