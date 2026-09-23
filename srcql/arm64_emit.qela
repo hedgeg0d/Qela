@@ -136,6 +136,10 @@ fn arm64_add_imm(rd int, rn int, imm i64) {
 	if (lo != 0 || hi == 0) { b4(0x91000000 | (lo << 10) | (src << 5) | rd); }
 }
 
+fn arm64_add_signed_imm(rd int, rn int, imm i64) {
+	if (imm >= 0) { arm64_add_imm(rd, rn, imm); } else { arm64_sub_imm(rd, rn, -imm); }
+}
+
 fn arm64_sub_imm(rd int, rn int, imm i64) {
 	var hi i64 = (imm >> 12) & 0xfff;
 	var lo i64 = imm & 0xfff;
@@ -333,6 +337,47 @@ fn arm64_truncate_to(ty *Type) {
 }
 
 
+// Dereference X0 in place, widening/narrowing by ty -- mirrors
+// x86_emit.qela's load(). A W-register (32-bit) destination write zero-
+// extends the full X register as a side effect of AArch64's write-to-W
+// semantics, same as x86's 32-bit mov, so the unsigned/float 4-byte case
+// needs no separate extend step.
+fn arm64_load(ty *Type) {
+	if (ty.size == 1) {
+		if (ty.is_unsigned || ty.kind == TY_BOOL) { b4(0x39400000 | (X0 << 5) | X0); }
+		else { b4(0x39800000 | (X0 << 5) | X0); }
+		return;
+	}
+	if (ty.size == 2) {
+		if (ty.is_unsigned) { b4(0x79400000 | (X0 << 5) | X0); }
+		else { b4(0x79800000 | (X0 << 5) | X0); }
+		return;
+	}
+	if (ty.size == 4) {
+		if (ty.is_unsigned || ty.kind == TY_FLOAT) { b4(0xb9400000 | (X0 << 5) | X0); }
+		else { b4(0xb9800000 | (X0 << 5) | X0); }
+		return;
+	}
+	b4(0xf9400000 | (X0 << 5) | X0);
+}
+
+// Store rt through the pointer in rn, at ty's width.
+fn arm64_store_at(rn int, rt int, ty *Type) {
+	if (ty.size == 1) { b4(0x39000000 | (rn << 5) | rt); return; }
+	if (ty.size == 2) { b4(0x79000000 | (rn << 5) | rt); return; }
+	if (ty.size == 4) { b4(0xb9000000 | (rn << 5) | rt); return; }
+	b4(0xf9000000 | (rn << 5) | rt);
+}
+
+// Store immediate v through the pointer in X0 -- mirrors codegen.qela's
+// store_imm(), materializing v into X9 first (A64 STR has no immediate
+// form).
+fn arm64_store_imm(ty *Type, v i64) {
+	arm64_mov_imm64(X9, v);
+	arm64_store_at(X0, X9, ty);
+}
+
+
 fn arm64_lower_op(op *IrOp) {
 	if (op.kind == IR_MOV && op.dst.kind == OP_ACC && op.src0.kind == OP_IMM) {
 		arm64_mov_imm64(X0, op.src0.off);
@@ -373,6 +418,29 @@ fn arm64_lower_op(op *IrOp) {
 	}
 	if (op.kind == IR_RET) {
 		arm64_ret();
+		return;
+	}
+	if (op.kind == IR_LEA && op.dst.kind == OP_ACC && op.src0.kind == OP_STACKSLOT && op.src1.kind == OP_NONE) {
+		// A local's address (lea_local's slot form): X0 = X29 - off.
+		arm64_sub_imm(X0, X29, op.src0.off);
+		return;
+	}
+	if (op.kind == IR_LEA && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC && op.src1.kind == OP_NONE) {
+		// A constant offset folded into an address already in X0 (a struct
+		// member, a constant array index): X0 += dst.off.
+		if (op.dst.off != 0) { arm64_add_signed_imm(X0, X0, op.dst.off); }
+		return;
+	}
+	if (op.kind == IR_LOAD && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC) {
+		arm64_load(op.dst.ty);
+		return;
+	}
+	if (op.kind == IR_STORE && op.dst.kind == OP_ACC && op.src0.kind == OP_IMM) {
+		arm64_store_imm(op.dst.ty, op.src0.off);
+		return;
+	}
+	if (op.kind == IR_STORE && op.dst.kind == OP_OP2 && op.src0.kind == OP_ACC) {
+		arm64_store_at(op2_reg(op.dst.reg), X0, op.dst.ty);
 		return;
 	}
 	if (op.kind == IR_CALL && op.src0.kind == OP_FUNC) {
