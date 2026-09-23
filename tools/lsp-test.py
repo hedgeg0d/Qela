@@ -9,13 +9,16 @@ import subprocess
 import sys
 import tempfile
 
-PROG = """fn add(a int, b int) int {
+PROG = """struct Pt { x i64, y i64 }
+fn add(a int, b int) int {
 	return a + b;
 }
 var base int = 10;
 fn main() int {
 	var total int = base;
+	var pt Pt = Pt{x: 1, y: 2};
 	total = add(total, 5);
+	total = add(total, pt.x);
 	return total;
 }
 """
@@ -138,6 +141,24 @@ def main():
         assert loc["range"]["start"]["line"] == dline
         assert loc["range"]["start"]["character"] == dcol
         print("ok   definition of a global")
+
+        line, col = pos_of("var total int = base;")
+        frame_write(w, {"jsonrpc": "2.0", "id": 6, "method": "textDocument/completion",
+                        "params": {"textDocument": {"uri": uri},
+                                   "position": {"line": line, "character": col + 6}}})
+        resp = recv_until(r, 6)
+        labels = [i["label"] for i in resp["result"]["items"]]
+        assert "total" in labels, labels
+        print("ok   completion of a local")
+
+        line, col = pos_of("pt.x")
+        frame_write(w, {"jsonrpc": "2.0", "id": 7, "method": "textDocument/completion",
+                        "params": {"textDocument": {"uri": uri},
+                                   "position": {"line": line, "character": col + 3}}})
+        resp = recv_until(r, 7)
+        labels = [i["label"] for i in resp["result"]["items"]]
+        assert "x" in labels and "y" in labels, labels
+        print("ok   completion of fields after a dot")
 
         broken = PROG.replace("var total int = base;", "var total int = missing;")
         frame_write(w, {"jsonrpc": "2.0", "method": "textDocument/didChange",
