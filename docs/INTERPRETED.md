@@ -1,9 +1,12 @@
 # Runtime metaprogramming: per-block `interpreted`/`dynamic`, `eval`, and the global flags
 
-Planning notes from a design conversation. Not implemented yet. Read
-`docs/BOOTSTRAP.md` and `docs/STATUS.md` first for the compiler's current
-shape; read `srcql/interp.qela`'s own comments for what the tree-walking
-interpreter already does (`qela irun`).
+Started as planning notes from a design conversation; a real first slice is
+now implemented (see "What's implemented" below) — `eval()`, and
+`interpreted`/`dynamic` functions callable with ordinary call syntax from
+AOT code, both over the same ABI subprocess. Read `docs/BOOTSTRAP.md` and
+`docs/STATUS.md` first for the compiler's current shape; read
+`srcql/interp.qela`'s own comments for what the tree-walking interpreter
+already does (`qela irun`).
 
 This revises an earlier, narrower version of this document (a whole-program
 `--interpreted` subprocess model). The primary design is now finer-grained:
@@ -327,22 +330,57 @@ i64 = eval("some qela expression");` — real, arbitrary, JIT-free
 tree-walked execution of Qela source at runtime, in a process that never
 linked a compiler frontend into itself.
 
-What it cannot do yet, precisely: an `eval`'d call cannot read or write
-the *host's* own globals or call the host's own functions (no
-`eval_get`/`eval_set`/foreign-call bridging over the ABI yet — `eval var`/
-`eval fn` parse and record the allowlist but nothing consults it at
-runtime); `fn interpreted`/`fn dynamic` functions cannot yet be called
-with ordinary call syntax from AOT code (no codegen trampoline — item 4);
-`parse_ast`/`run_ast` and AST inspection do not exist (item 5); and the
-self-copy is not yet embedded at compile time (the correction above).
+**Call-site trampolines for `fn interpreted`/`fn dynamic` — also done,**
+and the mechanism turned out not to need any new codegen at all. A
+function marked `interpreted`/`dynamic` keeps its real, user-written body
+in a new `Func.interp_body` field; what `codegen.qela` actually compiles
+as `Func.body` is a small *synthesized* replacement — parsed from
+generated source text, right where the real body just finished parsing,
+in `parse_function` (`srcql/parse.qela`) — that forwards the function's
+own parameters into `__interp_call_dispatch(def_src, name, &args[0])`
+(`std/interpcall.qela`, auto-imported the same way `need_fmt`/`need_dyn`
+already work) and returns its result. The caller-side machinery
+(`gen_call`/`gen_args`, register/stack argument placement) never changes:
+it's compiling an ordinary call to an ordinary-looking function, exactly
+as it always has. `qela irun` and the ABI server both prefer
+`interp_body` over `body` when present (`ip_body_of` in `interp.qela`),
+so the *real* code still runs there — only AOT output goes through the
+dispatcher. `__interp_call_dispatch` registers the function's original
+source with the child once (by name, cached client-side) and then sends a
+new `ABI_REQ_CALL` message per call — binary-marshalled `i64` arguments,
+not re-parsed text — which the server answers by building `num_node`
+argument nodes and calling the registered `Func` through the ordinary
+`ip_call`, fork-validated exactly like `eval`. Scope, matching `eval`'s
+own restrictions: parameters and return type must be non-aggregate,
+non-float, ≤8 bytes (checked at parse time with an actionable error); the
+function's own source text must not contain string interpolation (the
+same `${`-collision guard `tools/genblob.py` already has, reused for the
+same reason — the source gets re-embedded as a string literal to cross
+the ABI). **`dynamic` is not yet a distinct, faster path** — it currently
+behaves identically to `interpreted` (every call round-trips over the
+ABI); the local `mmap`(RW)→copy→`mprotect`(RX)→call-natively optimization
+described in "Call-site mechanics" above is still open, tracked alongside
+item 4 below.
+
+What it cannot do yet, precisely: an `eval`'d call (or an `interpreted`/
+`dynamic` function) cannot read or write the *host's* own globals or call
+the host's own functions (no `eval_get`/`eval_set`/foreign-call bridging
+over the ABI yet — `eval var`/`eval fn` parse and record the allowlist but
+nothing consults it at runtime; also flagged as needing `type.qela` name-
+resolution changes, a materially bigger job than anything above — see
+`docs/TASKS.md`); `dynamic` does not actually run any faster than
+`interpreted` (previous paragraph); `parse_ast`/`run_ast` and AST
+inspection do not exist (item 5); and the self-copy is not yet embedded
+at compile time (the correction above).
 
 ## Size measurements (real numbers, not estimates)
 
-Baseline: `qela` (S2) = 511,144 bytes, 48.7% of the 1 MiB budget (up from
+Baseline: `qela` (S2) = 517,480 bytes, 49.4% of the 1 MiB budget (up from
 501,488 before this round of work: six new syscall wrappers, four new
-grammar modifiers/fields, and — the largest single piece — the wire
-protocol plus `--abi-server`, ~9.7 KB total. `std/eval.qela` and
-`std/abiwire.qela` do not count against this budget: they ship in the
+grammar modifiers/fields, the wire protocol plus `--abi-server`, and the
+`ABI_REQ_CALL` handler for call-site trampolines, ~16 KB total.
+`std/eval.qela`, `std/abiwire.qela`, `std/abiconn.qela` and
+`std/interpcall.qela` do not count against this budget: they ship in the
 *output* of programs that import them, never inside `qela` itself.)
 
 Self-copy (whole binary embedded in the *output*, cost does not touch
@@ -422,12 +460,21 @@ that, don't assume gzip-level ratios from a from-scratch LZSS.
    function is interpreted there regardless of the annotation. `frozen`
    and `eval_export` are otherwise inert until items 1/2/4 exist: a program
    using them compiles as ordinary AOT code today.
-4. **Call-site trampolines in codegen.qela.** New call shape for
-   `interpreted`/`dynamic` targets, built on the ABI from (1) — real,
-   nontrivial codegen work. The `dynamic` half needs the local
-   `mmap`(RW)→write→`mprotect`(RX) sequence after the one-time compile
-   round trip, plus a self-patching trampoline or an indirect call through
-   a pointer filled in after first JIT.
+4. **Call-site trampolines — done, but not via codegen.qela.** Turned out
+   not to need new codegen: `interpreted`/`dynamic` functions get a
+   *synthesized replacement body* at parse time (see "What's implemented"
+   above) that ordinary codegen compiles like any other function calling
+   a runtime helper. Still open: the actual JIT half. Right now `dynamic`
+   is just `interpreted` under another name — every call round-trips over
+   the ABI. The local `mmap`(RW)→write→`mprotect`(RX) sequence after a
+   one-time compile round trip, so calls after the first run at native
+   speed with no ABI involvement, is unbuilt; it needs the child to answer
+   "compile this, give me code bytes" (a new ABI message — `-c`'s object
+   output is the natural source for those bytes) and the host to load and
+   jump to them, which likely *does* need real codegen work (a
+   self-patching trampoline, or an indirect call through a pointer filled
+   in after first JIT) since "run these bytes" isn't expressible as an
+   ordinary call the way the `interpreted` half turned out to be.
 5. **The `*Ast` API surface**, including whether `*Ast` is a local pointer
    or a handle into the child's memory (see "Call-site mechanics") — scope
    as its own design pass once (1)–(4) are settled.
@@ -439,9 +486,10 @@ that, don't assume gzip-level ratios from a from-scratch LZSS.
    can be restricted under some hardening policies (SELinux, some
    container runtimes) — needs a real error message, not a silent
    failure, when it's unavailable.
-8. **Test plan — one of six done.** `tools/bootstrap.sh`'s "eval() over
+8. **Test plan — three of six done.** `tools/bootstrap.sh`'s "eval() over
    the abi subprocess" step covers bare `eval`, including cross-call
-   session state. Still needed: one program using `interpreted`, one using
-   `dynamic`, one using `eval var`/`eval fn` shared state, one using
-   `--interpreted`, one using `--jit`/whatever it's named — each blocked
-   on the item above it that doesn't exist yet.
+   session state; "interpreted/dynamic call-site trampolines" covers both
+   under AOT and under `qela irun` in the same test. Still needed: one
+   using `eval var`/`eval fn` shared state, one using `--interpreted`, one
+   using `--jit`/whatever it's named — each blocked on the item above it
+   that doesn't exist yet.
