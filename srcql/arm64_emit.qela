@@ -30,6 +30,7 @@ let X2  = 2;
 let X8  = 8;
 let X9  = 9;    // address/immediate scratch for st_local/ld_local and imm ALU operands
 let X10 = 10;   // second scratch, for a read-modify-write op's immediate operand
+let X16 = 16;   // indirect-call target scratch (AAPCS64's IP0, dead between calls)
 let X29 = 29;
 let X30 = 30;
 let SP  = 31;   // register field value 31 means SP or XZR depending on the instruction; only SP forms are used here.
@@ -214,6 +215,10 @@ fn arm64_add_signed_imm(rd int, rn int, imm i64) {
 }
 
 fn arm64_sub_imm(rd int, rn int, imm i64) {
+	// A stack-passed parameter's address comes in negated (ir_lea_arg_acc),
+	// i.e. imm < 0 means rn + |imm| -- SUB cannot encode that, so it becomes
+	// an ADD. Everything else here is a positive frame offset.
+	if (imm < 0) { arm64_add_imm(rd, rn, -imm); return; }
 	var hi i64 = (imm >> 12) & 0xfff;
 	var lo i64 = imm & 0xfff;
 	var src int = rn;
@@ -316,8 +321,14 @@ fn arm64_cmp_reg(rn int, rm int) {
 
 fn arm64_cmp_imm(rn int, imm i64) {
 	if (imm >= 0 && imm <= 4095) { b4(0xf1000000 | (imm << 10) | (rn << 5) | 0x1f); return; }
-	arm64_mov_imm64(X9, imm);
-	arm64_cmp_reg(rn, X9);
+	// A big immediate goes through a scratch -- but never the operand's own
+	// register: the STACKSLOT/MEM compare paths load the operand into X9
+	// first, and materialising the immediate into X9 too would compare the
+	// constant against itself (cmp x9, x9 is always equal).
+	var scratch int = X9;
+	if (rn == X9) { scratch = X10; }
+	arm64_mov_imm64(scratch, imm);
+	arm64_cmp_reg(rn, scratch);
 }
 
 fn arm64_cset(rd int, qcc i64) {
@@ -568,13 +579,43 @@ fn arm64_add_strref(id int) {
 
 
 fn arm64_add_dataref(v *Var) {
+	arm64_add_dataref_reg(X0, v);
+}
+
+
+// The same placeholder pair as arm64_add_dataref but into an arbitrary
+// register -- an indirect call's target, which must not sit in the
+// accumulator (X0 is the first argument register, still live at the call).
+fn arm64_add_dataref_reg(reg int, v *Var) {
 	var f *DataFixup = arena_alloc(sizeof(DataFixup), 8) as *DataFixup;
 	f.at = code.n;
 	f.varp = v;
 	if (datarefs_tail as i64 == 0) { datarefs_head = f; } else { datarefs_tail.next = f; }
 	datarefs_tail = f;
+	arm64_movz(reg, 0, 0);
+	arm64_movk(reg, 0, 1);
+}
+
+
+// A function's own address as a first-class value (ND_FUNCADDR): a
+// MOVZ/MOVK pair patched at finalize the same 16-bits-at-a-time way as
+// arm64_patch_movz_movk_addr patches string/data references.
+fn arm64_add_funcaddr(name str, pos i64) {
+	var f *CallFixup = arena_alloc(sizeof(CallFixup), 8) as *CallFixup;
+	f.at = code.n;
+	f.name = name;
+	f.pos = pos;
+	if (funcaddrs_tail as i64 == 0) { funcaddrs_head = f; } else { funcaddrs_tail.next = f; }
+	funcaddrs_tail = f;
 	arm64_movz(X0, 0, 0);
 	arm64_movk(X0, 0, 1);
+}
+
+
+// BLR Xn -- an indirect call, the target already staged in Xn.
+// 0xd61f0000 is BR (no link); 0xd63f0000 sets x30 to the return address.
+fn arm64_blr(reg int) {
+	b4(0xd63f0000 | (reg << 5));
 }
 
 
@@ -732,8 +773,41 @@ fn arm64_lower_op(op *IrOp) {
 		if (op.dst.off != 0) { arm64_add_signed_imm(X0, X0, op.dst.off); }
 		return;
 	}
+	if (op.kind == IR_LEA && op.dst.kind == OP_ACC && op.src0.kind == OP_OP2 && op.src1.kind == OP_ACC) {
+		// A slice element: the base pointer sits in the OP2 staging register
+		// (ND_INDEX's slice path staged it there), the index in the
+		// accumulator. X0 is both the index and the destination, which ADD
+		// (shifted register) accepts: Rm = X0 is read before Rd = X0 writes.
+		var base int = op2_reg(op.src0.reg);
+		var scale i64 = op.aux;
+		if (scale == 1 || scale == 2 || scale == 4 || scale == 8) {
+			var shift i64 = 0;
+			if (scale == 2) { shift = 1; } else if (scale == 4) { shift = 2; } else if (scale == 8) { shift = 3; }
+			b4(0x8b000000 | (shift << 10) | (X0 << 16) | (base << 5) | X0);
+		} else {
+			arm64_mov_imm64(X10, scale);
+			b4(0x9b007c00 | (X10 << 16) | (X0 << 5) | X10);
+			b4(0x8b000000 | (X10 << 16) | (base << 5) | X0);
+		}
+		if (op.dst.off != 0) { arm64_add_signed_imm(X0, X0, op.dst.off); }
+		return;
+	}
 	if (op.kind == IR_LOAD && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC) {
 		arm64_load(op.dst.ty);
+		return;
+	}
+	if (op.kind == IR_LOAD && op.dst.kind == OP_OP2 && op.src0.kind == OP_ACC) {
+		// A slice field copy (ND_SLICE): [X0 + off] into the OP2 staging
+		// register. Both producers are 8-byte (the pointer and the length),
+		// matching ld_at's width.
+		arm64_ld_at(op2_reg(op.dst.reg), X0, op.src0.off);
+		return;
+	}
+	if (op.kind == IR_STORE && op.dst.kind == OP_VREG && op.src0.kind == OP_ACC) {
+		// gen_args' staging fallback (a non-direct argument evaluated
+		// through the accumulator) and gen_opassign's write-back: dest.reg
+		// is a physical call-argument register, so the store is a move.
+		arm64_mov_reg(op.dst.reg, X0);
 		return;
 	}
 	if (op.kind == IR_STORE && op.dst.kind == OP_ACC && op.src0.kind == OP_IMM) {
@@ -746,6 +820,45 @@ fn arm64_lower_op(op *IrOp) {
 	}
 	if (op.kind == IR_CALL && op.src0.kind == OP_FUNC) {
 		arm64_add_call((op.src0.off as *Func).name, op.pos);
+		return;
+	}
+	if (op.kind == IR_CALL && op.src0.kind == OP_VREG) {
+		// An indirect target that arrived in a register (gen_indirect_call's
+		// promoted-local arm -- unreachable on ARM64 today since ra_nreg
+		// returns 0, but the lowering costs one move).
+		arm64_mov_reg(X16, op.src0.reg);
+		arm64_blr(X16);
+		return;
+	}
+	if (op.kind == IR_CALL && op.src0.kind == OP_STACKSLOT) {
+		// A function-pointer local: load its value (the stored address),
+		// then call through it.
+		arm64_ld_local(X16, op.src0.off);
+		arm64_blr(X16);
+		return;
+	}
+	if (op.kind == IR_CALL && op.src0.kind == OP_GLOBAL) {
+		// A function-pointer global: materialise the global's address in
+		// X16, load the stored function address, then call it.
+		arm64_add_dataref_reg(X16, op.src0.off as *Var);
+		arm64_ld_at(X16, X16, 0);
+		arm64_blr(X16);
+		return;
+	}
+	if (op.kind == IR_FUNCADDR && op.dst.kind == OP_ACC && op.src0.kind == OP_FUNC) {
+		arm64_add_funcaddr((op.src0.off as *Func).name, op.pos);
+		return;
+	}
+	if (op.kind == IR_ASSERT) {
+		// cmp x0, #0; b.eq over; bl <stub>; over:. The stub call is a plain
+		// BL placeholder recorded on assert_sites (shared bookkeeping with
+		// the x86 path), patched to the message's panic stub at emit time.
+		arm64_cmp_imm(X0, 0);
+		var over i64 = arm64_jump(arm64_cc(CC_NE));
+		ilist_push(&assert_sites, code.n);
+		ilist_push(&assert_msgs, op.aux);
+		b4(0x94000000);
+		arm64_patch_here(over);
 		return;
 	}
 	if (op.kind == IR_LOAD && op.dst.kind == OP_ACC && op.src0.kind == OP_STACKSLOT) {
@@ -900,6 +1013,14 @@ fn arm64_lower_op(op *IrOp) {
 	}
 	if (op.kind == IR_CMP && op.src0.kind == OP_OP2 && op.src1.kind == OP_IMM) {
 		arm64_cmp_imm(op2_reg(op.src0.reg), op.src1.off);
+		return;
+	}
+	if (op.kind == IR_CMP && op.src0.kind == OP_OP2 && op.src1.kind == OP_ACC) {
+		// ND_SLICE's start-vs-end check (ir_cmp_op2_acc_rev): the start
+		// index is in the staging register, the end in the accumulator.
+		// CMP op2, X0 sets flags for op2 - X0, and the trip condition
+		// (CC_UGT) reads out as b.hi, i.e. start > end.
+		arm64_cmp_reg(op2_reg(op.src0.reg), X0);
 		return;
 	}
 	if (op.kind == IR_CMP && op.src0.kind == OP_MEM && op.src1.kind == OP_IMM) {
