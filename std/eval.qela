@@ -10,7 +10,7 @@ fn eval(src str) i64 {
 	abi_send_frame(abi_in, ABI_REQ_RUN as u8, src.ptr, src.len);
 	var buf [8]u8;
 	var kind u8 = 0;
-	var n i64 = abi_recv_frame(abi_out, &kind, &buf[0], 8);
+	var n i64 = abi_wait_result(&kind, &buf[0], 8);
 	if (n < 0) {
 		eprint("eval: the qela subprocess died\n");
 		sys_exit(1);
