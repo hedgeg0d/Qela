@@ -1,3 +1,4 @@
+// interp-todo
 // stage1-only
 // expect-exit: 42
 // Two coroutines increment a shared counter through a CAS retry loop

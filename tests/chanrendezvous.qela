@@ -1,3 +1,4 @@
+// interp-todo
 // stage1-only
 // expect-exit: 42
 // An unbuffered channel hands a value straight across: the sender blocks

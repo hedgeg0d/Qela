@@ -1,3 +1,4 @@
+// interp-todo
 // stage1-only
 // expect-exit: 42
 // A real OS thread keeps a linked list alive only through a local variable

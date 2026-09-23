@@ -1,3 +1,4 @@
+// interp-skip
 // stage1-only
 // x86-only
 // expect-exit: 225

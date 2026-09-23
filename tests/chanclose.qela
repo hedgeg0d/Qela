@@ -1,3 +1,4 @@
+// interp-todo
 // stage1-only
 // expect-exit: 42
 // A closed channel drains first: the buffered values come out, then recv

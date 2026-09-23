@@ -133,6 +133,7 @@ compiler present.
 ```sh
 qela file.qela [-o out]     # compile to a static binary (default: input name)
 qela run file.qela [args]   # compile to a temp file, run it, print backtraces on panic
+qela irun file.qela [args]  # interpret the program, emit nothing (section 3.1)
 qela -                      # compile a program from stdin
 qela . [dir]                # merge every .qela in a directory into one program
 qela repl                   # one-liner REPL: type an expression, see its value
@@ -162,6 +163,41 @@ n = 42
 
 Each REPL line is a fresh program compiled in a forked child, so it is
 stateless and never accumulates anything.
+
+### 3.1 `qela irun`: the interpreter
+
+```sh
+qela irun file.qela [args]
+qela irun dir [args]
+```
+
+`irun` runs the program without producing machine code for it at all. The
+front end is the same one every compile uses -- the same parser, the same
+type checker, the same bounds elision -- and the interpreter walks the AST
+that comes out of it. Nothing is compiled in between: no bytecode, no
+temporary binary, no `fork`. The program runs inside the compiler's own
+process and its exit status becomes `irun`'s.
+
+That also means the program's pointers are ordinary addresses in that
+process. A `syscall` is forwarded straight to the kernel, so the standard
+library needs no interpreter support of any kind: files, `mmap`, `fork`,
+`execve` all behave exactly as they do compiled. The other side of the same
+coin is that there is no sandbox -- a wild pointer in an interpreted
+program corrupts the interpreter, which is why index checks are worth
+leaving on.
+
+Not everything survives the trip, and the ones that do not say so:
+
+| construct | interpreted |
+|---|---|
+| `asm(...)`, top-level `asm { }`, `fn naked`, `entry` | ignored, one warning per site |
+| `extern` functions and globals | error: there is no linker here |
+| `coro_switch`, `thread_clone` | error: they switch machine stacks |
+| atomics, `fence`, `tvar`, `tls_init` | work, as the single-threaded operations they reduce to |
+
+Accepted flags are `--no-bounds-checks`, `--no-warn` and `-D NAME=VALUE`,
+all before the program's own arguments; everything from the file name on
+belongs to the program, with the file itself as `argv[0]`.
 
 ## 4. Types
 

@@ -9,6 +9,15 @@ import "fmt.qela";
 import "lsp.qela";
 import "../std/io.qela";
 
+// The interpreter is the one part of srcql/ that stage0 does not compile: it
+// needs floats, match and coro_switch, none of which stage0 has. tools/
+// bootstrap.sh passes -D BOOTSTRAP=1 to the stage0 step alone, so S1a comes
+// out without `irun` and every compiler from S2 on has it. See
+// docs/BOOTSTRAP.md.
+$if (BOOTSTRAP != "1") {
+import "interp.qela";
+}
+
 fn default_output(path str) str {
 	var end i64 = path.len;
 	if (end > 5 && path.ptr[end - 5] == '.' && path.ptr[end - 4] == 'q' &&
@@ -252,7 +261,11 @@ fn dir_entry_path(dir str) str {
 // Merges every .qela file in the directory into one program: the entry file
 // (main.qela, or the sole file) comes last, everything else first in sorted
 // order, so functions call across files without imports.
-fn cmd_build_dir(dir str, output str) {
+// The token merge behind `qela .`: every file under the directory spliced
+// into one stream with the entry file last, then parsed as one unit. Split
+// out of cmd_build_dir so `qela irun <dir>` reaches the same unit without
+// going near codegen.
+fn parse_dir(dir str) *Unit {
 	var epath str = dir_entry_path(dir);
 	if (epath.len == 0) { sys_exit(1); }
 
@@ -274,7 +287,11 @@ fn cmd_build_dir(dir str, output str) {
 	tail = merge_file(epath, tail, &head);
 
 	set_module_dir(epath);
-	var unit *Unit = parse(head);
+	return parse(head);
+}
+
+fn cmd_build_dir(dir str, output str) {
+	var unit *Unit = parse_dir(dir);
 	var img Image;
 	codegen(unit, &img);
 	write_elf(output, &img);
@@ -693,7 +710,7 @@ fn cmd_repl(argc int, argv **u8) int {
 }
 
 fn cmd_help() int {
-	write_str(STDOUT, "usage: qela <file.qela> [-o output] [options]\n       qela . [dir]   build a project from a directory\n       qela run <file.qela> [args]\n       qela test <file.qela|dir> [files...] [-- args]\n       qela fmt <file.qela>\n       qela repl\n       qela --lsp\n       qela --dump-std <module>\n\ncompile a Qela program to a static binary; '-' reads the source\nfrom stdin. A directory merges every .qela file under it,\nrecursively, into one program (entry: main.qela, or the sole file) --\nno imports needed between project files. 'run' compiles to a temp file and executes\nit, and panics print a backtrace there. 'test' runs the program and\nchecks its leading comments: // expect-exit: N, // expect-out: text\n(one line each, compared in order) and // expect-compile-error;\nseveral files can be tested in one run -- '--' separates the\nprogram arguments, e.g. qela test a.qela b.qela -- 5 6. 'repl'\ncompiles each line as an expression and prints its value.\n\nstrings interpolate, so n = ${40 + 2} prints 42 and pointers\nrender as hex; the expression is evaluated at runtime.\n\noptions:\n  -o <file>        output path (default: input name without .qela)\n  -c               emit a relocatable object (.o) for an external linker\n  --target, -t <t> x86_64 (default) or arm64\n  -g               DWARF line info and symbols for gdb\n  --backtrace         print function frames on panic\n  --no-bounds-checks  disable index checks\n  --no-warn           suppress warnings\n  --color=auto|always|never  control coloured diagnostics (auto: tty + NO_COLOR)\n  -h, --help          this text\n");
+	write_str(STDOUT, "usage: qela <file.qela> [-o output] [options]\n       qela . [dir]   build a project from a directory\n       qela run <file.qela> [args]\n       qela irun <file.qela|dir> [args]\n       qela test <file.qela|dir> [files...] [-- args]\n       qela fmt <file.qela>\n       qela repl\n       qela --lsp\n       qela --dump-std <module>\n\ncompile a Qela program to a static binary; '-' reads the source\nfrom stdin. A directory merges every .qela file under it,\nrecursively, into one program (entry: main.qela, or the sole file) --\nno imports needed between project files. 'run' compiles to a temp file and executes\nit, and panics print a backtrace there. 'irun' interprets the\nprogram in this process instead of compiling it -- no binary is\nwritten, and asm, naked functions and 'entry' are ignored with a\nwarning. 'test' runs the program and\nchecks its leading comments: // expect-exit: N, // expect-out: text\n(one line each, compared in order) and // expect-compile-error;\nseveral files can be tested in one run -- '--' separates the\nprogram arguments, e.g. qela test a.qela b.qela -- 5 6. 'repl'\ncompiles each line as an expression and prints its value.\n\nstrings interpolate, so n = ${40 + 2} prints 42 and pointers\nrender as hex; the expression is evaluated at runtime.\n\noptions:\n  -o <file>        output path (default: input name without .qela)\n  -c               emit a relocatable object (.o) for an external linker\n  --target, -t <t> x86_64 (default), arm64 or riscv64\n  -g               DWARF line info and symbols for gdb\n  --backtrace         print function frames on panic\n  --no-bounds-checks  disable index checks\n  --no-warn           suppress warnings\n  --color=auto|always|never  control coloured diagnostics (auto: tty + NO_COLOR)\n  -h, --help          this text\n");
 	return 0;
 }
 
@@ -710,6 +727,11 @@ fn main(argc int, argv **u8) int {
 	}
 	if (argc >= 2 && str_eq(str_from_cstr(argv[1]), "test")) {
 		return cmd_test(argc, argv);
+	}
+	$if (BOOTSTRAP != "1") {
+	if (argc >= 2 && str_eq(str_from_cstr(argv[1]), "irun")) {
+		return cmd_irun(argc, argv);
+	}
 	}
 	if (argc >= 2 && str_eq(str_from_cstr(argv[1]), "fmt")) {
 		return cmd_fmt(argc, argv);

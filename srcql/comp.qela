@@ -290,6 +290,12 @@ let TARGET_ARM64  = 1;
 let TARGET_RISCV64 = 2;
 var opt_target int = 0;
 
+// `qela irun`: the unit is interpreted rather than emitted. Not a fourth
+// target -- no code comes out at all -- but the frontend has to know, because
+// a promoted local lives in a register and the interpreter has none: every
+// local needs a frame slot to interpret against (see ra_nreg).
+var opt_interp bool = false;
+
 struct ComptimeDef;
 struct ComptimeDef { next *ComptimeDef, name str, val str, }
 
