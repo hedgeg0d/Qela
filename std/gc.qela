@@ -272,7 +272,15 @@ fn gc_collect() {
 
 	var here i64 = 0;
 	var sp i64 = &here as i64;
-	gc_mark_range(sp, gc_stack_base + 8);
+	// Under `qela irun` a coroutine's frames live in a region of the
+	// interpreter's own, one per context, and gc_stack_base would name
+	// whichever context happened to allocate first -- a range spanning two
+	// unrelated mappings. The interpreter knows the right bounds.
+	$if (INTERP == "1") {
+		gc_mark_range(interp_coro_sp(cur_coro), interp_coro_top(cur_coro));
+	} $else {
+		gc_mark_range(sp, gc_stack_base + 8);
+	}
 	gc_mark_range(gc_data_base(), gc_data_end());
 
 	// Every other parked OS thread's roots, captured when it hit its
@@ -291,7 +299,11 @@ fn gc_collect() {
 	var ci int = 1;
 	while (ci <= coro_slots()) {
 		if (ci != cur_coro && coros[ci].alive && !coros[ci].done) {
-			gc_mark_range(coros[ci].sp, coros[ci].top);
+			$if (INTERP == "1") {
+				gc_mark_range(interp_coro_sp(ci), interp_coro_top(ci));
+			} $else {
+				gc_mark_range(coros[ci].sp, coros[ci].top);
+			}
 		}
 		ci = ci + 1;
 	}

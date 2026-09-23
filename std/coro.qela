@@ -40,10 +40,26 @@ fn coro_alloc_stack() *u8 {
 	return p;
 }
 
+// Under `qela irun` a coroutine cannot be a machine-stack image: there is
+// no machine code to park on one, and `target` is a *Func rather than an
+// address. INTERP is defined only by the interpreter, which owns the stack
+// switching and hands this module back the two operations it cannot do
+// itself. Everything else here -- the slot table, coro_next, the alive/done
+// bookkeeping -- is unchanged and stays interpreted, so std/chan.qela and
+// std/gc.qela keep reading the state they already read.
 fn coro_spawn(target i64, a0 i64, a1 i64, a2 i64, a3 i64, a4 i64) {
 	if (ncoros + 1 >= CORO_SLOTS) { return; }
 	ncoros = ncoros + 1;
 	var id int = ncoros;
+
+	$if (INTERP == "1") {
+		interp_coro_spawn(id, target, a0, a1, a2, a3, a4);
+		coros[id].sp = 0;
+		coros[id].top = 0;
+		coros[id].done = false;
+		coros[id].alive = true;
+		return;
+	}
 
 	var stack *u8 = coro_alloc_stack();
 	var top i64 = ((stack as i64) + CORO_STACK) & ~15;
@@ -144,6 +160,10 @@ fn coro_yield() bool {
 	var to int = coro_next(from);
 	if (to == from) { return false; }
 	cur_coro = to;
+	$if (INTERP == "1") {
+		interp_coro_switch(from, to);
+		return true;
+	}
 	coro_switch(&coros[from].sp as *u8, &coros[to].sp as *u8);
 	return true;
 }
@@ -155,6 +175,10 @@ fn coro_finish() {
 	coros[from].done = true;
 	var to int = coro_next(from);
 	cur_coro = to;
+	$if (INTERP == "1") {
+		interp_coro_switch(from, to);
+		return;
+	}
 	coro_switch(&coros[from].sp as *u8, &coros[to].sp as *u8);
 }
 

@@ -1,4 +1,3 @@
-// interp-todo
 // stage1-only
 // expect-exit: 109
 // A buffered channel hands every value across: two producers and one

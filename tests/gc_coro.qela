@@ -1,4 +1,3 @@
-// interp-todo
 // stage1-only
 // expect-exit: 42
 // A parked coroutine keeps roots on its own stack: gc_collect must scan
