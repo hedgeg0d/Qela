@@ -31,8 +31,11 @@ check: $(BIN)
 
 # The real compiler: stage1 compiled by itself, verified by the bootstrap
 # gate. build/bootstrap/s2 is the shipped binary; ./qela never ships.
+# The FFI gate after it uses gcc once, to compile C objects the Qela
+# compiler then links itself (see linker.qela / tools/ffi-test.sh).
 build: $(BIN)
 	@tools/bootstrap.sh
+	@tools/ffi-test.sh build/bootstrap/s2
 
 PREFIX ?= /usr/local
 DESTDIR ?=
