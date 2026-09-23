@@ -4,13 +4,17 @@ import "type.qela";
 
 // Parameterized types. `struct Chan(T) { ... }` is not a type; it is a template
 // whose body was parsed once with T bound to a type variable. Writing Chan(i64)
-// clones that body with T replaced and lays the result out.
+// clones that body with T replaced and lays the result out. A parameter may
+// carry a constraint -- `struct Foo(T: str)` -- and the argument must then be
+// that type or an implicit widening of it (checked when the arguments are
+// concrete, which is also the moment the instance is laid out).
 //
 // An argument that is still a type variable cannot be laid out yet, so the
 // application stays as a TY_GENERIC and is finished when the enclosing generic
 // function is monomorphized. Instances are registered under their printed name,
 // so the same arguments always name the same type: struct identity is pointer
-// identity here.
+// identity here. Up to four parameters, held in four explicit slots (stage0
+// has no arrays inside structs).
 
 var tmpls *Tmpl;
 
@@ -37,7 +41,33 @@ fn type_has_var(t *Type) bool {
 	return false;
 }
 
-fn inst_name(tm *Tmpl, a0 *Type, a1 *Type) str {
+fn tmpl_tv(tm *Tmpl, i int) *Type {
+	if (i == 0) { return tm.tv0; }
+	if (i == 1) { return tm.tv1; }
+	if (i == 2) { return tm.tv2; }
+	return tm.tv3;
+}
+
+fn tmpl_ct(tm *Tmpl, i int) *Type {
+	if (i == 0) { return tm.ct0; }
+	if (i == 1) { return tm.ct1; }
+	if (i == 2) { return tm.ct2; }
+	return tm.ct3;
+}
+
+// The i-th argument out of the four by-index slots.
+fn tmpl_arg_of(i int, a0 *Type, a1 *Type, a2 *Type, a3 *Type) *Type {
+	if (i == 0) { return a0; }
+	if (i == 1) { return a1; }
+	if (i == 2) { return a2; }
+	return a3;
+}
+
+// Where the last application was written, for constraint errors: set by the
+// parse site (like jmgen_errpos), read when a deferred instantiation checks.
+var gen_errpos i64 = 0;
+
+fn inst_name(tm *Tmpl, a0 *Type, a1 *Type, a2 *Type, a3 *Type) str {
 	var b Buf;
 	fmt_str(&b, tm.name);
 	buf_u8(&b, '(');
@@ -46,19 +76,51 @@ fn inst_name(tm *Tmpl, a0 *Type, a1 *Type) str {
 		buf_u8(&b, ',');
 		fmt_str(&b, type_name(a1));
 	}
+	if (tm.nparams > 2) {
+		buf_u8(&b, ',');
+		fmt_str(&b, type_name(a2));
+	}
+	if (tm.nparams > 3) {
+		buf_u8(&b, ',');
+		fmt_str(&b, type_name(a3));
+	}
 	buf_u8(&b, ')');
 	return buf_str(&b);
+}
+
+// The constraint `T: str` admits the exact type and the implicit widening
+// assignments already allow: a wider integer, a wider float. A type variable
+// is never concrete, so it is not checked here -- the enclosing instantiation
+// checks it when the arguments stop being variables.
+fn constraint_ok(arg *Type, cons *Type) bool {
+	if (cons as i64 == 0) { return true; }
+	if (arg as i64 == 0) { return false; }
+	if (same_type(arg, cons)) { return true; }
+	if (arg.kind == TY_INT && cons.kind == TY_INT) {
+		return cons.size > arg.size &&
+		       !(cons.is_unsigned && !arg.is_unsigned);
+	}
+	if (arg.kind == TY_FLOAT && cons.kind == TY_FLOAT) {
+		return cons.size > arg.size;
+	}
+	return false;
 }
 
 var gt0 *Type;
 var gc0 *Type;
 var gt1 *Type;
 var gc1 *Type;
+var gt2 *Type;
+var gc2 *Type;
+var gt3 *Type;
+var gc3 *Type;
 
 fn gsubst(t *Type) *Type {
 	if (t as i64 == 0) { return t; }
 	if (gt0 as i64 != 0 && t as i64 == gt0 as i64) { return gc0; }
 	if (gt1 as i64 != 0 && t as i64 == gt1 as i64) { return gc1; }
+	if (gt2 as i64 != 0 && t as i64 == gt2 as i64) { return gc2; }
+	if (gt3 as i64 != 0 && t as i64 == gt3 as i64) { return gc3; }
 	if (t.kind == TY_PTR) {
 		var b *Type = gsubst(t.base);
 		if (b as i64 != t.base as i64) { return type_ptr(b); }
@@ -77,8 +139,11 @@ fn gsubst(t *Type) *Type {
 	if (t.kind == TY_GENERIC) {
 		var b0 *Type = gsubst(t.ga0);
 		var b1 *Type = gsubst(t.ga1);
-		if (b0 as i64 != t.ga0 as i64 || b1 as i64 != t.ga1 as i64) {
-			return generic_instance(t.tmpl, b0, b1);
+		var b2 *Type = gsubst(t.ga2);
+		var b3 *Type = gsubst(t.ga3);
+		if (b0 as i64 != t.ga0 as i64 || b1 as i64 != t.ga1 as i64 ||
+		    b2 as i64 != t.ga2 as i64 || b3 as i64 != t.ga3 as i64) {
+			return generic_instance(t.tmpl, b0, b1, b2, b3);
 		}
 		return t;
 	}
@@ -101,8 +166,9 @@ fn clone_members(src *Member) *Member {
 	return head.next;
 }
 
-fn generic_instance(tm *Tmpl, a0 *Type, a1 *Type) *Type {
-	if (type_has_var(a0) || type_has_var(a1)) {
+fn generic_instance(tm *Tmpl, a0 *Type, a1 *Type, a2 *Type, a3 *Type) *Type {
+	if (type_has_var(a0) || type_has_var(a1) ||
+	    type_has_var(a2) || type_has_var(a3)) {
 		var g *Type = arena_alloc(sizeof(Type), 8) as *Type;
 		g.kind = TY_GENERIC;
 		g.size = 8;
@@ -110,13 +176,32 @@ fn generic_instance(tm *Tmpl, a0 *Type, a1 *Type) *Type {
 		g.tmpl = tm;
 		g.ga0 = a0;
 		g.ga1 = a1;
-		g.name = inst_name(tm, a0, a1);
+		g.ga2 = a2;
+		g.ga3 = a3;
+		g.name = inst_name(tm, a0, a1, a2, a3);
 		return g;
 	}
 
-	var nm str = inst_name(tm, a0, a1);
+	var nm str = inst_name(tm, a0, a1, a2, a3);
 	var found *Type = type_lookup(nm);
 	if (found as i64 != 0) { return found; }
+
+	var i int = 0;
+	while (i < tm.nparams) {
+		var cons *Type = tmpl_ct(tm, i);
+		if (cons as i64 != 0 && !constraint_ok(tmpl_arg_of(i, a0, a1, a2, a3), cons)) {
+			var nb Buf;
+			fmt_str(&nb, "type argument '");
+			fmt_str(&nb, type_name(tmpl_arg_of(i, a0, a1, a2, a3)));
+			fmt_str(&nb, "' does not satisfy the constraint '");
+			fmt_str(&nb, type_name(cons));
+			fmt_str(&nb, "' on parameter '");
+			fmt_str(&nb, tmpl_tv(tm, i).name);
+			fmt_str(&nb, "'");
+			error_at(gen_errpos, buf_str(&nb));
+		}
+		i = i + 1;
+	}
 
 	var ty *Type = arena_alloc(sizeof(Type), 8) as *Type;
 	ty.kind = tm.proto.kind;
@@ -126,18 +211,28 @@ fn generic_instance(tm *Tmpl, a0 *Type, a1 *Type) *Type {
 	ty.tmpl = tm;
 	ty.ga0 = a0;
 	ty.ga1 = a1;
+	ty.ga2 = a2;
+	ty.ga3 = a3;
 	// Registered before the body is filled in, so a member pointing back at the
 	// same instance finds it instead of instantiating for ever.
 	type_define(ty.name, ty);
 
 	var s0 *Type = gt0;
 	var s1 *Type = gt1;
+	var s2 *Type = gt2;
+	var s3 *Type = gt3;
 	var d0 *Type = gc0;
 	var d1 *Type = gc1;
+	var d2 *Type = gc2;
+	var d3 *Type = gc3;
 	gt0 = tm.tv0;
 	gc0 = a0;
 	gt1 = tm.tv1;
 	gc1 = a1;
+	gt2 = tm.tv2;
+	gc2 = a2;
+	gt3 = tm.tv3;
+	gc3 = a3;
 
 	ty.members = clone_members(tm.proto.members);
 
@@ -159,6 +254,10 @@ fn generic_instance(tm *Tmpl, a0 *Type, a1 *Type) *Type {
 	gc0 = d0;
 	gt1 = s1;
 	gc1 = d1;
+	gt2 = s2;
+	gc2 = d2;
+	gt3 = s3;
+	gc3 = d3;
 
 	if (ty.kind == TY_ENUM) { layout_enum(ty); } else { layout_struct(ty); }
 	return ty;
