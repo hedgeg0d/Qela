@@ -152,11 +152,45 @@ fn arm64_movk(rd int, imm16 i64, hw int) {
 	b4(0xf2800000 | (hw << 21) | ((imm16 & 0xffff) << 5) | rd);
 }
 
+fn arm64_movn(rd int, imm16 i64, hw int) {
+	b4(0x92800000 | (hw << 21) | ((imm16 & 0xffff) << 5) | rd);
+}
+
 fn arm64_mov_imm64(rd int, v i64) {
-	arm64_movz(rd, v & 0xffff, 0);
-	if (((v >> 16) & 0xffff) != 0) { arm64_movk(rd, (v >> 16) & 0xffff, 1); }
-	if (((v >> 32) & 0xffff) != 0) { arm64_movk(rd, (v >> 32) & 0xffff, 2); }
-	if (((v >> 48) & 0xffff) != 0) { arm64_movk(rd, (v >> 48) & 0xffff, 3); }
+	var nz int = 0;
+	var nf int = 0;
+	var i int = 0;
+	while (i < 4) {
+		var h i64 = (v >> (i * 16)) & 0xffff;
+		if (h != 0) { nz = nz + 1; }
+		if (h != 0xffff) { nf = nf + 1; }
+		i = i + 1;
+	}
+	if (nz == 0) { arm64_movz(rd, 0, 0); return; }
+	if (nf == 0) { arm64_movn(rd, 0, 0); return; }
+	if (nf < nz) {
+		var started bool = false;
+		i = 0;
+		while (i < 4) {
+			var h i64 = (v >> (i * 16)) & 0xffff;
+			if (h != 0xffff) {
+				if (!started) { arm64_movn(rd, ~h, i); started = true; }
+				else { arm64_movk(rd, h, i); }
+			}
+			i = i + 1;
+		}
+		return;
+	}
+	var done bool = false;
+	i = 0;
+	while (i < 4) {
+		var h i64 = (v >> (i * 16)) & 0xffff;
+		if (h != 0) {
+			if (!done) { arm64_movz(rd, h, i); done = true; }
+			else { arm64_movk(rd, h, i); }
+		}
+		i = i + 1;
+	}
 }
 
 fn arm64_ret() {
@@ -326,13 +360,11 @@ fn arm64_memset_local(off i64, size i64) {
 // 16-byte alignment risks a hardware fault on a later SP-relative access,
 // so every push/pop here moves SP by 16 and wastes the other 8 bytes.
 fn arm64_push(reg int) {
-	arm64_stur(reg, SP, -16);
-	arm64_sub_imm(SP, SP, 16);
+	b4(0xf8000c00 | ((-16 & 0x1ff) << 12) | (SP << 5) | reg);
 }
 
 fn arm64_pop(reg int) {
-	arm64_ldur(reg, SP, 0);
-	arm64_add_imm(SP, SP, 16);
+	b4(0xf8400400 | (16 << 12) | (SP << 5) | reg);
 }
 
 
@@ -518,6 +550,88 @@ fn arm64_lsrv(rd int, rn int, rm int) {
 
 fn arm64_asrv(rd int, rn int, rm int) {
 	b4(0x9ac02800 | (rm << 16) | (rn << 5) | rd);
+}
+
+fn arm64_ror64(x u64, r i64) u64 {
+	if (r == 0) { return x; }
+	return (x >> r) | (x << (64 - r));
+}
+
+fn arm64_logical_imm(v i64, immr *i64, imms *i64) bool {
+	var x u64 = v as u64;
+	if (x == 0) { return false; }
+	if (x + 1 == 0) { return false; }
+	var r i64 = 0;
+	while (r < 64) {
+		var y u64 = arm64_ror64(x, r);
+		if ((y & (y + 1)) == 0) {
+			var n i64 = 0;
+			var t u64 = y;
+			while (t != 0) { n = n + 1; t = t >> 1; }
+			*immr = (64 - r) & 63;
+			*imms = n - 1;
+			return true;
+		}
+		r = r + 1;
+	}
+	return false;
+}
+
+fn arm64_alu_imm(aop int, rd int, rn int, v i64, uns bool) bool {
+	if (aop == ALU_ADD || aop == ALU_SUB) {
+		var a int = aop;
+		var m i64 = v;
+		if (m < 0) {
+			m = -m;
+			if (a == ALU_ADD) { a = ALU_SUB; } else { a = ALU_ADD; }
+		}
+		var base i64 = 0x91000000;
+		if (a == ALU_SUB) { base = 0xd1000000; }
+		if (m <= 4095) { b4(base | (m << 10) | (rn << 5) | rd); return true; }
+		if ((m & 0xfff) == 0 && (m >> 12) <= 4095) {
+			b4(base | 0x400000 | ((m >> 12) << 10) | (rn << 5) | rd);
+			return true;
+		}
+		return false;
+	}
+	if (aop == ALU_AND || aop == ALU_OR || aop == ALU_XOR) {
+		var immr i64 = 0;
+		var imms i64 = 0;
+		if (!arm64_logical_imm(v, &immr, &imms)) { return false; }
+		var lbase i64 = 0x92400000;
+		if (aop == ALU_OR) { lbase = 0xb2400000; }
+		if (aop == ALU_XOR) { lbase = 0xd2400000; }
+		b4(lbase | (immr << 16) | (imms << 10) | (rn << 5) | rd);
+		return true;
+	}
+	if (aop == ALU_SHL) {
+		if (v < 0 || v > 63) { return false; }
+		if (v == 0) { arm64_mov_reg(rd, rn); return true; }
+		b4(0xd3400000 | (((64 - v) & 63) << 16) | ((63 - v) << 10) | (rn << 5) | rd);
+		return true;
+	}
+	if (aop == ALU_SHR) {
+		if (v < 0 || v > 63) { return false; }
+		if (v == 0) { arm64_mov_reg(rd, rn); return true; }
+		var sbase i64 = 0x93400000;
+		if (uns) { sbase = 0xd3400000; }
+		b4(sbase | (v << 16) | (63 << 10) | (rn << 5) | rd);
+		return true;
+	}
+	if (aop == ALU_MUL || aop == ALU_SCALE) {
+		if (v <= 0) { return false; }
+		var s i64 = 0;
+		var t i64 = v;
+		while ((t & 1) == 0) { t = t >> 1; s = s + 1; }
+		if (t != 1) { return false; }
+		if (s == 0) {
+			if (rd != rn) { arm64_mov_reg(rd, rn); }
+			return true;
+		}
+		b4(0xd3400000 | (((64 - s) & 63) << 16) | ((63 - s) << 10) | (rn << 5) | rd);
+		return true;
+	}
+	return false;
 }
 
 
@@ -878,8 +992,10 @@ fn arm64_lower_op(op *IrOp) {
 	if (op.kind == IR_ALU && op.dst.kind == OP_VREG && op.src0.kind == OP_VREG && op.src1.kind == OP_IMM) {
 		// A call argument's value staged with a fused imm ALU op (e.g.
 		// `f(n - 1)`), in place in its call-arg register.
+		var vuns bool = op.dst.ty as i64 != 0 && op.dst.ty.is_unsigned;
+		if (arm64_alu_imm(op.aux, op.dst.reg, op.src0.reg, op.src1.off, vuns)) { return; }
 		arm64_mov_imm64(X9, op.src1.off);
-		arm64_alu_full(op.aux, op.dst.reg, op.src0.reg, X9, op.dst.ty as i64 != 0 && op.dst.ty.is_unsigned);
+		arm64_alu_full(op.aux, op.dst.reg, op.src0.reg, X9, vuns);
 		return;
 	}
 	if (op.kind == IR_MEMCPY && op.dst.kind == OP_NONE) {
@@ -1183,6 +1299,7 @@ fn arm64_lower_op(op *IrOp) {
 	if (op.kind == IR_ALU && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC && op.src1.kind == OP_IMM) {
 		var v i64 = op.src1.off;
 		var uns bool = op.dst.ty.is_unsigned;
+		if (arm64_alu_imm(op.aux, X0, X0, v, uns)) { return; }
 		arm64_mov_imm64(X9, v);
 		if (op.aux == ALU_DIV) { arm64_div(X0, X0, X9, uns); return; }
 		if (op.aux == ALU_MOD) { arm64_mod(X0, X0, X9, uns); return; }
@@ -1237,8 +1354,10 @@ fn arm64_lower_op(op *IrOp) {
 		// v op= imm as a statement (stmt_update's fused form): read-modify-write
 		// the slot directly, no ACC involved.
 		arm64_ld_local(X9, op.dst.off);
-		arm64_mov_imm64(X10, op.src1.off);
-		arm64_alu_reg(op.aux, X9, X9, X10);
+		if (!arm64_alu_imm(op.aux, X9, X9, op.src1.off, op.dst.ty as i64 != 0 && op.dst.ty.is_unsigned)) {
+			arm64_mov_imm64(X10, op.src1.off);
+			arm64_alu_reg(op.aux, X9, X9, X10);
+		}
 		arm64_st_local(op.dst.off, X9);
 		return;
 	}

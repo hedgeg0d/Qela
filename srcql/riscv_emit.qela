@@ -182,14 +182,14 @@ fn c_jr16(rs1 int) bool {
 
 // c.mv rd, rs2: 100 [11:7]=rd [6:2]=rs2 10, both nonzero.
 fn c_mv16(rd int, rn int) bool {
-	if (rd == 0 || rn == 0 || rd == 2 || rn == 2) { return false; }
+	if (rd == 0 || rn == 0) { return false; }
 	c16(0x8002 | (rd << 7) | (rn << 2));
 	return true;
 }
 
 // c.li rd, imm: 010 [12]=imm[5] [11:7]=rd [6:2]=imm[4:0] 01, rd nonzero.
 fn c_li16(rd int, imm i64) bool {
-	if (rd == 0 || rd == 2) { return false; }
+	if (rd == 0) { return false; }
 	if (imm < -32 || imm > 31) { return false; }
 	c16(0x4001 | (rd << 7) | ((imm & 0x1f) << 2) | (((imm >> 5) & 1) << 12));
 	return true;
@@ -197,7 +197,7 @@ fn c_li16(rd int, imm i64) bool {
 
 // c.slli rd, shamt: 000 [12]=shamt[5] [11:7]=rd [6:2]=shamt[4:0] 10.
 fn c_slli16(rd int, sh i64) bool {
-	if (rd == 0 || rd == 2) { return false; }
+	if (rd == 0) { return false; }
 	if (sh < 1 || sh > 31) { return false; }
 	c16(0x0002 | (rd << 7) | (sh << 2));
 	return true;
@@ -262,6 +262,7 @@ fn riscv_j(imm i64, rd int, op i64) {
 
 fn riscv_mov_reg(rd int, rn int) {
 	if (rd == rn) { return; }
+	if (c_mv16(rd, rn)) { return; }
 	riscv_i(0, rn, 0, rd, 0x13);        // addi rd, rn, 0
 }
 
@@ -535,9 +536,13 @@ fn riscv_load(ty *Type) {
 	}
 	if (ty.size == 4) {
 		if (ty.is_unsigned && ty.kind != TY_FLOAT) { riscv_i(0, A0, 6, A0, 0x03); }
-		else { riscv_i(0, A0, 2, A0, 0x03); }
+		else {
+			if (c_lwst16(A0, A0, 0, false)) { return; }
+			riscv_i(0, A0, 2, A0, 0x03);
+		}
 		return;
 	}
+	if (c_ldst16(A0, A0, 0, false)) { return; }
 	riscv_i(0, A0, 3, A0, 0x03);            // ld a0, 0(a0)
 }
 
@@ -564,6 +569,7 @@ fn riscv_store_at(rn int, rt int, ty *Type) {
 		riscv_s(0, rt, rn, 2, 0x23);
 		return;
 	}
+	if (c_ldst16(rt, rn, 0, true)) { return; }
 	riscv_s(0, rt, rn, 3, 0x23);
 }
 
@@ -618,6 +624,37 @@ var riscv_br_n i64;
 var riscv_br_at I64List;
 var riscv_br_tramp bool = false;
 
+var riscv_br_c I64List;
+var riscv_br_uncond I64List;
+
+fn riscv_br_is_c(id i64) bool {
+	return id < riscv_br_c.n && riscv_br_c.p[id] != 0;
+}
+
+fn c_j16_word(rel i64) i64 {
+	return 0xa001 | (((rel >> 11) & 1) << 12) | (((rel >> 4) & 1) << 11) |
+	       (((rel >> 8) & 3) << 9) | (((rel >> 10) & 1) << 8) |
+	       (((rel >> 6) & 1) << 7) | (((rel >> 7) & 1) << 6) |
+	       (((rel >> 1) & 7) << 3) | (((rel >> 5) & 1) << 2);
+}
+
+fn c_j16_fits(rel i64) bool {
+	return rel >= -2048 && rel <= 2046 && (rel & 1) == 0;
+}
+
+fn c_bz16_fits(rs1 int, rs2 int, cc i64, off i64) bool {
+	if (cc != CC_EQ && cc != CC_NE) { return false; }
+	if (rs2 != ZERO || rs1 < 8 || rs1 > 15) { return false; }
+	return off >= -256 && off <= 254 && (off & 1) == 0;
+}
+
+fn c_bz16_word(cc i64, rs1 int, off i64) i64 {
+	var base i64 = 0xc001;
+	if (cc == CC_NE) { base = 0xe001; }
+	return base | (((off >> 8) & 1) << 12) | (((off >> 3) & 3) << 10) | ((rs1 - 8) << 7) |
+	       (((off >> 6) & 3) << 5) | (((off >> 1) & 3) << 3) | (((off >> 5) & 1) << 2);
+}
+
 // Neutral condition -> B-type funct3 and whether the operands must swap
 // (CC_LE/GT/ULE/UGT have no direct encoding; b<swapped> covers them).
 fn riscv_cc(cc i64) i64 {
@@ -661,7 +698,9 @@ fn riscv_jump(cond i64, rs1 int, rs2 int) i64 {
 	var id i64 = riscv_br_n;
 	riscv_br_n = riscv_br_n + 1;
 	if (cond < 0) {
+		ilist_set(&riscv_br_uncond, id, 1);
 		ilist_set(&riscv_br_at, id, code.n);
+		if (riscv_br_is_c(id)) { c16(0xa001); return id; }
 		b4(0x6f | (ZERO << 7));             // jal x0, 0
 		return id;
 	}
@@ -670,12 +709,21 @@ fn riscv_jump(cond i64, rs1 int, rs2 int) i64 {
 		// carry the compare's own operands, or the branch never fires.
 		var inv i64 = cc_invert(cond);
 		var f3i i64 = riscv_cc(inv);
-		if (riscv_cc_swap(inv)) {
-			riscv_b(8, rs1, rs2, f3i, 0x63);
+		var jc bool = riscv_br_is_c(id);
+		var skip i64 = 8;
+		if (jc) { skip = 6; }
+		var bskip i64 = 6;
+		if (jc) { bskip = 4; }
+		if (!riscv_cc_swap(inv) && c_bz16_fits(rs1, rs2, inv, bskip)) {
+			c16(c_bz16_word(inv, rs1, bskip));
+		} else if (riscv_cc_swap(inv)) {
+			riscv_b(skip, rs1, rs2, f3i, 0x63);
 		} else {
-			riscv_b(8, rs2, rs1, f3i, 0x63);
+			riscv_b(skip, rs2, rs1, f3i, 0x63);
 		}
+		ilist_set(&riscv_br_uncond, id, 1);
 		ilist_set(&riscv_br_at, id, code.n);
+		if (riscv_br_is_c(id)) { c16(0xa001); return id; }
 		b4(0x6f | (ZERO << 7));             // jal x0, 0 (patched to the real target)
 		return id;
 	}
@@ -694,6 +742,7 @@ fn riscv_jump(cond i64, rs1 int, rs2 int) i64 {
 // function).
 fn riscv_jump_back(target i64) {
 	var rel i64 = target - code.n;
+	if (c_j16_fits(rel)) { c16(c_j16_word(rel)); return; }
 	riscv_j(rel, ZERO, 0x6f);
 }
 
@@ -703,14 +752,27 @@ fn riscv_jump_back(target i64) {
 fn riscv_jump_back_cc(cond i64, rs1 int, rs2 int, target i64) {
 	var rel i64 = target - code.n;
 	if (rel >= -4096 && rel <= 4094 && (rel & 1) == 0) {
+		if (!riscv_cc_swap(cond) && c_bz16_fits(rs1, rs2, cond, rel)) {
+			c16(c_bz16_word(cond, rs1, rel));
+			return;
+		}
 		if (riscv_cc_swap(cond)) { riscv_b(rel, rs1, rs2, riscv_cc(cond), 0x63); }
 		else { riscv_b(rel, rs2, rs1, riscv_cc(cond), 0x63); }
 		return;
 	}
 	var inv i64 = cc_invert(cond);
-	if (riscv_cc_swap(inv)) { riscv_b(8, rs1, rs2, riscv_cc(inv), 0x63); }
-	else { riscv_b(8, rs2, rs1, riscv_cc(inv), 0x63); }
-	riscv_j(rel - 4, ZERO, 0x6f);
+	if (!riscv_cc_swap(inv) && c_bz16_fits(rs1, rs2, inv, 4) && c_j16_fits(rel - 2)) {
+		c16(c_bz16_word(inv, rs1, 4));
+		c16(c_j16_word(rel - 2));
+		riscv_br_tramp = true;
+		br_grew = true;
+		return;
+	}
+	var skip i64 = 8;
+	if (c_j16_fits(rel - 4)) { skip = 6; }
+	if (riscv_cc_swap(inv)) { riscv_b(skip, rs1, rs2, riscv_cc(inv), 0x63); }
+	else { riscv_b(skip, rs2, rs1, riscv_cc(inv), 0x63); }
+	if (skip == 6) { c16(c_j16_word(rel - 4)); } else { riscv_j(rel - 4, ZERO, 0x6f); }
 	riscv_br_tramp = true;
 	br_grew = true;
 }
@@ -718,6 +780,17 @@ fn riscv_jump_back_cc(cond i64, rs1 int, rs2 int, target i64) {
 fn riscv_patch_here(id i64) {
 	var at i64 = riscv_br_at.p[id];
 	var rel i64 = code.n - at;
+	if (riscv_br_is_c(id)) {
+		if (!c_j16_fits(rel)) {
+			ilist_set(&riscv_br_c, id, 0);
+			br_grew = true;
+			return;
+		}
+		var cw i64 = c_j16_word(rel);
+		code.p[at] = (cw & 255) as u8;
+		code.p[at + 1] = ((cw >> 8) & 255) as u8;
+		return;
+	}
 	var word i64 = buf_read32(&code, at);
 	if ((word & 0x7f) == 0x63) {
 		if (rel >= -4096 && rel <= 4094 && (rel & 1) == 0) {
@@ -734,6 +807,10 @@ fn riscv_patch_here(id i64) {
 	// A JAL: trampoline mode, or an unconditional branch. 1 MiB covers any
 	// function's control flow.
 	riscv_patch_jal(&code, at, rel);
+	if (id < riscv_br_uncond.n && riscv_br_uncond.p[id] != 0 && c_j16_fits(rel)) {
+		ilist_set(&riscv_br_c, id, 1);
+		br_grew = true;
+	}
 }
 
 // ── calls and address pairs ──
@@ -1944,8 +2021,8 @@ fn riscv_lower_op(op *IrOp) {
 			var a int = pc_a;
 			var b int = pc_b;
 			if (pc_imm_valid) {
-				riscv_li64(T1, pc_imm);
-				b = T1;
+				if (pc_imm == 0) { b = ZERO; }
+				else { riscv_li64(T1, pc_imm); b = T1; }
 				pc_imm_valid = false;
 			}
 			var cc i64 = op.aux;
@@ -1973,8 +2050,8 @@ fn riscv_lower_op(op *IrOp) {
 		var a int = pc_a;
 		var b int = pc_b;
 		if (pc_imm_valid) {
-			riscv_li64(T1, pc_imm);
-			b = T1;
+			if (pc_imm == 0) { b = ZERO; }
+			else { riscv_li64(T1, pc_imm); b = T1; }
 			pc_imm_valid = false;
 		}
 		pc_mode = 0;
