@@ -1,0 +1,7 @@
+fn paging_user() {
+	var pd *u64 = 0x92000 as *u64;
+	pd[8] = pd[8] | 0x4 as u64;
+	pd[16] = pd[16] | 0x4 as u64;
+	invlpg(0x1000000);
+	invlpg(0x2000000);
+}

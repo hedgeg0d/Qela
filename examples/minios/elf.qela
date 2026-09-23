@@ -1,0 +1,78 @@
+fn rd16(p *u8, off i64) i64 {
+	return (p[off] as i64) | ((p[off + 1] as i64) << 8);
+}
+
+fn rd32(p *u8, off i64) i64 {
+	var v i64 = 0;
+	var i i64 = 0;
+	while (i < 4) {
+		v = v | ((p[off + i] as i64) << (i * 8));
+		i = i + 1;
+	}
+	return v;
+}
+
+fn rd64(p *u8, off i64) i64 {
+	var v i64 = 0;
+	var i i64 = 0;
+	while (i < 8) {
+		v = v | ((p[off + i] as i64) << (i * 8));
+		i = i + 1;
+	}
+	return v;
+}
+
+fn elf_load(e str) i64 {
+	var p *u8 = e.ptr;
+	if (e.len < 64) {
+		return 0;
+	}
+	if (p[0] != 0x7f as u8 || p[1] != 69 as u8 || p[2] != 76 as u8 || p[3] != 70 as u8) {
+		return 0;
+	}
+	if (rd16(p, 16) != 2 || rd16(p, 18) != 62) {
+		return 0;
+	}
+	var phoff i64 = rd64(p, 32);
+	var phent i64 = rd16(p, 54);
+	var phnum i64 = rd16(p, 56);
+	var i i64 = 0;
+	var minv i64 = -1;
+	var maxv i64 = 0;
+	while (i < phnum) {
+		var ph i64 = phoff + i * phent;
+		if (rd32(p, ph) == 1) {
+			var off i64 = rd64(p, ph + 8);
+			var va i64 = rd64(p, ph + 16);
+			var fs i64 = rd64(p, ph + 32);
+			var ms i64 = rd64(p, ph + 40);
+			var j i64 = 0;
+			while (j < fs) {
+				(va as *u8)[j] = p[off + j];
+				j = j + 1;
+			}
+			while (j < ms) {
+				(va as *u8)[j] = 0 as u8;
+				j = j + 1;
+			}
+			if (minv < 0 || va < minv) {
+				minv = va;
+			}
+			if (va + ms > maxv) {
+				maxv = va + ms;
+			}
+		}
+		i = i + 1;
+	}
+	if (minv < 0 || maxv == 0) {
+		return 0;
+	}
+	var pd *u64 = 0x92000 as *u64;
+	var idx i64 = minv >> 21;
+	while (idx <= ((maxv - 1) >> 21)) {
+		pd[idx] = pd[idx] | 0x4 as u64;
+		invlpg(idx << 21);
+		idx = idx + 1;
+	}
+	return rd64(p, 24);
+}
