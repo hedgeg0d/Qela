@@ -201,6 +201,8 @@ var need_fmt bool = false;
 // the next top-level splice point, same as need_fmt.
 var need_dyn bool = false;
 
+var need_interp bool = false;
+
 // ── top-level asm and the entry point ──
 
 // `asm { ... }` bytes land at the start of the code segment, before any
@@ -1871,7 +1873,86 @@ fn func_param_index(f *Func, name str) int {
 	return -1;
 }
 
+fn interp_check_scalar(ty *Type, pos i64, what str) {
+	if (is_aggregate(ty) || is_float(ty)) {
+		var b Buf;
+		fmt_str(&b, "interpreted/dynamic functions currently support only scalar integer ");
+		fmt_str(&b, what);
+		fmt_str(&b, " (see docs/INTERPRETED.md)");
+		error_at(pos, buf_str(&b));
+	}
+}
+
+fn interp_escape_src(raw str, pos i64) str {
+	var b Buf;
+	buf_u8(&b, '"');
+	var i i64 = 0;
+	while (i < raw.len) {
+		var c u8 = raw.ptr[i];
+		if (c == '$' && i + 1 < raw.len && raw.ptr[i + 1] == '{') {
+			error_at(pos, "an interpreted/dynamic function's source cannot contain string interpolation -- it collides with re-embedding the source over the runtime ABI");
+		}
+		if (c == '\\') { buf_u8(&b, '\\'); buf_u8(&b, '\\'); }
+		else if (c == '"') { buf_u8(&b, '\\'); buf_u8(&b, '"'); }
+		else if (c == '\n') { buf_u8(&b, '\\'); buf_u8(&b, 'n'); }
+		else if (c == '\r') { buf_u8(&b, '\\'); buf_u8(&b, 'r'); }
+		else if (c == '\t') { buf_u8(&b, '\\'); buf_u8(&b, 't'); }
+		else { buf_u8(&b, c); }
+		i = i + 1;
+	}
+	buf_u8(&b, '"');
+	return buf_str(&b);
+}
+
+var interp_trampoline_seq int = 0;
+
+fn interp_synthesize_trampoline(f *Func, fn_start i64, end_pos i64) {
+	interp_check_scalar(f.ret, f.pos, "return types");
+	var i int = 0;
+	while (i < f.nparams) {
+		interp_check_scalar(func_param(f, i).ty, f.pos, "parameters");
+		i = i + 1;
+	}
+
+	var fid int = diag_file_of(f.pos);
+	var src str = diag_src_of(fid);
+	var def_src str = str_slice(src, diag_offset_of(fn_start), diag_offset_of(end_pos));
+	var escaped str = interp_escape_src(def_src, f.pos);
+
+	var b Buf;
+	fmt_str(&b, "{ var __ia [6]i64;");
+	i = 0;
+	while (i < 6) {
+		fmt_str(&b, " __ia[");
+		fmt_i64(&b, i as i64);
+		fmt_str(&b, "] = ");
+		if (i < f.nparams) { fmt_str(&b, func_param(f, i).name); }
+		else { fmt_str(&b, "0"); }
+		fmt_str(&b, ";");
+		i = i + 1;
+	}
+	fmt_str(&b, " return __interp_call_dispatch(");
+	fmt_str(&b, escaped);
+	fmt_str(&b, ", \"");
+	fmt_str(&b, f.name);
+	fmt_str(&b, "\", &__ia[0]); }");
+
+	var nameb Buf;
+	fmt_str(&nameb, "<interp-trampoline:");
+	fmt_i64(&nameb, interp_trampoline_seq as i64);
+	buf_u8(&nameb, '>');
+	interp_trampoline_seq = interp_trampoline_seq + 1;
+
+	var synth_file int = diag_add_file(buf_str(&nameb), buf_str(&b));
+	var synth_toks *Token = lex(buf_str(&b), (synth_file as i64) << FILE_SHIFT);
+	f.interp_body = f.body;
+	add_type(f.interp_body);
+	f.body = parse_block(&synth_toks);
+	need_interp = true;
+}
+
 fn parse_function(t **Token, is_extern bool) *Func {
+	var fn_start i64 = (*t).pos;
 	tok_expect(t, "fn");
 	// A naked function runs without prologue or epilogue: no frame, no
 	// implicit ret. The body is asm bytes plus bare stores, so the
@@ -1994,6 +2075,9 @@ fn parse_function(t **Token, is_extern bool) *Func {
 		*t = (*t).next;
 	} else {
 		f.body = parse_block(t);
+		if (f.interpreted || f.dynamic) {
+			interp_synthesize_trampoline(f, fn_start, (*t).pos);
+		}
 	}
 	leave_scope();
 	ntype_vars = saved_ntype_vars;
@@ -2473,6 +2557,10 @@ fn parse(tok *Token) *Unit {
 		if (need_dyn) {
 			need_dyn = false;
 			tok = splice_import(tok, "std/dyn.qela", tok.pos);
+		}
+		if (need_interp) {
+			need_interp = false;
+			tok = splice_import(tok, "std/interpcall.qela", tok.pos);
 		}
 		resolve_comptime(&tok);
 		if (tok.kind == TK_EOF) { break; }
