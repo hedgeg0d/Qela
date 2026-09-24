@@ -2389,6 +2389,19 @@ fn base_check() {
 	}
 }
 
+fn pie_check() {
+	if (!opt_pie) { return; }
+	if (opt_object) {
+		die("error: --pie and -c do not combine (an object is already relocatable)");
+	}
+	if (opt_base != ELF_BASE) {
+		die("error: --pie and --base do not combine");
+	}
+	if (opt_target != TARGET_X86_64) {
+		die("error: --pie currently supports x86_64 only");
+	}
+}
+
 fn parse_addr(s str) i64 {
 	var v i64 = 0;
 	var i i64 = 0;
@@ -2517,6 +2530,8 @@ fn main(argc int, argv **u8) int {
 			opt_base = parse_addr(str_from_cstr(argv[i]));
 			if ((opt_base & 4095) != 0) { die("error: --base must be page aligned"); }
 			base_check();
+		} else if (str_eq(a, "--pie")) {
+			opt_pie = true;
 		} else if (str_eq(a, "--no-bounds-checks")) {
 			opt_no_bounds = true;
 		} else if (str_eq(a, "--backtrace")) {
@@ -2564,6 +2579,7 @@ fn main(argc int, argv **u8) int {
 	}
 	if (opt_target == TARGET_RISCV64) { comptime_set("TARGET", "riscv64"); }
 	if (opt_target == TARGET_ARM64) { comptime_set("TARGET", "arm64"); }
+	pie_check();
 
 	if (!have_input) {
 		eprint("usage: qela <file.qela> [-o output]\n");

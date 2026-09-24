@@ -1,0 +1,36 @@
+// expect-exit: 0
+// expect-out: pie ok 42
+// Position-independent coverage: strings (headers live in the RW segment
+// and self-relocate at entry), data and bss globals, a bounds-checked
+// loop, a tvar (the tls_init stub resolves its template rip-relative)
+// and a coroutine (the entry stub's address is rip-relative too). The
+// gate compiles and runs this file again under --pie; here it just runs
+// plain, so both layouts stay pinned.
+import "std/io.qela";
+import "std/coro.qela";
+import "std/str.qela";
+
+var gcount i64 = 40;
+var gsink [4]i64;
+tvar tcount i64 = 1;
+
+fn worker() {
+	gcount = gcount + 1;
+}
+
+fn main() int {
+	gcount = gcount + 1;
+	gsink[0] = 7;
+	var s str = "hello pie";
+	if (!str_eq(s, "hello pie")) { return 1; }
+	if (gcount != 41) { return 2; }
+	var arr = [1, 2, 3];
+	var i i64 = 2;
+	if (arr[i] != 3) { return 3; }
+	spawn worker();
+	coro_run_all();
+	if (gcount != 42) { return 4; }
+	if (tcount != 1) { return 5; }
+	println("pie ok ${gcount}");
+	return 0;
+}
