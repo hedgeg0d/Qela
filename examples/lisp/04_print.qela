@@ -60,7 +60,7 @@ fn pr_obj(b *Buf, o Obj, quoted bool) {
 			fmt_str(b, n);
 			buf_u8(b, '>');
 		}
-		Lambda(c) => {
+		Lambda(_) => {
 			fmt_str(b, "#<lambda>");
 		}
 	}
