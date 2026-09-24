@@ -1933,17 +1933,42 @@ fn ast_take_tail_expr(head **Node) *Node {
 	return null;
 }
 
+// The last validation run's captured output. abi_try_run keeps the child's
+// stdout and stderr off the terminal: a failing eval reports through the
+// ERR frame instead of printing once from the validation fork and again
+// from the retry or the real run.
+var abi_try_err str;
+
 fn abi_try_run(src str, name str, path_a bool) bool {
+	var cap [2]i32;
+	if (sys_pipe2(&cap[0], 0) != 0) { return false; }
 	var pid i64 = sys_fork();
+	if (pid < 0) {
+		sys_close(cap[0] as i64);
+		sys_close(cap[1] as i64);
+		return false;
+	}
 	if (pid == 0) {
-		var devnull i64 = sys_open_append(cstr("/dev/null"));
-		sys_dup2(devnull, STDOUT);
+		sys_dup2(cap[1] as i64, STDOUT);
+		sys_dup2(cap[1] as i64, STDERR);
+		sys_close(cap[0] as i64);
+		sys_close(cap[1] as i64);
 		ip_abi_validating = true;
 		repl_run_source(src, name, path_a);
 		sys_exit(0);
 	}
+	sys_close(cap[1] as i64);
+	var out Buf;
+	var chunk [256]u8;
+	while (true) {
+		var r i64 = sys_read(cap[0] as i64, &chunk[0], 256);
+		if (r <= 0) { break; }
+		buf_bytes(&out, &chunk[0], r);
+	}
+	sys_close(cap[0] as i64);
 	var status [1]i64;
 	sys_wait4(pid, &status[0] as *u8);
+	abi_try_err = buf_str(&out);
 	return ((status[0] >> 8) & 255) == 0 && (status[0] & 127) == 0;
 }
 
@@ -2339,8 +2364,12 @@ fn cmd_abi_server(_argc int, _argv **u8) int {
 		}
 
 		if (!abi_try_run(to_run, name, path_a)) {
-			var msg str = "eval: compile or runtime error";
-			abi_send_frame(ABI_FD_CHILD_TO_HOST, ABI_RESP_ERR as u8, msg.ptr, msg.len);
+			if (abi_try_err.len > 0) {
+				abi_send_frame(ABI_FD_CHILD_TO_HOST, ABI_RESP_ERR as u8, abi_try_err.ptr, abi_try_err.len);
+			} else {
+				var msg str = "eval: compile or runtime error";
+				abi_send_frame(ABI_FD_CHILD_TO_HOST, ABI_RESP_ERR as u8, msg.ptr, msg.len);
+			}
 			continue;
 		}
 		repl_run_source(to_run, name, path_a);
