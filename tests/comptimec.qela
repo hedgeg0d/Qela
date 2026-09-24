@@ -1,0 +1,46 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: 42
+// expect-out: 4242
+// expect-out: 298
+// expect-out: 16
+// expect-out: 7
+// expect-out: consts ok
+// `$c("expr")` folds a constant expression at compile time: arithmetic,
+// bit operations, comparisons, ternary, sizeof, casts and references to
+// constant globals -- the whole expression resolves now and only the
+// number ships. A non-constant operand is a clean error.
+import "std/io.qela";
+
+let BASE = 40;
+
+struct Point { x i64, y i64 }
+
+fn main() int {
+	var a i64 = $c("1 + 41");
+	if (a != 42) { return 1; }
+	write_str(STDOUT, "42\n");
+	var b i64 = $c("BASE + 2");
+	if (b != 42) { return 2; }
+	write_str(STDOUT, "4242\n");
+	var c i64 = $c("(1 << 8) | 42");
+	if (c != 298) { return 3; }
+	write_str(STDOUT, "298\n");
+	var d i64 = $c("sizeof(Point)");
+	if (d != 16) { return 4; }
+	write_str(STDOUT, "16\n");
+	var e i64 = $c("7 if 6 * 7 > 40 else 0");
+	if (e != 7) { return 5; }
+	write_str(STDOUT, "7\n");
+	var f i64 = $c("BASE + 1 + 1");
+	if (f != 42) { return 6; }
+	var arr [8]i64;
+	var i i64 = 0;
+	while (i < $c("sizeof(Point) / 2")) {
+		arr[i] = i;
+		i = i + 1;
+	}
+	if (arr[7] != 7) { return 7; }
+	write_str(STDOUT, "consts ok\n");
+	return 0;
+}
