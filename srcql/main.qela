@@ -1085,6 +1085,7 @@ fn abi_try_call(f *Func, vals *i64, n int) bool {
 	if (pid == 0) {
 		var devnull i64 = sys_open_append(cstr("/dev/null"));
 		sys_dup2(devnull, STDOUT);
+		ip_abi_validating = true;
 		ip_call(f, abi_build_call_args(vals, n), 0, f.pos);
 		sys_exit(0);
 	}
@@ -1106,6 +1107,7 @@ fn abi_try_run(src str, name str, path_a bool) bool {
 	if (pid == 0) {
 		var devnull i64 = sys_open_append(cstr("/dev/null"));
 		sys_dup2(devnull, STDOUT);
+		ip_abi_validating = true;
 		repl_run_source(src, name, path_a);
 		sys_exit(0);
 	}
