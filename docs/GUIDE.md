@@ -153,7 +153,33 @@ qela --dump-std <module>    # print a standard module's embedded source
 Flags: `-g` (DWARF for gdb), `--backtrace`, `--no-bounds-checks`,
 `--no-warn`, `--color=auto|always|never`, `-o <file>`, `--target, -t <t>`
 (x86_64 — the default — arm64 or riscv64), `--interpreted` and `--jit`
-(section 3.2).
+(section 3.2), `--pie` (a position-independent executable: ET_DYN at a
+kernel-chosen base, x86_64/arm64/riscv64; on arm64 it also carries the
+strict ELF apparatus Android's linker demands, so the binary runs on
+stock Android).
+
+Flags can also live in the source: a top-level `$flag` directive sets a
+compile flag for the whole unit — the file, its imports and, for
+`qela .`, every merged project file — so no command-line flag is needed
+to get the build right:
+
+```qela
+$flag --pie
+
+fn main() int { return 0; }
+```
+
+The allowed flags are `--pie`, `--backtrace`, `--no-bounds-checks`,
+`--base <addr>` and `-D NAME=VALUE` (comptime definitions, section 4.6).
+An explicit command-line flag always wins over the source, and `$flag`
+works inside `$if` — the branch that survives comptime splicing
+applies its flags:
+
+```qela
+$if (TARGET == "arm64") {
+$flag --pie
+}
+```
 
 `qela .` is the compiler as its own build system: every `.qela` file in a
 directory is merged into one program, so functions call across files with no
