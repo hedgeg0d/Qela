@@ -253,6 +253,11 @@ fn arg_leaf_ok(a *Node) bool {
 
 fn arg_direct_ok(a *Node) bool {
 	if (arg_leaf_ok(a)) { return true; }
+	// The address of a frame slot is a bare lea into the destination.
+	if (a.kind == ND_ADDR && a.lhs as i64 != 0 && a.lhs.kind == ND_VAR) {
+		var v *Var = a.lhs.varp;
+		return !v.has_reg && !v.is_global && !v.by_ref && !v.arg_stack && !v.is_tls;
+	}
 	var k int = a.kind;
 	if (k != ND_ADD && k != ND_SUB && k != ND_BITAND && k != ND_BITOR && k != ND_BITXOR) {
 		return false;
@@ -309,6 +314,7 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) int
 	}
 
 	var av [14]i64;
+	var dfr [14]bool;
 	var an int = 0;
 	var has_overflow bool = false;
 	var scan *Node = n.args;
@@ -318,16 +324,17 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) int
 		an = an + 1;
 		scan = scan.next;
 	}
-	var direct_from int = an;
-	// The direct-argument fast path assumes every argument lands in a
-	// register; a call with stack-spilled arguments always takes the slow,
-	// evaluate-then-place path instead. A marshalled float argument can never
-	// take the fast path: its value has to move into an xmm register, and
+	// Which arguments can be filled straight into their register after the
+	// pushed ones are in place, instead of being pushed and popped. Decided
+	// per argument: an argument that cannot be deferred does not force the
+	// ones around it onto the stack too. A marshalled float argument can
+	// never take this path: its value has to move into an xmm register, and
 	// gen_into does not know about those.
-	while (!has_overflow && direct_from > 0 &&
-	       !(marshall && is_float((av[direct_from - 1] as *Node).ty)) &&
-	       arg_direct_ok(av[direct_from - 1] as *Node)) {
-		direct_from = direct_from - 1;
+	var dj int = 0;
+	while (dj < an) {
+		var dn *Node = av[dj] as *Node;
+		dfr[dj] = !has_overflow && !(marshall && is_float(dn.ty)) && arg_direct_ok(dn);
+		dj = dj + 1;
 	}
 	var ai int = 0;
 
@@ -353,7 +360,7 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) int
 
 	var a *Node = n.args;
 	while (a as i64 != 0) {
-		if (ai >= direct_from) {
+		if (dfr[ai]) {
 			if (first_in_rax && nd == 0) {
 				// A syscall's number is x86's rax, but ARM64's SVC reads it
 				// from x8 and RISC-V's ecall from a7 -- unlike x86, neither
@@ -1266,6 +1273,15 @@ fn gen_into(n *Node, dst int) bool {
 		return true;
 	}
 	var k int = n.kind;
+	if (k == ND_ADDR && n.lhs as i64 != 0 && n.lhs.kind == ND_VAR) {
+		// &slot: one lea, when the slot has a frame address of its own.
+		var v *Var = n.lhs.varp;
+		if (!v.has_reg && !v.is_global && !v.by_ref && !v.arg_stack && !v.is_tls) {
+			ir_lea_vreg_slot(dst, v.offset as i64, n.pos);
+			return true;
+		}
+		return false;
+	}
 	if (k != ND_ADD && k != ND_SUB && k != ND_BITAND && k != ND_BITOR && k != ND_BITXOR) {
 		return false;
 	}
@@ -1688,6 +1704,18 @@ fn ir_lea_op2_slot(off i64, pos i64) {
 fn ir_lea_slot_acc(off i64, pos i64) {
 	var op *IrOp = ir_emit(IR_LEA, pos);
 	op.dst = operand_acc();
+	op.src0 = operand_stackslot(off, null);
+	op.src1 = operand_none();
+	op.aux = 1;
+}
+
+
+// The same address, but into a specific register: an argument that is the
+// address of a frame slot reaches its register in one instruction instead of
+// being computed into the accumulator, pushed and popped.
+fn ir_lea_vreg_slot(dst int, off i64, pos i64) {
+	var op *IrOp = ir_emit(IR_LEA, pos);
+	op.dst = operand_vreg(dst, type_ptr(ty_i64));
 	op.src0 = operand_stackslot(off, null);
 	op.src1 = operand_none();
 	op.aux = 1;

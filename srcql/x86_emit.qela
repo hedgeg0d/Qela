@@ -2049,6 +2049,12 @@ fn x86_lower_op(op *IrOp) {
 		lea_local(op2_reg(op.dst.reg), op.src0.off);
 		return;
 	}
+	// The same frame address, straight into a call-argument register: an
+	// &slot argument needs no accumulator detour.
+	if (op.kind == IR_LEA && op.dst.kind == OP_VREG && op.src0.kind == OP_STACKSLOT && op.src1.kind == OP_NONE) {
+		lea_local(op.dst.reg, op.src0.off);
+		return;
+	}
 	if (op.kind == IR_BR) {
 		var label i64 = op.dst.off;
 		if (ir_label_pos.p[label] >= 0) {
