@@ -1,0 +1,23 @@
+// stage1-only
+// expect-exit: 42
+// tls_init's x86 stub used to clobber r12 without saving it. A call site
+// with several promoted locals keeps them in callee-saved registers
+// (rbx, r12-r15), so a value live across tls_init() died there and the
+// sum came out wrong. The stub now preserves r12 like any callee-saved
+// register.
+fn sum_across_tls(a i64) i64 {
+	var v1 i64 = a + 1;
+	var v2 i64 = a + 2;
+	var v3 i64 = a + 3;
+	var v4 i64 = a + 4;
+	var v5 i64 = a + 5;
+	var v6 i64 = a + 6;
+	tls_init();
+	return v1 + v2 + v3 + v4 + v5 + v6;
+}
+
+fn main() int {
+	var got i64 = sum_across_tls(10);
+	if (got != 81) { return 1; }
+	return 42;
+}
