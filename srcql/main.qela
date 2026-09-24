@@ -157,6 +157,9 @@ fn compile_src(name str, src str, output str) {
 	base_check();
 	var img Image;
 	codegen(unit, &img);
+	// Soft errors kept the compile alive to find more of them; now that
+	// every pass finished, fail without writing a binary.
+	diag_fail_if_errors();
 	if (opt_object) { write_object(output, &img); }
 	else { write_elf(output, &img); }
 }
