@@ -13,9 +13,13 @@ fn eval(src str) i64 {
 	var kind u8 = 0;
 	var resp str = abi_wait_result_payload(&kind);
 	if (kind == 0) {
+		if (abi_child_signal != 0) {
+			eprint("eval: interrupted\n");
+			return 0;
+		}
 		if (!abi_respawned && abi_respawn()) { return eval(src); }
 		eprint("eval: the qela subprocess died\n");
-		sys_exit(1);
+		return 0;
 	}
 	if (kind == (ABI_RESP_ERR as u8)) {
 		// A bad source reports and skips: the evaluator survives a typo,
