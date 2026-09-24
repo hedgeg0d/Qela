@@ -895,6 +895,12 @@ fn arm64_ld_at(rt int, rn int, off i64) {
 	b4(0xf9400000 | ((off / 8) << 10) | (rn << 5) | rt);
 }
 
+// 32-bit load with an offset in bytes (64-bit ldr encodes off/8, so a
+// 4-byte step is unreachable for it). Used by the f32 HFA marshalling.
+fn arm64_ldw_off(rt int, rn int, off i64) {
+	b4(0xb9400000 | ((off / 4) << 10) | (rn << 5) | rt);
+}
+
 
 fn arm64_str_off(rt int, rn int, off i64) {
 	b4(0xf9000000 | ((off / 8) << 10) | (rn << 5) | rt);

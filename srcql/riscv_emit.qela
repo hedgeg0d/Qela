@@ -1504,6 +1504,20 @@ fn gen_extern_params_riscv(f *Func) {
 			fi = fi + 1;
 			if (v.has_reg) { riscv_mov_reg(v.reg, A0); }
 			else { riscv_st_local(v.offset as i64, A0); }
+		} else if (agg_fp_shape(v.ty) != 0) {
+			// LP64D's HFA: one element per fa-register, word 0 first.
+			var shape i64 = agg_fp_shape(v.ty);
+			var unit i64 = agg_fp_unit(shape);
+			var count i64 = agg_fp_count(shape);
+			var base i64 = v.offset as i64;
+			if (v.ty.size > 8) { base = base - 8; }
+			var r i64 = 0;
+			while (r < count && r < 4) {
+				riscv_fmv_f_to_wx(A0, FA0 + r, unit);
+				riscv_st_local(base + r * unit, A0);
+				r = r + 1;
+			}
+			fi = fi + count;
 		} else if (is_aggregate(v.ty) && !v.by_ref && v.ty.size > 8) {
 			riscv_st_local(v.offset as i64, call_reg(ri));
 			riscv_st_local((v.offset as i64) - 8, call_reg(ri + 1));
