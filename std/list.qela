@@ -8,6 +8,7 @@ struct List {
 	cap  i64,
 }
 
+/// Grows the backing array to hold more elements.
 fn list_grow(l *List, need i64) {
 	if (l.len + need <= l.cap) { return; }
 	var cap i64 = l.cap;
@@ -29,6 +30,7 @@ fn list_grow(l *List, need i64) {
 	l.cap = cap;
 }
 
+/// Appends a pointer to the list.
 fn list_push(l *List, p *u8) {
 	list_grow(l, 1);
 	var slot *i64 = (l.data as *i64) + l.len;
@@ -36,12 +38,14 @@ fn list_push(l *List, p *u8) {
 	l.len = l.len + 1;
 }
 
+/// Returns the pointer at a given index.
 fn list_get(l *List, i i64) *u8 {
 	if (i < 0 || i >= l.len) { return null; }
 	var slot *i64 = (l.data as *i64) + i;
 	return *slot as *u8;
 }
 
+/// Returns the number of stored pointers.
 fn list_len(l *List) i64 {
 	return l.len;
 }

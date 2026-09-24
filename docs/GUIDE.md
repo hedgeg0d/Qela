@@ -145,6 +145,7 @@ qela . [dir]                # merge every .qela in a directory into one program
 qela repl                   # one-liner REPL: type an expression, see its value
 qela test file.qela         # run file, check its // expect-* comments (section 21)
 qela fmt file.qela          # reformat over the token stream, idempotent
+qela doc std name           # look up a /// doc comment by name (fuzzy)
 qela --lsp                  # language server: diagnostics, hover, go-to-def
 qela --dump-std <module>    # print a standard module's embedded source
 ```

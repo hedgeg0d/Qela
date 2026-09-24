@@ -1,4 +1,4 @@
-// expect-exit: 10
+// expect-exit: 1
 // got: CRASH
 struct Pair { x int, y int, }
 struct Wide { a int, b int, c int, }
@@ -37,31 +37,35 @@ fn main() int {
     var a [4]int;
     var i0 int = 0;
     var i1 int = 0;
-    var i2 int = 0;
+    var i2 int = 0x0;
     var i3 int = 0;
-    var i4 int = 0;
+    var i4 int = 0x0;
     var i5 int = 0;
     fv = 100.0;
-    v1 = ((("foobar")[2..5])[0] & (((-v1) % (((fv <= -2.0) & 15) + 1)) << (mix6(-738, 127, v0, true, v1, false) & (39 < '2'))));
-    match (e) {
-        A => {
-            return v2;
-        }
-        B(mb0) => {
-            return (!v0);
-        }
-        C(mb0, mb1) => {
-            return (p.x | mb1);
-        }
+    v1 = ((!(((((sv1 + ("foobar")[2..6]))[0..2] + ("""x
+yz""")[0..2]))[1] >= (-v1))) & (((544 != false) as u8) << (('0' if ('0' < (sv1).len) else 'd') & (39 < '2'))));
+    v1 = v2;
+    sv1 = sv1;
+    if (((-false) > (((((v2 > true) && (true < false)) * ('a' % ((0xfffffffffffffd9e & 15) + 1))) - (((0x2 if ((((v2 in 0..((((960 <= -241) && (-241 <= 42)) & 15) + 1)) * ((0xfffffffffffffd0f != false) | 10)) / ((v0 & 15) + 1)) == (((fv / -1.5) > 10.5) < ((((0 >= 0) && (0 >= v2)) * p.y) > (('0' - 'g') != (-0.5 as i64))))) else -655) < (!v0)) && ((!v0) <= v0))) in 0..(((((100 in 0..((false & 15) + 0x1)) if (255 >= str_eq("qwerty", sv1)) else 302) - (!210)) & 15) + 0x1)))) {
+        v2 = v0;
+        p.x = (("hi" + ("qwerty")[0..2])).len;
+        return ((p.x >= (fv != (0.5 / 1.7))) <= (((-v2) & (1 / ((1 & 15) + 0x1))) * mix6((0 in a), (-true), (1 > false), (255 as i8), (-75 as u16), (!204))));
+    } else {
+        sv0 += sv1;
+        sv1 += sv0;
     }
-    e = E.C(mix6(v2, 42, str_eq("42", ("abc")[0..3]), -315, '3', (!(mix6(v2, true, 668, '1', v2, 10) | (508 % (('e' & 15) + 1))))), (((-(127 >= 655)) >> 'b') < ((!(("qwerty")[0..2]).len) > (('g' & v0) < 127))));
-    v0 = (!v1);
-    v1 -= false;
-    sv0 = "42";
-    v0, v1 = ((a[(v2 & 3)] * ((-753 != false) | 10)) / ((v0 & 15) + 1)), 0;
-    var ob Buf;
-    fmt_i64(&ob, v2);
-    write_str(STDOUT, buf_str(&ob));
-    write_str(STDOUT, "\n");
-    return ((((fv / -2.0) as i64) > (sv0)[0]) >> (a[((-863 > 'd') & 3)] ^ (v1 < (10 > 'f'))));
+    v0 |= (((2.5 * (1 as double)) as i64) >= ((-(42 == 0xb)) in 0..((mix6((v1 if ((!(!p.y)) >= true) else 127), ((false >= 113) && (113 > v2)), a[(v1 & 3)], (true in 0..((627 & 15) + 1)), (480 ^ v0), (fv >= 0.125)) & 15) + 1)));
+    b = Bag{p: ((((100 == 100) as i16) / ((((-160 if (((((59 in a) in a) as double) > (1.0 / -1.5)) >= '\t') else 931) in 0..(((-129 in a) & 15) + 1)) & 15) + 1)) >= (-v2)), q: ((((("xyz")[0..3] + "hello"))[0] as i32) < (v1 as i16)), r: (("foobar" + ("hello")[0..2])).len, s: ((((v2 as double) * (10.5 - 0.1)) <= ((v2 == v0) as double)) if (("zz")[0] >= ((((10 as double) / 0.1) / -0.5) <= 1.7)) else (((!(753 != 42)) >= pair_sum(Pair{x: 100, y: (false as u8)})) && (pair_sum(Pair{x: 100, y: (false as u8)}) > zero())))};
+    if (((((v2 | ((((("abcd")[0..2])[0..2] + ("xyzzy" + """x
+yz""")))[0..2])[0]) as i16) if (((((v2 ^ (fv <= fv)) <= ((pair_sum(Pair{x: false, y: 1}) >= (-19)) && ((-19) <= false))) && (((pair_sum(Pair{x: false, y: 1}) >= (-19)) && ((-19) <= false)) > ((0x1cf - 0x7f) == (10 if ((false / ((((((("hello")[0..2]).len | ('f' ^ 0xd8)) <= (p.x in a)) && ((p.x in a) > ((-1 > 748) / ((('f' / ((780 & 15) + 0x1)) & 15) + 1)))) & 15) + 1)) < (100 <= true)) else 42)))) < (((fv + 0.125) as i64) in a)) != ((613 as u16) <= (42 in a))) else p.y) > ('g' << (((v2 & 2) ^ (true as i32)) << ((!-399) < ('c' <= 637)))))) {
+        v1 = (((a[(0 & 3)] as double) <= fv) ^ str_eq("hi", ((((("42")[0..2] + sv0) + ("""ab
+cd""")[1..5]))[0..2])[0..2]));
+        p.y = ((((v1 as i32) in a) <= str_eq("no", ("""x
+yz""")[1..3])) && (str_eq("no", ("""x
+yz""")[1..3]) <= -817));
+    } else {
+        b = Bag{p: 72, q: ((((fv < fv) as i16) << ((("foobar")[1..6])[0..2])[0]) <= false), r: ((("hello")[0..2]).len as u16), s: 100};
+    }
+    write_str(STDOUT, "${v1:08x}\n");
+    return (((((str_eq("abcd", ("xyz")[0..3]) < (!1)) && ((!0x1) < (255 + '\n'))) > ((-127) in 0..(((-124 == false) & 15) + 0x1))) && (((-127) in 0..(((-124 == false) & 15) + 1)) > (104 << (-false)))) in 0..(((("abcd")[0] in 0..((469 & 15) + 1)) & 0xf) + 1));
 }
