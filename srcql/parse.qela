@@ -1282,9 +1282,26 @@ fn parse_decl(t **Token) *Node {
 	if (is_dyn) { ty = type_dynval(); }
 	else if (typed && !tok_eq(*t, "=")) { ty = parse_type(t); }
 	var n *Node = new_node(ND_EXPRSTMT, p);
+	var dyn_zero *Node = 0 as *Node;
 	if (tok_consume(t, "=")) {
 		var rhs *Node = parse_assign(t);
 		var v *Var = declare_var(name, ty, p);
+		if (is_dyn) {
+			// A with-initializer local skips the usual "zeroed at
+			// declaration" step -- the initializer overwrites the whole
+			// slot anyway, normally. A dynamic local is different: the
+			// assign below rewrites into a free-before-rebox
+			// (type_assign_dyn) that unconditionally reads the *old*
+			// `v.ptr` first, so a fresh `var ~n = expr` needs that old
+			// value to be a real null, not whatever garbage this stack
+			// slot last held (a prior function's frame, an entry-stub
+			// scratch value -- platform- and build-dependent, so this
+			// looked fine on x86 by luck of stack contents and only
+			// crashed heap_free on ARM64, where the leftover bytes happen
+			// to look like a wild pointer).
+			dyn_zero = new_node(ND_ZERO, p);
+			dyn_zero.varp = v;
+		}
 		if (ty as i64 == 0) {
 			// An interpolation's result type is always str, known without
 			// typing it: typing it now would rewrite it into calls on
@@ -1350,6 +1367,7 @@ fn parse_decl(t **Token) *Node {
 		n.lhs = z;
 	}
 	tok_expect(t, ";");
+	if (dyn_zero as i64 != 0) { dyn_zero.next = n; return dyn_zero; }
 	return n;
 }
 
