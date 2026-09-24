@@ -1,6 +1,10 @@
 // expect-out: Hello, Qela!
 fn main() int {
 	let msg = "Hello, Qela!\n";
-	syscall(1, 1, msg.ptr, msg.len);
+	$if (TARGET == "arm64") {
+		syscall(64, 1, msg.ptr, msg.len);
+	} $else {
+		syscall(1, 1, msg.ptr, msg.len);
+	}
 	return 0;
 }

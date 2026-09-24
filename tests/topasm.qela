@@ -1,4 +1,5 @@
 // stage1-only
+// x86-only
 // expect-exit: 42
 // Top-level asm bytes are the image's first bytes — a multiboot header
 // fits in the first 8 KiB of the file. `entry start` makes the naked
