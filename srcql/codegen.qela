@@ -3229,6 +3229,21 @@ fn layout_globals(globals *Var, funcs *Func) {
 		}
 		v = v.next;
 	}
+	// An ARM64 PIE's Android tables (gnu hash, symtab, strtab, the
+	// dynamic table and the section table -- 392 bytes, written by the
+	// ELF layer right after the file-backed data) sit exactly where the
+	// bss zero-fill would otherwise start; shift the bss globals past
+	// them or an atomic_cas on a bss lock spins on a hash word.
+	if (opt_pie && opt_target == TARGET_ARM64) {
+		var v2 *Var = globals;
+		while (v2 as i64 != 0) {
+			if (!v2.is_tls && v2.init == 0 && !(v2.extern && !v2.has_init) && (v2.reachable || opt_object)) {
+				v2.data_off = v2.data_off + 392;
+			}
+			v2 = v2.next;
+		}
+		bss = bss + 392;
+	}
 	bss_size = bss - gdata.n;
 }
 
@@ -3786,6 +3801,11 @@ fn codegen(u *Unit, img *Image) {
 	}
 	var nph int = 1;
 	if (gdata.n + bss_size > 0) { nph = 2; }
+	// An ARM64 PIE always carries the RW segment: its DT_NULL dynamic
+	// table (Android's linker refuses an ET_DYN without a PT_DYNAMIC)
+	// needs mapped memory, so the segment exists even for a program with
+	// no data at all.
+	if (opt_pie && opt_target == TARGET_ARM64) { nph = 4; }
 	var hdr i64 = EHDR_SZ + PHDR_SZ * (nph as i64);
 	riscv_image_hdr = hdr;
 	arm64_image_hdr = hdr;
