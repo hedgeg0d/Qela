@@ -3255,6 +3255,7 @@ fn reset_code() {
 	br_grew = false;
 	arm64_br_n = 0;
 	arm64_br_at.n = 0;
+	arm64_op2_ov = -1;
 	riscv_br_n = 0;
 	riscv_br_at.n = 0;
 	bounds_checks.n = 0;
