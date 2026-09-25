@@ -23,6 +23,12 @@ let TK_FMTSPEC = 8;
 // Positions of every file share one i64: file_id << FILE_SHIFT | offset.
 let FILE_SHIFT = 40;
 
+// The compiler version, one source of truth: `qela --version`, the help
+// header and the repl banner print what this returns. Bump it here only.
+fn qela_version() str {
+	return "alpha-0.1.0";
+}
+
 struct Token;
 struct Token {
 	kind int,
