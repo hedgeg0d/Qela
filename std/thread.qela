@@ -102,6 +102,7 @@ fn pool_worker(id i64) i64 {
 			coro_yield();
 		} else if (!pool_steal(id)) {
 			fence();
+			sys_sched_yield();
 		}
 	}
 	return 0;
@@ -131,11 +132,12 @@ fn thread_pool_init(n i64) {
 // five i64/pointer-sized arguments, the same convention coro_spawn uses.
 fn go(fn_ptr i64, a0 i64, a1 i64, a2 i64, a3 i64, a4 i64) {
 	var id i64 = atomic_add(&pool_next, 1) % pool_n;
-	while (!atomic_cas(&pool_lock[id], 0, 1)) { }
+	while (!atomic_cas(&pool_lock[id], 0, 1)) { sys_sched_yield(); }
 	while (pool_tail[id] - pool_head[id] >= POOL_QUEUE) {
 		atomic_store(&pool_lock[id], 0);
 		fence();
-		while (!atomic_cas(&pool_lock[id], 0, 1)) { }
+		sys_sched_yield();
+		while (!atomic_cas(&pool_lock[id], 0, 1)) { sys_sched_yield(); }
 	}
 	var slot i64 = pool_tail[id] % POOL_QUEUE;
 	pool_queue[id][slot].fn_ptr = fn_ptr;
