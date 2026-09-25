@@ -1,14 +1,14 @@
 # Where the project stands
 
-Updated 2026-08-05. Read `BOOTSTRAP.md` first; it constrains everything below.
+Updated 2026-08-08. Read `BOOTSTRAP.md` first; it constrains everything below.
 
 ## Numbers
 
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **324 400 B** |
-| stage1 sources | 12 785 lines of Qela |
+| **S2 — the shipped compiler, Qela compiled by itself** | **480 576 B** |
+| stage1 sources | 20 313 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
 
 Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 124-test corpus under S2, the embedded stdlib resolving outside the source tree,
@@ -18,6 +18,39 @@ backtrace, interpolation and the repl, the compiler flags (`-g`,
 server conversation.
 
 ## Done
+
+**The interpreter: `qela irun` (2026-08-08).** A fourth way to run a
+program, and the first that emits nothing at all. `srcql/interp.qela` walks
+the typed AST `parse()` already produces -- type checking, folding, bounds
+elision and frame layout all ran there long before codegen existed -- so
+`codegen.qela` and `elf.qela` are simply not in the path. Source, not
+bytecode: there is no compilation step of any kind between the AST and the
+result.
+
+The interpreted program's pointers are real addresses in the interpreter's
+own process. That single decision is what makes it small: `syscall` is a
+forwarded call (`sys_call6` in `std/sys.qela`), so `arena`, `str`, `buf`,
+`io` and `fmt` run unchanged and the interpreter supports nothing above
+`syscall`. Globals and string literals go into one mapped block laid out
+the way `layout_globals` lays out `.data`, so `gc_data_base`/`gc_data_end`
+are just its bounds; frames come off a second block growing downward, which
+is the shape `std/gc.qela`'s conservative stack scan already expects.
+
+`asm`, `fn naked`, top-level `asm { }` and `entry` are ignored with one
+warning per site -- there is no machine code for them to be part of.
+`coro_switch`, `thread_clone` and any extern are a clear error rather than a
+wrong answer. Atomics, `fence`, `tls_init` and `tvar` work as the
+single-threaded operations they reduce to here.
+
+Verified: 104/104 under `TARGET=interp tools/run-tests.sh` (9 tests
+`// interp-skip` as machine-level by definition, 15 `// interp-todo`
+pending coroutines), and `examples/lisp` -- a lisp interpreter running
+inside the Qela interpreter -- gives the same 57 ok / 0 fail as compiled.
+Costs +23 368 B in S2.
+
+`interp.qela` is the one file in `srcql/` stage0 does not compile; the `$if
+(BOOTSTRAP != "1")` guard and its consequences are written up in
+`BOOTSTRAP.md`.
 
 **Real parallelism: OS threads, `tvar`, `go`, work-stealing (2026-08-05).**
 Coroutines used to be concurrency without parallelism -- one process, one
