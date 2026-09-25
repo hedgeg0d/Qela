@@ -10,6 +10,11 @@ diagnostic rendered as garbage on a terminal. Piped runs never showed it,
 because auto colour is off without a tty, which is why this check asks for
 colour explicitly.
 
+The colour decision is part of this too: "auto" must ask about the stream the
+diagnostics go to (stderr), not about stdin. With stdin on a terminal and
+stderr in a file the escapes used to be written into the file, and a run with
+everything redirected still coloured its log.
+
 The cascade part: a soft error poisons its node and the compile goes on, so
 one run can report several independent mistakes. A check that does not know
 about the poison type reports a second, useless error on top of the real
@@ -18,7 +23,7 @@ diagnostic must be there, the poison one must not.
 
 QELA is the compiler to test, set by the caller.
 """
-import os, subprocess, sys, tempfile
+import os, pty, subprocess, sys, tempfile
 
 qela = os.environ.get("QELA", "./build/bootstrap/s2")
 
@@ -63,6 +68,58 @@ if "undefined function 'countre'" not in out:
     fails.append("the real error is missing")
 if "cannot interpolate" in out:
     fails.append("a poisoned part reported a second, useless error")
+
+def colored_with_stderr_tty():
+    """The diagnostics' own stream is a terminal: colour is expected."""
+    with tempfile.NamedTemporaryFile("w", suffix=".qela", delete=False) as f:
+        f.write(BAD)
+        path = f.name
+    m, s = pty.openpty()
+    try:
+        subprocess.run([qela, path, "-o", path + ".bin"], stdin=subprocess.DEVNULL,
+                       stdout=subprocess.PIPE, stderr=s, timeout=60)
+    finally:
+        os.close(s)
+    out = b""
+    while True:
+        try:
+            chunk = os.read(m, 4096)
+        except OSError:
+            break
+        if not chunk:
+            break
+        out += chunk
+    os.close(m)
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+    return out
+
+
+def colored_with_stderr_pipe():
+    """stdin is a terminal but stderr is not: no colour may appear."""
+    with tempfile.NamedTemporaryFile("w", suffix=".qela", delete=False) as f:
+        f.write(BAD)
+        path = f.name
+    m, s = pty.openpty()
+    try:
+        p = subprocess.run([qela, path, "-o", path + ".bin"], stdin=s,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+    finally:
+        os.close(s)
+        os.close(m)
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+    return p.stderr
+
+
+if b"\x1b[" not in colored_with_stderr_tty():
+    fails.append("a terminal on stderr got no colour")
+if b"\x1b[" in colored_with_stderr_pipe():
+    fails.append("escapes were written while stderr was not a terminal")
 
 MEMBER = ('import "std/io.qela";\nstruct P { x i64 }\n'
           'fn main() int { var p P; println("${nosuchz.pos}"); return 0; }\n')
