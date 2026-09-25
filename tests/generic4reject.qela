@@ -1,0 +1,10 @@
+// expect-compile-error
+// stage1-only
+// A constrained parameter rejects a non-conforming argument at the
+// application site: Labeled's V is constrained to str, so Labeled(i64)
+// must not compile.
+struct Labeled(V: str) { label str, v V, }
+fn main() int {
+	var l Labeled(i64);
+	return 0;
+}
