@@ -1,6 +1,8 @@
 # Where the project stands
 
-Updated 2026-08-16. Read `BOOTSTRAP.md` first; it constrains everything below.
+Updated 2026-08-17 (commit `c0eac74`). Read `BOOTSTRAP.md` first; it
+constrains everything below. The dated entries below are implementation
+history; the numbers in this section are the current snapshot.
 
 ## Numbers
 
@@ -8,14 +10,19 @@ Updated 2026-08-16. Read `BOOTSTRAP.md` first; it constrains everything below.
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
 | **S2 — the shipped compiler, Qela compiled by itself** | **765 088 B** (73.0% of the 1 MiB budget) |
-| stage1 sources | ~21 900 lines of Qela |
+| stage1 sources | 32 077 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
 
-Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 212-test corpus under S2, the embedded stdlib resolving outside the source tree,
+The last successful gate verifies S2 == S3 byte-for-byte, the 212-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
 backtrace, interpolation and the repl, the compiler flags (`-g`,
 `--backtrace`, `--no-bounds-checks`, `--dump-std`), and a scripted language
 server conversation.
+
+On the current workspace, `make build` reproduced the fixed point at 765 088 B.
+The local sandbox cannot bind loopback sockets, so `tests/http.qela` and
+`tests/netproc.qela` exit at `net_listen`; this is an environment failure, not
+a changed compiler result. The last unrestricted gate remains 212/212.
 
 ## Done
 
@@ -224,7 +231,8 @@ bools, ints, floats, strings, arrays, slices, pointers to structs or
 nested structs. A field missing from the JSON, of the wrong kind, or
 beyond the length of a fixed array keeps its current value, and unmarshal
 returns false only when the document is not an object; field names are
-the JSON keys (no tags yet). The rewrite lives in `srcql/jmgen.qela`
+the JSON keys; field tags were added in the 2026-08-16 missing-features batch.
+The rewrite lives in `srcql/jmgen.qela`
 plus a hook at the top of `type_call`; the generated code compares node
 kinds against plain numbers because it parses in a fresh scope that
 cannot see `std/json.qela`'s `let` constants. S2 676 536 -> 696 264 B
@@ -504,7 +512,7 @@ rejected. A generator may consume another generator (the sub-generator's
 parent tracking follows the nesting). The two features together cost
 +19 848 B in S2 (592 584 -> 612 432). Pinned by `tests/gen.qela`.
 
-**The interpreter: `qela irun` (2026-08-08).** A fourth way to run a
+**The interpreter: `qela irun` (2026-08-17).** A fourth way to run a
 program, and the first that emits nothing at all. `srcql/interp.qela` walks
 the typed AST `parse()` already produces -- type checking, folding, bounds
 elision and frame layout all ran there long before codegen existed -- so
@@ -645,8 +653,8 @@ the pool scheduler is round-robin plus queue-level stealing, not Go's
 work-stealing across live goroutines -- a coroutine already handed to a
 thread stays there. A thread that never allocates and isn't in the pool
 loop can't be paused by the collector; nothing here tries to preempt it.
-Cross-thread deadlock detection does not exist (not a buggy version of
-it -- it is off). Costs +25.7 KB in S2.
+Cross-thread deadlock detection was not present in this earlier snapshot (it
+was completed on 2026-08-14; see the entry above). Costs +25.7 KB in S2.
 
 **Default and named arguments (2026-08-05).** `fn sum(a=0 i64, b=0 i64) i64`
 declares defaults; `sum(1,2)` still takes the unchanged positional path.
@@ -875,14 +883,48 @@ RAX back into `xmm0`. The marshalling applies to every call to an
 `extern`-marked function, whether it has a body or not, so the same code
 serves both crossing directions. The new `gpr_to_xmm`/`xmm_to_gpr`
 helpers carry a correct REX prefix for `r8`/`r9` (the older float moves
-never saw a register that high). SysV marshalling is register-only: a
-parameter that would spill is a compile error in `parse.qela` ("an
-extern function takes at most six register words"), and indirect calls
-through function pointers and aggregate floats (`Vector2` and friends)
-are not marshalled. Pinned by `tests/externfloat.qela` and
-`tests/externfloat_reject.qela`; the crossing is verified against gcc in
-both directions. `examples/flappy/` now calls `GetFrameTime` and
-`DrawCircle` directly and `glue.c` is gone.
+never saw a register that high). Indirect calls through function
+pointers and mixed int/float structs (`{f64, i64}` rides two GPRs, not
+the xmm+gpr split gcc uses) are not marshalled. Pinned by
+`tests/externfloat.qela` and `tests/externfloat_reject.qela`; the
+crossing is verified against gcc in both directions. `examples/flappy/`
+now calls `GetFrameTime` and `DrawCircle` directly and `glue.c` is gone.
+
+**Extern spills and >16-byte aggregates by value (2026-08-17).** The
+"six register words" ceiling is gone: an `extern` function's parameters
+are classified SysV-style on separate integer and float budgets, and
+what does not fit spills to the stack (`rbp+16+8k`, exactly where a C
+caller puts it) instead of failing to compile. On the caller side
+`gen_args` pushes the spilled words in reverse source order (the first
+spill ends up nearest `rbp`), on the callee side `gen_extern_params`
+reads them in place, and the x86 alignment pad counts every word. An
+sret pointer reserves the first integer register on x86-64 and RISC-V
+(AAPCS64 hides it in `x8`), so an extern function that returns a big
+aggregate and takes six parameters no longer collides on the last
+register. RISC-V's LP64D falls back to the integer registers once `fa`
+is exhausted (verified against gcc: the ninth float rides `a0`), which
+x86 and AArch64 do not; the same fallback exists on both sides of the
+boundary. Aggregates wider than 16 bytes travel by value: x86-64's
+MEMORY class copies the struct into the outgoing stack area (one word
+per eightbyte, byte 0 at the lowest address), while AAPCS64 and LP64D
+pass them by reference -- Qela's own `by_ref` shape takes no new code
+on those targets. A `by_val` flag on the parameter marks the difference
+on x86 (`gen_addr` must lea the slot, not load a pointer). Two latent
+unrelated bugs were found and fixed along the way: an FP-marshalling
+pop into the accumulator shredded the first integer argument on
+AArch64/LP64D (the accumulator *is* `x0`/`a0`; the pop now goes through
+`X9`/`T0`), and the exported callee's float restaging clobbered the
+same register. Honest rejections remain where SysV has no Qela
+representation: a str that would straddle the GPR budget on x86, an
+all-float struct spilling past the FP registers, and an all-float
+struct of 17..32 bytes on AArch64/LP64D (an HFA there -- up to four
+elements on AAPCS64, eight on LP64D -- rides FP registers Qela cannot
+stage; x86-64 stacks it, verified against gcc). Pinned by
+`tests/externspill.qela`, `tests/externagg_reject.qela`,
+`tests/externstr_reject.qela` and the rewritten
+`tests/externfloat_reject.qela`; `tools/ffi-test.sh` gained the
+9-argument, struct-by-value and six-return cases against gcc on all
+three targets.
 
 **Float global initializers (2026-08-05).** Two constants bugs, both found
 while writing the raylib example (`examples/flappy/`): an `f32` global
@@ -1006,8 +1048,9 @@ integer" met float bits: `spine_ok` folded float comparisons as integers
 (`srcql/opt.qela`), and `gen_into`, `stmt_update` and `gen_compare`
 miscopied or mistyped float moves (`srcql/codegen.qela`). All fixed.
 
-Known limits: subnormal literals flush to zero on parse, printing rounds
-half up instead of half to even, and there is no comptime float.
+Decimal literals, including subnormals, and fixed-point formatting use
+round-to-nearest, ties-to-even. `comptime` expressions support float
+literals, arithmetic, negation and comparisons in S2/S3.
 
 **Hardening pass (2026-08-04).** Every fix below is mirrored in stage0 where
 the feature exists there, and pinned by a corpus test; the gate stayed green
@@ -1312,11 +1355,13 @@ written in lisp itself. `examples/lisp/tests.lisp` carries ~60 checks; the
 interpreter gained `and`/`or` (short-circuiting) and `equal?`/`string=?`
 builtins to support them.
 
-## Not done
+## Open work
 
-Item 1 is kept here for what remains of it. Item 2 (backends) is done:
-ARM64 and RISC-V both reach the self-hosting fixed point, and the full
-writeups live in this file.
+The backends are complete: ARM64 and RISC-V both reach the self-hosting fixed
+point. Older backend measurements and rejected experiments are retained below
+as history; they are not current TODOs. The remaining product-sized item is
+emitted-code efficiency (the M4 benchmark gate). The standard-library breadth
+batch is complete; it is not an open item.
 
 ### 1. Emitted code size (M4)
 
@@ -1445,8 +1490,9 @@ native x86 build, passing the x86 corpus here.
   enums with payloads and exhaustive `match` — and evaluates them in a Python
   model that mirrors x86 semantics exactly. Clean across 2 500 generated
   programs under both stage0 and S2.
-- Parameterized types take at most two parameters, and there is no way to
-  constrain one. Both limits are in `srcql/generic.qela`.
+- Parameterized types support four parameters and constraints; the current
+  behavior is pinned by `tests/generic4.qela` and
+  `tests/generic4reject.qela`. The older two-parameter note is historical.
 - `genblob.py --min` to strip comments and indentation from the embedded
   library. Comments were instead stripped at the source (2026-08-04): only
   comments the code cannot explain itself kept in `std/*.qela`, saving

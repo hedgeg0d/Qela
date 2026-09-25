@@ -215,6 +215,12 @@ struct Var {
 	extern    bool,
 	has_init  bool,
 	by_ref    bool,
+	// A stack-passed parameter whose slot holds the aggregate itself, not a
+	// pointer to it: SysV's MEMORY class, where a C caller copies a struct
+	// wider than 16 bytes into the outgoing argument area. Only ever set
+	// together with arg_stack + by_ref; gen_addr must lea the slot for
+	// these instead of loading a pointer.
+	by_val    bool,
 	data_off  i64,
 	init      i64,
 	has_reg   bool,
@@ -532,6 +538,7 @@ let CV_INT = 0;
 let CV_STR = 1;
 let CV_TYPE = 2;
 let CV_VOID = 3;
+let CV_FLOAT = 4;
 
 // Inter-module API. Qela has no prototypes: functions are visible across the
 // whole spliced token stream, so this list is the agreed contract. Changing a
