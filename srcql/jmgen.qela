@@ -14,8 +14,10 @@ import "../std/fmt.qela";
 // floats, strings, arrays, slices, pointers to structs or nested structs;
 // a field missing from the JSON, of the wrong kind, or beyond the length
 // of a fixed array keeps its current value, and it returns false only when
-// the JSON itself is not an object (or cannot be parsed at all). Field
-// names are the JSON keys; there are no tags yet.
+// the JSON itself is not an object (or cannot be parsed at all). A field
+// may carry a tag -- `x i64 "json-key"` -- that renames its key in both
+// directions; the tag "-" omits the field from the output and from the
+// unmarshal scan (the field keeps its current value).
 //
 // The generated code compares node kinds against plain numbers (0..6)
 // because it is parsed in a fresh scope that cannot see std/json.qela's
@@ -193,10 +195,13 @@ fn jmgen_marshal_for(ty *Type) str {
 		var m *Member = ty.members;
 		var first bool = true;
 		while (m as i64 != 0) {
+			var key str = m.name;
+			if (m.tag.len != 0) { key = m.tag; }
+			if (str_eq(key, "-")) { m = m.next; continue; }
 			if (!first) { fmt_str(&sb, "buf_u8(&b, ',');\n"); }
 			first = false;
 			fmt_str(&sb, "json_emit_str(&b, \"");
-			fmt_str(&sb, m.name);
+			fmt_str(&sb, key);
 			fmt_str(&sb, "\");\nbuf_u8(&b, ':');\n");
 			var fb Buf;
 			fmt_str(&fb, "v.");
@@ -424,11 +429,14 @@ fn jmgen_unmarshal_for(ty *Type) str {
 	fmt_str(&sb, ") bool {\nif (j as i64 == 0) { return false; }\nif (j.kind != 6) { return false; }\n");
 	var m *Member = ty.members;
 	while (m as i64 != 0) {
+		var key str = m.name;
+		if (m.tag.len != 0) { key = m.tag; }
+		if (str_eq(key, "-")) { m = m.next; continue; }
 		var ev str = jmgen_tmp_name();
 		fmt_str(&sb, "{ var ");
 		fmt_str(&sb, ev);
 		fmt_str(&sb, " *Json = json_get(j, \"");
-		fmt_str(&sb, m.name);
+		fmt_str(&sb, key);
 		fmt_str(&sb, "\");\nif (");
 		fmt_str(&sb, ev);
 		fmt_str(&sb, " as i64 != 0) {\n");
