@@ -1,4 +1,3 @@
-// interp-todo
 // expect-exit: 0
 // stage1-only
 // A sender blocked on a full channel is not a deadlock while the receiver is
