@@ -1,0 +1,13 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: 3.75 -1.5 ok
+import "std/io.qela";
+
+fn main() int {
+	let x = comptime { return 1.5 + 2.25; };
+	let y = comptime { return -1.5; };
+	let ok = comptime { return (1.25 * 4.0) == 5.0 && 3.0 / 2.0 < 2.0; };
+	if (!ok || x != 3.75 || y != -1.5) { return 1; }
+	write_str(STDOUT, "${x} ${y} ok\n");
+	return 0;
+}
