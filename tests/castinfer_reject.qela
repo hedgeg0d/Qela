@@ -1,0 +1,11 @@
+// expect-compile-error
+// interp-skip
+// `as _` where nothing asks for a type: the statement has no destination, so
+// there is nothing to infer the cast target from.
+import "std/io.qela";
+
+fn main() int {
+	var x i64 = 5;
+	x as _;
+	return 0;
+}
