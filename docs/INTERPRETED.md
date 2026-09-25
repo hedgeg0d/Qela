@@ -6,12 +6,15 @@ shape; read `srcql/interp.qela`'s own comments for what the tree-walking
 interpreter already does (`qela irun`).
 
 This revises an earlier, narrower version of this document (a whole-program
-`--interpreted` subprocess model). That model is kept below as one piece of
-the design (the global flags), but the primary design is now finer-grained:
+`--interpreted` subprocess model). The primary design is now finer-grained:
 individual functions opt into being interpreted or JIT'd, ordinary AOT code
 calls them exactly like any other function, and a small runtime API
 (`parse_ast`/`run_ast`/`eval`) lets a normal compiled program reach for the
-compiler explicitly when it wants to.
+compiler explicitly when it wants to. The mechanism underneath all of it,
+resolved after a few false starts (see "Resolved" below), turned out to be
+the *same* subprocess/self-copy model the whole-program flags always used
+— per-function granularity comes from what gets said over the pipe, not
+from a second, in-process mechanism.
 
 ## Goal
 
@@ -88,109 +91,113 @@ default, and the two global flags only upgrade `interpreted`/`dynamic`
 functions that are *already* marked, never bare ones" is an open question
 — see below.
 
-## The architectural fork this design surfaces
+## Resolved: one mechanism for everything, subprocess plus an ABI
 
-The original version of this document (kept for its size data and the
-rejected alternatives, both still valid) proposed a **subprocess** model:
-`qela` embeds a copy of itself, and at runtime the output `fexecve`s that
-copy as a *separate process*, talking to it over pipes.
+Earlier passes at this document treated "points 2–4 need in-process
+linking" and "point 5 is a subprocess" as two different mechanisms, and
+got stuck on where the in-process compiler's source would come from
+without a permanent blob in `qela` or a hard dependency on the `srcql/`
+tree being on disk. That fork is resolved: **everything uses the
+subprocess/self-copy model from point 5. There is no in-process compiler.**
+What changes between `interpreted`/`dynamic` is *how* the call site talks
+to that subprocess, not whether one exists.
 
-That model is right for point 5 (the whole-program global flags) — if
-*everything* is interpreted or JIT'd, the output can just *be* a
-specialized `qela irun`/JIT invocation, no mixing with anything else.
+The key realization, specifically for `dynamic`: the ABI does not have to
+be crossed on every call. It is crossed **once**, to compile — the child
+process compiles the function's AST and hands back *machine code bytes*
+(or a relocatable object, reusing the existing `-c` output path), and the
+*host* `mmap`s that `PROT_READ|WRITE`, copies the bytes in, `mprotect`s it
+`PROT_READ|EXEC`, and calls it directly, in its own process, from then on.
+The subprocess's job is "compile this and hand me bytes," not "run this
+every time" — so `dynamic` gets genuine native speed after the first call,
+same as the in-process design would have given, without needing the
+compiler linked into the output at all.
 
-It is **wrong** for points 2–4. A `dynamic hot_path()` called from ordinary
-AOT code in a loop cannot be a fork+exec or even a persistent-worker+IPC
-round trip per call — that's slower than the tree interpreter it's
-supposed to be faster than, and it can't share pointers/structs with the
-caller at all, which breaks the "call it like any other function" promise
-point 2 makes. Per-function `interpreted`/`dynamic`, and `parse_ast`/
-`run_ast`/`eval` as directly-callable functions, need the compiler's
-machinery **in the same process**, linked in like any other code.
+`interpreted` does cross the ABI on every call — and that is fine, not a
+compromise: choosing `interpreted` over `dynamic` is already choosing to
+pay a speed cost for staying inspectable/patchable, so the added IPC cost
+on top of that is a difference of degree, not a broken promise. `eval`/
+`run_ast` on an AST that isn't a compile-once function work the same way,
+per call, for whichever the caller keeps invoking it.
 
-So there are two different mechanisms for two different parts of the
-feature:
+This also answers the earlier "where does the source come from" problem
+by making it not apply: `qela` never needs to link its own frontend into
+someone else's binary. It only ever needs to *run itself*, exactly as
+built and shipped — the exact same self-copy mechanism as point 5, used
+uniformly, just with two different conversations happening over the pipe
+("interpret this and give me a result" vs. "compile this once and give me
+bytes").
 
-- **Points 2–4 (per-function, `eval` as a callable):** needs the frontend
-  (+ interpreter, + codegen if any function is `dynamic`) compiled *into
-  the same output binary* as ordinary linked-in native code. This is
-  "Approach A" from the original design pass (recompile from source),
-  not the subprocess trick.
-- **Point 5 (global flags):** the subprocess/self-copy model still applies
-  cleanly here, or can reuse whatever in-process machinery points 2–4 end
-  up building — worth deciding once 2–4 exist, rather than building the
-  subprocess path first and then finding it doesn't generalize.
+### The foreign-globals/foreign-calls ABI
 
-### Unresolved: how does `qela` get the in-process compiler without a source blob inside itself?
+For `interpreted` code (or `eval`'d code generally) to read/write the
+host's own state, or call the host's own functions, rather than only
+operating on values passed in and returned — because otherwise this
+degrades from "a real language for configs/patches" to "a pure function
+calculator" — the ABI needs two more message shapes, in both directions:
 
-This is the open problem for the next session, not a solved one. Two
-candidates, neither fully worked out:
+```qela
+fn eval_get(name str) i64        // child asks host: current value of a shared global
+fn eval_set(name str, v i64)     // child asks host: write a shared global
+// and the same shape for calling a host function by name with marshalled args
+```
 
-1. **`qela` reads `srcql/*.qela` off disk at build time** (like `qela .`
-   does today, like `tools/bootstrap.sh` already requires for self-hosting)
-   when it needs to compile the interpreter/frontend/codegen subset into
-   someone's output. Simplest, reuses everything already built and tested.
-   Cost: producing an `interpreted`/`dynamic`-using output requires the
-   `srcql/` source tree to be present *at build time*, on the machine
-   running `qela` — the *output* is still fully standalone/freestanding at
-   *its own* runtime (the compiler subset is normal linked native code by
-   then), but `qela` itself is no longer usable for this feature as a lone
-   downloaded binary with no source tree nearby. Whether that's acceptable
-   depends on how `qela` is meant to be distributed/used — worth deciding
-   explicitly rather than assuming either way.
-2. **Reuse the self-copy trick, but as a build-time codegen helper, not a
-   runtime one.** `qela`, when it needs this, materializes a copy of
-   itself via `/proc/self/exe` (exactly as before) and asks that copy to
-   compile the needed subset (feeding it embedded *inline* source — which
-   still has to come from somewhere, so this doesn't obviously avoid
-   problem 1 either) to a relocatable object (`-c`, already supported),
-   then links that object into the final output with its own ELF writer.
-   The output ends up with no subprocess machinery at its own runtime
-   either way. This does not yet have a clean answer for where the
-   interp/frontend/codegen *source text* comes from without either a
-   blob inside `qela` or a source tree on disk — it may turn out to
-   collapse into option 1 with extra steps. Flagged here so the next
-   session doesn't have to re-derive this dead end from scratch.
+`srcql/interp.qela` already has exactly this kind of dispatch, for a
+different purpose: `ip_intrinsic` decides whether a call is one the
+interpreter must special-case (a coroutine primitive, an atomic) versus an
+ordinary interpreted call. The same pattern extends here — a global or a
+call that isn't part of the AST being run locally in the child resolves to
+"ask the host over the ABI" instead of "not found."
 
-Whichever of these is chosen, the earlier "Approach A" cost data (below)
-is the relevant sizing — but note it was computed as *cost to `qela`
-itself*; if the resolution is "read `srcql/` off disk," `qela`'s own size
-is untouched (0 bytes), and the cost question disappears entirely except
-as "does the machine building this have the source tree."
+**This needs an explicit, opt-in surface, not "everything visible."**
+Point 3's security posture (nothing patchable unless marked) has to extend
+to *state*, not just to *code* — a `frozen` core that happens to share its
+globals unrestricted with `eval`'d code is not actually frozen. Proposed:
+something in the shape of `extern`, but declaring the *export* side rather
+than the import side —
 
-## Call-site mechanics (new — not in the original pass)
+```qela
+eval var current_price i64;         // eval-visible global, get/settable over the ABI
+eval fn apply_discount(pct i64);    // eval-visible function, callable over the ABI
+```
 
-For AOT code to call an `interpreted`/`dynamic` function with ordinary call
-syntax, codegen needs a new call shape: instead of a direct `call` to a
-fixed address, the call site goes through a small per-function trampoline
-that:
+— an explicit allowlist, checked at compile time, so "what can an eval'd
+patch touch" is a `grep`-able property of the source, the same way
+`frozen` makes "what can never be touched" one.
 
-- for `interpreted`: marshals the arguments and invokes the tree
-  interpreter against that function's (embedded, pre-parsed/typed) AST,
-  same as how the interpreter-backed `repl` invokes a function today
-  (`ip_call` in `srcql/interp.qela`) — this part is not new, it already
-  exists and works.
-- for `dynamic`: on first call, hands the function's AST to the embedded
-  codegen, `mmap`s a `PROT_READ|PROT_WRITE` region, writes the compiled
-  code and fixups, `mprotect`s it `PROT_READ|PROT_EXEC`, and rewrites the
-  trampoline (or a function pointer it indirects through) to jump straight
-  there from then on. Every call after the first is a normal indirect call
-  at native speed, in-process — no interpreter involvement, and critically
-  no IPC. If this instead stayed as an out-of-process compile-and-fetch,
-  `dynamic` would not deliver the speed it's named for.
+## Call-site mechanics
 
-Both are lazy by default — nothing gets parsed/interpreted/JIT'd until the
-first call actually reaches it, so a program that has a `dynamic` function
-it never calls in a given run pays nothing for it beyond whatever binary
-size it added.
+For AOT code to call an `interpreted`/`dynamic` function with ordinary
+call syntax, codegen needs a new call shape: instead of a direct `call` to
+a fixed address, the call site goes through a small per-function
+trampoline that talks to the (lazily spawned, then kept alive for the
+process's lifetime — not re-forked per call) self-copy subprocess:
+
+- for `interpreted`: marshal the arguments over the ABI, ask the child to
+  run that function's AST against them, marshal the result back. Every
+  call round-trips.
+- for `dynamic`: on first call, ask the child to compile the function and
+  send back code bytes; `mmap`(RW) → copy → `mprotect`(RX) locally; rewrite
+  the trampoline (or a function pointer it indirects through) to jump
+  straight there. Every call after the first is a normal local indirect
+  call — no ABI, no child involvement.
+
+Both lazy by default: nothing is parsed, subprocess-spawned, interpreted,
+or JIT'd until the first call actually reaches it. A program with a
+`dynamic` function it never calls in a given run pays only its own binary
+size, nothing at runtime.
 
 `*Ast` (for `parse_ast`/`run_ast`) should be an opaque handle, not a raw
 `*Node`/`*Unit` — expose accessor/mutator functions (kind, children,
 replace-a-node, etc.) rather than the internal struct layout, so user code
-can't corrupt compiler-internal state by getting a field wrong. This is
-its own real sub-effort (a stable, ergonomic AST API is more design work
-than the embedding mechanism itself) — scope it separately once the
-embedding question above is resolved.
+can't corrupt compiler-internal state by getting a field wrong. Given the
+subprocess model above, "run" an `*Ast` obtained via `parse_ast` most
+likely means "hand it to the child over the same ABI," which may mean
+`*Ast` itself is a handle into the *child's* memory (an opaque id/token),
+not a local pointer at all — resolve this once the ABI's message shapes
+are drafted (see open questions). This is its own real sub-effort — a
+stable, ergonomic AST API is more design work than the ABI plumbing
+itself.
 
 ## Naming
 
@@ -214,9 +221,10 @@ embedding question above is resolved.
 **Embed a source blob permanently inside `qela` itself.** Survivable by
 size (below) but permanent cost for a feature most builds never touch, and
 needs a minifier + `$if (TARGET==...)` pre-resolution + a trimmed
-`parse()` that skips `regalloc`/`opt`/`bounds`. Superseded by "read
-`srcql/` off disk at build time" as the simpler option with the same
-zero-cost-to-`qela` property, pending the unresolved question above.
+`parse()` that skips `regalloc`/`opt`/`bounds`. Made moot entirely by the
+resolved design above — `qela` never needs to link its own frontend into
+someone else's binary, so there's no in-process compiler to source in the
+first place.
 
 **Mark a byte range inside `qela`'s own compiled image and copy those
 bytes directly (skip recompilation).** Rejected: `qela` is `-no-pie`/
@@ -228,15 +236,16 @@ shipped binary rather than at `qela`'s own build/test time, arch-locked to
 the host `qela` was built for, and forecloses PIE/ASLR permanently for
 anything the scheme touches.
 
-### The subprocess/self-copy model (still the right answer for point 5)
+### The subprocess/self-copy model (now the answer for everything, see "Resolved" above)
 
 `/proc/self/exe` → `$QELAPATH` fallback → error with a `QELAPATH=$(which
 qela)` hint if neither resolves. Materialize via `memfd_create()` (no disk
 write) + `fexecve()`. Real, complete, unmodified `qela` process, loaded by
 the kernel's own ELF loader — no custom loader, no address-layout surgery.
-Trade-off: separate process, IPC only (fine for "load a config file, get
-data back," wrong for tight in-program calls — which is exactly why points
-2–4 need the different, in-process mechanism above). A build today embeds
+The IPC cost this implies is not a blanket problem: it's paid per call for
+`interpreted` (acceptable — that mode already trades speed for
+flexibility) and paid exactly once, at compile time, for `dynamic` (the
+compiled bytes cross the boundary, not the calls). A build today embeds
 *today's* `qela`; upgrading the installed compiler later doesn't change
 already-shipped binaries — a feature (reproducibility), not a bug.
 
@@ -253,9 +262,9 @@ Self-copy (whole binary embedded in the *output*, cost does not touch
 | + gzip -9 | 137,941 |
 | + xz -9 | 111,420 |
 
-What permanently embedding a source blob *inside `qela`* would have cost
-(relevant only if the disk-read option turns out to be unacceptable and
-this path gets revisited):
+What permanently embedding a source blob *inside `qela`* would have cost —
+kept only as a record of a rejected path, not a live option under the
+resolved design:
 
 whole compiler minus `lsp.qela`/`arm64_emit.qela`/`riscv_emit.qela`,
 `$if (TARGET == "x86_64")` pre-resolved, comments/whitespace stripped,
@@ -276,35 +285,45 @@ that, don't assume gzip-level ratios from a from-scratch LZSS.
 
 ## Open questions / next steps for implementation
 
-1. **Resolve the disk-read-vs-self-copy-as-codegen-helper question above**
-   before writing any code — it decides whether points 2–4 need any new
-   syscall plumbing at all (if "read `srcql/` off disk," they mostly
-   don't) or need the full self-copy mechanism repurposed as a build-time
-   tool (if not).
-2. **Grammar.** `fn interpreted name(...)`/`fn dynamic name(...)` as
+1. **The ABI's wire format.** Every message shape needs to be nailed down
+   before any trampoline code is written: "run this AST with these args,
+   give me a result," "compile this AST, give me code bytes," "get/set
+   this global," "call this host function with these args." Simplest
+   starting point: a small length-prefixed binary protocol over a pipe
+   (`sys_pipe` + the child's stdin/stdout, or a dedicated socketpair);
+   values that aren't plain scalars (structs, strings) need a marshalling
+   convention decided up front, not improvised per message kind.
+2. **Child process lifecycle.** Spawned lazily on first need, then kept
+   alive for the host process's lifetime (not re-forked per call — see
+   "Call-site mechanics"). Decide: one child total, or one per distinct
+   `interpreted`/`dynamic` function (isolation vs. simplicity)? What
+   happens if the child dies mid-run (crashed, killed) — does the next
+   call respawn it, or is that a hard error for the host too?
+3. **Grammar.** `fn interpreted name(...)`/`fn dynamic name(...)` as
    modifiers parsed the same place `fn naked` already is (see
-   `docs/BOOTSTRAP.md`'s grammar list) — small, contained parser change.
+   `docs/BOOTSTRAP.md`'s grammar list); `eval var`/`eval fn` for the
+   export-side allowlist (see "foreign-globals/foreign-calls ABI").
    Decide `frozen`'s status (real third keyword vs. "default posture,
    global flags only upgrade already-annotated functions") here too.
-3. **Call-site trampolines in codegen.qela.** New call shape for
-   `interpreted`/`dynamic` targets — real, nontrivial codegen work,
-   separate from the embedding question. The `interpreted` half reuses
-   `ip_call` as-is; the `dynamic` half needs the `mmap`(RW)→write→
-   `mprotect`(RX) sequence and a self-patching trampoline or indirect call
-   through a pointer filled in after first JIT.
-4. **The `*Ast` API surface.** `parse_ast`/`run_ast`/`eval` plus accessor/
-   mutator functions for an opaque `*Ast` handle — scope as its own
-   design pass once 1–3 are settled; this is more work than the embedding
-   mechanism.
-5. **`sys_readlink`, `memfd_create`, `fexecve` wrappers** in
-   `std/sys.qela` — needed regardless, for point 5 at minimum.
-6. **W^X on hardened kernels.** `mprotect(RW→RX)` for the `dynamic` path
+4. **Call-site trampolines in codegen.qela.** New call shape for
+   `interpreted`/`dynamic` targets, built on the ABI from (1) — real,
+   nontrivial codegen work. The `dynamic` half needs the local
+   `mmap`(RW)→write→`mprotect`(RX) sequence after the one-time compile
+   round trip, plus a self-patching trampoline or an indirect call through
+   a pointer filled in after first JIT.
+5. **The `*Ast` API surface**, including whether `*Ast` is a local pointer
+   or a handle into the child's memory (see "Call-site mechanics") — scope
+   as its own design pass once (1)–(4) are settled.
+6. **`sys_readlink`, `memfd_create`, `fexecve`, and pipe/socketpair
+   wrappers** in `std/sys.qela` — needed regardless.
+7. **W^X on hardened kernels.** `mprotect(RW→RX)` for the `dynamic` path
    can be restricted under some hardening policies (SELinux, some
    container runtimes) — needs a real error message, not a silent
    failure, when it's unavailable.
-7. **Test plan.** At minimum: one program using `interpreted`, one using
-   `dynamic`, one using bare `eval`, one using `--interpreted`, one using
-   `--jit`/whatever it's named, each with a small correctness check —
-   wired into `tools/bootstrap.sh` the way the repl's interpolation test
-   was (`tools/bootstrap.sh`'s "interpolation and repl" step), as a
-   permanent regression gate, not a one-off manual check.
+8. **Test plan.** At minimum: one program using `interpreted`, one using
+   `dynamic`, one using bare `eval`, one using `eval var`/`eval fn` shared
+   state, one using `--interpreted`, one using `--jit`/whatever it's
+   named, each with a small correctness check — wired into
+   `tools/bootstrap.sh` the way the repl's interpolation test was
+   (`tools/bootstrap.sh`'s "interpolation and repl" step), as a permanent
+   regression gate, not a one-off manual check.
