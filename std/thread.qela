@@ -8,14 +8,9 @@ import "chan.qela";
 // loop drains it into a local coro_spawn the next time it polls. Channels
 // (chan.qela) are the supported way to hand results back across threads.
 //
-// Work-stealing only covers requests that have not started running yet:
-// an idle thread with nothing of its own to drain tries its neighbors'
-// queues before spinning. A coroutine already coro_spawn'd is pinned to
-// its thread's tvar-scoped coros[] for good -- migrating a *running*
-// coroutine's stack/registers to another OS thread mid-flight is real
-// extra work (a safe migration point that isn't inside a lock or a GC
-// safepoint, plus re-homing it into the target's own coros[] slot) that
-// nothing here has needed yet; this is the cheap win, not that one.
+// Idle workers steal queued requests first, then ask busy workers for one
+// context parked at an ordinary coro_yield. A handoff moves only the saved
+// stack image; channel waits and directed generator contexts stay pinned.
 //
 // A pool thread never calls gc_thread_enter itself -- that would force
 // every user of thread.qela to also pull in gc.qela. A program that wants
@@ -63,6 +58,7 @@ fn pool_drain(id i64) {
 	var r SpawnReq = pool_queue[id][slot];
 	pool_head[id] = pool_head[id] + 1;
 	atomic_store(&pool_lock[id], 0);
+	coro_cancel_handoff_request();
 	coro_spawn(r.fn_ptr, r.a0, r.a1, r.a2, r.a3, r.a4);
 }
 
@@ -100,11 +96,12 @@ fn pool_worker(id i64) i64 {
 	tls_init();
 	chan_thread_enter();
 	pool_worker_id = id;
+	coro_pool_enter(id);
 	while (true) {
 		pool_drain(id);
 		if (coro_pending()) {
 			coro_yield();
-		} else if (!pool_steal(id)) {
+		} else if (!pool_steal(id) && !coro_take_handoff()) {
 			fence();
 			sys_sched_yield();
 		}
@@ -131,6 +128,7 @@ fn thread_pool_init(n i64) {
 		i = i + 1;
 	}
 	pool_n = n;
+	coro_pool_set_n(n);
 	// The cross-thread deadlock check never reports before every pool
 	// thread has registered (registration is a worker's first act):
 	// a worker that has not registered yet cannot have done anything.
