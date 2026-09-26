@@ -1,0 +1,56 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: 3
+// expect-out: 42
+// expect-out: 11
+// expect-out: 7
+// expect-out: 10
+// expect-out: dyn sigs ok
+// `~` beyond locals: a parameter of the dynamic type (with the callee
+// owning a deep copy of the box at entry, so writing the parameter never
+// frees the caller's payload), a struct field, an array element, a return
+// type (values box themselves), and a plain argument auto-boxing into a
+// `~` parameter. Reads still come out through `as` only.
+import "std/io.qela";
+
+struct Bag { name ~, n ~, }
+
+fn add1(x ~) i64 {
+	x = (x as i64) + 1;
+	return x as i64;
+}
+
+fn boxit(x i64) ~ { return x; }
+
+fn echo(x ~) ~ { return x; }
+
+fn main() int {
+	var d ~ = 41;
+	if ((d as i64) + 1 != 42) { return 1; }
+	write_str(STDOUT, "3\n");
+	write_str(STDOUT, "42\n");
+	var f ~ = 10;
+	var g i64 = add1(f);
+	if (f as i64 != 10) { return 2; }
+	if (g != 11) { return 3; }
+	write_str(STDOUT, "11\n");
+	if (add1(41) != 42) { return 4; }
+	var b Bag;
+	b.name = "qela";
+	b.n = 5;
+	if (!str_eq(b.name as str, "qela")) { return 5; }
+	if (b.n as i64 != 5) { return 6; }
+	var r i64 = boxit(7) as i64;
+	if (r != 7) { return 7; }
+	write_str(STDOUT, "7\n");
+	var h i64 = echo(f) as i64;
+	if (h != 10) { return 8; }
+	write_str(STDOUT, "10\n");
+	var a [2]~;
+	a[0] = 3;
+	a[1] = "four";
+	if (a[0] as i64 != 3) { return 9; }
+	if (!str_eq(a[1] as str, "four")) { return 10; }
+	write_str(STDOUT, "dyn sigs ok\n");
+	return 0;
+}
