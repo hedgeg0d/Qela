@@ -1970,5 +1970,8 @@ fn cmd_irun(argc int, argv **u8) int {
 		set_module_dir(name);
 		unit = parse(lex(src, (file as i64) << FILE_SHIFT));
 	}
+	// Soft errors kept the parse alive to find more of them; the program
+	// must not run on a poisoned tree. compile_src fails at this same point.
+	diag_fail_if_errors();
 	return ip_run(unit, nargs, cargv as **u8);
 }

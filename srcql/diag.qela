@@ -186,12 +186,16 @@ fn diag_setup() {
 	diag_colored = diag_want_color();
 }
 
-// Resets between compiles so the colour decision is re-evaluated. Called
+// Resets between compiles so the colour decision is re-evaluated, the
+// secondary span and macro backtrace do not leak, and the soft-error count
+// starts from zero -- a compile that reported errors must not make the next
+// one look failed, and a forked child must judge only its own work. Called
 // from reset_compile(); diag_setup() will run again on the next compile.
 fn diag_reset() {
 	diag_setup_done = false;
 	diag_colored = false;
 	sec_set = false;
+	sec_pos = -1;
 	macro_top = null;
 	errcount = 0;
 }
