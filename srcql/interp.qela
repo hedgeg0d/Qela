@@ -1190,8 +1190,11 @@ fn ip_call_node(n *Node) i64 {
 	} else {
 		ip_intrinsic(n);
 		if (ip_was_intrinsic) { return ip_intrinsic_val; }
-		f = find_func(n.name);
-		if (f as i64 == 0) { error_at(n.pos, "interpreter: undefined function"); }
+		if (n.ovfunc as i64 != 0) { f = n.ovfunc; }
+		else {
+			f = find_func(n.name);
+			if (f as i64 == 0) { error_at(n.pos, "interpreter: undefined function"); }
+		}
 		n.ip_fn = f;
 	}
 
