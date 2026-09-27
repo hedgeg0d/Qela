@@ -301,6 +301,18 @@ fn sys_exit(code i64) {
 	}
 }
 
+// exit(60), not exit_group: ends only the calling thread. A thread
+// spawned through thread_clone reaches this when its entry function
+// returns -- it must not take the whole process down on its way out.
+/// Ends the calling thread with the given code.
+fn sys_exit_thread(code i64) {
+	$if (TARGET != "x86_64") {
+		syscall(SYS_EXIT_N, code, 0, 0, 0, 0, 0);
+	} $else {
+		syscall(SYS_EXIT, code, 0, 0, 0, 0, 0);
+	}
+}
+
 /// Forks a child process copying this address space.
 fn sys_fork() i64 {
 	$if (TARGET != "x86_64") {
