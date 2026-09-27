@@ -12,7 +12,7 @@ fn std_blob_data() str { return ""; }
 
 fn std_blob_count() int { return 39; }
 
-fn std_blob_total() i64 { return 176504; }
+fn std_blob_total() i64 { return 176768; }
 
 fn std_blob_name(i int) str {
 	if (i == 0) { return "std/abiconn.qela"; }
@@ -90,13 +90,13 @@ fn std_blob_off(i int) i64 {
 	if (i == 29) { return 130705; }
 	if (i == 30) { return 131529; }
 	if (i == 31) { return 139140; }
-	if (i == 32) { return 140984; }
-	if (i == 33) { return 141462; }
-	if (i == 34) { return 142232; }
-	if (i == 35) { return 150589; }
-	if (i == 36) { return 167118; }
-	if (i == 37) { return 173073; }
-	if (i == 38) { return 174109; }
+	if (i == 32) { return 141248; }
+	if (i == 33) { return 141726; }
+	if (i == 34) { return 142496; }
+	if (i == 35) { return 150853; }
+	if (i == 36) { return 167382; }
+	if (i == 37) { return 173337; }
+	if (i == 38) { return 174373; }
 	return -1;
 }
 
@@ -132,7 +132,7 @@ fn std_blob_len(i int) i64 {
 	if (i == 28) { return 977; }
 	if (i == 29) { return 824; }
 	if (i == 30) { return 7611; }
-	if (i == 31) { return 1844; }
+	if (i == 31) { return 2108; }
 	if (i == 32) { return 478; }
 	if (i == 33) { return 770; }
 	if (i == 34) { return 8357; }
