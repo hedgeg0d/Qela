@@ -1,0 +1,16 @@
+// expect-compile-error
+// "control reaches the end of a non-void function": an if without an else
+// and a `while true` that can break both fall out without returning.
+fn f(c bool) i64 {
+	if (c) { return 1; }
+}
+
+fn g() i64 {
+	while (true) {
+		break;
+	}
+}
+
+fn main() i64 {
+	return f(true) + g();
+}

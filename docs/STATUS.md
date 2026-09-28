@@ -215,6 +215,26 @@ Costs +872 B in S2. Pinned by `tests/dotcallptr.qela` (both directions,
 struct-literal receiver) and `tests/dotcallptr_reject.qela` (plain call
 with a value receiver still rejected).
 
+**Missing-return check (2026-08-07).** A function with a non-void return
+type that can fall off the end is now a compile error ("control reaches the
+end of a non-void function"). The flow analysis reuses codegen's existing
+`always_returns` walk (which already skipped the dead `return 0` tail for
+blocks and if/else) and extends it with two shapes: `match` — every arm
+must return, exhaustiveness is already guaranteed by `type_match`, so no
+default arm is required — and `while true` — the condition can never fall
+through, so the loop always returns unless a break anywhere in its body can
+let control out (a break inside a nested loop belongs to that loop and is
+ignored). Conservative by design: a call to a never-returning function
+(`panic`, `die`, a raw `exit` syscall) is not treated as a return, so
+`if (c) { return 1; } panic("x")` asks for an explicit `return` — a false
+positive only for code that is one misplaced return away from returning
+garbage anyway. `fn naked` bodies and `extern` declarations are exempt.
+The compiler's own 12k+ lines of stage1 pass the check unmodified (the
+first build run caught `lsp_frame`'s nested-loop break, which the first
+subtree scan over-counted; stopping the scan at nested `ND_FOR`s fixed it).
+Costs +648 B in S2. Pinned by `tests/retflow.qela` (match + `while true`)
+and `tests/retflow_reject.qela` (if without else, breakable loop).
+
 **`~` opt-in dynamic typing (2026-08-05).** `var ~n = expr;` declares a
 local whose type is checked at runtime instead of compile time: it can be
 reassigned across unrelated types (`n = 5; n = "hi"; n = SomeStruct{...};`),
