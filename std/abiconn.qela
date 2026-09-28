@@ -102,6 +102,20 @@ fn abi_wait_result(kind *u8, buf *u8, cap i64) i64 {
 			abi_send_frame(abi_in, 1 as u8, &grb[0], 8);
 			continue;
 		}
+		if (*kind == 5) {
+			if (n < 9) { return -1; }
+			var snlen i64 = scratch[0] as i64;
+			if (n < 1 + snlen + 8) { return -1; }
+			var sname str;
+			sname.ptr = &scratch[0] + 1;
+			sname.len = snlen;
+			var sv i64 = abi_decode_u64(&scratch[0] + 1 + snlen);
+			__eval_set_dispatch(sname, sv);
+			var srb [8]u8;
+			*(&srb[0] as *i64) = 0;
+			abi_send_frame(abi_in, 1 as u8, &srb[0], 8);
+			continue;
+		}
 		if (*kind != 3) {
 			if (n > cap) { return -1; }
 			var ci i64 = 0;

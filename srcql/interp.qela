@@ -54,6 +54,7 @@ var ip_ndefer int = 0;
 // ip_intrinsic reports through these: a call it handled leaves
 // ip_was_intrinsic set and its result in ip_intrinsic_val.
 var ip_was_intrinsic bool = false;
+var ip_abi_validating bool = false;
 var ip_intrinsic_val i64 = 0;
 
 var ip_asm_warned [256]i64;
@@ -511,7 +512,27 @@ fn ip_enumlit(n *Node) i64 {
 	return base;
 }
 
+fn ip_foreign_set(name str, v i64) {
+	if (ip_abi_validating) { return; }
+	var b Buf;
+	buf_u8(&b, name.len as u8);
+	buf_bytes(&b, name.ptr, name.len);
+	buf_u64(&b, v);
+	var msg str = buf_str(&b);
+	abi_send_frame(ABI_FD_CHILD_TO_HOST, 5 as u8, msg.ptr, msg.len);
+	var rbuf [8]u8;
+	var kind u8 = 0;
+	var rn i64 = abi_recv_frame(ABI_FD_HOST_TO_CHILD, &kind, &rbuf[0], 8);
+	if (rn < 0) { ip_panic("interpreter: the host process died answering a foreign global write\n"); }
+	if (kind == 2) { ip_panic("interpreter: the host rejected a foreign global write\n"); }
+}
+
 fn ip_assign(n *Node) i64 {
+	if (n.lhs.foreign) {
+		var v i64 = ip_eval(n.rhs);
+		ip_foreign_set(n.lhs.name, v);
+		return v;
+	}
 	if (is_aggregate(n.lhs.ty)) {
 		var dst i64 = ip_addr(n.lhs);
 		ip_memcpy(dst, ip_eval(n.rhs), n.lhs.ty.size as i64);
@@ -819,6 +840,7 @@ fn ip_syscall(n *Node) i64 {
 // ── calls ──
 
 fn ip_foreign_get(name str) i64 {
+	if (ip_abi_validating) { return 0; }
 	abi_send_frame(ABI_FD_CHILD_TO_HOST, 4 as u8, name.ptr, name.len);
 	var rbuf [8]u8;
 	var kind u8 = 0;
@@ -837,6 +859,7 @@ fn ip_foreign_call(n *Node) i64 {
 		a = a.next;
 		given = given + 1;
 	}
+	if (ip_abi_validating) { return 0; }
 	var b Buf;
 	buf_u8(&b, n.name.len as u8);
 	buf_bytes(&b, n.name.ptr, n.name.len);
