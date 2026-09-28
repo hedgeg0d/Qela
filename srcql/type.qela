@@ -559,26 +559,25 @@ fn usual_conv(n *Node) {
 	n.rhs = cast_to(n.rhs, t);
 }
 
-// Stack-spilled parameters are always a suffix of the parameter list (the
-// register-word budget only ever runs out, never recovers), so the p0..p5
-// / pextra split point is `nparams - n_stack_args`, not a fixed index 6:
-// a str earlier in the list can push the split below 6. Six slots cover
-// x86's register count exactly; ARM64 (eight argument registers) reaches
-// p6/p7 for a run of eight register parameters.
+// Parameters live in the p0..p7 slots by *positional index*, and pextra
+// chains position 8 and beyond -- the two halves of a stage0 constraint
+// (no arrays inside structs). The old split at
+// `nparams - n_stack_args` assumed stack-passed parameters are always a
+// suffix, which holds for Qela-internal calls (the register-word budget
+// only runs out) but not for an extern function's SysV split: a MEMORY-
+// class aggregate lands on the stack even when later scalars still fit
+// the registers.
 fn func_param(f *Func, i int) *Var {
-	var split int = f.nparams - f.n_stack_args;
-	if (i < split) {
-		if (i == 0) { return f.p0; }
-		if (i == 1) { return f.p1; }
-		if (i == 2) { return f.p2; }
-		if (i == 3) { return f.p3; }
-		if (i == 4) { return f.p4; }
-		if (i == 5) { return f.p5; }
-		if (i == 6) { return f.p6; }
-		return f.p7;
-	}
+	if (i == 0) { return f.p0; }
+	if (i == 1) { return f.p1; }
+	if (i == 2) { return f.p2; }
+	if (i == 3) { return f.p3; }
+	if (i == 4) { return f.p4; }
+	if (i == 5) { return f.p5; }
+	if (i == 6) { return f.p6; }
+	if (i == 7) { return f.p7; }
 	var v *Var = f.pextra;
-	var k int = i - split;
+	var k int = i - 8;
 	while (k > 0) { v = v.pnext; k = k - 1; }
 	return v;
 }
@@ -593,13 +592,6 @@ fn func_param(f *Func, i int) *Var {
 // too), so reusing it here would splice the pextra chain into the locals
 // list and corrupt both.
 fn set_func_param(f *Func, i int, v *Var) {
-	if (v.arg_stack) {
-		if (f.pextra as i64 == 0) { f.pextra = v; return; }
-		var t *Var = f.pextra;
-		while (t.pnext as i64 != 0) { t = t.pnext; }
-		t.pnext = v;
-		return;
-	}
 	if (i == 0) { f.p0 = v; return; }
 	if (i == 1) { f.p1 = v; return; }
 	if (i == 2) { f.p2 = v; return; }
@@ -607,7 +599,11 @@ fn set_func_param(f *Func, i int, v *Var) {
 	if (i == 4) { f.p4 = v; return; }
 	if (i == 5) { f.p5 = v; return; }
 	if (i == 6) { f.p6 = v; return; }
-	f.p7 = v;
+	if (i == 7) { f.p7 = v; return; }
+	if (f.pextra as i64 == 0) { f.pextra = v; return; }
+	var t *Var = f.pextra;
+	while (t.pnext as i64 != 0) { t = t.pnext; }
+	t.pnext = v;
 }
 
 // ── monomorphization ──
@@ -1871,8 +1867,13 @@ fn type_call(n *Node) {
 		// A stack-passed argument's final one-word value (a scalar, or the
 		// address of a by-ref/small-aggregate copy) is staged in its own
 		// temp, then pushed in reverse order after every register argument
-		// is placed -- see gen_args.
-		if (pv.arg_stack) { tail.next.stack_tmp = alloc_temp(ty_i64); }
+		// is placed -- see gen_args. An extern MEMORY-class argument (a
+		// struct wider than 16 bytes passed by value) skips this temp
+		// entirely: the spill block copies the bytes from a.tmp, staged
+		// above, straight into the outgoing stack area.
+		if (pv.arg_stack && !(f.extern && is_aggregate(want) && abi_by_ref(want.size))) {
+			tail.next.stack_tmp = alloc_temp(ty_i64);
+		}
 		tail = tail.next;
 		a = nxt;
 	}
@@ -2008,6 +2009,17 @@ fn add_type(n *Node) {
 		while (s as i64 != 0) { add_type(s); s = s.next; }
 		return;
 	}
+	// A comptime block is evaluated in its own language context.  Typing its
+	// `return` as the surrounding runtime function's return would reject a
+	// perfectly valid float result before the evaluator can fold it.
+	if (n.kind == ND_COMPTIME) {
+		var cv ComptimeVal = comptime_eval(n);
+		if (cv.kind == CV_INT) { n.kind = ND_NUM; n.val = cv.num; n.ty = ty_i64; return; }
+		if (cv.kind == CV_FLOAT) { n.kind = ND_NUM; n.val = cv.num; n.ty = cv.ty; return; }
+		if (cv.kind == CV_STR) { error_at(n.pos, "comptime cannot produce a string value"); }
+		n.ty = ty_void;
+		return;
+	}
 
 	type_children(n);
 
@@ -2023,6 +2035,12 @@ fn add_type(n *Node) {
 		if (cv.kind == CV_INT) {
 			n.val = cv.num;
 			n.ty = ty_i64;
+			return;
+		}
+		if (cv.kind == CV_FLOAT) {
+			n.kind = ND_NUM;
+			n.val = cv.num;
+			n.ty = cv.ty;
 			return;
 		}
 		if (cv.kind == CV_STR) {
