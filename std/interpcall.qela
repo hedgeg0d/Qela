@@ -39,6 +39,9 @@ fn interp_jit_compile(name str) i64 {
 	var kind u8 = 0;
 	var n i64 = abi_wait_result(&kind, &buf[0], 8192);
 	if (n < 0) {
+		// The child died mid-request: one respawn, then give up. The
+		// jit cache is host-side, so already-jitted functions survive.
+		if (!abi_respawned && abi_respawn()) { return interp_jit_compile(name); }
 		eprint("dynamic: the qela subprocess died compiling '");
 		eprint(name);
 		eprint("'\n");
@@ -53,10 +56,7 @@ fn interp_jit_compile(name str) i64 {
 	var nslots i64 = *(&buf[0] as *u32) as i64;
 	var body i64 = 4 + 4 * nslots;
 	var addr i64 = sys_mmap_anon(8192);
-	if (addr < 0) {
-		eprint("dynamic: mmap failed\n");
-		sys_exit(1);
-	}
+	if (addr < 0) { return -1; }
 	var dst *u8 = addr as *u8;
 	var i i64 = 0;
 	while (i < n - body) { dst[i] = buf[body + i]; i = i + 1; }
@@ -68,8 +68,11 @@ fn interp_jit_compile(name str) i64 {
 		j = j + 1;
 	}
 	if (sys_mprotect(addr, 8192, 5) != 0) {
-		eprint("dynamic: mprotect failed\n");
-		sys_exit(1);
+		// A hardened kernel may refuse the RW->RX transition; the jit is
+		// an optimization, so degrade to the interpreted path instead of
+		// dying (the -1 the callers already handle).
+		sys_munmap(addr, 8192);
+		return -1;
 	}
 	return addr;
 }
@@ -124,6 +127,7 @@ fn __interp_call_dispatch(name str, args *i64) i64 {
 	var kind u8 = 0;
 	var n i64 = abi_wait_result(&kind, &rbuf[0], 8);
 	if (n < 0) {
+		if (!abi_respawned && abi_respawn()) { return __interp_call_dispatch(name, args); }
 		eprint("interpreted: the qela subprocess died while calling '");
 		eprint(name);
 		eprint("'\n");
@@ -148,6 +152,7 @@ fn __interp_call_marshalled(msg str) str {
 	var kind u8 = 0;
 	var r str = abi_wait_result_payload(&kind);
 	if (kind == 0) {
+		if (!abi_respawned && abi_respawn()) { return __interp_call_marshalled(msg); }
 		eprint("interpreted: the qela subprocess died while calling\n");
 		sys_exit(1);
 	}
