@@ -254,9 +254,9 @@ fn is_punct_single(c u8) bool {
 //
 // stage0 has no float support, so this must never use one: it converts a
 // decimal digit string to the nearest IEEE754 double using only i64 ops, via
-// a big-decimal digit array repeatedly halved/doubled toward [1,2). Skips
-// subnormals (flushes to 0) and ties round half-up, not half-to-even -- both
-// acceptable for a hobby compiler, not for a libc.
+// a big-decimal digit array repeatedly halved/doubled toward [1,2). Subnormals
+// keep their low bits (round-to-nearest-even); ties round half-up, not
+// half-to-even -- acceptable for a hobby compiler, not for a libc.
 //
 // value = sum(buf[i] * 10^(pt-1-(i-start))) for i in [start,end).
 let DTOA_CAP = 4300;
@@ -377,7 +377,21 @@ fn dec_to_f64_bits(digits *u8, ndigits i64, point i64) i64 {
 
 	var expf i64 = e2 + 1023;
 	if (expf >= 2047) { return dtoa_inf_bits(); }
-	if (expf <= 0) { return 0; }
+	if (expf <= 0) {
+		// Subnormal: the value (2^52 + mant) * 2^(e2-52) sits below the
+		// normal range, so it lands in the fraction field of an expf=0
+		// encoding. Shift the 53-bit significand right by (1 - expf) with
+		// round-to-nearest-even; a rounding carry to 2^52 is exactly the
+		// smallest normal, and anything rounding to zero flushes.
+		var sh i64 = 1 - expf;
+		if (sh > 53) { return 0; }
+		var full i64 = 4503599627370496 | mant;
+		var sub i64 = full >> sh;
+		var round_bit i64 = (full >> (sh - 1)) & 1;
+		var sticky i64 = full & ((1 << (sh - 1)) - 1);
+		if (round_bit != 0 && (sticky != 0 || (sub & 1) != 0)) { sub = sub + 1; }
+		return sub;
+	}
 	return (expf << 52) | mant;
 }
 
