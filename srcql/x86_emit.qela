@@ -2148,6 +2148,10 @@ fn ir_flush() {
 	if (opt_target == TARGET_ARM64) { arm64_pool_pass(ir_head); }
 	var op *IrOp = ir_head;
 	while (op as i64 != 0) {
+		if (opt_target == TARGET_ARM64 && arm64_cmp_zero_branch(op)) {
+			op = op.next.next;
+			continue;
+		}
 		if (opt_target == TARGET_RISCV64) { riscv_lower_op(op); }
 		else if (opt_target == TARGET_ARM64) { arm64_lower_op(op); }
 		else { x86_lower_op(op); }
