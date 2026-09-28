@@ -180,3 +180,75 @@ fn chan_recv(comptime T: type, c *Chan(T)) T {
 		chan_block("receive");
 	}
 }
+
+// Non-blocking receive for `select`. Returns the value and sets *ok only
+// when one is immediately available; a closed channel counts as ready with
+// a zeroed value (the same value chan_recv would return), matching select's
+// contract that a closed channel never blocks a case.
+fn chan_try_recv(comptime T: type, c *Chan(T), ok *bool) T {
+	var zero T;
+	*ok = false;
+	chan_lock(c);
+	if (c.cap == 0) {
+		if (c.waiting) {
+			var v T = c.buf[0];
+			c.waiting = false;
+			chan_unlock(c);
+			atomic_add(&chan_epoch, 1);
+			*ok = true;
+			return v;
+		}
+		if (c.closed) { chan_unlock(c); *ok = true; return zero; }
+		chan_unlock(c);
+		return zero;
+	}
+	if (c.n != 0) {
+		var v T = c.buf[c.head];
+		c.head = c.head + 1;
+		if (c.head >= c.cap) { c.head = 0; }
+		c.n = c.n - 1;
+		chan_unlock(c);
+		atomic_add(&chan_epoch, 1);
+		*ok = true;
+		return v;
+	}
+	if (c.closed) { chan_unlock(c); *ok = true; return zero; }
+	chan_unlock(c);
+	return zero;
+}
+
+// Non-blocking send for `select`: returns true only when the value was
+// placed without waiting. A rendezvous (cap 0) send completes the handoff
+// slot and returns immediately -- unlike chan_send it does not wait for the
+// receiver to take the value out.
+fn chan_try_send(comptime T: type, c *Chan(T), v T) bool {
+	chan_lock(c);
+	if (c.closed) {
+		chan_unlock(c);
+		eprint("qela: send on a closed channel\n");
+		sys_exit(1);
+	}
+	if (c.cap == 0) {
+		if (c.waiting) { chan_unlock(c); return false; }
+		c.buf[0] = v;
+		c.waiting = true;
+		chan_unlock(c);
+		atomic_add(&chan_epoch, 1);
+		return true;
+	}
+	if (c.n == c.cap) { chan_unlock(c); return false; }
+	var slot i64 = c.head + c.n;
+	if (slot >= c.cap) { slot = slot - c.cap; }
+	c.buf[slot] = v;
+	c.n = c.n + 1;
+	chan_unlock(c);
+	atomic_add(&chan_epoch, 1);
+	return true;
+}
+
+// The wait a `select` with no ready case and no default falls into. Same
+// deadlock heuristic as a blocking send/receive: every coroutine parked
+// here while the epoch stands still is reported.
+fn chan_select_block() {
+	chan_block("select");
+}
