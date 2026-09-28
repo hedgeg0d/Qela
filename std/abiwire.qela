@@ -1,6 +1,8 @@
 import "sys.qela";
 
 let ABI_MAX_MSG = 1048576;
+let ABI_FD_HOST_TO_CHILD = 3;
+let ABI_FD_CHILD_TO_HOST = 4;
 
 fn abi_read_exact(fd i64, buf *u8, n i64) bool {
 	var got i64 = 0;
@@ -33,6 +35,11 @@ fn abi_send_frame(fd i64, kind u8, payload *u8, n i64) {
 	kb[0] = kind;
 	abi_write_exact(fd, &kb[0], 1);
 	if (n > 0) { abi_write_exact(fd, payload, n); }
+}
+
+fn abi_decode_u64(p *u8) i64 {
+	return (p[0] as i64) | ((p[1] as i64) << 8) | ((p[2] as i64) << 16) | ((p[3] as i64) << 24) |
+	       ((p[4] as i64) << 32) | ((p[5] as i64) << 40) | ((p[6] as i64) << 48) | ((p[7] as i64) << 56);
 }
 
 fn abi_recv_frame(fd i64, kind *u8, buf *u8, cap i64) i64 {
