@@ -1,0 +1,29 @@
+// stage1-only
+// expect-exit: 42
+// The dot-call receiver may be a value or a pointer; the first parameter's
+// type decides: a value receiver auto-addresses for a *Op first parameter,
+// and a pointer receiver auto-derefs for an Op first parameter. Only the
+// dot-call form does this -- edit(o) with a value o stays a type error, and
+// a temporary receiver cannot be auto-addressed. Struct literals
+// materialise in a temp, so they are addressable.
+struct Op { x i64, }
+
+fn val(o Op) i64 {
+	return o.x + 100;
+}
+
+fn edit(o *Op, n i64) i64 {
+	o.x = o.x + n;
+	return o.x;
+}
+
+fn main() i64 {
+	var o Op;
+	o.x = 40;
+	o.edit(1);       // auto-&: edit(&o, 1)
+	o.edit(5);       // auto-&: edit(&o, 5)
+	var p *Op = &o;
+	var v i64 = p.val();        // auto-*: val(*p)
+	var l i64 = Op { x: 9 }.edit(1);   // struct-literal receiver: &temp
+	return v + l - 114;
+}
