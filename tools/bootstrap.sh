@@ -311,6 +311,26 @@ EOF
 printf '    ok\n'
 
 
+step "eval var: host globals readable from eval'd source"
+cat > "$tmp2/evalvar.qela" <<'EOF'
+import "std/eval.qela";
+import "std/io.qela";
+eval var price i64 = 100;
+var secret i64 = 12345;
+fn main() int {
+	var a i64 = eval("price * 2");
+	var b i64 = eval("secret");
+	write_str(STDOUT, "a=${a} b=${b}\n");
+	return 0;
+}
+EOF
+( cd "$tmp2" &&
+  "$root/$OUT/s2" evalvar.qela -o evalvar &&
+  [ "$(QELAPATH="$root/$OUT/s2" ./evalvar)" = "a=200 b=0" ] ) ||
+	fail "eval var does not expose an exported global, or leaks an unexported one"
+printf '    ok\n'
+
+
 step "stdin compile and shebang"
 cat > "$tmp2/btcrash.qela" <<'EOF'
 fn deep(n i64) i64 {

@@ -1651,6 +1651,11 @@ fn add_type(n *Node) {
 	if (k == ND_VAR) { n.ty = n.varp.ty; return; }
 	if (k == ND_FUNCADDR) {
 		var f *Func = find_func(n.name);
+		if (f as i64 == 0 && type_abi_mode) {
+			n.foreign = true;
+			n.ty = ty_i64;
+			return;
+		}
 		if (f as i64 == 0) {
 			var sug str = did_you_mean(n.name);
 			if (sug.len > 0) {
