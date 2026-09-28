@@ -1524,7 +1524,6 @@ fn ir_alu_acc_rm(aop int, ty *Type, src IrOperand, pos i64) {
 }
 
 
-// stmt_update: dst op= imm folded into dst's own slot or register.
 fn ir_alu_rm_imm(aop int, dst IrOperand, v i64, pos i64) {
 	var op *IrOp = ir_emit(IR_ALU, pos);
 	op.dst = dst;
@@ -1534,7 +1533,6 @@ fn ir_alu_rm_imm(aop int, dst IrOperand, v i64, pos i64) {
 }
 
 
-// stmt_update: dst op= a promoted local's register.
 fn ir_alu_rm_reg(aop int, dst IrOperand, src IrOperand, pos i64) {
 	var op *IrOp = ir_emit(IR_ALU, pos);
 	op.dst = dst;
@@ -1569,7 +1567,6 @@ fn ir_cmp_acc_rm(src IrOperand, pos i64) {
 }
 
 
-// cmp <direct local>, imm -- gen_compare's direct-local fast path.
 fn ir_cmp_rm_imm(n *Node, v i64, pos i64) {
 	var op *IrOp = ir_emit(IR_CMP, pos);
 	op.src0 = direct_operand(n);
@@ -1702,7 +1699,6 @@ fn ir_cmp_acc_imm32(v i64, pos i64) {
 }
 
 
-// cmp <op2>, imm32 -- a staged index's bounds check.
 fn ir_cmp_op2_imm32(v i64, pos i64) {
 	var op *IrOp = ir_emit(IR_CMP, pos);
 	op.src0 = operand_op2(0);
@@ -1711,7 +1707,6 @@ fn ir_cmp_op2_imm32(v i64, pos i64) {
 }
 
 
-// cmp <direct local>, imm32 -- a promoted index's bounds check.
 fn ir_cmp_rm_imm32(n *Node, v i64, pos i64) {
 	var op *IrOp = ir_emit(IR_CMP, pos);
 	op.src0 = direct_operand(n);

@@ -340,7 +340,6 @@ fn warn_unused(f *Func) {
 		if (v.reads == 0 && v.name.len > 0 && !v.is_global) { nl_unused = nl_unused + 1; }
 		v = v.next;
 	}
-	// Count params with zero reads.
 	if (f.p0 as i64 != 0 && f.p0.reads == 0) { np_unused = np_unused + 1; }
 	if (f.p1 as i64 != 0 && f.p1.reads == 0) { np_unused = np_unused + 1; }
 	if (f.p2 as i64 != 0 && f.p2.reads == 0) { np_unused = np_unused + 1; }
