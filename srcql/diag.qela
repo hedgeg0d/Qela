@@ -111,6 +111,8 @@ fn diag_nfiles() int { return nfiles; }
 
 fn diag_path_of(file_id int) str { return files[file_id].path; }
 
+fn diag_src_of(file_id int) str { return files[file_id].src; }
+
 fn diag_file_dir(file_id int) str {
 	var p str = files[file_id].path;
 	var i i64 = p.len - 1;

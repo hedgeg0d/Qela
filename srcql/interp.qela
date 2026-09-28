@@ -840,13 +840,19 @@ fn ip_call_node(n *Node) i64 {
 	return ip_call(f, n.args, dst, n.pos);
 }
 
+fn ip_body_of(f *Func) *Node {
+	if (f.interp_body as i64 != 0) { return f.interp_body; }
+	return f.body;
+}
+
 fn ip_call(f *Func, args *Node, dst i64, pos i64) i64 {
 	if (f.extern) { error_at(pos, "interpreter: cannot call an extern function"); }
 	if (f.naked) {
 		ip_warn_once(f.pos, "interpreter: a naked function has no body to run, returning 0");
 		return 0;
 	}
-	if (f.body as i64 == 0) { error_at(pos, "interpreter: function has no body"); }
+	var body *Node = ip_body_of(f);
+	if (body as i64 == 0) { error_at(pos, "interpreter: function has no body"); }
 
 	// Arguments evaluate in the caller's frame, so they are collected
 	// before the callee's frame exists. Fourteen is parse.qela's own cap.
@@ -904,7 +910,7 @@ fn ip_call(f *Func, args *Node, dst i64, pos i64) i64 {
 		i = i + 1;
 	}
 
-	ip_block(f.body);
+	ip_block(body);
 
 	var r i64 = 0;
 	if (ip_returning) { r = ip_ret; }
@@ -926,7 +932,8 @@ fn ip_call(f *Func, args *Node, dst i64, pos i64) i64 {
 // trampoline has i64s, not nodes. `spawn` casts every argument to i64 at
 // parse time, so a scalar store is always the right shape here.
 fn ip_call_vals(f *Func, a0 i64, a1 i64, a2 i64, a3 i64, a4 i64) i64 {
-	if (f.body as i64 == 0) { die("internal: interpreted coroutine target has no body"); }
+	var body *Node = ip_body_of(f);
+	if (body as i64 == 0) { die("internal: interpreted coroutine target has no body"); }
 
 	var save_fp i64 = ip_fp;
 	var save_sp i64 = ip_sp;
@@ -956,7 +963,7 @@ fn ip_call_vals(f *Func, a0 i64, a1 i64, a2 i64, a3 i64, a4 i64) i64 {
 		i = i + 1;
 	}
 
-	ip_block(f.body);
+	ip_block(body);
 	var r i64 = 0;
 	if (ip_returning) { r = ip_ret; }
 
