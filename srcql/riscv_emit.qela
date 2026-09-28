@@ -75,6 +75,7 @@ let T6   = 31;
 // model x86_emit.qela and arm64_emit.qela use.
 let F10 = 10;
 let F11 = 11;
+let FA0 = 10;   // the LP64D float argument register f10, marshalling rank 0
 
 let SYS_RISCV_WRITE = 64;
 let SYS_RISCV_EXIT  = 93;
@@ -226,14 +227,18 @@ fn riscv_alu_full(aop int, rd int, rs1 int, rs2 int, uns bool) {
 // ALU with a 12-bit-sign-extended immediate; the caller decides when the
 // immediate qualifies. SRLI/SRAI/SLLI take a 6-bit shamt, not a sign-extended
 // word -- the frontend's shift counts are already masked to 6 bits.
-fn riscv_alu_imm(aop int, rd int, rs1 int, imm i64) {
+fn riscv_alu_imm(aop int, rd int, rs1 int, imm i64, uns bool) {
 	if (aop == ALU_ADD) { riscv_addi(rd, rs1, imm); return; }
 	if (aop == ALU_AND) { riscv_andi(rd, rs1, imm); return; }
 	if (aop == ALU_OR)  { riscv_ori(rd, rs1, imm); return; }
 	if (aop == ALU_XOR) { riscv_xori(rd, rs1, imm); return; }
 	if (aop == ALU_SHL) { riscv_slli(rd, rs1, imm); return; }
 	if (aop == ALU_SHR) {
-		if ((imm & 0x40) != 0) { riscv_srai(rd, rs1, imm); } else { riscv_srli(rd, rs1, imm); }
+		// SRAI vs SRLI is a signedness decision off the type, not a bit of
+		// the shift amount -- a negative value shifted by an unsigned
+		// srl would come out astronomically wrong (a bug that only showed
+		// in the riscv-hosted compiler's own constant folding).
+		if (uns) { riscv_srli(rd, rs1, imm); } else { riscv_srai(rd, rs1, imm); }
 		return;
 	}
 	die("internal: riscv_alu_imm: unhandled ALU op");
@@ -491,7 +496,15 @@ fn riscv_jump(cond i64, rs1 int, rs2 int) i64 {
 		return id;
 	}
 	if (riscv_br_tramp) {
-		riscv_b(8, ZERO, ZERO, riscv_cc(cc_invert(cond)), 0x63);  // b<inv> +8
+		// The trampoline's B<inv> is the real condition test -- it must
+		// carry the compare's own operands, or the branch never fires.
+		var inv i64 = cc_invert(cond);
+		var f3i i64 = riscv_cc(inv);
+		if (riscv_cc_swap(inv)) {
+			riscv_b(8, rs1, rs2, f3i, 0x63);
+		} else {
+			riscv_b(8, rs2, rs1, f3i, 0x63);
+		}
 		ilist_set(&riscv_br_at, id, code.n);
 		b4(0x6f | (ZERO << 7));             // jal x0, 0 (patched to the real target)
 		return id;
@@ -524,7 +537,9 @@ fn riscv_jump_back_cc(cond i64, rs1 int, rs2 int, target i64) {
 		else { riscv_b(rel, rs2, rs1, riscv_cc(cond), 0x63); }
 		return;
 	}
-	riscv_b(8, ZERO, ZERO, riscv_cc(cc_invert(cond)), 0x63);
+	var inv i64 = cc_invert(cond);
+	if (riscv_cc_swap(inv)) { riscv_b(8, rs1, rs2, riscv_cc(inv), 0x63); }
+	else { riscv_b(8, rs2, rs1, riscv_cc(inv), 0x63); }
 	riscv_j(rel - 4, ZERO, 0x6f);
 	riscv_br_tramp = true;
 	br_grew = true;
@@ -1051,8 +1066,42 @@ fn add_absref_riscv(name str, pos i64) {
 
 // ── not yet ported ──
 
+// LP64D, the riscv half of the extern marshalling. A C caller hands the
+// exported extern its integer words in a0..a7 and its scalar floats in
+// fa0..fa7 (f10..f17) on separate counters; Qela stages parameters
+// internally into the same a0..a7 (floats ride the GPRs), so only the
+// floats move out of the FP file into their frame slots, and an sret
+// pointer arrives in a0 (the first argument register, unlike AAPCS64's
+// x8). No re-staging pass is needed: loading one integer parameter's
+// register can never clobber a later one, and the FP file is never
+// written. Aggregate floats (an HFA) are not marshalled.
 fn gen_extern_params_riscv(f *Func) {
-	die("internal: extern functions are not ported to riscv64 yet");
+	var ri int = 0;
+	var fi int = 0;
+	if (f.ret_slot as i64 != 0) {
+		riscv_st_local(f.ret_slot.offset as i64, call_reg(ri));
+		ri = ri + 1;
+	}
+	var i int = 0;
+	while (i < f.nparams) {
+		var v *Var = func_param(f, i);
+		if (v.arg_stack) { i = i + 1; continue; }
+		if (is_float(v.ty)) {
+			riscv_fmv_f_to_wx(A0, FA0 + fi, v.ty.size);
+			fi = fi + 1;
+			if (v.has_reg) { riscv_mov_reg(v.reg, A0); }
+			else { riscv_st_local(v.offset as i64, A0); }
+		} else if (is_aggregate(v.ty) && !v.by_ref && v.ty.size > 8) {
+			riscv_st_local(v.offset as i64, call_reg(ri));
+			riscv_st_local((v.offset as i64) - 8, call_reg(ri + 1));
+			ri = ri + 2;
+		} else {
+			if (v.has_reg) { riscv_mov_reg(v.reg, call_reg(ri)); }
+			else { riscv_st_local(v.offset as i64, call_reg(ri)); }
+			ri = ri + 1;
+		}
+		i = i + 1;
+	}
 }
 
 // Builds a fresh per-thread TLS block, the RISC-V counterpart of the
@@ -1213,7 +1262,7 @@ fn riscv_lower_op(op *IrOp) {
 		var uns bool = op.dst.ty as i64 != 0 && op.dst.ty.is_unsigned;
 		if ((op.aux == ALU_ADD || op.aux == ALU_AND || op.aux == ALU_OR || op.aux == ALU_XOR ||
 		     op.aux == ALU_SHL || op.aux == ALU_SHR) && v >= -2048 && v <= 2047) {
-			riscv_alu_imm(op.aux, op.dst.reg, op.src0.reg, v);
+			riscv_alu_imm(op.aux, op.dst.reg, op.src0.reg, v, uns);
 			return;
 		}
 		riscv_li64(T0, v);
@@ -1503,7 +1552,7 @@ fn riscv_lower_op(op *IrOp) {
 		var uns bool = op.dst.ty.is_unsigned;
 		if ((op.aux == ALU_ADD || op.aux == ALU_AND || op.aux == ALU_OR || op.aux == ALU_XOR ||
 		     op.aux == ALU_SHL || op.aux == ALU_SHR) && v >= -2048 && v <= 2047) {
-			riscv_alu_imm(op.aux, A0, A0, v);
+			riscv_alu_imm(op.aux, A0, A0, v, uns);
 			return;
 		}
 		if (op.aux == ALU_DIV || op.aux == ALU_MOD || op.aux == ALU_SCALE) {
@@ -1548,7 +1597,7 @@ fn riscv_lower_op(op *IrOp) {
 		var v i64 = op.src1.off;
 		if ((op.aux == ALU_ADD || op.aux == ALU_AND || op.aux == ALU_OR || op.aux == ALU_XOR) &&
 		    v >= -2048 && v <= 2047) {
-			riscv_alu_imm(op.aux, T0, T0, v);
+			riscv_alu_imm(op.aux, T0, T0, v, false);
 		} else {
 			riscv_li64(T1, v);
 			riscv_alu_full(op.aux, T0, T0, T1, op.dst.ty.is_unsigned);
