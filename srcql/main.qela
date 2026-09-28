@@ -1243,12 +1243,18 @@ fn jit_identish(c u8) bool {
 	return c == '_' || c == '$';
 }
 
-fn jit_emit(b *Buf, last *u8, t *Token) {
-	if (*last != 0 && jit_identish(*last) && jit_identish(t.text.ptr[0])) {
+// The last emitted character and the function name being rewritten. The
+// rewrite helpers share them instead of carrying them as parameters (the
+// bootstrap subset caps a function at six parameters).
+var jit_last u8 = 0;
+var jit_self_name str;
+
+fn jit_emit(b *Buf, t *Token) {
+	if (jit_last != 0 && jit_identish(jit_last) && jit_identish(t.text.ptr[0])) {
 		buf_u8(b, ' ');
 	}
 	buf_bytes(b, t.text.ptr, t.text.len);
-	*last = t.text.ptr[t.text.len - 1];
+	jit_last = t.text.ptr[t.text.len - 1];
 }
 
 fn jit_punct(t *Token, s str) bool {
@@ -1286,28 +1292,190 @@ fn jit_is_lambda(t *Token) bool {
 	return false;
 }
 
-// Rewrites the returns of `body` (which includes its own braces). A void
-// return type needs no rewrite -- there is no value to carry.
-fn abi_jit_rewrite(body str, ret *Type) str {
+// The matching `)` of the call that starts at `t` (t = `name`, t.next is
+// the `(`). Returned, not skipped past, so callers copy the arguments as
+// everything strictly inside it.
+fn jit_skip_call(t *Token) *Token {
+	var depth i64 = 1;
+	var j *Token = t.next.next;
+	while (j as i64 != 0 && depth > 0) {
+		if (j.kind == TK_PUNCT) {
+			if (str_eq(j.text, "(")) { depth = depth + 1; }
+			else if (str_eq(j.text, ")")) { depth = depth - 1; }
+		}
+		if (depth > 0) { j = j.next; }
+	}
+	return j;
+}
+
+// The closing `}` of the lambda that starts at `t`, copying its tokens
+// verbatim on the way (returns included: a lambda has its own return
+// convention, untouched by the rewrite).
+fn jit_copy_lambda(b *Buf, t *Token) *Token {
+	var in_body bool = false;
+	var bd i64 = 0;
+	while (t.kind != TK_EOF) {
+		jit_emit(b, t);
+		if (jit_punct(t, "{")) {
+			if (!in_body) { in_body = true; }
+			bd = bd + 1;
+		} else if (jit_punct(t, "}")) {
+			bd = bd - 1;
+			if (in_body && bd == 0) { return t; }
+		}
+		t = t.next;
+	}
+	return t;
+}
+
+// The closing `}` of the lambda that starts at `t`, without emitting.
+fn jit_skip_lambda(t *Token) *Token {
+	var in_body bool = false;
+	var bd i64 = 0;
+	while (t.kind != TK_EOF) {
+		if (jit_punct(t, "{")) {
+			if (!in_body) { in_body = true; }
+			bd = bd + 1;
+		} else if (jit_punct(t, "}")) {
+			bd = bd - 1;
+			if (in_body && bd == 0) { return t; }
+		}
+		t = t.next;
+	}
+	return t;
+}
+
+// Counts the self-calls between `start` (inclusive) and `end` (exclusive).
+fn jit_count_selfcalls(start *Token, end *Token, name str) i64 {
+	var n i64 = 0;
+	var t *Token = start;
+	while (t as i64 != 0 && t != end) {
+		if (t.kind == TK_KW && str_eq(t.text, "fn") && jit_is_lambda(t)) { t = jit_skip_lambda(t); }
+		else if (t.kind == TK_IDENT && str_eq(t.text, name) && jit_punct(t.next, "(")) { n = n + 1; }
+		t = t.next;
+	}
+	return n;
+}
+
+// Counts every temp the emit pass will need over the whole body.
+fn jit_count_all(t *Token, name str, ret *Type) i64 {
+	var n i64 = 0;
+	var s *Token = t;
+	while (s.kind != TK_EOF) {
+		if (s.kind == TK_KW && str_eq(s.text, "fn") && jit_is_lambda(s)) {
+			s = jit_skip_lambda(s);
+		} else if (s.kind == TK_KW && str_eq(s.text, "return") && ret.kind != TY_VOID) {
+			var depth i64 = 0;
+			var j *Token = s.next;
+			while (j as i64 != 0 && !(depth == 0 && jit_punct(j, ";"))) {
+				if (j.kind == TK_PUNCT) {
+					if (str_eq(j.text, "(") || str_eq(j.text, "[") || str_eq(j.text, "{")) { depth = depth + 1; }
+					else if (str_eq(j.text, ")") || str_eq(j.text, "]") || str_eq(j.text, "}")) { depth = depth - 1; }
+				}
+				j = j.next;
+			}
+			var first *Token = s.next;
+			if (first.kind == TK_IDENT && str_eq(first.text, name) && jit_punct(first.next, "(") &&
+			    jit_skip_call(first).next == j) {
+				// a bare tail self-call takes no temp; its arguments may
+				n = n + jit_count_selfcalls(first.next.next, j, name);
+			} else {
+				n = n + jit_count_selfcalls(first, j, name);
+			}
+			s = j.next;
+		} else {
+			s = s.next;
+		}
+	}
+	return n;
+}
+
+// Copies tokens from `start` (inclusive) to `end` (exclusive), rewriting
+// every self-call into the temp form.
+fn jit_copy_expr(b *Buf, start *Token, end *Token, ret *Type, tempno *i64) {
+	var t *Token = start;
+	while (t as i64 != 0 && t != end) {
+		if (t.kind == TK_KW && str_eq(t.text, "fn") && jit_is_lambda(t)) {
+			t = jit_copy_lambda(b, t);
+		} else if (t.kind == TK_IDENT && str_eq(t.text, jit_self_name) && jit_punct(t.next, "(")) {
+			t = jit_rewrite_selfcall(b, t, ret, tempno, false);
+		} else {
+			jit_emit(b, t);
+		}
+		t = t.next;
+	}
+}
+
+// Rewrites one self-call. tail: the call's value is the enclosing return's
+// value, so the callee writes into our own out-parameter and no store or
+// temp is needed; non-tail, the value comes back through a fresh temp
+// slot of the return type: (name(args, &_rN as *u8), _rN). Returns the
+// call's closing `)`.
+fn jit_rewrite_selfcall(b *Buf, t *Token, ret *Type, tempno *i64, tail bool) *Token {
+	var rparen *Token = jit_skip_call(t);
+	var tn i64 = 0;
+	if (!tail) {
+		tn = *tempno;
+		*tempno = tn + 1;
+		fmt_str(b, " (");
+		jit_last = ' ';
+	}
+	jit_emit(b, t);
+	jit_emit(b, t.next);
+	jit_copy_expr(b, t.next.next, rparen, ret, tempno);
+	if (!tail) {
+		fmt_str(b, ", &_r");
+		fmt_i64(b, tn);
+		fmt_str(b, " as *u8), _r");
+		fmt_i64(b, tn);
+		fmt_str(b, ")");
+	} else {
+		fmt_str(b, ", ___dynret)");
+	}
+	jit_last = ')';
+	return rparen;
+}
+
+// Rewrites the returns of `body` (which includes its own braces) and every
+// self-call inside it. A call to the function itself would hit the
+// rewritten signature (the hidden out-parameter) and fail the isolated
+// compile, so it is rewritten along with the returns: a tail call passes
+// the out-parameter on directly, any other call goes through a fresh
+// per-site temp. A void return type needs no rewrite -- there is no value
+// to carry.
+fn abi_jit_rewrite(body str, name str, ret *Type) str {
 	var t *Token = lex(body, 0);
 	var b Buf;
-	var last u8 = 0;
+	jit_last = 0;
+	jit_self_name = name;
+
+	// Count the temps first: a `var` cannot appear mid-expression, so the
+	// declarations are injected right after the opening brace. The count
+	// and the emit pass share the same rules, so every temp is declared
+	// exactly once and used exactly once.
+	var temps i64 = jit_count_all(t, name, ret);
+	if (temps > 0) {
+		jit_emit(&b, t);
+		var k i64 = 0;
+		while (k < temps) {
+			fmt_str(&b, " var _r");
+			fmt_i64(&b, k);
+			fmt_str(&b, " ");
+			fmt_str(&b, type_name(ret));
+			fmt_str(&b, ";");
+			k = k + 1;
+		}
+		jit_last = ';';
+		t = t.next;
+	}
+	var tempno i64 = 0;
 	while (t.kind != TK_EOF) {
 		if (t.kind == TK_KW && str_eq(t.text, "fn") && jit_is_lambda(t)) {
-			// copy the whole lambda verbatim, returns included
-			var in_body bool = false;
-			var bd i64 = 0;
-			while (t.kind != TK_EOF) {
-				jit_emit(&b, &last, t);
-				if (jit_punct(t, "{")) {
-					if (!in_body) { in_body = true; }
-					bd = bd + 1;
-				} else if (jit_punct(t, "}")) {
-					bd = bd - 1;
-					if (in_body && bd == 0) { t = t.next; break; }
-				}
-				t = t.next;
-			}
+			// a self-call inside a lambda stays a plain call: the lambda
+			// cannot see the body's temps (no closures), so the isolated
+			// compile rejects it and the interpreted fallback takes over
+			t = jit_copy_lambda(&b, t);
+			t = t.next;
 			continue;
 		}
 		if (t.kind == TK_KW && str_eq(t.text, "return") && ret.kind != TY_VOID) {
@@ -1320,21 +1488,28 @@ fn abi_jit_rewrite(body str, ret *Type) str {
 				}
 				j = j.next;
 			}
-			fmt_str(&b, "*(___dynret as *");
-			fmt_str(&b, type_name(ret));
-			fmt_str(&b, ") = ");
-			last = ' ';
-			var k *Token = t.next;
-			while (k as i64 != j as i64) {
-				jit_emit(&b, &last, k);
-				k = k.next;
+			var first *Token = t.next;
+			if (first.kind == TK_IDENT && str_eq(first.text, name) && jit_punct(first.next, "(") &&
+			    jit_skip_call(first).next == j) {
+				jit_rewrite_selfcall(&b, first, ret, &tempno, true);
+			} else {
+				fmt_str(&b, "*(___dynret as *");
+				fmt_str(&b, type_name(ret));
+				fmt_str(&b, ") = ");
+				jit_last = ' ';
+				jit_copy_expr(&b, first, j, ret, &tempno);
 			}
 			fmt_str(&b, "; return 0; ");
-			last = ' ';
+			jit_last = ' ';
 			t = j.next;
 			continue;
 		}
-		jit_emit(&b, &last, t);
+		if (t.kind == TK_IDENT && str_eq(t.text, name) && jit_punct(t.next, "(")) {
+			t = jit_rewrite_selfcall(&b, t, ret, &tempno, false);
+			t = t.next;
+			continue;
+		}
+		jit_emit(&b, t);
 		t = t.next;
 	}
 	return buf_str(&b);
@@ -1395,7 +1570,7 @@ fn abi_chain_collect(path str, depth i64) {
 fn abi_bundle_dedup(src str) str {
 	var t *Token = lex(src, 0);
 	var b Buf;
-	var last u8 = 0;
+	jit_last = 0;
 	while (t.kind != TK_EOF) {
 		if ((t.kind == TK_KW && str_eq(t.text, "struct")) ||
 		    (t.kind == TK_KW && str_eq(t.text, "enum"))) {
@@ -1418,7 +1593,7 @@ fn abi_bundle_dedup(src str) str {
 				}
 			}
 		}
-		jit_emit(&b, &last, t);
+		jit_emit(&b, t);
 		t = t.next;
 	}
 	return buf_str(&b);
@@ -1544,7 +1719,7 @@ fn abi_handle_jit(f *Func) {
 			if (interp_jit_budget(f)) {
 				rewrite = true;
 				fmt_str(&sigb, ", ___dynret *u8) i64 ");
-				fmt_str(&sigb, abi_jit_rewrite(body_only, f.ret));
+				fmt_str(&sigb, abi_jit_rewrite(body_only, f.name, f.ret));
 			} else {
 				var msg str = "dynamic: this signature is too wide for the jit call path (more than six register words)";
 				abi_send_frame(ABI_FD_CHILD_TO_HOST, ABI_RESP_ERR as u8, msg.ptr, msg.len);
@@ -1568,13 +1743,37 @@ fn abi_handle_jit(f *Func) {
 		var img Image;
 		codegen(junit, &img);
 
-		var ok bool = o_rela_count(img.relocs) == 0;
+		// Self-contained means: no relocation at all, or nothing but calls
+		// to the function itself. The host can patch those locally -- it
+		// knows the unit's mapped address, so a self-call's rel32 is
+		// -(slot + 4) -- no second round trip. Everything else (a call to
+		// another function, a global, a string literal) is a clean
+		// rejection and the interpreted fallback.
+		var ok bool = true;
+		var slotb Buf;
+		var nslots i64 = 0;
+		var r *Reloc = img.relocs;
+		while (r as i64 != 0) {
+			if (r.kind == REL_PCREL32_PLT && r.name.len > 0 && str_eq(r.name, f.name)) {
+				buf_u32(&slotb, r.at as u32);
+				nslots = nslots + 1;
+			} else {
+				ok = false;
+			}
+			r = r.next;
+		}
 		if (!ok) {
-			var msg str = "dynamic: not self-contained yet -- calls, globals and literals inside a dynamic function are not supported by the jit path (see docs/INTERPRETED.md)";
+			var msg str = "dynamic: not self-contained yet -- calls to other functions, globals and string literals inside a dynamic function are not supported by the jit path (see docs/INTERPRETED.md)";
 			abi_send_frame(ABI_FD_CHILD_TO_HOST, ABI_RESP_ERR as u8, msg.ptr, msg.len);
 			sys_exit(0);
 		}
-		abi_send_frame(ABI_FD_CHILD_TO_HOST, ABI_RESP_OK as u8, img.code.p, img.code.n);
+		// Payload: [u32 slot count][u32 slot offsets][code]. The host
+		// patches each slot with the self-call's rel32 and calls the unit.
+		var sendb Buf;
+		buf_u32(&sendb, nslots);
+		buf_bytes(&sendb, slotb.p, slotb.n);
+		buf_bytes(&sendb, img.code.p, img.code.n);
+		abi_send_frame(ABI_FD_CHILD_TO_HOST, ABI_RESP_OK as u8, sendb.p, sendb.n);
 		sys_exit(0);
 	}
 	var status [1]i64;
