@@ -657,13 +657,402 @@ fn cmd_test(argc int, argv **u8) int {
 	return fails;
 }
 
-// ── qela repl: expressions in, values out ──
-//
-// Each line is compiled as `write_str(STDOUT, "${line}")` in a forked
-// child — the interpolation picks decimal or string rendering from the
-// type — then the child exits, so the arena leak of a compile never
-// accumulates and a compile error costs the repl only the child. A repl
-// session is stateless: every line is a fresh program.
+$if (BOOTSTRAP != "1") {
+
+let REPL_FRAME_SIZE = 1 * 1024 * 1024;
+let REPL_DATA_SIZE = 16 * 1024 * 1024;
+
+let REPL_PATH_A = 1;
+let REPL_PATH_STMT = 2;
+let REPL_PATH_EXPR = 3;
+
+var repl_fn *Func;
+var repl_unit *Unit;
+var repl_off i64 = 0;
+var repl_locals_done *Var = 0 as *Var;
+var repl_globals_done *Var = 0 as *Var;
+var repl_strs_done *StrLit = 0 as *StrLit;
+var repl_bootstrap_funcs *Func = 0 as *Func;
+var repl_line_seq int = 0;
+
+fn repl_skip_ws(s str, i i64) i64 {
+	while (i < s.len && (s.ptr[i] == ' ' || s.ptr[i] == '\t')) { i = i + 1; }
+	return i;
+}
+
+fn repl_blank(s str) bool {
+	return repl_skip_ws(s, 0) == s.len;
+}
+
+fn repl_leading_word(s str) str {
+	var i i64 = repl_skip_ws(s, 0);
+	var start i64 = i;
+	if (i < s.len && is_letter(s.ptr[i])) {
+		while (i < s.len && is_ident_char(s.ptr[i])) { i = i + 1; }
+	}
+	return str_slice(s, start, i);
+}
+
+fn repl_colon_word(s str, rest *str) str {
+	var i i64 = repl_skip_ws(s, 0) + 1;
+	var start i64 = i;
+	while (i < s.len && is_ident_char(s.ptr[i])) { i = i + 1; }
+	var w str = str_slice(s, start, i);
+	i = repl_skip_ws(s, i);
+	*rest = str_slice(s, i, s.len);
+	return w;
+}
+
+fn repl_classify(line str) int {
+	var w str = repl_leading_word(line);
+	if (str_eq(w, "fn") || str_eq(w, "struct") || str_eq(w, "enum") ||
+	    str_eq(w, "import") || str_eq(w, "macro") || str_eq(w, "extern") ||
+	    str_eq(w, "asm") || str_eq(w, "entry")) {
+		return REPL_PATH_A;
+	}
+	if (str_eq(w, "var") || str_eq(w, "let") || str_eq(w, "if") ||
+	    str_eq(w, "while") || str_eq(w, "for") || str_eq(w, "match") ||
+	    str_eq(w, "return") || str_eq(w, "super") || str_eq(w, "break") ||
+	    str_eq(w, "continue") || str_eq(w, "defer") || str_eq(w, "spawn") ||
+	    str_eq(w, "go")) {
+		return REPL_PATH_STMT;
+	}
+	var i i64 = repl_skip_ws(line, 0);
+	if (i < line.len && line.ptr[i] == '{') { return REPL_PATH_STMT; }
+	return REPL_PATH_EXPR;
+}
+
+fn repl_strip_trailing_semi(s str) str {
+	var end i64 = s.len;
+	while (end > 0 && (s.ptr[end - 1] == ' ' || s.ptr[end - 1] == '\t')) { end = end - 1; }
+	if (end > 0 && s.ptr[end - 1] == ';') { end = end - 1; }
+	return str_slice(s, 0, end);
+}
+
+fn repl_wrap_expr(line str) str {
+	var b Buf;
+	fmt_str(&b, "write_str(STDOUT, \"");
+	buf_u8(&b, '$');
+	buf_u8(&b, '{');
+	fmt_str(&b, repl_strip_trailing_semi(line));
+	buf_u8(&b, '}');
+	fmt_str(&b, "\");\n");
+	return buf_str(&b);
+}
+
+fn repl_unshadow(name str) {
+	var vs *VarScope = scope_root.vars;
+	var prev *VarScope = 0 as *VarScope;
+	while (vs as i64 != 0) {
+		if (str_eq(vs.name, name)) {
+			if (prev as i64 == 0) { scope_root.vars = vs.next; }
+			else { prev.next = vs.next; }
+			return;
+		}
+		prev = vs;
+		vs = vs.next;
+	}
+}
+
+fn repl_maybe_unshadow(line str, word str) {
+	if (!str_eq(word, "var") && !str_eq(word, "let")) { return; }
+	var i i64 = repl_skip_ws(line, 0) + word.len;
+	i = repl_skip_ws(line, i);
+	if (i < line.len && line.ptr[i] == '~') { i = i + 1; }
+	var start i64 = i;
+	while (i < line.len && is_ident_char(line.ptr[i])) { i = i + 1; }
+	if (i > start) { repl_unshadow(str_slice(line, start, i)); }
+}
+
+fn repl_depth_delta(line str) i64 {
+	var d i64 = 0;
+	var i i64 = 0;
+	var in_str bool = false;
+	while (i < line.len) {
+		var c u8 = line.ptr[i];
+		if (in_str) {
+			if (c == '\\') { i = i + 1; }
+			else if (c == '"') { in_str = false; }
+		} else if (c == '"') {
+			in_str = true;
+		} else if (c == '/' && i + 1 < line.len && line.ptr[i + 1] == '/') {
+			return d;
+		} else if (c == '{' || c == '(' || c == '[') {
+			d = d + 1;
+		} else if (c == '}' || c == ')' || c == ']') {
+			d = d - 1;
+		}
+		i = i + 1;
+	}
+	return d;
+}
+
+fn repl_offset_var(v *Var) {
+	if (v.has_reg || v.arg_stack) { return; }
+	var size i64 = v.ty.size as i64;
+	var al i64 = v.ty.align as i64;
+	if (v.by_ref) { size = 8; al = 8; }
+	else if (size < 8) { size = 8; }
+	repl_off = (repl_off + size + al - 1) & ~(al - 1);
+	v.offset = repl_off as int;
+}
+
+fn repl_assign_offsets(head *Var, stop *Var) {
+	if (head as i64 == 0 || head as i64 == stop as i64) { return; }
+	repl_assign_offsets(head.next, stop);
+	repl_offset_var(head);
+}
+
+fn repl_sync() {
+	repl_assign_offsets(repl_fn.locals, repl_locals_done);
+	repl_locals_done = repl_fn.locals;
+
+	ip_repl_layout_globals(global_vars, repl_globals_done);
+	repl_globals_done = global_vars;
+
+	var s *StrLit = strlist_head;
+	if (repl_strs_done as i64 != 0) { s = repl_strs_done.next; }
+	ip_repl_layout_strs(s);
+	repl_strs_done = strlist_tail;
+
+	repl_unit.funcs = all_funcs;
+	repl_unit.globals = global_vars;
+	repl_unit.strs = strlist_head;
+	repl_unit.nstrs = nstrs;
+	ip_unit = repl_unit;
+}
+
+fn repl_run_source(src str, name str, path_a bool) {
+	var file int = diag_add_file(name, src);
+	var toks *Token = lex(src, (file as i64) << FILE_SHIFT);
+	if (path_a) {
+		cur_func = 0 as *Func;
+		type_set_fn(0 as *Func);
+		parse(toks);
+		cur_func = repl_fn;
+		type_set_fn(repl_fn);
+		repl_sync();
+		return;
+	}
+	var t *Token = toks;
+	resolve_comptime(&t);
+	while (t.kind != TK_EOF) {
+		var n *Node = parse_stmt(&t);
+		while (n as i64 != 0) {
+			add_type(n);
+			repl_sync();
+			ip_stmt(n);
+			n = n.next;
+		}
+		resolve_comptime(&t);
+	}
+}
+
+fn repl_process(src str, name str, path_a bool) {
+	var pid i64 = sys_fork();
+	if (pid == 0) {
+		var devnull i64 = sys_open_append(cstr("/dev/null"));
+		sys_dup2(devnull, STDOUT);
+		repl_run_source(src, name, path_a);
+		sys_exit(0);
+	}
+	var status [1]i64;
+	sys_wait4(pid, &status[0] as *u8);
+	if (((status[0] >> 8) & 255) != 0 || (status[0] & 127) != 0) { return; }
+	repl_run_source(src, name, path_a);
+}
+
+fn repl_hidden_name(s str) bool {
+	return s.len == 0 || (s.len >= 2 && s.ptr[0] == '_' && s.ptr[1] == '$');
+}
+
+fn repl_print_vars() {
+	var v *Var = repl_fn.locals;
+	var any bool = false;
+	while (v as i64 != 0) {
+		if (!repl_hidden_name(v.name)) {
+			var newer *Var = repl_fn.locals;
+			var shadowed bool = false;
+			while (newer as i64 != 0 && newer as i64 != v as i64) {
+				if (str_eq(newer.name, v.name)) { shadowed = true; break; }
+				newer = newer.next;
+			}
+			if (!shadowed) {
+				write_str(STDOUT, v.name);
+				write_str(STDOUT, ": ");
+				write_str(STDOUT, type_name(v.ty));
+				write_str(STDOUT, "\n");
+				any = true;
+			}
+		}
+		v = v.next;
+	}
+	if (!any) { write_str(STDOUT, "(no locals)\n"); }
+}
+
+fn repl_print_funcs() {
+	var f *Func = all_funcs;
+	if (repl_bootstrap_funcs as i64 != 0) { f = repl_bootstrap_funcs.next; }
+	var any bool = false;
+	while (f as i64 != 0) {
+		if (!repl_hidden_name(f.name)) {
+			write_str(STDOUT, f.name);
+			write_str(STDOUT, "\n");
+			any = true;
+		}
+		f = f.next;
+	}
+	if (!any) { write_str(STDOUT, "(no functions)\n"); }
+}
+
+fn repl_print_type(expr str) {
+	if (repl_blank(expr)) { write_str(STDOUT, "usage: :type <expr>\n"); return; }
+	var pid i64 = sys_fork();
+	if (pid == 0) {
+		var file int = diag_add_file("<repl :type>", expr);
+		var t *Token = lex(expr, (file as i64) << FILE_SHIFT);
+		var n *Node = parse_assign(&t);
+		add_type(n);
+		write_str(STDOUT, type_name(n.ty));
+		write_str(STDOUT, "\n");
+		sys_exit(0);
+	}
+	var status [1]i64;
+	sys_wait4(pid, &status[0] as *u8);
+}
+
+fn repl_print_help() {
+	write_str(STDOUT, "qela repl commands:\n  :help, :h        this text\n  :quit, :q, :exit exit the session\n  :reset           discard all session state and start over\n  :vars            list declared locals and their types\n  :funcs           list functions defined this session\n  :type <expr>     print an expression's type without running it\n\na line starting with fn/struct/enum/import/macro/extern declares a name\nfor the rest of the session; var/let bind a local that survives to later\nlines (retyping the same name rebinds it); anything else runs as a\nstatement, and a bare expression prints its value.\n");
+}
+
+fn repl_command(line str) {
+	var rest str;
+	var cmd str = repl_colon_word(line, &rest);
+	if (str_eq(cmd, "help") || str_eq(cmd, "h")) { repl_print_help(); return; }
+	if (str_eq(cmd, "quit") || str_eq(cmd, "q") || str_eq(cmd, "exit")) { sys_exit(0); }
+	if (str_eq(cmd, "reset")) { repl_init(); write_str(STDOUT, "session reset\n"); return; }
+	if (str_eq(cmd, "vars")) { repl_print_vars(); return; }
+	if (str_eq(cmd, "funcs")) { repl_print_funcs(); return; }
+	if (str_eq(cmd, "type")) { repl_print_type(rest); return; }
+	write_str(STDOUT, "unknown command '");
+	write_str(STDOUT, cmd);
+	write_str(STDOUT, "', try :help\n");
+}
+
+fn repl_init() {
+	ip_reset();
+	reset_compile();
+	opt_interp = true;
+	comptime_set("INTERP", "1");
+	diag_setup();
+	cur_func = 0 as *Func;
+	type_set_fn(0 as *Func);
+	enter_scope();
+
+	var boot str = "import \"std/io.qela\";\nimport \"std/fmt.qela\";\nimport \"std/rand.qela\";\n";
+	var file int = diag_add_file("<repl bootstrap>", boot);
+	set_module_dir("<repl>");
+	parse(lex(boot, (file as i64) << FILE_SHIFT));
+	repl_bootstrap_funcs = funcs_tail;
+
+	repl_off = 0;
+	repl_locals_done = 0 as *Var;
+	repl_globals_done = 0 as *Var;
+	repl_strs_done = 0 as *StrLit;
+	repl_unit = arena_alloc(sizeof(Unit), 8) as *Unit;
+
+	type_init();
+	repl_fn = arena_alloc(sizeof(Func), 8) as *Func;
+	repl_fn.name = "<repl>";
+	repl_fn.ret = ty_void;
+	repl_fn.stack_size = REPL_FRAME_SIZE as int;
+
+	var d i64 = sys_mmap_anon(REPL_DATA_SIZE);
+	if (d < 0 && d > -4096) { die("error: interpreter cannot map the data segment"); }
+	ip_data = d;
+	ip_data_end = d + REPL_DATA_SIZE;
+
+	var s i64 = sys_mmap_anon(IP_STACK);
+	if (s < 0 && s > -4096) { die("error: interpreter cannot map the frame stack"); }
+	ip_stack_lo = s;
+	ip_sp = s + IP_STACK;
+	ip_defers = arena_alloc(IP_MAX_DEFERS * 8, 8) as **Node;
+	ip_cur = 0;
+	ip_coro[0].live = true;
+	ip_coro[0].flo = s;
+	ip_coro[0].fhi = s + IP_STACK;
+	if (!ip_dispatch_ready) { ip_dispatch_init(); }
+
+	repl_sync();
+
+	ip_fp = ip_enter(repl_fn);
+	ip_fn = repl_fn;
+	ip_retdst = 0;
+	ip_returning = false;
+	ip_broke = false;
+	ip_continued = false;
+
+	cur_func = repl_fn;
+	type_set_fn(repl_fn);
+}
+
+fn cmd_repl(argc int, argv **u8) int {
+	repl_init();
+	var tty bool = sys_isatty() == 0;
+	if (tty) {
+		write_str(STDOUT, "qela repl: statements and expressions, state kept across lines; :help for commands, Ctrl-D to quit\n");
+	}
+	while (true) {
+		if (tty) { write_str(STDOUT, "qela> "); }
+		var line str = read_line();
+		if (line.len == 0) { return 0; }
+		if (line.ptr[line.len - 1] == '\n') { line.len = line.len - 1; }
+
+		var buf Buf;
+		fmt_str(&buf, line);
+		var depth i64 = repl_depth_delta(line);
+		var eof bool = false;
+		while (depth > 0) {
+			if (tty) { write_str(STDOUT, "  ... "); }
+			var more str = read_line();
+			if (more.len == 0) { eof = true; break; }
+			if (more.ptr[more.len - 1] == '\n') { more.len = more.len - 1; }
+			buf_u8(&buf, '\n');
+			fmt_str(&buf, more);
+			depth = depth + repl_depth_delta(more);
+		}
+		var full str = buf_str(&buf);
+		if (repl_blank(full)) { if (eof) { return 0; } continue; }
+
+		if (full.ptr[0] == ':') {
+			repl_command(full);
+			if (eof) { return 0; }
+			continue;
+		}
+
+		repl_line_seq = repl_line_seq + 1;
+		var nameb Buf;
+		fmt_str(&nameb, "<repl:");
+		fmt_i64(&nameb, repl_line_seq as i64);
+		buf_u8(&nameb, '>');
+		var name str = buf_str(&nameb);
+
+		var cls int = repl_classify(full);
+		if (cls == REPL_PATH_EXPR) {
+			repl_process(repl_wrap_expr(full), name, false);
+		} else {
+			if (cls == REPL_PATH_STMT) { repl_maybe_unshadow(full, repl_leading_word(full)); }
+			var srcb Buf;
+			fmt_str(&srcb, full);
+			buf_u8(&srcb, '\n');
+			repl_process(buf_str(&srcb), name, cls == REPL_PATH_A);
+		}
+		if (eof) { return 0; }
+	}
+}
+
+} $else {
+
 fn cmd_repl(argc int, argv **u8) int {
 	var tty bool = sys_isatty() == 0;
 	if (tty) { write_str(STDOUT, "qela repl: expressions in, values out; Ctrl-D to quit\n"); }
@@ -707,6 +1096,8 @@ fn cmd_repl(argc int, argv **u8) int {
 		sys_wait4(pid2, &status[0] as *u8);
 		sys_unlink(tmpc);
 	}
+}
+
 }
 
 fn cmd_help() int {
