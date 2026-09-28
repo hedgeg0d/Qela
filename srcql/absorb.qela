@@ -1,0 +1,353 @@
+// User modules carried in the compiler executable.  The archive is an LZSS
+// stream followed by an index and a fixed footer; Linux ignores this trailer
+// when loading the ELF.  Keeping it outside the loadable image also lets
+// `qela absorbed drop` restore the pristine compiler byte-for-byte.
+import "comp.qela";
+import "../std/io.qela";
+
+let ABS_FOOTER = 40;
+let ABS_MAX_FILES = 8192;
+
+struct AbsFile {
+	name str,
+	off i64,
+	len i64,
+}
+
+var abs_files [8192]AbsFile;
+var abs_n int;
+var abs_image str;
+var abs_raw str;
+var abs_base_len i64;
+var abs_loaded bool;
+var abs_add_dir str;
+var abs_add_root str;
+var abs_add_names *str;
+var abs_add_n int;
+
+fn abs_u32(p *u8) i64 {
+	return p[0] as i64 | ((p[1] as i64) << 8) | ((p[2] as i64) << 16) |
+	       ((p[3] as i64) << 24);
+}
+
+fn abs_u64(p *u8) i64 {
+	return abs_u32(p) | (abs_u32(p + 4) << 32);
+}
+
+fn abs_magic(p *u8) bool {
+	return p[0] == 'Q' && p[1] == 'E' && p[2] == 'L' && p[3] == 'A' &&
+	       p[4] == 'A' && p[5] == 'B' && p[6] == 'S' && p[7] == '1';
+}
+
+fn abs_put_magic(b *Buf) { buf_bytes(b, "QELAABS1".ptr, 8); }
+
+fn abs_unpack(src *u8, packed_len i64, total i64) str {
+	var out *u8 = arena_alloc(total + 1, 1);
+	var si i64 = 0;
+	var oi i64 = 0;
+	while (oi < total) {
+		if (si >= packed_len) { die("error: corrupt absorbed archive"); }
+		var flags i64 = src[si] as i64;
+		si = si + 1;
+		var bit int = 0;
+		while (bit < 8 && oi < total) {
+			if ((flags & (1 << (bit as i64))) != 0) {
+				if (si >= packed_len) { die("error: corrupt absorbed archive"); }
+				out[oi] = src[si]; si = si + 1; oi = oi + 1;
+			} else {
+				if (si + 1 >= packed_len) { die("error: corrupt absorbed archive"); }
+				var code i64 = ((src[si] as i64) << 8) | src[si + 1] as i64;
+				si = si + 2;
+				var dist i64 = (code >> 4) + 1;
+				var len i64 = (code & 15) + 3;
+				if (dist > oi || oi + len > total) { die("error: corrupt absorbed archive"); }
+				var from i64 = oi - dist;
+				var k i64 = 0;
+				while (k < len) { out[oi] = out[from + k]; oi = oi + 1; k = k + 1; }
+			}
+			bit = bit + 1;
+		}
+	}
+	out[total] = 0;
+	var r str; r.ptr = out; r.len = total; return r;
+}
+
+// Loads the trailer lazily.  A normal compile that finds every import on
+// disk never reads its own executable for this feature.
+fn abs_load() {
+	if (abs_loaded) { return; }
+	abs_loaded = true;
+	abs_image = read_file("/proc/self/exe");
+	abs_base_len = abs_image.len;
+	if (abs_image.len < ABS_FOOTER) { return; }
+	var f *u8 = abs_image.ptr + abs_image.len - ABS_FOOTER;
+	if (!abs_magic(f)) { return; }
+	var base i64 = abs_u64(f + 8);
+	var packed i64 = abs_u64(f + 16);
+	var rawlen i64 = abs_u64(f + 24);
+	var count i64 = abs_u32(f + 32);
+	var indexlen i64 = abs_u32(f + 36);
+	if (base < 0 || packed < 0 || rawlen < 0 || indexlen < 0 || count < 0 ||
+	    count > ABS_MAX_FILES || base + packed + indexlen + ABS_FOOTER != abs_image.len) {
+		die("error: corrupt absorbed archive footer");
+	}
+	abs_base_len = base;
+	abs_raw = abs_unpack(abs_image.ptr + base, packed, rawlen);
+	var p *u8 = abs_image.ptr + base + packed;
+	var end *u8 = p + indexlen;
+	abs_n = count as int;
+	var i int = 0;
+	while (i < abs_n) {
+		if (p + 20 > end) { die("error: corrupt absorbed archive index"); }
+		var nl i64 = abs_u32(p); p = p + 4;
+		var off i64 = abs_u64(p); p = p + 8;
+		var len i64 = abs_u64(p); p = p + 8;
+		if (nl < 1 || p + nl > end || off < 0 || len < 0 || off + len > rawlen) {
+			die("error: corrupt absorbed archive index");
+		}
+		abs_files[i].name.ptr = p; abs_files[i].name.len = nl;
+		abs_files[i].off = off; abs_files[i].len = len;
+		p = p + nl; i = i + 1;
+	}
+	if (p != end) { die("error: corrupt absorbed archive index"); }
+}
+
+// Called by import resolution after the disk lookup and before embedded std.
+fn absorbed_find(path str, out *str) bool {
+	abs_load();
+	var i int = 0;
+	while (i < abs_n) {
+		if (str_eq(abs_files[i].name, path)) {
+			*out = str_slice(abs_raw, abs_files[i].off, abs_files[i].off + abs_files[i].len);
+			return true;
+		}
+		i = i + 1;
+	}
+	return false;
+}
+
+fn abs_lt(a str, b str) bool {
+	var i i64 = 0;
+	while (i < a.len && i < b.len) {
+		if (a.ptr[i] != b.ptr[i]) { return a.ptr[i] < b.ptr[i]; }
+		i = i + 1;
+	}
+	return a.len < b.len;
+}
+
+fn abs_root(path str) str {
+	var end i64 = path.len;
+	while (end > 0 && path.ptr[end - 1] == '/') { end = end - 1; }
+	var start i64 = end;
+	while (start > 0 && path.ptr[start - 1] != '/') { start = start - 1; }
+	return str_slice(path, start, end);
+}
+
+fn abs_dir(path str) str {
+	var end i64 = path.len;
+	while (end > 0 && path.ptr[end - 1] == '/') { end = end - 1; }
+	while (end > 0 && path.ptr[end - 1] != '/') { end = end - 1; }
+	if (end == 0) { return "."; }
+	return str_slice(path, 0, end - 1);
+}
+
+fn abs_package(name str) str {
+	var i i64 = 0;
+	while (i < name.len && name.ptr[i] != '/') { i = i + 1; }
+	return str_slice(name, 0, i);
+}
+
+fn abs_prefix(name str, root str) bool {
+	if (name.len < root.len) { return false; }
+	var i i64 = 0;
+	while (i < root.len) { if (name.ptr[i] != root.ptr[i]) { return false; } i = i + 1; }
+	return name.len == root.len || name.ptr[root.len] == '/';
+}
+
+// Same wire format as the embedded std compressor.  Hash chains keep it
+// linear-ish without shipping a map implementation; lazy matching is left to
+// the offline std packer so this cold command remains small.
+fn abs_compress(data str) str {
+	var heads *i64 = arena_alloc(4096 * 8, 8) as *i64;
+	var h int = 0; while (h < 4096) { heads[h] = -1; h = h + 1; }
+	var prev *i64 = arena_alloc((data.len + 1) * 8, 8) as *i64;
+	var out Buf; var items Buf;
+	var flags i64 = 0; var nf int = 0; var i i64 = 0;
+	while (i < data.len) {
+		var best i64 = 0; var bestdist i64 = 0;
+		if (i + 3 <= data.len) {
+			var key i64 = ((data.ptr[i] as i64) * 251 + data.ptr[i + 1] as i64) * 251 + data.ptr[i + 2] as i64;
+			var pos i64 = heads[(key & 4095) as int];
+			var probes int = 0;
+			while (pos >= 0 && i - pos <= 4096 && probes < 128) {
+				if (data.ptr[pos] == data.ptr[i] && data.ptr[pos + 1] == data.ptr[i + 1] &&
+				    data.ptr[pos + 2] == data.ptr[i + 2]) {
+					var len i64 = 3; var lim i64 = 18;
+					if (data.len - i < lim) { lim = data.len - i; }
+					while (len < lim && data.ptr[pos + len] == data.ptr[i + len]) { len = len + 1; }
+					if (len > best) { best = len; bestdist = i - pos; if (len == 18) { break; } }
+				}
+				pos = prev[pos]; probes = probes + 1;
+			}
+		}
+		var step i64 = 1;
+		if (best >= 3) {
+			var code i64 = ((bestdist - 1) << 4) | (best - 3);
+			buf_u8(&items, ((code >> 8) & 255) as u8); buf_u8(&items, (code & 255) as u8);
+			step = best;
+		} else { flags = flags | (1 << (nf as i64)); buf_u8(&items, data.ptr[i]); }
+		nf = nf + 1;
+		if (nf == 8) { buf_u8(&out, flags as u8); buf_bytes(&out, items.p, items.n); items.n = 0; flags = 0; nf = 0; }
+		var k i64 = 0;
+		while (k < step) {
+			var at i64 = i + k;
+			if (at + 3 <= data.len) {
+				var ky i64 = ((data.ptr[at] as i64) * 251 + data.ptr[at + 1] as i64) * 251 + data.ptr[at + 2] as i64;
+				var slot int = (ky & 4095) as int; prev[at] = heads[slot]; heads[slot] = at;
+			}
+			k = k + 1;
+		}
+		i = i + step;
+	}
+	if (nf > 0) { buf_u8(&out, flags as u8); buf_bytes(&out, items.p, items.n); }
+	return buf_str(&out);
+}
+
+fn abs_self_path() str {
+	var p *u8 = arena_alloc(4097, 1);
+	var n i64 = sys_readlink(cstr("/proc/self/exe"), p, 4096);
+	if (n <= 0) { die("error: cannot resolve the qela executable"); }
+	p[n] = 0; var s str; s.ptr = p; s.len = n; return s;
+}
+
+fn abs_write(dest str, image str, replace bool) {
+	var tmp str = dest;
+	if (replace) {
+		var b Buf; fmt_str(&b, dest); fmt_str(&b, ".absorb-new-"); fmt_i64(&b, sys_getpid()); tmp = buf_str(&b);
+	}
+	var fd i64 = sys_open_exec(cstr(tmp));
+	if (fd < 0) {
+		eprint("error: cannot update "); eprint(dest);
+		eprint(": its directory is not writable; use sufficient privileges or pass -o <path>\n");
+		sys_exit(1);
+	}
+	var off i64 = 0;
+	while (off < image.len) {
+		var n i64 = sys_write(fd, image.ptr + off, image.len - off);
+		if (n <= 0) { sys_close(fd); sys_unlink(cstr(tmp)); die("error: failed while writing absorbed compiler"); }
+		off = off + n;
+	}
+	sys_close(fd);
+	if (replace && sys_rename(cstr(tmp), cstr(dest)) != 0) {
+		sys_unlink(cstr(tmp)); die("error: cannot replace qela; its directory is not writable");
+	}
+}
+
+// Rewrites the current archive from keep[], followed by add[] files.
+fn abs_rewrite(dest str, replace bool, keep *bool) {
+	var raw Buf;
+	var names *str = arena_alloc(ABS_MAX_FILES * 16, 8) as *str;
+	var offs *i64 = arena_alloc(ABS_MAX_FILES * 8, 8) as *i64;
+	var lens *i64 = arena_alloc(ABS_MAX_FILES * 8, 8) as *i64;
+	var n int = 0;
+	var i int = 0;
+	while (i < abs_n) {
+		if (keep[i]) {
+			names[n] = abs_files[i].name; offs[n] = raw.n; lens[n] = abs_files[i].len;
+			buf_bytes(&raw, abs_raw.ptr + abs_files[i].off, abs_files[i].len); n = n + 1;
+		}
+		i = i + 1;
+	}
+	i = 0;
+	while (i < abs_add_n) {
+		if (n >= ABS_MAX_FILES) { die("error: too many absorbed files"); }
+		var fp Buf; fmt_str(&fp, abs_add_dir);
+		if (fp.n > 0 && fp.p[fp.n - 1] != '/') { buf_u8(&fp, '/'); }
+		fmt_str(&fp, abs_add_names[i]);
+		var src str = read_file(buf_str(&fp));
+		var np Buf; fmt_str(&np, abs_add_root);
+		if (abs_add_names[i].len > 0) {
+			if (np.n > 0) { buf_u8(&np, '/'); }
+			fmt_str(&np, abs_add_names[i]);
+		}
+		names[n] = buf_str(&np); offs[n] = raw.n; lens[n] = src.len; buf_bytes(&raw, src.ptr, src.len); n = n + 1; i = i + 1;
+	}
+	// Stable output independent of getdents order.
+	i = 1;
+	while (i < n) {
+		var j int = i;
+		while (j > 0 && abs_lt(names[j], names[j - 1])) {
+			var ns str = names[j]; names[j] = names[j - 1]; names[j - 1] = ns;
+			var x i64 = offs[j]; offs[j] = offs[j - 1]; offs[j - 1] = x;
+			x = lens[j]; lens[j] = lens[j - 1]; lens[j - 1] = x; j = j - 1;
+		}
+		i = i + 1;
+	}
+	// Sorting metadata requires rebuilding raw in the same order.
+	var sorted Buf; i = 0;
+	while (i < n) { var old i64 = offs[i]; offs[i] = sorted.n; buf_bytes(&sorted, raw.p + old, lens[i]); i = i + 1; }
+	var packed str = abs_compress(buf_str(&sorted));
+	var check str = abs_unpack(packed.ptr, packed.len, sorted.n);
+	if (check.len != sorted.n) { die("error: absorbed archive compression failed"); }
+	var ck i64 = 0;
+	while (ck < sorted.n) { if (check.ptr[ck] != sorted.p[ck]) { die("error: absorbed archive compression failed"); } ck = ck + 1; }
+	var index Buf; i = 0;
+	while (i < n) { buf_u32(&index, names[i].len); buf_u64(&index, offs[i]); buf_u64(&index, lens[i]); buf_bytes(&index, names[i].ptr, names[i].len); i = i + 1; }
+	var image Buf; buf_bytes(&image, abs_image.ptr, abs_base_len);
+	if (n > 0) {
+		buf_bytes(&image, packed.ptr, packed.len); buf_bytes(&image, index.p, index.n); abs_put_magic(&image);
+		buf_u64(&image, abs_base_len); buf_u64(&image, packed.len); buf_u64(&image, sorted.n); buf_u32(&image, n); buf_u32(&image, index.n);
+	}
+	abs_write(dest, buf_str(&image), replace);
+}
+
+fn cmd_absorb(argc int, argv **u8) int {
+	if (argc < 3) { eprint("usage: qela absorb <file|dir> [-o qela]\n"); return 1; }
+	var input str = str_from_cstr(argv[2]); var self str = abs_self_path(); var dest str = self; var replace bool = true;
+	var i int = 3;
+	while (i < argc) {
+		var a str = str_from_cstr(argv[i]);
+		if (str_eq(a, "-o")) { i = i + 1; if (i >= argc) { die("error: -o needs a path"); } dest = str_from_cstr(argv[i]); replace = str_eq(dest, self); }
+		else { die("error: unknown absorb option"); }
+		i = i + 1;
+	}
+	abs_load(); var root str = abs_root(input); if (root.len == 0) { die("error: cannot absorb this path"); }
+	var keep *bool = arena_alloc(ABS_MAX_FILES, 1) as *bool;
+	i = 0; while (i < abs_n) { keep[i] = !abs_prefix(abs_files[i].name, root); i = i + 1; }
+	var names *str = arena_alloc(ABS_MAX_FILES * 16, 8) as *str;
+	var nn int = 0; var dir str = input;
+	if (is_dir(input)) {
+		var list Buf; read_dir_rec(input, "", &list); var p i64 = 0; var start i64 = 0;
+		while (p < list.n) { if (list.p[p] == '\n') { names[nn].ptr = list.p + start; names[nn].len = p - start; nn = nn + 1; start = p + 1; } p = p + 1; }
+		if (nn == 0) { die("error: no .qela files to absorb"); }
+	} else {
+		if (!file_exists(input)) { die("error: absorb input does not exist"); }
+		dir = abs_dir(input); names[0] = abs_root(input); nn = 1; root = names[0];
+	}
+	abs_add_dir = dir; abs_add_root = root;
+	if (!is_dir(input)) { abs_add_root = ""; }
+	abs_add_names = names; abs_add_n = nn;
+	abs_rewrite(dest, replace, keep);
+	write_str(STDOUT, "absorbed "); write_str(STDOUT, root); write_str(STDOUT, "\n"); return 0;
+}
+
+fn cmd_absorbed(argc int, argv **u8) int {
+	abs_load();
+	if (argc >= 3 && str_eq(str_from_cstr(argv[2]), "drop")) {
+		if (argc > 4) { eprint("usage: qela absorbed drop [package]\n"); return 1; }
+		var keep *bool = arena_alloc(ABS_MAX_FILES, 1) as *bool;
+		var any bool = false; var all bool = argc == 3; var root str;
+		if (!all) { root = str_from_cstr(argv[3]); }
+		var i int = 0; while (i < abs_n) { keep[i] = !all && !abs_prefix(abs_files[i].name, root); if (!keep[i]) { any = true; } i = i + 1; }
+		if (!any && !all) { eprint("error: no absorbed package named "); eprint(root); eprint("\n"); return 1; }
+		abs_add_n = 0;
+		var self str = abs_self_path(); abs_rewrite(self, true, keep);
+		if (all) { write_str(STDOUT, "dropped all absorbed packages\n"); }
+		else { write_str(STDOUT, "dropped "); write_str(STDOUT, root); write_str(STDOUT, "\n"); }
+		return 0;
+	}
+	if (argc != 2) { eprint("usage: qela absorbed [drop [package]]\n"); return 1; }
+	var last str; var i int = 0;
+	while (i < abs_n) { var p str = abs_package(abs_files[i].name); if (!str_eq(p, last)) { write_str(STDOUT, p); write_str(STDOUT, "\n"); last = p; } i = i + 1; }
+	return 0;
+}
