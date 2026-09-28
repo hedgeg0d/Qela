@@ -1081,24 +1081,28 @@ fn riscv_fneg(fd int, fn_ int, sz i64) {
 // FP. rs2 encodes the integer width/signedness: 0 = W, 2 = L, 1 = WU,
 // 3 = LU. funct5 11000 = float -> int, 11010 = int -> float; the fmt bit
 // is the float operand's width.
-fn riscv_fcvt_to_int(rd int, fs int, _dsz i64, ssz i64, uns bool) {
-	var rs2 i64 = 2;
-	if (uns) { rs2 = 3; }
-	if (ssz == 4) { rs2 = 0; }
-	if (uns && ssz == 4) { rs2 = 1; }
-	var fmt i64 = 0;
-	if (ssz == 8) { fmt = 1; }
-	riscv_r((0x18 << 2) | fmt, rs2, fs, 7, rd, 0x53);
+fn riscv_fcvt_to_int(rd int, fs int, dsz i64, ssz i64, uns bool) {
+	// FCVT.{W,L}(.U).{S,D}: rs2 marks the destination width (1 = W, 2 = L)
+	// and the rounding mode sits in funct3 -- RTZ (001) for C's float->int
+	// cast. funct7 picks the sign/source width: 0x60/0x61 signed S/D,
+	// 0x70..0x73 the unsigned forms. Verified against gas.
+	var f7 i64 = 0x60;
+	if (ssz == 8) { f7 = f7 + 1; }
+	if (uns) { f7 = f7 + 0x10; }
+	var rs2 i64 = 1;
+	if (dsz == 8) { rs2 = 2; }
+	riscv_r(f7, rs2, fs, 1, rd, 0x53);
 }
 
 fn riscv_fcvt_from_int(fd int, rn int, dsz i64, ssz i64, uns bool) {
-	var rs2 i64 = 2;
-	if (uns) { rs2 = 3; }
-	if (ssz == 4) { rs2 = 0; }
-	if (uns && ssz == 4) { rs2 = 1; }
-	var fmt i64 = 0;
-	if (dsz == 8) { fmt = 1; }
-	riscv_r((0x1a << 2) | fmt, rs2, rn, 7, fd, 0x53);
+	// FCVT.{S,D}(.W|.L)(.U): rs2 marks the source width, funct3 the
+	// rounding mode -- RNE (000) for int->float.
+	var f7 i64 = 0x68;
+	if (dsz == 8) { f7 = f7 + 1; }
+	if (uns) { f7 = f7 + 0x10; }
+	var rs2 i64 = 1;
+	if (ssz == 8) { rs2 = 2; }
+	riscv_r(f7, rs2, rn, 0, fd, 0x53);
 }
 
 // FCVT.S.D / FCVT.D.S: change float precision. funct5 01000, the fmt bit
