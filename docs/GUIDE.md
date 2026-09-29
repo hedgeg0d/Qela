@@ -231,6 +231,11 @@ directory is merged into one program, so functions call across files with no
 imports. The entry is `main.qela` (or the sole file). This is how
 `examples/lisp/` is organised.
 
+One declaration kind follows the parse order: a top-level `let` constant is
+visible to the code parsed after it, so a constant shared by several files
+belongs in a file that sorts before its users (the entry file is parsed
+last). Functions and types are resolved by name and are order-independent.
+
 The REPL is handy for experiments:
 
 ```sh
@@ -2220,12 +2225,44 @@ They are whole-program shortcuts for the individual `interpreted` and
 
 | flag | meaning |
 |---|---|
-| `-D NAME=VALUE` | define a value visible to `$if` and compile-time expressions |
+| `-D NAME=VALUE` | define a value `$if` can test, and rewrite a top-level `let NAME = ...` constant |
 
-The compiler also defines `TARGET` for the selected architecture. A source can
-carry `--pie`, `--backtrace`, `--no-bounds-checks`, `--base`, and `-D` through
-a top-level `$flag` directive; an explicit command-line option wins. This keeps
-required image settings with the source instead of in an external build file.
+A definition is a string as far as `$if` is concerned: `$if (NAME)` is
+true for any value other than `""`, and `$if (NAME == "VALUE")` compares
+against it. The compiler defines `TARGET` for the selected architecture
+and `INTERP` under `qela irun`; those two are the compiler's own and never
+rewrite a constant.
+
+`-D` also *sets a constant*: a top-level `let NAME = ...` takes its value
+from the flag instead of the initializer written in the source. That is
+how a build carries configuration without generating files:
+
+```qela
+let PLAY_PORT = 8080;      // the default, and the type
+let PLAY_BANNER = true;
+```
+
+```sh
+qela . -D PLAY_PORT=9090 -D PLAY_BANNER=false
+```
+
+The value is anything the lexer takes as a literal -- `9090`,
+`0x7f000001`, `2.5`, `-5`, `true` -- coerced to the type the declaration
+already has, so every use of the constant stays typed as before. An
+integer may also be given for a float constant. A value that does not fit,
+or a constant of a type that cannot hold one (a `str`, say), is a compile
+error at the declaration. A `-D` name with no matching constant is
+harmless: it stays a plain `$if` value, which is what `-D BOOTSTRAP=1`
+relies on.
+
+Only `let` is rewritten -- a `var` global is program state, not
+configuration -- and only at the top level, not in a function body.
+
+A source can carry `--pie`, `--backtrace`, `--no-bounds-checks`, `--base`,
+and `-D` through a top-level `$flag` directive; an explicit command-line
+option wins and a command-line `-D` cannot be overridden by a `$flag -D`
+in the source. This keeps required image settings with the source instead
+of in an external build file.
 
 ### Debugging
 

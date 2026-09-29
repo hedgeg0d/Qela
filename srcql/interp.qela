@@ -1889,7 +1889,7 @@ fn cmd_irun(argc int, argv **u8) int {
 			var d str = str_from_cstr(argv[i]);
 			var eq i64 = str_find(d, '=');
 			if (eq < 0) { die("error: -D needs NAME=VALUE"); }
-			comptime_set(str_slice(d, 0, eq), str_slice(d, eq + 1, d.len));
+			comptime_set_cli(str_slice(d, 0, eq), str_slice(d, eq + 1, d.len));
 		} else if (str_eq(a, "-")) { input = a; have_input = true; }
 		else if (a.len > 0 && a.ptr[0] == '-') { die("error: unknown option"); }
 		else { input = a; have_input = true; }
@@ -1917,7 +1917,7 @@ fn cmd_irun(argc int, argv **u8) int {
 	// std/coro.qela and std/gc.qela branch on this: the interpreter owns
 	// the stack switching, so those modules hand it back the two operations
 	// they cannot do here themselves.
-	comptime_set("INTERP", "1");
+	comptime_set_builtin("INTERP", "1");
 	diag_setup();
 	var unit *Unit = null;
 	if (is_dir(input)) {
