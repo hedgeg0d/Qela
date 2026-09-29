@@ -670,6 +670,7 @@ fn ip_ev_call(n *Node) i64 { return ip_call_node(n); }
 fn ip_ev_syscall(n *Node) i64 { return ip_syscall(n); }
 
 fn ip_ev_funcaddr(n *Node) i64 {
+	if (n.foreign) { return ip_foreign_get(n.name); }
 	// There is no code address to hand out, so a function value is the
 	// *Func itself; ip_call_node casts it back for an indirect call.
 	var f *Func = find_func(n.name);
@@ -816,6 +817,16 @@ fn ip_syscall(n *Node) i64 {
 }
 
 // ── calls ──
+
+fn ip_foreign_get(name str) i64 {
+	abi_send_frame(ABI_FD_CHILD_TO_HOST, 4 as u8, name.ptr, name.len);
+	var rbuf [8]u8;
+	var kind u8 = 0;
+	var rn i64 = abi_recv_frame(ABI_FD_HOST_TO_CHILD, &kind, &rbuf[0], 8);
+	if (rn < 0) { ip_panic("interpreter: the host process died answering a foreign global read\n"); }
+	if (kind == 2) { ip_panic("interpreter: the host rejected a foreign global read\n"); }
+	return *(&rbuf[0] as *i64);
+}
 
 fn ip_foreign_call(n *Node) i64 {
 	var vals [6]i64;
