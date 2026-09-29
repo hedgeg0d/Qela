@@ -202,6 +202,8 @@ var need_fmt bool = false;
 var need_dyn bool = false;
 
 var need_interp bool = false;
+var opt_global_interpreted bool = false;
+var opt_global_jit bool = false;
 
 // ── top-level asm and the entry point ──
 
@@ -1917,7 +1919,9 @@ fn interp_synthesize_trampoline(f *Func, fn_start i64, end_pos i64) {
 	var fid int = diag_file_of(f.pos);
 	var src str = diag_src_of(fid);
 	var def_src str = str_slice(src, diag_offset_of(fn_start), diag_offset_of(end_pos));
-	var escaped str = interp_escape_src(def_src, f.pos);
+	interp_escape_src(def_src, f.pos);
+	f.src_start = fn_start;
+	f.src_end = end_pos;
 
 	var b Buf;
 	fmt_str(&b, "{ var __ia [6]i64;");
@@ -1931,9 +1935,7 @@ fn interp_synthesize_trampoline(f *Func, fn_start i64, end_pos i64) {
 		fmt_str(&b, ";");
 		i = i + 1;
 	}
-	fmt_str(&b, " return __interp_call_dispatch(");
-	fmt_str(&b, escaped);
-	fmt_str(&b, ", \"");
+	fmt_str(&b, " return __interp_call_dispatch(\"");
 	fmt_str(&b, f.name);
 	fmt_str(&b, "\", &__ia[0]); }");
 
@@ -1971,6 +1973,13 @@ fn parse_function(t **Token, is_extern bool) *Func {
 	var name str = (*t).text;
 	var p i64 = (*t).pos;
 	*t = (*t).next;
+
+	var is_internal bool = name.len > 2 && name.ptr[0] == '_' && name.ptr[1] == '_';
+	if (!naked_fn && !interpreted_fn && !dynamic_fn && !frozen_fn &&
+	    !is_extern && !is_internal && !is_std_path(diag_path_of(diag_file_of(p)))) {
+		if (opt_global_jit) { dynamic_fn = true; }
+		else if (opt_global_interpreted) { interpreted_fn = true; }
+	}
 
 	var f *Func = arena_alloc(sizeof(Func), 8) as *Func;
 	f.name = name;
@@ -2730,6 +2739,35 @@ fn parse(tok *Token) *Unit {
 		if (funcs_tail as i64 == 0) { head.next = snf; }
 		else { funcs_tail.next = snf; }
 		funcs_tail = snf;
+		if (head.next as i64 == 0) { head.next = all_funcs; }
+		all_funcs = head.next;
+	}
+
+	if (find_func("abi_spawn") as i64 != 0 && find_func("__interp_all_src") as i64 == 0) {
+		var cb Buf;
+		var cf *Func = all_funcs;
+		while (cf as i64 != 0) {
+			if ((cf.interpreted || cf.dynamic) && cf.nct == 0) {
+				var cfid int = diag_file_of(cf.pos);
+				var csrc str = diag_src_of(cfid);
+				fmt_str(&cb, str_slice(csrc, diag_offset_of(cf.src_start), diag_offset_of(cf.src_end)));
+				buf_u8(&cb, '\n');
+			}
+			cf = cf.next;
+		}
+		var escaped_all str = interp_escape_src(buf_str(&cb), 0);
+
+		var ab Buf;
+		fmt_str(&ab, "fn __interp_all_src() str { return ");
+		fmt_str(&ab, escaped_all);
+		fmt_str(&ab, "; }");
+
+		var afile int = diag_add_file("<interp-all-src>", buf_str(&ab));
+		var atoks *Token = lex(buf_str(&ab), (afile as i64) << FILE_SHIFT);
+		var anf *Func = parse_function(&atoks, false);
+		if (funcs_tail as i64 == 0) { head.next = anf; }
+		else { funcs_tail.next = anf; }
+		funcs_tail = anf;
 		if (head.next as i64 == 0) { head.next = all_funcs; }
 		all_funcs = head.next;
 	}
