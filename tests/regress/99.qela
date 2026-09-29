@@ -1,0 +1,81 @@
+// expect-exit: 0
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+fn diff4(a int, b int, c int, d int) int { return a - b - c - d; }
+fn max2(a int, b int) int { if (a > b) { return a; } else { return b; } }
+fn mix5(a int, b int, c int, d int, e int) int { return a + b - c + d - e; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn wide_make(a int, b int, c int) Wide { return Wide{a: a, b: b, c: c}; }
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 8;
+    var v1 int = 10;
+    var v2 int = 8;
+    var sv0 str = "hello";
+    var sv1 str = "42";
+    var fv double = -2.0;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    w = Wide{a: (127 < ((a[(42 & 3)] < v2) | (-(-40 * v2)))), b: (((-776 ^ (-v2)) > p.x) as i8), c: mix5((-(-v2)), a[(((42 > false) | ('d' as i8)) & 3)], (false as u32), (("abc")[0..2]).len, v0)};
+    v1 = (fv as i64);
+    match (e) {
+        A => {
+            return p.y;
+        }
+        B(mb0) => {
+            return ((((true << 100) > (790 % ((10 & 15) + 1))) < ((0.1 as i64) == (v0 < 'f'))) / ((pair_sum(Pair{x: v1, y: ("hi").len}) & 15) + 1));
+        }
+        C(mb0, mb1) => {
+            return (!(((-'f') <= v1) * ((10 == '1') as u16)));
+        }
+    }
+    p.x = ((!v2) % (((((10 ^ v1) as u32) ^ ((v0 as i8) <= (-770 <= false))) & 15) + 1));
+    fv = ((("abc").len << 10) as double);
+    b = Bag{p: ((!pair_sum(Pair{x: (1 as i32), y: (-325 > v0)})) % (((str_eq(sv1, (sv1)[0..2]) & (('g' | 127) < v1)) & 15) + 1)), q: (p.x as i32), r: v2, s: ((("xyz")[0..2])[0..2]).len};
+    fv = (1.0 / 0.125);
+    e = E.B((fv > (1.7 / -1.5)));
+    if ((((((2 as double) / 1.7) / 1.0) > fv) == (opt_d(D.None) / ((opt_d(D.None) & 15) + 1)))) {
+        v1 = v1;
+    } else {
+        v2 = ((-((-527 as u16) ^ true)) ^ (((-1.5 / 3.75) == (fv + fv)) * str_eq(sv0, sv0)));
+        match (e) {
+            A => {
+                return (((-(fv as i64)) as double) <= fv);
+            }
+            B(mb0) => {
+                return ((!(804 == (("abc")[0..2]).len)) * mb0);
+            }
+            C(mb0, mb1) => {
+                return max2(-276, (((("xyzzy")[0..2])[0..2])[0..2]).len);
+            }
+        }
+    }
+    var ob Buf;
+    fmt_i64(&ob, v1);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return ((-(p.x as u8)) - (((v0 > -661) as i16) ^ (-(fv as i64))));
+}

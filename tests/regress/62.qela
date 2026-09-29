@@ -1,0 +1,70 @@
+// expect-exit: 0
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+fn mul2(a int, b int) int { return a * b; }
+fn sub2(a int, b int) int { return a - b; }
+fn max2(a int, b int) int { if (a > b) { return a; } else { return b; } }
+fn twice(n int) int { return n + n; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn wide_make(a int, b int, c int) Wide { return Wide{a: a, b: b, c: c}; }
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 2;
+    var v1 int = 1;
+    var v2 int = 0;
+    var sv0 str = "no";
+    var sv1 str = "no";
+    var fv double = 0.5;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    fv = fv;
+    i0 = 0;
+    while ((i0 < 4)) {
+        sv1 = (((("abc")[0..3])[0..2])[0..2])[0..2];
+        sv1 = sv0;
+        a[i0] = (sv0).len;
+        i0 = (i0 + 1);
+    }
+    v0 = 42;
+    a[(((0 << ((v2 >= -259) ^ ('f' | '1'))) as u32) & 3)] = (-(a[(max2('g', -1) & 3)] == ((v1 != '\t') | (-true))));
+    i0 = 0;
+    while ((i0 < 4)) {
+        n.tag = (!(((v1 & '\n') * (-1 >> false)) | -647));
+        a[i0] = ((-(('f' | '\n') != a[(100 & 3)])) != ((!(42 as u16)) / ((v2 & 15) + 1)));
+        i0 = (i0 + 1);
+    }
+    v2 = (!pair_sum(p));
+    n.tag = v0;
+    e = E.B((!(((1 / ((v2 & 15) + 1)) as u32) << ((fv - 0.125) >= 2.5))));
+    e = E.B((((sv0)[0..2]).len & (p.y > ((-312 > false) - p.x))));
+    v1, v2 = v2, v1;
+    var ob Buf;
+    fmt_i64(&ob, v2);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return (sub2(true, v2) & v0);
+}

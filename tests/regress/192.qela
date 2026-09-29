@@ -1,0 +1,91 @@
+// expect-exit: 1
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+fn min2(a int, b int) int { if (a < b) { return a; } else { return b; } }
+fn sub2(a int, b int) int { return a - b; }
+fn twice(n int) int { return n + n; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn wide_swap(w Wide) Wide { return Wide{a: w.b, b: w.a, c: w.c}; }
+fn wide_make(a int, b int, c int) Wide { return Wide{a: a, b: b, c: c}; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 2;
+    var v1 int = 2;
+    var v2 int = 4;
+    var sv0 str = "no";
+    var sv1 str = "abcd";
+    var fv double = -0.5;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    n.tag = ((!("abcd").len) >> (((fv as i64) & (v2 - -1)) / ((((false >> true) as u16) & 15) + 1)));
+    w = wide_swap(w);
+    i0 = 0;
+    while ((i0 < 3)) {
+        i0 = (i0 + 1);
+        v2 <<= ((((fv != fv) % (((!v0) & 15) + 1)) - ((19 == 249) << str_eq(("xyz")[0..3], "hi"))) & false);
+        a[(((-(a[('g' & 3)] == ('3' as u8))) as i32) & 3)] = ((true <= (('f' / (('f' & 15) + 1)) >= (100.0 <= fv))) > str_eq(((sv0)[0..2])[0..2], ("hello")[2..5]));
+    }
+    v2, v1 = (v2 as u16), (-((fv as i64) < a[((1 >= -56) & 3)]));
+    p.x = opt_d(D.Some(str_eq((sv0)[0..2], ("xyzzy")[2..4])));
+    n.tag = ((((fv + fv) / 0.5) >= 0.125) * (((-722 / (('g' & 15) + 1)) != (fv > 100.0)) > (-a[(127 & 3)])));
+    p.y = tag_e(e);
+    n.tag = ((v0 as i16) < true);
+    match (e) {
+        A => {
+            return (((!str_eq("aa", "no")) % ((1 & 15) + 1)) & (-(('0' * 'c') >= (-'\t'))));
+        }
+        B(mb0) => {
+            return (-((0.5 >= (127 as double)) > ((!3) < a[('g' & 3)])));
+        }
+        C(mb0, mb1) => {
+            return -1;
+        }
+    }
+    match (e) {
+        A => {
+            return ((((fv / 0.5) as i64) ^ opt_d(D.None)) == ((false < (-100)) >> twice(p.y)));
+        }
+        B(mb0) => {
+            return (p.x * mb0);
+        }
+        C(mb0, mb1) => {
+            return ((-((1 * -41) <= (false >> 127))) as i16);
+        }
+    }
+    var ob Buf;
+    fmt_i64(&ob, v2);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return v2;
+}
