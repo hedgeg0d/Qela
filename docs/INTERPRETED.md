@@ -226,6 +226,8 @@ itself.
   `--interpreted` / `--jit`.
 - `frozen` (security section) — placeholder, fine unless something better
   comes up.
+- All of the above are now implemented as named: `interpreted`/`dynamic`/
+  `frozen` per-function, `--interpreted`/`--jit` global flags.
 
 ## Kept from the original design pass
 
@@ -461,6 +463,61 @@ regression test (`tools/bootstrap.sh`'s "eval var" step asserts
 `price=150`, not `200` — it would have shipped silently wrong without a
 concrete expected value to check against).
 
+**One `interpreted`/`dynamic` function calling another — a real,
+launch-blocking bug, found and fixed** (2026-08-08). Each function was
+registering *itself* with the child lazily, on its own first call, which
+worked as long as the only caller was AOT code. The moment one
+`interpreted` function called another — `square` and `quad` in the
+example above — the *callee* had never been registered when the child
+hit it, so `type_call`'s `type_abi_mode` fallback did exactly what it's
+supposed to do for a genuinely unknown name: treated `square` as a
+foreign *host* call. The host's `__eval_call_dispatch` had never heard of
+`square` either (it only knows `eval fn`-tagged names), so it silently
+returned `0` — `quad(2)` came back `0`, not `16`, no error, no crash, just
+a wrong answer. This is exactly why `--interpreted`/`--jit` (below) were
+the thing that surfaced it: forcing *every* function through the ABI
+makes function-calls-function the common case instead of a corner case.
+Fixed by registering all `interpreted`/`dynamic` functions **together**,
+once, when the child connects — `parse()` concatenates every one of
+their source spans into a single generated `__interp_all_src() str`
+(mirroring the other generated dispatchers), and `abi_spawn()`
+(`std/abiconn.qela`) sends it as one `ABI_REQ_RUN` right after the pipes
+come up, before any real call happens. Calls between them now resolve as
+ordinary local calls inside the child's own function table — no foreign
+fallback involved at all. `__interp_call_dispatch` simplified as a
+result: it no longer carries a source argument or does its own
+lazy-registration bookkeeping (that whole mechanism — `InterpReg`, the
+per-name registered-set, `interp_register` — is gone from
+`std/interpcall.qela`).
+
+**`--interpreted`/`--jit` global flags — done.** Parsed in `main()`
+(mutually exclusive, `error_at`-style `die()` if both given).
+`parse_function` applies the matching modifier to any function that has
+no explicit `naked`/`interpreted`/`dynamic`/`frozen`, isn't `extern`,
+isn't a compiler-internal name (`__`-prefixed), **and isn't defined in a
+`std/` module** (`is_std_path` on the function's own source file). That
+last exclusion is load-bearing, not cosmetic: without it, `--interpreted`
+would also convert `str_eq`, `arena_alloc`, `abi_spawn` and everything
+else the ABI client itself is built from, into functions that need the
+ABI client to reach — a circular bootstrap that would hang or crash
+before the first real call. So the actual behavior is "every function
+*you* wrote becomes interpreted/dynamic; the standard library underneath
+keeps running natively" — closer to how JIT'd languages usually draw this
+line (your code is hot-swappable, the runtime under it isn't) than to a
+literal reading of "every function." Includes `main` itself, which is
+just an ordinary function from this mechanism's point of view — verified
+in the test (`main` becomes a trampoline too, and still runs correctly).
+
+One known cosmetic side effect, not a correctness issue: a local used
+only inside an `interpreted`/`dynamic` function's *real* body (never
+referenced by the synthetic trampoline body codegen actually compiles)
+can trigger a spurious "unused variable" warning, because `warn_unused`/
+`count_reads` walk `Func.body` — the synthetic one — and never see
+`interp_body`. Harmless (it doesn't affect what's emitted, `main`'s
+compiled form never touches those locals directly either way), but worth
+fixing properly if this becomes annoying: `count_reads` would need to
+walk `interp_body` instead of (or in addition to) `body` when one is set.
+
 What it cannot do yet, precisely: `dynamic` does not actually run any
 faster than `interpreted` — every call still round-trips over the ABI,
 the local `mmap`/`mprotect` JIT path is unbuilt; `parse_ast`/`run_ast`
@@ -469,11 +526,12 @@ embedded at compile time (the correction above).
 
 ## Size measurements (real numbers, not estimates)
 
-Baseline: `qela` (S2) = 525,712 bytes, 50.1% of the 1 MiB budget (up from
+Baseline: `qela` (S2) = 526,816 bytes, 50.2% of the 1 MiB budget (up from
 501,488 before this round of work: six new syscall wrappers, four new
 grammar modifiers/fields, the wire protocol plus `--abi-server`, the
 `ABI_REQ_CALL` handler for call-site trampolines, the `type_abi_mode`/
-foreign-call/dispatcher-generation machinery, and `eval var` get/set,
+foreign-call/dispatcher-generation machinery, `eval var` get/set, the
+combined-registration fix, and the `--interpreted`/`--jit` flags,
 ~24 KB total — crossing the halfway mark of the 1 MiB budget.
 `std/eval.qela`, `std/abiwire.qela`, `std/abiconn.qela` and
 `std/interpcall.qela` do not count against this budget: they ship in the
@@ -583,13 +641,15 @@ that, don't assume gzip-level ratios from a from-scratch LZSS.
    can be restricted under some hardening policies (SELinux, some
    container runtimes) — needs a real error message, not a silent
    failure, when it's unavailable.
-8. **Test plan — five of six done.** `tools/bootstrap.sh`'s "eval() over
-   the abi subprocess" step covers bare `eval`, including cross-call
-   session state; "interpreted/dynamic call-site trampolines" covers both
-   under AOT and under `qela irun` in the same test; "eval fn: host
-   functions callable from eval'd source" covers the foreign-call
-   bridging; "eval var: host globals readable and writable from eval'd
-   source" covers the foreign-global bridging, including the
-   double-write regression. Still needed: one using `--interpreted`, one
-   using `--jit`/whatever it's named — both blocked on item 4 fully
-   landing (the `dynamic` JIT half, not just the call mechanism).
+8. **Test plan — all six done**, though "`--jit`" currently exercises the
+   same call mechanism as `--interpreted` rather than a distinct JIT path
+   (see item 4). `tools/bootstrap.sh`: "eval() over the abi subprocess"
+   (bare `eval`, cross-call session state); "interpreted/dynamic
+   call-site trampolines" (both under AOT and `qela irun`); "eval fn:
+   host functions callable from eval'd source"; "eval var: host globals
+   readable and writable from eval'd source" (including the double-write
+   regression); "interpreted functions calling each other" (both under
+   AOT and `qela irun` — this one caught a real bug, see "What's
+   implemented" above); "--interpreted and --jit global flags". A
+   dedicated `dynamic`-is-actually-faster test still needs the JIT half
+   to exist first.
