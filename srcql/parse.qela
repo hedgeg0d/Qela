@@ -1417,10 +1417,12 @@ fn parse_primary(t **Token) *Node {
 		var e *Node = parse_assign(&toks);
 		if (toks.kind != TK_EOF) { error_at(sp, "trailing tokens after the $c expression"); }
 		add_type(e);
-		var v i64 = eval_const(e);
+		var cv ComptimeVal = comptime_eval(e);
+		if (cv.kind != CV_INT && cv.kind != CV_FLOAT) { error_at(sp, "$c expression must produce a scalar constant"); }
 		var n *Node = new_node(ND_NUM, sp);
-		n.val = v;
-		n.ty = ty_i64;
+		n.val = cv.num;
+		if (cv.kind == CV_FLOAT) { n.ty = cv.ty; }
+		else { n.ty = ty_i64; }
 		n.typed = true;
 		return n;
 	}
