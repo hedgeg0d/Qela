@@ -36,8 +36,10 @@ the JSON keys (no tags yet). The rewrite lives in `srcql/jmgen.qela`
 plus a hook at the top of `type_call`; the generated code compares node
 kinds against plain numbers because it parses in a fresh scope that
 cannot see `std/json.qela`'s `let` constants. S2 676 536 -> 696 264 B
-(+19 728, 66.4% of the 1 MiB budget). Corpus 194 -> 195
-(`tests/jsonmarshal.qela`), compiled and interpreted; torture 200/200.
+(+19 728, 66.4% of the 1 MiB budget). Corpus 194 -> 196
+(`tests/jsonmarshal.qela`, `tests/jsonfile.qela` — a save/load round
+trip through a real file, unlinked right after the read so nothing
+survives), compiled and interpreted; torture 200/200.
 Full writeup in this file.
 
 ## Done

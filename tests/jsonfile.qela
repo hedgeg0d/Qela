@@ -1,0 +1,35 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: 17
+// expect-out: gone
+// Save/load: json_marshal into a file, json_unmarshal back out, and the
+// temp file is unlinked immediately after the read so nothing survives.
+import "std/io.qela";
+import "std/json.qela";
+import "std/fs.qela";
+
+struct Save {
+	n i64,
+	name str,
+	vals []i64,
+}
+
+fn main() int {
+	var s Save;
+	s.n = 17;
+	s.name = "file round trip";
+	s.vals = [1, 2, 3];
+	var j str = json_marshal(s);
+	write_file("tests/out/jsonfile.tmp", j.ptr, j.len);
+	var back str = read_file("tests/out/jsonfile.tmp");
+	fs_unlink("tests/out/jsonfile.tmp");
+	if (back.len != j.len) { return 1; }
+	var r Save;
+	if (!json_unmarshal(back, &r)) { return 1; }
+	println("${r.n}");
+	if (r.vals.len != 3 || r.vals[2] != 3) { return 1; }
+	if (!str_eq(r.name, "file round trip")) { return 1; }
+	if (fs_file_size("tests/out/jsonfile.tmp") >= 0) { return 1; }
+	println("gone");
+	return 0;
+}
