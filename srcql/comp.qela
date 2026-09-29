@@ -151,6 +151,7 @@ let ND_INTERP    = 53;
 let ND_STRPART   = 54;
 let ND_ASMREF    = 55;
 let ND_ARRLIT    = 56;
+let ND_MAPLIT    = 57;
 
 struct Var;
 struct Node;
@@ -218,6 +219,7 @@ struct Node {
 	stack_tmp *Var,
 	clo_code *Var,
 	clo_env *Var,
+	idxget  bool,
 	ip_fn   *Func,
 	ip_off  i64,
 	ip_cached bool,
