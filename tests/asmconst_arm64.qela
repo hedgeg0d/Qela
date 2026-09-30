@@ -1,0 +1,14 @@
+// stage1-only
+// arm64-only
+// expect-exit: 42
+// asm operands may be comptime constants: a global with a constant init
+// (let B0 = 0x40) or any constant expression folds to a byte.
+let B0 = 0x40;
+let B1 = 0x05;
+let B2 = 0x80;
+let B3 = 0xd2;
+
+fn main() int {
+	var r i64 = asm(B0, B1, B2, B3); // movz x0, #42
+	return r as int;
+}

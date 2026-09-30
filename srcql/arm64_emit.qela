@@ -37,6 +37,13 @@ let X11 = 11;   // third scratch, an exclusive-store retry status word
 let X16 = 16;   // indirect-call target scratch (AAPCS64's IP0, dead between calls)
 let X19 = 19;   // thread_clone's child-args carrier (callee-saved, saved around the call)
 let X20 = 20;
+let X21 = 21;
+let X22 = 22;
+let X23 = 23;
+let X24 = 24;
+let X25 = 25;
+let X26 = 26;
+let X27 = 27;
 let X28 = 28;   // top of the AAPCS64 callee-saved block (x19-x28), GC-scan range end
 let X29 = 29;
 let X30 = 30;
@@ -412,6 +419,50 @@ fn gen_tls_init_stub_arm64() {
 	arm64_str_off(X0, X0, 0);            // [block] = self-pointer
 	arm64_msr_tpidr(X0);                 // tpidr_el0 = block
 	arm64_ret();
+}
+
+// coro_switch's stub on ARM64. The caller's bl leaves SP%16 == 8 (a call
+// pushes its return address), so the stub realigns before its STP pairs and
+// cancels that adjustment after the LDPs on the new stack. Switching to a
+// fresh coroutine pops the trampoline address from the X30 slot and rets
+// into it; the stack image is laid out by coro_spawn in std/coro.qela.
+fn gen_coro_switch_stub_arm64() {
+	coro_switch_at = code.n;
+	arm64_sub_imm(SP, SP, 8);
+	arm64_stp_pre_sp(X19, X20, -16);
+	arm64_stp_pre_sp(X21, X22, -16);
+	arm64_stp_pre_sp(X23, X24, -16);
+	arm64_stp_pre_sp(X25, X26, -16);
+	arm64_stp_pre_sp(X27, X28, -16);
+	arm64_stp_pre_sp(X29, X30, -16);
+	arm64_mov_reg(X16, SP);          // STR/LDR's Rt=31 is XZR, so SP travels via a scratch
+	arm64_str_off(X16, X0, 0);       // [x0] = current sp
+	arm64_ld_at(X16, X1, 0);         // x16 = [x1]
+	arm64_mov_reg(SP, X16);          // sp = [x1]
+	arm64_ldp_post_sp(X29, X30, 16);
+	arm64_ldp_post_sp(X27, X28, 16);
+	arm64_ldp_post_sp(X25, X26, 16);
+	arm64_ldp_post_sp(X23, X24, 16);
+	arm64_ldp_post_sp(X21, X22, 16);
+	arm64_ldp_post_sp(X19, X20, 16);
+	arm64_add_imm(SP, SP, 8);
+	arm64_ret();
+}
+
+// The coroutine trampoline: a fresh stack holds five arguments and the
+// target above the X30 slot that ret popped, so it drains them into
+// X0-X4 and X9, calls the target and finishes when it returns.
+fn gen_coro_stub_arm64() {
+	coro_stub_at = code.n;
+	b4(0xf84087e0);                  // ldr x0, [sp], #8
+	b4(0xf84087e1);                  // ldr x1, [sp], #8
+	b4(0xf84087e2);                  // ldr x2, [sp], #8
+	b4(0xf84087e3);                  // ldr x3, [sp], #8
+	b4(0xf84087e4);                  // ldr x4, [sp], #8
+	b4(0xf84087e9);                  // ldr x9, [sp], #8  (target)
+	b4(0xd63f0120);                  // blr x9
+	add_callref_arm64("coro_finish", 0);
+	b4(0xd4a00000);                  // brk #0: coro_finish never returns
 }
 
 fn arm64_cset(rd int, qcc i64) {
