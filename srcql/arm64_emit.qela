@@ -34,8 +34,6 @@ let X8  = 8;
 let X9  = 9;    // address/immediate scratch for st_local/ld_local and imm ALU operands
 let X10 = 10;   // second scratch, for a read-modify-write op's immediate operand
 let X11 = 11;   // third scratch, an exclusive-store retry status word
-let X16 = 16;   // indirect-call target scratch (AAPCS64's IP0, dead between calls)
-let X19 = 19;   // thread_clone's child-args carrier (callee-saved, saved around the call)
 let X20 = 20;
 let X21 = 21;
 let X22 = 22;
@@ -848,6 +846,16 @@ fn arm64_lower_op(op *IrOp) {
 		arm64_mov_reg(op.dst.reg, op.src0.reg);
 		return;
 	}
+	if (op.kind == IR_LOAD && op.dst.kind == OP_ACC && op.src0.kind == OP_VREG) {
+		// ld_rm's register path, a promoted local read into the accumulator.
+		arm64_mov_reg(X0, op.src0.reg);
+		return;
+	}
+	if (op.kind == IR_LOAD && op.dst.kind == OP_OP2 && op.src0.kind == OP_VREG) {
+		// A promoted local staged into the OP2 binop register.
+		arm64_mov_reg(op2_reg(op.dst.reg), op.src0.reg);
+		return;
+	}
 	if (op.kind == IR_ALU && op.dst.kind == OP_VREG && op.src0.kind == OP_VREG && op.src1.kind == OP_STACKSLOT) {
 		// gen_into's register-rm arm, in place: dst.reg op= [local].
 		arm64_ld_local(X9, op.src1.off);
@@ -1184,6 +1192,25 @@ fn arm64_lower_op(op *IrOp) {
 		arm64_alu_reg(op.aux, X0, X0, X9);
 		return;
 	}
+	if (op.kind == IR_ALU && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC && op.src1.kind == OP_VREG) {
+		// A promoted local as the right-hand operand: no load needed, it is
+		// already a real register.
+		arm64_alu_reg(op.aux, X0, X0, op.src1.reg);
+		return;
+	}
+	if (op.kind == IR_ALU && op.dst.kind == OP_VREG && op.src0.kind == OP_VREG && op.src1.kind == OP_ACC) {
+		// dst op= X0, dst a promoted local -- stmt_update's write-back arm
+		// when the right side was evaluated into the accumulator.
+		arm64_alu_reg(op.aux, op.dst.reg, op.src0.reg, X0);
+		return;
+	}
+	if (op.kind == IR_ALU && op.dst.kind == OP_STACKSLOT && op.src0.kind == OP_STACKSLOT && op.src1.kind == OP_VREG) {
+		// v op= <promoted local> as a statement, v a frame slot.
+		arm64_ld_local(X9, op.dst.off);
+		arm64_alu_reg(op.aux, X9, X9, op.src1.reg);
+		arm64_st_local(op.dst.off, X9);
+		return;
+	}
 	if (op.kind == IR_CMP && op.src0.kind == OP_ACC && op.src1.kind == OP_OP2) {
 		if (op.src0.ty as i64 != 0 && is_float(op.src0.ty)) {
 			var sz i64 = op.src0.ty.size;
@@ -1234,9 +1261,17 @@ fn arm64_lower_op(op *IrOp) {
 		arm64_cmp_reg(X0, X9);
 		return;
 	}
+	if (op.kind == IR_CMP && op.src0.kind == OP_ACC && op.src1.kind == OP_VREG) {
+		arm64_cmp_reg(X0, op.src1.reg);
+		return;
+	}
 	if (op.kind == IR_CMP && op.src0.kind == OP_STACKSLOT && op.src1.kind == OP_IMM) {
 		arm64_ld_local(X9, op.src0.off);
 		arm64_cmp_imm(X9, op.src1.off);
+		return;
+	}
+	if (op.kind == IR_CMP && op.src0.kind == OP_VREG && op.src1.kind == OP_IMM) {
+		arm64_cmp_imm(op.src0.reg, op.src1.off);
 		return;
 	}
 	if (op.kind == IR_SETCC && op.dst.kind == OP_ACC) {
