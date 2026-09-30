@@ -21,6 +21,22 @@ fn interpreted ifmul(x f64, y f64) f64 { return x * y; }
 fn dynamic dbag(b Bag) i64 { return b.tag + b.s.len + b.n; }
 fn interpreted ibag(b Bag) i64 { return b.tag + b.s.len + b.n; }
 fn interpreted i7(a i64, b i64, c i64, d i64, e i64, f i64, g i64) i64 { return a + b + c + d + e + f + g; }
+fn dynamic dfib(n i64) i64 {
+	if (n < 2) { return n; }
+	return dfib(n - 1) + dfib(n - 2);
+}
+fn dynamic dlenrec(s str, n i64) i64 {
+	if (n <= 0) { return s.len; }
+	return dlenrec(s, n - 1);
+}
+fn dynamic dgreetrec(s str, n i64) str {
+	if (n <= 0) { return s; }
+	return dgreetrec(s, n - 1);
+}
+fn dynamic dsumrec(s str, n i64) i64 {
+	if (n <= 0) { return s.len; }
+	return dsumrec(s, n - 1) + dsumrec(s, n - 2);
+}
 
 fn main() int {
 	var fails i64 = 0;
@@ -40,6 +56,10 @@ fn main() int {
 	if (dbag(bag) != 18) { fails = fails + 1; }
 	if (ibag(bag) != 18) { fails = fails + 1; }
 	if (i7(1, 2, 3, 4, 5, 6, 7) != 28) { fails = fails + 1; }
+	if (dfib(10) != 55) { fails = fails + 1; }
+	if (dlenrec("abcd", 4) != 4) { fails = fails + 1; }
+	if (dgreetrec("yo", 3).len != 2) { fails = fails + 1; }
+	if (dsumrec("ab", 5) != 26) { fails = fails + 1; }
 	if (fails == 0) { write_str(STDOUT, "all marshalled paths ok\n"); }
 	return fails as int;
 }
