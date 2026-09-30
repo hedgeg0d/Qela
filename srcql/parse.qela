@@ -2041,6 +2041,116 @@ fn interp_gen_marshal(b *Buf, expr str, ty *Type) {
 	fmt_str(b, " as i64);");
 }
 
+fn interp_gen_pname(b *Buf, idx int) {
+	fmt_str(b, "__p");
+	fmt_i64(b, idx as i64);
+}
+
+// Decodes one marshalled argument into a `__p<i>` local of the generated
+// eval dispatcher, advancing the `__cur` cursor. Mirrors the child side's
+// abi_unmarshal_value: scalars as 8-byte slots, strs length-prefixed,
+// POD aggregates as raw images, everything else field by field.
+fn interp_gen_eval_decode(b *Buf, idx int, ty *Type) {
+	fmt_str(b, " var ");
+	interp_gen_pname(b, idx);
+	if (ty.kind == TY_SLICE) {
+		fmt_str(b, " str; ");
+		interp_gen_pname(b, idx);
+		fmt_str(b, ".len = *(__cur as *i64); ");
+		interp_gen_pname(b, idx);
+		fmt_str(b, ".ptr = __cur + 8; __cur = __cur + 8 + ");
+		interp_gen_pname(b, idx);
+		fmt_str(b, ".len;");
+		return;
+	}
+	if (ty.kind == TY_STRUCT && !interp_struct_pod(ty)) {
+		fmt_str(b, " ");
+		fmt_str(b, type_name(ty));
+		fmt_str(b, ";");
+		var pb Buf;
+		interp_gen_pname(&pb, idx);
+		interp_gen_wire_fields(b, buf_str(&pb), ty);
+		return;
+	}
+	fmt_str(b, " ");
+	fmt_str(b, type_name(ty));
+	fmt_str(b, " = *(__cur as *");
+	fmt_str(b, type_name(ty));
+	fmt_str(b, "); __cur = __cur + ");
+	if (ty.kind == TY_STRUCT || ty.kind == TY_ARRAY) { fmt_i64(b, ty.size as i64); }
+	else { fmt_str(b, "8"); }
+	fmt_str(b, ";");
+}
+
+// The body of one eval-fn branch in the generated dispatcher: decode the
+// arguments, call the function, marshal the return value into the
+// caller-provided Buf (`__b`), which the host side then sends back.
+fn interp_gen_eval_body(b *Buf, ef *Func) {
+	fmt_str(b, " var __cur *u8 = args;");
+	var ei int = 0;
+	while (ei < ef.nparams) {
+		interp_gen_eval_decode(b, ei, func_param(ef, ei).ty);
+		ei = ei + 1;
+	}
+	fmt_str(b, " ");
+	var callb Buf;
+	fmt_str(&callb, ef.name);
+	fmt_str(&callb, "(");
+	ei = 0;
+	while (ei < ef.nparams) {
+		if (ei > 0) { fmt_str(&callb, ", "); }
+		interp_gen_pname(&callb, ei);
+		ei = ei + 1;
+	}
+	fmt_str(&callb, ")");
+	var call str = buf_str(&callb);
+	if (ef.ret.kind == TY_VOID) {
+		fmt_str(b, call);
+		fmt_str(b, ";");
+		return;
+	}
+	if (ef.ret.kind == TY_SLICE) {
+		fmt_str(b, "var __r0 str = ");
+		fmt_str(b, call);
+		fmt_str(b, "; buf_u64(__b, __r0.len); buf_bytes(__b, __r0.ptr, __r0.len);");
+		return;
+	}
+	if (is_float(ef.ret)) {
+		if (ef.ret.size == 4) {
+			fmt_str(b, "{ var __st [4]u8; *(&__st[0] as *f32) = ");
+			fmt_str(b, call);
+			fmt_str(b, "; buf_u64(__b, *(&__st[0] as *u32) as i64); }");
+		} else {
+			fmt_str(b, "{ var __st [8]u8; *(&__st[0] as *f64) = ");
+			fmt_str(b, call);
+			fmt_str(b, "; buf_u64(__b, *(&__st[0] as *u64) as i64); }");
+		}
+		return;
+	}
+	if (ef.ret.kind == TY_STRUCT && !interp_struct_pod(ef.ret)) {
+		fmt_str(b, "var __r0 ");
+		fmt_str(b, type_name(ef.ret));
+		fmt_str(b, " = ");
+		fmt_str(b, call);
+		fmt_str(b, ";");
+		interp_gen_marshal_fields(b, "__r0", ef.ret);
+		return;
+	}
+	if (ef.ret.kind == TY_STRUCT || ef.ret.kind == TY_ARRAY) {
+		fmt_str(b, "var __r0 ");
+		fmt_str(b, type_name(ef.ret));
+		fmt_str(b, " = ");
+		fmt_str(b, call);
+		fmt_str(b, "; buf_bytes(__b, &__r0 as *u8, ");
+		fmt_i64(b, ef.ret.size as i64);
+		fmt_str(b, ");");
+		return;
+	}
+	fmt_str(b, "buf_u64(__b, ");
+	fmt_str(b, call);
+	fmt_str(b, " as i64);");
+}
+
 fn interp_gen_marshal_fields(b *Buf, expr str, ty *Type) {
 	var m *Member = ty.members;
 	while (m as i64 != 0) {
@@ -3168,37 +3278,25 @@ fn parse(tok *Token) *Unit {
 
 	if (find_func("abi_spawn") as i64 != 0 && find_func("__eval_call_dispatch") as i64 == 0) {
 		var db Buf;
-		fmt_str(&db, "fn __eval_call_dispatch(name str, args *i64) i64 { if (name.ptr as i64 == args as i64) { return 0; }");
+		fmt_str(&db, "fn __eval_call_dispatch(name str, args *u8, __b *Buf) bool { if (name.ptr as i64 == args as i64 || __b.p as i64 != __b.p as i64) { return false; }");
 		var ef *Func = all_funcs;
 		while (ef as i64 != 0) {
 			if (ef.eval_export && ef.nct == 0) {
-				if (ef.nparams > 6) {
-					error_at(ef.pos, "'eval fn' takes at most six arguments over the runtime ABI");
-				}
-				interp_check_scalar(ef.ret, ef.pos, "return types");
+				interp_sig_reject(ef.ret, ef.pos, "return type");
 				var ei int = 0;
 				while (ei < ef.nparams) {
-					interp_check_scalar(func_param(ef, ei).ty, ef.pos, "parameters");
+					interp_sig_reject(func_param(ef, ei).ty, ef.pos, "parameter type");
 					ei = ei + 1;
 				}
 				fmt_str(&db, " if (str_eq(name, \"");
 				fmt_str(&db, ef.name);
-				fmt_str(&db, "\")) { return ");
-				fmt_str(&db, ef.name);
-				fmt_str(&db, "(");
-				ei = 0;
-				while (ei < ef.nparams) {
-					if (ei > 0) { fmt_str(&db, ", "); }
-					fmt_str(&db, "args[");
-					fmt_i64(&db, ei as i64);
-					fmt_str(&db, "]");
-					ei = ei + 1;
-				}
-				fmt_str(&db, "); }");
+				fmt_str(&db, "\")) {");
+				interp_gen_eval_body(&db, ef);
+				fmt_str(&db, " return true; }");
 			}
 			ef = ef.next;
 		}
-		fmt_str(&db, " return 0; }");
+		fmt_str(&db, " return false; }");
 
 		var dfile int = diag_add_file("<eval-dispatch>", buf_str(&db));
 		var dtoks *Token = lex(buf_str(&db), (dfile as i64) << FILE_SHIFT);
@@ -3269,6 +3367,34 @@ fn parse(tok *Token) *Unit {
 	if (find_func("abi_spawn") as i64 != 0 && find_func("__interp_all_src") as i64 == 0) {
 		var cb Buf;
 		interp_emit_types(&cb);
+		// eval fns are host functions; the child gets their signatures as
+		// bodyless extern declarations so a call from eval'd or
+		// interpreted code types correctly, then routes to the host (see
+		// ip_call_node's extern+abi-mode branch).
+		var ed *Func = all_funcs;
+		while (ed as i64 != 0) {
+			if (ed.eval_export && ed.nct == 0) {
+				fmt_str(&cb, "extern fn ");
+				fmt_str(&cb, ed.name);
+				fmt_str(&cb, "(");
+				var edi int = 0;
+				while (edi < ed.nparams) {
+					if (edi > 0) { fmt_str(&cb, ", "); }
+					var edv *Var = func_param(ed, edi);
+					fmt_str(&cb, edv.name);
+					fmt_str(&cb, " ");
+					fmt_str(&cb, type_name(edv.ty));
+					edi = edi + 1;
+				}
+				fmt_str(&cb, ") ");
+				if (ed.ret.kind != TY_VOID) {
+					fmt_str(&cb, type_name(ed.ret));
+					fmt_str(&cb, " ");
+				}
+				fmt_str(&cb, ";\n");
+			}
+			ed = ed.next;
+		}
 		var cf *Func = all_funcs;
 		while (cf as i64 != 0) {
 			if ((cf.interpreted || cf.dynamic) && cf.nct == 0) {

@@ -132,21 +132,18 @@ fn abi_serve_host_req(kind u8, buf *u8, n i64) {
 	if (kind != 3) { return; }
 	if (n < 1) { return; }
 	var nlen i64 = buf[0] as i64;
-	if (n < 1 + nlen + 48) { return; }
+	if (n < 1 + nlen) { return; }
 	var name str;
 	name.ptr = buf + 1;
 	name.len = nlen;
-	var args [6]i64;
-	var vp *u8 = buf + 1 + nlen;
-	var i i64 = 0;
-	while (i < 6) {
-		args[i] = abi_decode_u64(vp + i * 8);
-		i = i + 1;
-	}
-	var r i64 = __eval_call_dispatch(name, &args[0]);
-	var rb [8]u8;
-	*(&rb[0] as *i64) = r;
-	abi_send_frame(abi_in, 1 as u8, &rb[0], 8);
+	// The dispatcher decodes the marshalled arguments per the function's
+	// own signature and marshals the return value into `resp`; an unknown
+	// name answers a plain zero, which the caller decodes per its own
+	// expected type (an empty str for a str-typed call).
+	var resp Buf;
+	var found bool = __eval_call_dispatch(name, buf + 1 + nlen, &resp);
+	if (!found) { buf_u64(&resp, 0); }
+	abi_send_frame(abi_in, 1 as u8, resp.p, resp.n);
 }
 
 fn abi_wait_result(kind *u8, buf *u8, cap i64) i64 {

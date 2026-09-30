@@ -6,7 +6,6 @@ import "abiconn.qela";
 let ABI_REQ_RUN = 1;
 let ABI_REQ_PARSE = 7;
 let ABI_REQ_RUN_AST = 8;
-let ABI_RESP_ERR = 2;
 
 fn eval(src str) i64 {
 	abi_spawn();
