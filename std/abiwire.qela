@@ -4,6 +4,8 @@ let ABI_MAX_MSG = 1048576;
 let ABI_FD_HOST_TO_CHILD = 3;
 let ABI_FD_CHILD_TO_HOST = 4;
 
+let ABI_RESP_ERR = 2;
+
 fn abi_read_exact(fd i64, buf *u8, n i64) bool {
 	var got i64 = 0;
 	while (got < n) {
