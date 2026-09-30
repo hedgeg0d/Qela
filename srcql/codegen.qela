@@ -6,6 +6,7 @@ import "ir.qela";
 import "x86_emit.qela";
 import "arm64_emit.qela";
 import "riscv_emit.qela";
+import "../std/io.qela";
 
 
 // The integer argument register for rank i on the current target -- the
@@ -2865,6 +2866,73 @@ fn layout_tls(globals *Var) {
 }
 
 
+// ── embedded compiler copy ──
+//
+// A program that pulls in the runtime ABI (std/abiconn.qela declares the
+// two `__qela_embedded*` globals) gets the compiler's own image embedded
+// into its data segment, so the runtime child can materialize itself via
+// memfd+fexecve without qela installed. The length global's init is set
+// before layout so the real size lands in .data; the pointer global's
+// init is forced nonzero so it gets a .data slot too, and the slot is
+// patched with the blob's runtime address once the image geometry is
+// known. The blob sits after the bss region (the file carries bss-size
+// zero padding up to it), so the conservative GC scan, which ends at the
+// bss, never walks the compiler's bytes. Object mode skips the embed --
+// the blob has no relocation story there -- and the runtime falls back
+// to $QELAPATH/$PATH when the length is zero.
+
+var embed_lenv *Var;
+var embed_ptrv *Var;
+var embed_blob str;
+var embed_blob_off i64 = -1;
+
+fn find_global_var(name str) *Var {
+	var v *Var = global_vars;
+	while (v as i64 != 0) {
+		if (str_eq(v.name, name)) { return v; }
+		v = v.next;
+	}
+	return 0 as *Var;
+}
+
+fn embed_prepare() {
+	embed_lenv = find_global_var("__qela_embedded_len");
+	embed_ptrv = find_global_var("__qela_embedded");
+	if (embed_lenv as i64 == 0 || embed_ptrv as i64 == 0) { return; }
+	if (opt_object) { return; }
+	var self_path [4096]u8;
+	var plen i64 = sys_readlink(cstr("/proc/self/exe"), &self_path[0], 4096);
+	if (plen <= 0 || plen >= 4096) { return; }
+	var sp str;
+	sp.ptr = &self_path[0];
+	sp.len = plen;
+	var blob str = read_file(sp);
+	embed_blob = blob;
+	embed_lenv.init = blob.len;
+	// Forces a .data slot (init 0 would put the pointer in bss); the real
+	// value is patched in embed_patch.
+	embed_ptrv.init = 1;
+}
+
+fn embed_append() {
+	if (embed_blob.len == 0) { return; }
+	var off i64 = gdata.n + bss_size;
+	var align8 i64 = (off + 7) & ~7;
+	while (gdata.n < align8) { buf_u8(&gdata, 0); }
+	embed_blob_off = gdata.n;
+	buf_bytes(&gdata, embed_blob.ptr, embed_blob.len);
+}
+
+fn embed_patch(dbase i64) {
+	if (embed_blob_off < 0) { return; }
+	var addr i64 = dbase + embed_blob_off;
+	var k i64 = 0;
+	while (k < 8) {
+		gdata.p[embed_ptrv.data_off + k] = ((addr >> (k * 8)) & 255) as u8;
+		k = k + 1;
+	}
+}
+
 fn layout_globals(globals *Var) {
 	layout_tls(globals);
 	var v *Var = globals;
@@ -3229,7 +3297,9 @@ fn codegen(u *Unit, img *Image) {
 		s = s.next;
 	}
 
+	embed_prepare();
 	layout_globals(u.globals);
+	embed_append();
 	if (opt_object) {
 		// `-c`: no entry, no panic stub, no gc roots. Code plus the
 		// relocation list is all the object needs; the exe patching below
@@ -3393,6 +3463,7 @@ fn codegen(u *Unit, img *Image) {
 	while ((rodata.n & 7) != 0) { buf_u8(&rodata, 0); }
 
 	var dbase i64 = ELF_BASE + SEG_GAP + hdr + code.n + rodata.n;
+	embed_patch(dbase);
 	if (opt_target == TARGET_RISCV64) {
 		var bi i64 = 0;
 		while (bi < gc_base_refs.n) {
