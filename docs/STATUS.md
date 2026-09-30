@@ -1,6 +1,6 @@
 # Where the project stands
 
-Updated 2026-08-17 (commit `9be1c90`). Read `BOOTSTRAP.md` first; it
+Updated 2026-08-17 (commit `37b959f`). Read `BOOTSTRAP.md` first; it
 constrains everything below. The dated entries below are implementation
 history; the numbers in this section are the current snapshot.
 
