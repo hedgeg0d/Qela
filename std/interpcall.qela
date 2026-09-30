@@ -1,11 +1,77 @@
 import "sys.qela";
 import "str.qela";
 import "buf.qela";
+import "arena.qela";
 import "abiwire.qela";
 import "abiconn.qela";
 
 let ABI_REQ_CALL = 2;
+let ABI_REQ_JIT = 6;
 let ABI_RESP_ERR = 2;
+
+struct DynEntry;
+struct DynEntry {
+	name str,
+	ptr  i64,
+	next *DynEntry,
+}
+var dyn_cache *DynEntry = 0 as *DynEntry;
+
+fn dyn_find(name str) i64 {
+	var e *DynEntry = dyn_cache;
+	while (e as i64 != 0) {
+		if (str_eq(e.name, name)) { return e.ptr; }
+		e = e.next;
+	}
+	return 0;
+}
+
+fn dyn_store(name str, ptr i64) {
+	var e *DynEntry = arena_alloc(sizeof(DynEntry), 8) as *DynEntry;
+	e.name = name;
+	e.ptr = ptr;
+	e.next = dyn_cache;
+	dyn_cache = e;
+}
+
+fn interp_jit_compile(name str) i64 {
+	abi_send_frame(abi_in, ABI_REQ_JIT as u8, name.ptr, name.len);
+	var buf [4096]u8;
+	var kind u8 = 0;
+	var n i64 = abi_wait_result(&kind, &buf[0], 4096);
+	if (n < 0) {
+		eprint("dynamic: the qela subprocess died compiling '");
+		eprint(name);
+		eprint("'\n");
+		sys_exit(1);
+	}
+	if (kind == (ABI_RESP_ERR as u8)) { return -1; }
+	var addr i64 = sys_mmap_anon(4096);
+	if (addr < 0) {
+		eprint("dynamic: mmap failed\n");
+		sys_exit(1);
+	}
+	var dst *u8 = addr as *u8;
+	var i i64 = 0;
+	while (i < n) { dst[i] = buf[i]; i = i + 1; }
+	if (sys_mprotect(addr, 4096, 5) != 0) {
+		eprint("dynamic: mprotect failed\n");
+		sys_exit(1);
+	}
+	return addr;
+}
+
+fn __dyn_jit_call(name str, args *i64) i64 {
+	abi_spawn();
+	var ptr i64 = dyn_find(name);
+	if (ptr == 0) {
+		ptr = interp_jit_compile(name);
+		dyn_store(name, ptr);
+	}
+	if (ptr == -1) { return __interp_call_dispatch(name, args); }
+	var fp fn(i64, i64, i64, i64, i64, i64) i64 = *(&ptr as *fn(i64, i64, i64, i64, i64, i64) i64);
+	return fp(args[0], args[1], args[2], args[3], args[4], args[5]);
+}
 
 fn __interp_call_dispatch(name str, args *i64) i64 {
 	abi_spawn();

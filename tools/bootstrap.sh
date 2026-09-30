@@ -382,6 +382,30 @@ EOF
 printf '    ok\n'
 
 
+step "dynamic: real native jit, and a clean fallback when it can't"
+cat > "$tmp2/jitreal.qela" <<'EOF'
+import "std/io.qela";
+fn dynamic pure_square(x i64) i64 {
+	return x * x;
+}
+fn dynamic notpure(x i64) i64 {
+	write_str(STDOUT, "side effect\n");
+	return x + 1;
+}
+fn main() int {
+	var s i64 = pure_square(7);
+	var r i64 = notpure(41);
+	write_str(STDOUT, "s=${s} r=${r}\n");
+	return 0;
+}
+EOF
+( cd "$tmp2" &&
+  "$root/$OUT/s2" jitreal.qela -o jitreal &&
+  [ "$(QELAPATH="$root/$OUT/s2" ./jitreal 2>/dev/null)" = "$(printf 'side effect\ns=49 r=42')" ] ) ||
+	fail "a self-contained dynamic function doesn't jit correctly, or a non-self-contained one doesn't fall back"
+printf '    ok\n'
+
+
 step "stdin compile and shebang"
 cat > "$tmp2/btcrash.qela" <<'EOF'
 fn deep(n i64) i64 {
