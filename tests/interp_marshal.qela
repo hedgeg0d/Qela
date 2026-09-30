@@ -1,0 +1,45 @@
+// expect-exit: 0
+// expect-out: all marshalled paths ok
+// stage1-only
+// interpreted/dynamic functions with str, float and struct signatures,
+// both over the runtime ABI wire and through the jit's rewritten
+// out-parameter form.
+struct P { x i64, y i64 }
+struct Big { a i64, b i64, c i64, d i64 }
+struct Bag { tag i64, s str, n i64 }
+
+fn dynamic dlen(s str) i64 { return s.len; }
+fn interpreted ilen(s str) i64 { return s.len; }
+fn dynamic dgreet(s str) str { return s; }
+fn interpreted igreet(s str) str { return s; }
+fn dynamic dsum(p P) i64 { return p.x + p.y; }
+fn interpreted isum(p P) i64 { return p.x + p.y; }
+fn dynamic dbig(b Big) i64 { return b.a + b.b + b.c + b.d; }
+fn interpreted ibig(b Big) i64 { return b.a + b.b + b.c + b.d; }
+fn dynamic dfmul(x f64, y f64) f64 { return x * y; }
+fn interpreted ifmul(x f64, y f64) f64 { return x * y; }
+fn dynamic dbag(b Bag) i64 { return b.tag + b.s.len + b.n; }
+fn interpreted ibag(b Bag) i64 { return b.tag + b.s.len + b.n; }
+fn interpreted i7(a i64, b i64, c i64, d i64, e i64, f i64, g i64) i64 { return a + b + c + d + e + f + g; }
+
+fn main() int {
+	var fails i64 = 0;
+	if (dlen("abcd") != 4) { fails = fails + 1; }
+	if (ilen("xyz") != 3) { fails = fails + 1; }
+	if (dgreet("hi").len != 2) { fails = fails + 1; }
+	if (igreet("yo").len != 2) { fails = fails + 1; }
+	var p P = P{x: 1, y: 2};
+	if (dsum(p) != 3) { fails = fails + 1; }
+	if (isum(p) != 3) { fails = fails + 1; }
+	var b Big = Big{a: 1, b: 2, c: 3, d: 4};
+	if (dbig(b) != 10) { fails = fails + 1; }
+	if (ibig(b) != 10) { fails = fails + 1; }
+	if (dfmul(2.5, 4.0) != 10.0) { fails = fails + 1; }
+	if (ifmul(2.5, 4.0) != 10.0) { fails = fails + 1; }
+	var bag Bag = Bag{tag: 10, s: "abc", n: 5};
+	if (dbag(bag) != 18) { fails = fails + 1; }
+	if (ibag(bag) != 18) { fails = fails + 1; }
+	if (i7(1, 2, 3, 4, 5, 6, 7) != 28) { fails = fails + 1; }
+	if (fails == 0) { write_str(STDOUT, "all marshalled paths ok\n"); }
+	return fails as int;
+}
