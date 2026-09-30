@@ -241,7 +241,10 @@ fn ip_layout(u *Unit, write bool) {
 	ip_lay = 0;
 	var v *Var = u.globals;
 	while (v as i64 != 0) {
-		if (v.extern && !v.has_init) {
+		// Under the abi server an extern var is an `eval var`: the host
+		// answers every read and write, so the child's own slot (laid out
+		// below, never touched) is dead weight, not an error.
+		if (v.extern && !v.has_init && !type_abi_mode) {
 			error_at(v.pos, "interpreter: an extern global has no definition to run against");
 		}
 		ip_lay_align(v.ty.align as i64);
@@ -283,7 +286,7 @@ fn ip_layout(u *Unit, write bool) {
 }
 
 fn ip_repl_layout_var(v *Var) {
-	if (v.extern && !v.has_init) {
+	if (v.extern && !v.has_init && !type_abi_mode) {
 		error_at(v.pos, "interpreter: an extern global has no definition to run against");
 	}
 	ip_lay_align(v.ty.align as i64);
@@ -324,7 +327,10 @@ fn ip_repl_layout_strs(s *StrLit) {
 
 fn ip_addr(n *Node) i64 {
 	var k int = n.kind;
-	if (k == ND_VAR) { return ip_var_addr(n.varp); }
+	if (k == ND_VAR) {
+		if (n.varp.extern && type_abi_mode) { return ip_foreign_var_materialize(n.varp); }
+		return ip_var_addr(n.varp);
+	}
 	if (k == ND_DEREF) { return ip_eval(n.lhs); }
 	if (k == ND_MEMBER) {
 		var base i64 = 0;
@@ -527,10 +533,108 @@ fn ip_foreign_set(name str, v i64) {
 	if (kind == 2) { ip_panic("interpreter: the host rejected a foreign global write\n"); }
 }
 
+// An `eval var` arrives in the bundle as an extern declaration, so its
+// reads and writes are typed; its value lives on the host, so the child
+// marshals the value over the ABI per the type. A read materialises a
+// copy at a fresh temp (an aggregate-typed expression evaluates to its
+// address), a write marshals the local copy back.
+fn ip_foreign_get_into(name str, dst i64, ty *Type) {
+	if (ip_abi_validating) { return; }
+	abi_send_frame(ABI_FD_CHILD_TO_HOST, 4 as u8, name.ptr, name.len);
+	var total i64 = abi_peek_len(ABI_FD_HOST_TO_CHILD);
+	if (total < 0) { ip_panic("interpreter: the host process died answering a foreign global read\n"); }
+	var pb *u8 = arena_alloc(total, 8);
+	var kind u8 = 0;
+	if (!abi_recv_rest(ABI_FD_HOST_TO_CHILD, &kind, pb, total - 1)) {
+		ip_panic("interpreter: the host process died answering a foreign global read\n");
+	}
+	if (kind == 2) { ip_panic("interpreter: the host rejected a foreign global read\n"); }
+	abi_unmarshal_value(pb, dst, ty);
+}
+
+fn ip_foreign_var_materialize(v *Var) i64 {
+	var dst i64 = ip_temp(v.ty.size as i64);
+	ip_foreign_get_into(v.name, dst, v.ty);
+	return dst;
+}
+
+fn ip_foreign_set_typed(name str, addr i64, ty *Type) {
+	if (ip_abi_validating) { return; }
+	var b Buf;
+	buf_u8(&b, name.len as u8);
+	buf_bytes(&b, name.ptr, name.len);
+	abi_marshal_value(&b, addr, ty);
+	var msg str = buf_str(&b);
+	abi_send_frame(ABI_FD_CHILD_TO_HOST, 5 as u8, msg.ptr, msg.len);
+	var rbuf [8]u8;
+	var kind u8 = 0;
+	var rn i64 = abi_recv_frame(ABI_FD_HOST_TO_CHILD, &kind, &rbuf[0], 8);
+	if (rn < 0) { ip_panic("interpreter: the host process died answering a foreign global write\n"); }
+	if (kind == 2) { ip_panic("interpreter: the host rejected a foreign global write\n"); }
+}
+
+// The variable the assignment's left-hand side is rooted at, if that root
+// is a foreign extern global (a chain of members and indexes over one).
+fn ip_foreign_root(n *Node) *Var {
+	while (n as i64 != 0) {
+		if (n.kind == ND_VAR) {
+			if (n.varp.extern && type_abi_mode) { return n.varp; }
+			return 0 as *Var;
+		}
+		if (n.kind == ND_MEMBER || n.kind == ND_INDEX || n.kind == ND_DEREF) { n = n.lhs; }
+		else { return 0 as *Var; }
+	}
+	return 0 as *Var;
+}
+
+// The address of `n`'s value relative to a materialised copy of its
+// foreign root at `base`, mirroring ip_addr. The deref and the pointer
+// member cases follow the copy's own pointers, which live at the same
+// offsets as the host original.
+fn ip_foreign_rel_addr(n *Node, base i64) i64 {
+	var addr i64 = base;
+	while (n.kind != ND_VAR) {
+		if (n.kind == ND_MEMBER) {
+			if (n.lhs.ty.kind == TY_PTR) { addr = ip_eval(n.lhs); }
+			addr = addr + (n.member.offset as i64);
+		} else if (n.kind == ND_DEREF) {
+			addr = ip_eval(n.lhs);
+		} else if (n.kind == ND_INDEX) {
+			var lt *Type = n.lhs.ty;
+			var idx i64 = ip_eval(n.rhs);
+			if (lt.kind == TY_SLICE) {
+				var len i64 = ip_ld64(addr + 8);
+				if (!opt_no_bounds && !n.nobounds && (idx as u64) >= (len as u64)) {
+					ip_panic("index out of bounds\n");
+				}
+				addr = ip_ld64(addr) + idx * (lt.base.size as i64);
+			} else {
+				addr = addr + idx * (lt.base.size as i64);
+			}
+		} else {
+			ip_panic("interpreter: cannot write into a foreign global through this path\n");
+		}
+		n = n.lhs;
+	}
+	return addr;
+}
+
 fn ip_assign(n *Node) i64 {
 	if (n.lhs.foreign) {
 		var v i64 = ip_eval(n.rhs);
 		ip_foreign_set(n.lhs.name, v);
+		return v;
+	}
+	var fv *Var = ip_foreign_root(n.lhs);
+	if (fv as i64 != 0) {
+		// `price.x = v` or `price = v`: materialise the host value once,
+		// apply the write to the copy, send the whole object back.
+		var base i64 = ip_foreign_var_materialize(fv);
+		var a i64 = ip_foreign_rel_addr(n.lhs, base);
+		var v i64 = ip_eval(n.rhs);
+		if (is_aggregate(n.lhs.ty)) { ip_memcpy(a, v, n.lhs.ty.size as i64); }
+		else { ip_store(a, n.lhs.ty, v); }
+		ip_foreign_set_typed(fv.name, base, fv.ty);
 		return v;
 	}
 	if (is_aggregate(n.lhs.ty)) {
@@ -642,6 +746,11 @@ fn ip_ev_strlit(n *Node) i64 {
 }
 
 fn ip_ev_var(n *Node) i64 {
+	if (n.varp.extern && type_abi_mode) {
+		var a i64 = ip_foreign_var_materialize(n.varp);
+		if (is_aggregate(n.ty)) { return a; }
+		return ip_load(a, n.ty);
+	}
 	var a i64 = ip_var_addr(n.varp);
 	if (is_aggregate(n.ty)) { return a; }
 	return ip_load(a, n.ty);
