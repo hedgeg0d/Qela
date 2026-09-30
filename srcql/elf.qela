@@ -365,8 +365,15 @@ fn o_sym_rec(f *Buf, i int) {
 	buf_u64(f, o_size[i]);
 }
 
-// The only place that knows REL_* purposes map to R_X86_64_* type numbers.
+// The only place that knows REL_* purposes map to the target's relocation
+// type numbers: R_X86_64_* here, R_AARCH64_* under -target arm64.
 fn elf_reloc_type(kind int) int {
+	if (opt_target == TARGET_ARM64) {
+		if (kind == REL_ABS64) { return 257; }          // R_AARCH64_ABS64
+		if (kind == REL_ARM64_CALL26) { return 283; }   // R_AARCH64_CALL26
+		if (kind == REL_ARM64_ADRP) { return 275; }     // R_AARCH64_ADR_PREL_PG_HI21
+		return 277;                                     // R_AARCH64_ADD_ABS_LO12_NC
+	}
 	if (kind == REL_ABS64) { return 1; }        // R_X86_64_64
 	if (kind == REL_PCREL32) { return 2; }      // R_X86_64_PC32
 	if (kind == REL_PCREL32_PLT) { return 4; }  // R_X86_64_PLT32
@@ -376,11 +383,15 @@ fn elf_reloc_type(kind int) int {
 fn o_rela_rec(f *Buf, r *Reloc, img *Image, base i64) {
 	buf_u64(f, r.at - base);
 	buf_u64(f, (o_sym_index(img, r) as i64) << 32 | (elf_reloc_type(r.kind) as i64));
-	// PC-relative slots resolve from the *next* instruction; the linker's P
-	// is the slot's own address, so a -4 addend aligns the two (gcc emits
-	// the same). Absolute relocations carry no addend.
+	// x86 PC-relative slots resolve from the *next* instruction; the
+	// linker's P is the slot's own address, so a -4 addend aligns the two
+	// (gcc emits the same). Absolute relocations carry no addend, and none
+	// of the AArch64 kinds need one -- A64 bakes its own immediates into
+	// the instruction the relocation names.
 	var add i64 = 0;
-	if (r.kind == REL_PCREL32_PLT || r.kind == REL_PCREL32) { add = -4; }
+	if (opt_target != TARGET_ARM64) {
+		if (r.kind == REL_PCREL32_PLT || r.kind == REL_PCREL32) { add = -4; }
+	}
 	buf_u64(f, add);
 }
 

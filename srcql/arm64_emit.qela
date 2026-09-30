@@ -174,6 +174,15 @@ fn arm64_mov_reg(rd int, rn int) {
 // and the patch reads-modifies-writes the word instead of overwriting a
 // blank rel32.
 fn arm64_add_call(name str, pos i64) {
+	if (opt_object) {
+		// The linker writes the BL's imm26 from S + A - P and resolves a
+		// later-defined function or an extern, so there is no local fixup to
+		// record -- just the relocation.
+		var at i64 = code.n;
+		b4(0x94000000);
+		push_reloc(at, name, REL_ARM64_CALL26);
+		return;
+	}
 	var f *CallFixup = arena_alloc(sizeof(CallFixup), 8) as *CallFixup;
 	f.at = code.n;
 	f.name = name;
@@ -505,12 +514,46 @@ fn arm64_patch_movz_movk_addr(at i64, addr i64) {
 	buf_patch32(&code, at + 4, w1 | (((addr >> 16) & 0xffff) << 5));
 }
 
+// Object mode (-c) loads every absolute address through an ADRP+ADD_LO12
+// pair carrying two relocations (R_AARCH64_ADR_PREL_PG_HI21 then
+// R_AARCH64_ADD_ABS_LO12_NC), the same pair gcc emits for a PC-relative
+// AArch64 data reference, so the object links at any base the way the x86
+// RIP-relative lea does. The exe path keeps the MOVZ+MOVK patch above, since
+// the image base is known at finalize. The pair is always the same two-word
+// shape; callers record the fixups against `at` (the ADRP) and `at + 4`
+// (the ADD).
+fn arm64_adrp(rd int) { b4(0x90000000 | rd); }
+
+fn arm64_add_lo12(rd int) { b4(0x91000000 | (rd << 5) | rd); }
+
 // A bounds/assert trip: print the message to stderr, then exit(134). The
 // message's own address is unknown until the image is laid out (it lives
 // in .rodata), so it loads through a placeholder MOVZ/MOVK pair recorded on
 // panic_msg_at/panic_msg_ids (srcql/codegen.qela's lists, shared with the
 // x86 stub) and patched at image finalize time.
 fn arm64_gen_panic_stub(msg_id int, msg_len i64) {
+	if (opt_object) {
+		// The message bytes get a `.Lstrd<msg_id>` symbol; the ADRP+ADD_LO12
+		// pair with its two relocations survives any link base (an absolute
+		// MOVZ/MOVK pair would be TEXTREL).
+		var nb Buf;
+		fmt_str(&nb, ".Lstrd");
+		fmt_i64(&nb, msg_id as i64);
+		var at0 i64 = code.n;
+		arm64_adrp(X1);
+		var at1 i64 = code.n;
+		arm64_add_lo12(X1);
+		push_reloc(at0, buf_str(&nb), REL_ARM64_ADRP);
+		push_reloc(at1, buf_str(&nb), REL_ARM64_ADD_LO12);
+		arm64_mov_imm64(X0, 2);
+		arm64_mov_imm64(X2, msg_len);
+		arm64_mov_imm64(X8, SYS_ARM64_WRITE);
+		arm64_svc();
+		arm64_mov_imm64(X0, 134);
+		arm64_mov_imm64(X8, SYS_ARM64_EXIT_GROUP);
+		arm64_svc();
+		return;
+	}
 	ilist_push(&panic_msg_at, code.n);
 	ilist_push(&panic_msg_ids, msg_id as i64);
 	arm64_movz(X1, 0, 0);
@@ -568,6 +611,15 @@ fn arm64_memcpy(dst int, src int, size i64) {
 
 
 fn arm64_add_strref(id int) {
+	if (opt_object) {
+		var at0 i64 = code.n;
+		arm64_adrp(X0);
+		var at1 i64 = code.n;
+		arm64_add_lo12(X0);
+		push_reloc_id(at0, id as i64, REL_ARM64_ADRP);
+		push_reloc_id(at1, id as i64, REL_ARM64_ADD_LO12);
+		return;
+	}
 	var f *StrFixup = arena_alloc(sizeof(StrFixup), 8) as *StrFixup;
 	f.at = code.n;
 	f.id = id;
@@ -587,6 +639,18 @@ fn arm64_add_dataref(v *Var) {
 // register -- an indirect call's target, which must not sit in the
 // accumulator (X0 is the first argument register, still live at the call).
 fn arm64_add_dataref_reg(reg int, v *Var) {
+	if (opt_object) {
+		// Every global is an ADRP+ADD_LO12 pair here: own symbols and
+		// exported externs live in this image, an imported extern resolves
+		// at static link, exactly the x86 PC-relative-lea contract.
+		var at0 i64 = code.n;
+		arm64_adrp(reg);
+		var at1 i64 = code.n;
+		arm64_add_lo12(reg);
+		push_reloc(at0, v.name, REL_ARM64_ADRP);
+		push_reloc(at1, v.name, REL_ARM64_ADD_LO12);
+		return;
+	}
 	var f *DataFixup = arena_alloc(sizeof(DataFixup), 8) as *DataFixup;
 	f.at = code.n;
 	f.varp = v;
@@ -601,6 +665,15 @@ fn arm64_add_dataref_reg(reg int, v *Var) {
 // MOVZ/MOVK pair patched at finalize the same 16-bits-at-a-time way as
 // arm64_patch_movz_movk_addr patches string/data references.
 fn arm64_add_funcaddr(name str, pos i64) {
+	if (opt_object) {
+		var at0 i64 = code.n;
+		arm64_adrp(X0);
+		var at1 i64 = code.n;
+		arm64_add_lo12(X0);
+		push_reloc(at0, name, REL_ARM64_ADRP);
+		push_reloc(at1, name, REL_ARM64_ADD_LO12);
+		return;
+	}
 	var f *CallFixup = arena_alloc(sizeof(CallFixup), 8) as *CallFixup;
 	f.at = code.n;
 	f.name = name;
