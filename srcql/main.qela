@@ -16,6 +16,7 @@ import "../std/io.qela";
 // docs/BOOTSTRAP.md.
 $if (BOOTSTRAP != "1") {
 import "interp.qela";
+import "../std/abiwire.qela";
 }
 
 fn default_output(path str) str {
@@ -1060,6 +1061,79 @@ fn cmd_repl(argc int, argv **u8) int {
 	}
 }
 
+let ABI_REQ_RUN = 1;
+let ABI_RESP_OK = 1;
+let ABI_RESP_ERR = 2;
+
+fn abi_wrap_expr(src str) str {
+	var b Buf;
+	fmt_str(&b, "__abi_result = (");
+	fmt_str(&b, repl_strip_trailing_semi(src));
+	fmt_str(&b, ");\n");
+	return buf_str(&b);
+}
+
+fn abi_try_run(src str, name str, path_a bool) bool {
+	var pid i64 = sys_fork();
+	if (pid == 0) {
+		var devnull i64 = sys_open_append(cstr("/dev/null"));
+		sys_dup2(devnull, STDOUT);
+		repl_run_source(src, name, path_a);
+		sys_exit(0);
+	}
+	var status [1]i64;
+	sys_wait4(pid, &status[0] as *u8);
+	return ((status[0] >> 8) & 255) == 0 && (status[0] & 127) == 0;
+}
+
+fn cmd_abi_server(argc int, argv **u8) int {
+	repl_init();
+	repl_run_source("var __abi_result i64 = 0;\n", "<abi:init>", false);
+	var result_var *Var = repl_fn.locals;
+
+	var buf *u8 = arena_alloc(ABI_MAX_MSG, 8) as *u8;
+	var seq int = 0;
+	while (true) {
+		var kind u8 = 0;
+		var n i64 = abi_recv_frame(0, &kind, buf, ABI_MAX_MSG);
+		if (n < 0 || kind != ABI_REQ_RUN) { return 0; }
+		var raw str;
+		raw.ptr = buf;
+		raw.len = n;
+		raw = str_dup(raw);
+
+		seq = seq + 1;
+		var nameb Buf;
+		fmt_str(&nameb, "<eval:");
+		fmt_i64(&nameb, seq as i64);
+		buf_u8(&nameb, '>');
+		var name str = buf_str(&nameb);
+
+		var cls int = repl_classify(raw);
+		var to_run str = raw;
+		var path_a bool = false;
+		if (cls == REPL_PATH_EXPR) {
+			to_run = abi_wrap_expr(raw);
+		} else if (cls == REPL_PATH_A) {
+			path_a = true;
+		} else {
+			repl_maybe_unshadow(raw, repl_leading_word(raw));
+		}
+
+		if (!abi_try_run(to_run, name, path_a)) {
+			var msg str = "eval: compile or runtime error";
+			abi_send_frame(1, ABI_RESP_ERR as u8, msg.ptr, msg.len);
+			continue;
+		}
+		repl_run_source(to_run, name, path_a);
+		var val i64 = ip_load(ip_var_addr(result_var), result_var.ty);
+		var vb [8]u8;
+		*(&vb[0] as *i64) = val;
+		abi_send_frame(1, ABI_RESP_OK as u8, &vb[0], 8);
+	}
+	return 0;
+}
+
 } $else {
 
 fn cmd_repl(argc int, argv **u8) int {
@@ -1131,6 +1205,9 @@ fn main(argc int, argv **u8) int {
 	$if (BOOTSTRAP != "1") {
 	if (argc >= 2 && str_eq(str_from_cstr(argv[1]), "irun")) {
 		return cmd_irun(argc, argv);
+	}
+	if (argc >= 2 && str_eq(str_from_cstr(argv[1]), "--abi-server")) {
+		return cmd_abi_server(argc, argv);
 	}
 	}
 	if (argc >= 2 && str_eq(str_from_cstr(argv[1]), "fmt")) {
