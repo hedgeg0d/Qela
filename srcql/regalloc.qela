@@ -9,15 +9,18 @@ import "funcs.qela";
 // a defer body stretches its ranges to the end of the function, because it is
 // emitted out of order at every exit.
 
-let RA_NSAVED = 5;
 let RA_FOREVER = 0x7fffffffffffff;
 
 // Callee-saved registers cost a save and a restore. A function that makes no
-// calls pays nothing for r8-r11, so those come first there. r10 and r11 are
-// never argument registers; r8 and r9 are free only when this function's own
-// parameters do not reach them, or the prologue would overwrite an incoming
-// argument before reading it.
+// calls pays nothing for r8-r11 (x86) / x16-x17 (ARM64), so those come first
+// there. r10 and r11 are never argument registers; r8 and r9 are free only
+// when this function's own parameters do not reach them, or the prologue
+// would overwrite an incoming argument before reading it.
 fn ra_free(i int) int {
+	if (opt_target == TARGET_ARM64) {
+		if (i == 0) { return X16; }
+		return X17;
+	}
 	if (i == 0) { return R10; }
 	if (i == 1) { return R11; }
 	if (i == 2) { return R9; }
@@ -39,6 +42,7 @@ fn ra_argregs(f *Func) int {
 
 fn ra_nfree(f *Func) int {
 	if (!f.leaf) { return 0; }
+	if (opt_target == TARGET_ARM64) { return 2; }
 	var nin int = ra_argregs(f);
 	if (nin <= 4) { return 4; }
 	if (nin <= 5) { return 3; }
@@ -46,6 +50,9 @@ fn ra_nfree(f *Func) int {
 }
 
 fn ra_saved(i int) int {
+	if (opt_target == TARGET_ARM64) {
+		return X19 + i;
+	}
 	if (i == 0) { return RBX; }
 	if (i == 1) { return R12; }
 	if (i == 2) { return R13; }
@@ -53,12 +60,13 @@ fn ra_saved(i int) int {
 	return R15;
 }
 
+fn ra_nsaved() int {
+	if (opt_target == TARGET_ARM64) { return 10; }
+	return 5;
+}
+
 fn ra_nreg(f *Func) int {
-	// The free/saved pools below are x86 encodings (RBX/R8-R15). ARM64 needs
-	// its own callee-saved pool (AAPCS64's x19-x28) before promotion is safe
-	// for that target; until then every local goes to a frame slot.
-	if (opt_target == TARGET_ARM64) { return 0; }
-	return RA_NSAVED + ra_nfree(f);
+	return ra_nsaved() + ra_nfree(f);
 }
 
 fn ra_pool(f *Func, i int) int {
@@ -240,7 +248,7 @@ fn regalloc(f *Func) {
 
 	f.nsaved = 0;
 	i = 0;
-	while (i < RA_NSAVED) {
+	while (i < ra_nsaved()) {
 		var used bool = false;
 		var v *Var = f.locals;
 		while (v as i64 != 0) {
