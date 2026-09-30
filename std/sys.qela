@@ -315,11 +315,15 @@ fn sys_memfd_create(name *u8, flags i64) i64 {
 	return syscall(SYS_MEMFD_CREATE, name as i64, flags, 0);
 }
 
+// execveat with AT_EMPTY_PATH wants a valid pointer to an empty string,
+// not NULL -- the kernel faults on the latter.
+var fexec_empty [1]u8;
+
 fn sys_fexecve(fd i64, argv *u8, envp *u8) i64 {
 	$if (TARGET != "x86_64") {
-		return syscall(SYS_EXECVEAT_N, fd, 0, argv as i64, envp as i64, AT_EMPTY_PATH, 0);
+		return syscall(SYS_EXECVEAT_N, fd, &fexec_empty[0] as i64, argv as i64, envp as i64, AT_EMPTY_PATH, 0);
 	}
-	return syscall(SYS_EXECVEAT, fd, 0, argv as i64, envp as i64, AT_EMPTY_PATH, 0);
+	return syscall(SYS_EXECVEAT, fd, &fexec_empty[0] as i64, argv as i64, envp as i64, AT_EMPTY_PATH, 0);
 }
 
 fn sys_pipe2(fds *i32, flags i64) i64 {
