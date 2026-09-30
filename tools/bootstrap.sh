@@ -58,6 +58,9 @@ fi
 printf '\n\033[32mM7 GATE PASSED\033[0m: S2 == S3, %s bytes\n' \
 	"$(stat -c %s "$OUT/s2")"
 
+step "absorbed package archive"
+QELA="$OUT/s2" tools/absorb-test.sh || fail "absorb/list/drop integration failed"
+
 step "test corpus under S2"
 QELA="$OUT/s2" tools/run-tests.sh || fail "S2 does not pass the test corpus"
 
