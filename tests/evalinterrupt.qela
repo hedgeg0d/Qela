@@ -1,0 +1,23 @@
+// expect-exit: 0
+// expect-out: eval: interrupted
+// expect-out: stopped=0 next=42
+// stage1-only
+import "std/eval.qela";
+import "std/io.qela";
+import "std/sys.qela";
+import "std/time.qela";
+fn main() int {
+	abi_spawn();
+	var killer i64 = sys_fork();
+	if (killer == 0) {
+		sleep_ms(10);
+		sys_kill(abi_pid, SIGINT);
+		sys_exit(0);
+	}
+	var stopped i64 = eval("var i i64 = 0; while (i < 1000000) { i = i + 1; } i;");
+	var raw i64 = 0;
+	sys_wait4(killer, &raw as *u8);
+	var next i64 = eval("40 + 2");
+	println("stopped=${stopped} next=${next}");
+	return 0;
+}
