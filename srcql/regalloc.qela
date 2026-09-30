@@ -289,6 +289,15 @@ fn regalloc(f *Func) {
 // the path coverage matches the regalloc pass.
 fn count_reads(f *Func) {
 	if (f as i64 == 0) { return; }
+	// An interpreted/dynamic function's real body is what codegen never
+	// compiles: count reads there too, or every local it uses warns
+	// unused. The synthetic body still needs its own pass for its hidden
+	// variables.
+	if (f.interp_body as i64 != 0) {
+		reads_list(f.interp_body);
+		reads_list(f.body);
+		return;
+	}
 	reads_list(f.body);
 }
 
