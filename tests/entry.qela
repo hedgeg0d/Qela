@@ -1,4 +1,5 @@
 // stage1-only
+// x86-only
 // expect-exit: 42
 // `entry name;` picks the ELF entry point and suppresses the call-main
 // stub; the naked entry does its own exit syscall.
