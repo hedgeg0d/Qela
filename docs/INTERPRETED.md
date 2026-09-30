@@ -740,3 +740,75 @@ todo list anymore.
    "What's implemented" above); "--interpreted and --jit global flags";
    "dynamic: real native jit, and a clean fallback when it can't";
    "parse_ast/run_ast: parse once, run repeatedly against fresh state".
+
+## After v1 — what's left for a future session
+
+v1 (everything above) is done, tested, and shipped. Nothing below is a
+bug or a gap in what v1 claims to do — every one of these is a
+deliberate v1 boundary, listed here so the next session doesn't have to
+rediscover where they are. Roughly in order of how tractable each looks,
+not necessarily how valuable it is:
+
+1. **Struct/string marshalling over the ABI.** The single biggest
+   ceiling on everything else: `eval var`/`eval fn`/`interpreted`/
+   `dynamic` are all stuck at non-aggregate, non-float, ≤8-byte scalars
+   because the wire protocol only ever carries a bare `i64` or six packed
+   `i64`s. Unlocking a `str` parameter (say) needs a real marshalling
+   convention — length-prefixed bytes are the obvious shape, but deciding
+   whether the *callee* or the *caller* owns the resulting buffer, and on
+   which side, needs actual thought before writing code. Struct
+   marshalling is the same problem with a field-layout question on top.
+   This one change would let go of several "scalar only" restrictions at
+   once rather than needing four separate fixes.
+2. **Self-embedding the compiler into the output ELF at compile time.**
+   `abi_spawn()` still resolves the child via `$QELAPATH` then a `$PATH`
+   search — real, working, but not what the original design meant by
+   "self-copy": a build today should embed *today's* `qela` so a shipped
+   binary using `eval`/`interpreted`/`dynamic` doesn't need `qela`
+   installed on the machine that runs it. Needs a genuinely new
+   primitive — "embed an arbitrary byte blob into the output ELF" doesn't
+   exist yet (`std_blob.qela` embeds *qela's own* std/ as string
+   literals at *qela's* build time via `genblob.py`, which is a
+   different mechanism solving a different problem: source text baked
+   into `qela` itself, not raw bytes baked into something `qela`
+   produces). The natural place to start: extend `elf.qela`'s writer
+   with a data segment that isn't source-derived, then have `qela`
+   `readlink(/proc/self/exe)` *itself* at compile time (reliable — that
+   always resolves to the actual running compiler) when the program
+   being compiled imports `std/eval.qela`/uses `interpreted`/`dynamic`,
+   and write those bytes into that segment. `std/eval.qela`'s
+   `abi_spawn()` would then `memfd_create()`+`fexecve()` its own
+   embedded copy instead of searching `$PATH`, with `$QELAPATH` kept as
+   an explicit override, not the primary path.
+3. **Self-recursive `dynamic` functions.** A `dynamic` function calling
+   itself is currently indistinguishable from calling any other function
+   — a relocation, which fails the self-containment check and falls back
+   to `interpreted`. Fixable without touching the ABI at all: the host
+   already knows its own JIT'd address once compiled once, so a
+   self-call could patch its own relocation against that address after
+   the fact, entirely locally, no new round trip. The general "calls
+   another `dynamic` function" case is a different, harder problem (needs
+   the *other* function's address, which may not be JIT'd yet) and
+   probably isn't worth solving before item 1 changes what's even
+   possible to pass between them.
+4. **`parse_ast` beyond a single expression.** Statements and multi-line
+   blocks would need deciding what "run it again" even means for a `var`
+   declaration (redeclaration the second time?) or a sequence with a
+   `return` partway through — genuine semantic design, not just wiring.
+5. **AST inspection/mutation API** (`*Ast` accessors/mutators — kind,
+   children, replace-a-node). Explicitly out of scope for v1 on purpose;
+   still "its own real sub-effort," per the original framing.
+6. **W^X fallback.** A denied `mprotect(RW→RX)` is a reported error today
+   (`std/interpcall.qela`), not a silent failure — but it's a hard error,
+   not the same clean fallback-to-`interpreted` a self-containment
+   rejection gets. Making it fall back instead is a small, mechanical
+   change once someone actually hits it on a hardened kernel; not done
+   preemptively because it's untested without one.
+7. **Respawn-on-crash policy.** Currently: if the child dies, the caller
+   reports an error and exits — chosen because a dead child loses the
+   whole session (every registered `interpreted`/`dynamic` function,
+   every cached `*Ast`). Once JIT'd `dynamic` functions stop needing the
+   child at all after their first call, "the child died" stops being
+   fatal for *those* — only for anything still routing through
+   `interpreted`/`eval`/foreign calls. Worth revisiting once real
+   programs give a sense of how often this actually matters.
