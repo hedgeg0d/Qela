@@ -1,4 +1,5 @@
 // expect-compile-error
+// stage1-only
 // "control reaches the end of a non-void function": an if without an else
 // and a `while true` that can break both fall out without returning.
 fn f(c bool) i64 {
