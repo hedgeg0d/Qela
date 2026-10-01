@@ -1,8 +1,11 @@
 # Qela: a learning guide
 
-This guide teaches you to program in Qela from zero. Everything here runs on
-the shipped compiler, S2 (`build/bootstrap/s2`). Each example is a complete
-program you can copy, compile and run.
+This guide teaches Qela from the first static executable to generics,
+concurrency, C interop, and freestanding kernels. Everything described here is
+implemented by the shipped self-hosted compiler, S2 (`build/bootstrap/s2`).
+Code blocks are either complete programs or deliberately small fragments that
+fit into the surrounding example; runnable feature specifications live in
+[`tests/`](../tests/).
 
 Qela is a compiled systems language for Linux (x86-64 by default, arm64
 and riscv64 with `--target`):
@@ -12,13 +15,11 @@ and riscv64 with `--target`):
 - **Self-hosting.** The compiler is written in Qela and compiles itself. The
   whole thing — compiler plus standard library — is one static binary under
   1 MiB.
-- **Small on purpose.** Every feature is judged by wow-effect per byte. That
-  is why there is no `interface`, no exceptions, and why the standard library
-  is a handful of small files. Floats are the exception that proves the rule:
-  `f32`/`f64` cost no calling convention — a float is raw bits in an ordinary
-  register, with SSE only at the instant of an operation. On the `extern`
-  boundary the compiler marshals scalar floats into the SysV XMM registers,
-  so floats cross into C directly.
+- **Small on purpose.** Every feature is judged by usefulness per byte. There
+  are no interfaces or exceptions, but there are generics, closures, payload
+  enums, optional dynamic values, an interpreter, a JIT path, and a readable
+  embedded standard library. The implementation details stay small without
+  shrinking the programming model.
 - **Scripting sugar on a systems core.** Interpolation with format specs,
   `x in coll`, list and map comprehensions, closures, `?` error propagation
   — Python-style conveniences that cost a few KB each — sit on top of raw
@@ -33,8 +34,34 @@ and riscv64 with `--target`):
   (`go`/`thread_pool_init`) each running its own scheduler when you actually
   want multiple cores, not just multiple stacks.
 
-The quickest way to read this guide is to keep a terminal open and run the
-examples as you go.
+Keep a terminal open and run the examples as you go. The guide uses `qela` in
+commands; substitute `./build/bootstrap/s2` when working from an uninstalled
+checkout.
+
+### Pick a route
+
+| If you want to… | Read |
+|---|---|
+| write and run a first program | [1–3: setup and execution](#1-getting-the-compiler) |
+| learn the language in order | [4–17: types through runtime checks](#4-types) |
+| build a CLI, server, or data tool | [18: standard library](#18-modules-and-the-standard-library) |
+| use async-style tasks or multiple cores | [19: coroutines](#19-coroutines-and-channels), then [20: threads](#20-real-os-threads) |
+| embed Qela, call C, or ship an object file | [C interop](#qela--c--c-interop) |
+| configure an editor or CI | [21: compiler tooling](#21-the-compiler-as-a-tool) and [24: flags](#24-compiler-flags-reference) |
+| write a kernel or bootloader | [22: raw machine code](#22-raw-machine-code) and [`examples/minios/`](../examples/minios/README.md) |
+| understand how the compiler stays self-hosted | [`BOOTSTRAP.md`](BOOTSTRAP.md) and [`STATUS.md`](STATUS.md) |
+
+### Reading conventions
+
+- `int`, `uint`, and `usize` are machine-word aliases; all current targets are
+  64-bit. Explicit-width types such as `i32` mean exactly what they say.
+- Examples use tabs because `qela fmt` does. Semicolons terminate ordinary
+  statements; trailing commas belong to declarations and match payload lists.
+- “Compile-time” means work performed by the compiler. “Runtime” means code in
+  the produced program. “Interpreted” specifically means the typed-AST engine
+  described in [§3.1](#31-qela-irun-the-interpreter).
+- Stage1-only features are available to users of S2 but unavailable to the
+  frozen C bootstrap. This distinction matters only when modifying `srcql/`.
 
 ## Contents
 
@@ -46,7 +73,7 @@ examples as you go.
 6. [Operators](#6-operators)
 7. [Control flow](#7-control-flow)
 8. [Strings](#8-strings)
-9. [Functions](#9-functions)
+9. [Functions, closures, defaults, and C declarations](#9-functions)
 10. [Pointers and memory](#10-pointers-and-memory)
 11. [Arrays and slices](#11-arrays-and-slices)
 12. [Structs](#12-structs)
@@ -58,7 +85,7 @@ examples as you go.
 18. [Modules and the standard library](#18-modules-and-the-standard-library)
 19. [Coroutines and channels](#19-coroutines-and-channels)
 20. [Real OS threads](#20-real-os-threads)
-21. [The compiler as a tool](#21-the-compiler-as-a-tool)
+21. [The compiler as a tool: test, fmt, REPL, LSP, and C objects](#21-the-compiler-as-a-tool)
 22. [Raw machine code](#22-raw-machine-code)
 23. [Where to look next](#23-where-to-look-next)
 24. [Compiler flags reference](#24-compiler-flags-reference)
@@ -66,6 +93,12 @@ examples as you go.
 ---
 
 ## 1. Getting the compiler
+
+Qela is currently alpha software and targets 64-bit Linux. Building the native
+x86-64 compiler needs GNU make, a C compiler, binutils, and Python 3. The full
+`make build` portability gate additionally expects ARM64/RISC-V cross-C
+toolchains and QEMU; those are verification dependencies, not dependencies of
+the shipped `qela` binary or of programs it produces.
 
 ```sh
 make          # build the bootstrap compiler (stage0, C)
@@ -182,7 +215,7 @@ fn main() int { return 0; }
 ```
 
 The allowed flags are `--pie`, `--backtrace`, `--no-bounds-checks`,
-`--base <addr>` and `-D NAME=VALUE` (comptime definitions, section 4.6).
+`--base <addr>` and `-D NAME=VALUE` (compile-time definitions, section 16).
 An explicit command-line flag always wins over the source, and `$flag`
 works inside `$if` — the branch that survives comptime splicing
 applies its flags:
@@ -397,11 +430,33 @@ var z = 5;          // type inferred: int
 let w = 5;          // same as `var w = 5`; `let` just requires an initializer
 ```
 
-A `var ~n = expr` declares a **dynamic** local (`std/dyn.qela`): it boxes
+### Opt-in dynamic values: `~`
+
+A `var ~n = expr` declares a **dynamic** local (backed internally by
+`std/dyn.qela`, which you do not import directly): it boxes
 any value with its type id, can change type on reassignment, and frees its
 box automatically when the block exits. Reading it back needs a cast:
 `n as i64`. The scripting escape hatch — the static type system stays the
 default, this is the explicit opt-in.
+
+```qela
+var ~value = 42;
+var n i64 = value as i64;
+value = "forty-two";          // the same variable now holds a str
+var text str = value as str;
+```
+
+`~` is a type position too: parameters accept ordinary values and box them at
+the call, struct fields and array elements retain their runtime type, and a
+`~` return boxes at the return site. Dynamic parameters are copied on entry,
+so reassigning one does not free the caller's payload. Dynamic globals,
+`extern ~`, and assigning one dynamic box directly to another are rejected.
+Use an explicit cast when you know the current type; a wrong cast fails at
+runtime rather than silently reinterpreting bytes.
+
+This is independent of `fn dynamic` and `--jit`: `~` chooses how a value is
+typed, while [dynamic functions](#32-interpreted-and-dynamic-functions) choose
+how a function body is executed.
 
 The zeroing rule is deliberate and unlike C: a local declared inside a loop
 starts clean **every** iteration. A bare `var` is never uninitialized memory.
@@ -783,7 +838,7 @@ fn main(argc int, argv **u8) int {
 }
 ```
 
-### Function values
+### Function values and anonymous functions
 
 A function name used as a value is its address, and a variable or parameter
 of a function type can carry it and be called through it:
@@ -830,7 +885,9 @@ fn pick(v i64) fn(i64) i64 {
 }
 ```
 
-**Closures.** A lambda may also capture the enclosing function's locals —
+### Closures
+
+A lambda may also capture the enclosing function's locals —
 by value, at the point the lambda is written. The closure is a one-word
 value: a tagged pointer (bit 0 set) to an arena record holding the code
 address and the captured values, so function types, the calling convention
@@ -852,7 +909,9 @@ function value is still only the address — calling a closure through a
 `fn`-typed variable works, but a plain (non-lambda) function cannot capture
 locals. Stage1-only: stage0, the frozen bootstrap, has no function values.
 
-**Default parameters.** A parameter with a `= value` initializer may be
+### Default parameters
+
+A parameter with a `= value` initializer may be
 omitted at the call site; the default expression is evaluated in the
 callee when it is:
 
@@ -866,7 +925,9 @@ greet("qela", "?");     // "hello qela?"
 
 Defaults must trail the required parameters.
 
-**Multiple assignment.** Several targets can be assigned at once; the whole
+### Multiple assignment
+
+Several targets can be assigned at once; the whole
 right side is evaluated into hidden temporaries first, so a swap needs no
 third variable:
 
@@ -877,6 +938,8 @@ a, b = b, a;               // swap: a = 2, b = 1
 a, b = 3, 4;
 p.x, p.y = p.y, p.x;       // members and indexes work too
 ```
+
+### Extern declarations and the C ABI
 
 An `extern` function declares a body that lives elsewhere — in a C file the
 system linker will pull in. `extern fn f(a i64) i64;` (no body) stays an
@@ -894,7 +957,8 @@ re-stages incoming floats out of XMM on the callee side, and returns a float
 result through `xmm0`. So `extern fn GetFrameTime() f32;` and `extern fn
 DrawCircle(x int, y int, r f32, c Color) void;` call raylib directly. An
 extern function whose parameters would spill to the stack is rejected (the
-marshalling is register-only). See `qela -c` in §20.
+marshalling is register-only). See [`qela -c`](#qela--c--c-interop) for the
+complete object-file workflow.
 
 ## 10. Pointers and memory
 
@@ -1067,7 +1131,10 @@ fn sum(xs []int) int {
 Passing a slice is the idiomatic way to hand an array (or a piece of one) to
 a function.
 
-> **Note:** A slice `[]T` is a fixed-size view (`{ptr, len}`) over contiguous memory, so elements cannot be directly appended to a raw slice. For a growable collection where elements can be added dynamically, use `Vec(T)` from `import "std/vec.qela";` with `vec_push(&v, elem)`. You can convert a vector to a slice at any time using `vec_view(&v)` (see section 19).
+> **Note:** A slice `[]T` is a fixed-size view (`{ptr, len}`) over contiguous
+> memory, so it cannot grow. Use `Vec(T)` from `std/vec.qela` when elements
+> need to be appended, then obtain a slice with `vec_view(&v)`. See
+> [the stdlib vector section](#vec--generic-growable-vector).
 
 A Vec is fully wired into the language's sugar, so it behaves like a native
 collection: `v[i]` reads (vec_get), `v[i] = x` writes (vec_set),
@@ -2073,9 +2140,10 @@ booting in QEMU.
 
 ## 24. Compiler flags reference
 
-The compiler is one binary; the subcommands (`run`, `test`, `fmt`, `repl`,
-`.`), `--lsp` and `--dump-std` are described in sections 3 and 20. This is
-the rest of the command line, flag by flag.
+The compiler is one binary; the subcommands (`run`, `irun`, `test`, `fmt`,
+`repl`, `doc`, `.`, `absorb`), `--lsp`, and `--dump-std` are introduced in
+[§3](#3-running-programs) and [§21](#21-the-compiler-as-a-tool). This section
+collects the compile flags in one place.
 
 ### Output
 
@@ -2084,11 +2152,55 @@ the rest of the command line, flag by flag.
 | *(no input flag)* | compile `file.qela` to a static executable |
 | `-o <file>` | output path; default is the input name without `.qela` |
 | `-` | read the source from stdin (as `<stdin>`) |
+| `-c` | emit a relocatable, PIE-safe object instead of an executable |
 
 ```sh
 qela hello.qela -o hello && ./hello
 echo 'fn main() int { return 7; }' | qela - -o /tmp/seven && /tmp/seven
+qela -c library.qela -o library.o
 ```
+
+### Target and image
+
+| flag | meaning |
+|---|---|
+| `--target <t>`, `-t <t>` | emit `x86_64`, `arm64`, or `riscv64`; default is the host architecture |
+| `--pie` | emit a position-independent ET_DYN executable at a kernel-chosen base |
+| `--base <addr>` | link at a fixed virtual address, primarily for kernels and boot images |
+
+`--pie` and `--base` are mutually exclusive. Object files are already
+relocatable, so neither is combined with `-c`. Custom `entry` and top-level
+image assembly also conflict with `--pie`, because they bypass its startup
+fixups. Cross-compilation changes the output architecture; it does not run the
+result for you.
+
+```sh
+qela app.qela -t arm64 -o app-arm64
+qela app.qela --pie -o app-pie
+qela . --base 0x100000 -o kernel.elf
+```
+
+### Execution model
+
+| flag | meaning |
+|---|---|
+| `--interpreted` | compile the program shell but execute all user functions through the embedded typed-AST interpreter |
+| `--jit` | make user functions dynamic: generate native code for a body on its first call |
+
+These flags apply to user functions; standard-library code remains native.
+They are whole-program shortcuts for the individual `interpreted` and
+`dynamic` function modifiers described in [§3.2](#32-interpreted-and-dynamic-functions).
+
+### Compile-time definitions
+
+| flag | meaning |
+|---|---|
+| `-D NAME=VALUE` | define a value visible to `$if` and compile-time expressions |
+
+The compiler also defines `TARGET` for the selected architecture. A source can
+carry `--pie`, `--backtrace`, `--no-bounds-checks`, `--base`, and `-D` through
+a top-level `$flag` directive; an explicit command-line option wins. This keeps
+required image settings with the source instead of in an external build file.
 
 ### Debugging
 
@@ -2115,6 +2227,7 @@ qela run crash.qela         # same, always on
 |---|---|
 | `--no-warn` | suppress warnings (unused variable, shadowed name) |
 | `--color=auto\|always\|never` | coloured diagnostics; `auto` is a tty and `NO_COLOR` unset |
+| `--version` | print the compiler version |
 | `-h`, `--help` | the full usage text |
 
 ```sh
@@ -2127,9 +2240,9 @@ qela -h
 
 - The default build is the *smallest* one: no section headers, no debug
   info. Add `-g` only when you need gdb or objdump.
-- These flags belong to the plain-compile path, which `qela .` also uses, so
-  `qela . -o out` works. `qela run` and `qela test` do **not** take them:
-  every argument after the input file goes to the program, not the compiler
-  (`qela run a.qela --no-bounds-checks` would hand the flag to `a` itself).
+- Compile flags belong before the program arguments. `qela .` uses the normal
+  compile path, so `qela . -o out` works. For `run`, `irun`, and `test`, treat
+  everything after the input as belonging to the program; `qela test` accepts
+  an explicit `--` separator when several test files are present.
 - `--dump-std <module>` prints a standard module's source — the best way to
   see exactly what a std function does.
