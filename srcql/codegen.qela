@@ -3144,6 +3144,11 @@ fn gen_panic_stub(msg_id int, msg_len i64) {
 		fmt_str(&nb, ".Lstrd");
 		fmt_i64(&nb, msg_id as i64);
 		push_reloc(at, buf_str(&nb), REL_PCREL32);
+	} else if (base_is_wide()) {
+		b1(0x48); b1(0xbe);
+		ilist_push(&panic_msg_at, code.n);
+		ilist_push(&panic_msg_ids, msg_id as i64);
+		buf_u64(&code, 0);
 	} else {
 		b1(0xbe);
 		ilist_push(&panic_msg_at, code.n);
@@ -3739,6 +3744,7 @@ fn codegen(u *Unit, img *Image) {
 		var pm_addr i64 = rodata_vaddr + bytes_off[panic_msg_ids.p[pm]];
 		if (opt_target == TARGET_RISCV64) { riscv_patch_auipc_addi(panic_msg_at.p[pm], pm_addr); }
 		else if (opt_target == TARGET_ARM64) { arm64_patch_movz_movk_addr(panic_msg_at.p[pm], pm_addr); }
+		else if (base_is_wide()) { patch64(&code, panic_msg_at.p[pm], pm_addr); }
 		else { buf_patch32(&code, panic_msg_at.p[pm], pm_addr); }
 		pm = pm + 1;
 	}
