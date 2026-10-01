@@ -35,9 +35,9 @@ fn dyn_store(name str, ptr i64) {
 
 fn interp_jit_compile(name str) i64 {
 	abi_send_frame(abi_in, ABI_REQ_JIT as u8, name.ptr, name.len);
-	var buf [4096]u8;
+	var buf [8192]u8;
 	var kind u8 = 0;
-	var n i64 = abi_wait_result(&kind, &buf[0], 4096);
+	var n i64 = abi_wait_result(&kind, &buf[0], 8192);
 	if (n < 0) {
 		eprint("dynamic: the qela subprocess died compiling '");
 		eprint(name);
@@ -45,15 +45,29 @@ fn interp_jit_compile(name str) i64 {
 		sys_exit(1);
 	}
 	if (kind == (ABI_RESP_ERR as u8)) { return -1; }
-	var addr i64 = sys_mmap_anon(4096);
+	// Payload: [u32 slot count][u32 slot offsets][code]. A self-call's
+	// rel32 is fixed once the code sits at a known address: the call lands
+	// at slot, the next instruction at slot + 4, and the target is the
+	// function itself at offset 0, so rel32 = -(slot + 4). Patched locally,
+	// no second round trip.
+	var nslots i64 = *(&buf[0] as *u32) as i64;
+	var body i64 = 4 + 4 * nslots;
+	var addr i64 = sys_mmap_anon(8192);
 	if (addr < 0) {
 		eprint("dynamic: mmap failed\n");
 		sys_exit(1);
 	}
 	var dst *u8 = addr as *u8;
 	var i i64 = 0;
-	while (i < n) { dst[i] = buf[i]; i = i + 1; }
-	if (sys_mprotect(addr, 4096, 5) != 0) {
+	while (i < n - body) { dst[i] = buf[body + i]; i = i + 1; }
+	var j i64 = 0;
+	while (j < nslots) {
+		var slot i64 = *(&buf[4 + 4 * j] as *u32) as i64;
+		var rel *u8 = dst + slot;
+		*(rel as *i32) = -((slot as i32) + 4) as i32;
+		j = j + 1;
+	}
+	if (sys_mprotect(addr, 8192, 5) != 0) {
 		eprint("dynamic: mprotect failed\n");
 		sys_exit(1);
 	}

@@ -1429,6 +1429,13 @@ fn type_call(n *Node) {
 	if (type_intrinsic(n)) { return; }
 	if (n.varp as i64 != 0) { type_indirect_call(n); return; }
 	var f *Func = find_func(n.name);
+	// A function is appended to the table only after its own body parses,
+	// so a self-call inside a saved `interp_body` (typed mid-parse by
+	// interp_synthesize_trampoline) would resolve as undefined. The
+	// function being parsed is exactly the one that call means.
+	if (f as i64 == 0 && cur_func as i64 != 0 && str_eq(cur_func.name, n.name)) {
+		f = cur_func;
+	}
 	if (f as i64 == 0 && type_abi_mode) {
 		if (n.nargs > 6) {
 			emsg("'"); emsg(n.name); emsg("' is not a local function, and a host call over the eval ABI takes at most six arguments"); efail(n.pos);
@@ -1651,6 +1658,9 @@ fn add_type(n *Node) {
 	if (k == ND_VAR) { n.ty = n.varp.ty; return; }
 	if (k == ND_FUNCADDR) {
 		var f *Func = find_func(n.name);
+		if (f as i64 == 0 && cur_func as i64 != 0 && str_eq(cur_func.name, n.name)) {
+			f = cur_func;
+		}
 		if (f as i64 == 0 && type_abi_mode) {
 			n.foreign = true;
 			n.ty = ty_i64;
