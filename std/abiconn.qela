@@ -129,21 +129,27 @@ fn abi_serve_host_req(kind u8, buf *u8, n i64) {
 		var gname str;
 		gname.ptr = buf;
 		gname.len = n;
-		var gr i64 = __eval_get_dispatch(gname);
-		var grb [8]u8;
-		*(&grb[0] as *i64) = gr;
-		abi_send_frame(abi_in, 1 as u8, &grb[0], 8);
+		var gr str = __eval_get_dispatch(gname);
+		if (gr.len == 0) {
+			// An unknown name reads as zero, as it always has: the
+			// dispatcher's empty payload would leave the caller's buffer
+			// untouched, so answer the old 8 zero bytes explicitly.
+			var zb [8]u8;
+			*(&zb[0] as *i64) = 0;
+			abi_send_frame(abi_in, 1 as u8, &zb[0], 8);
+			return;
+		}
+		abi_send_frame(abi_in, 1 as u8, gr.ptr, gr.len);
 		return;
 	}
 	if (kind == 5) {
-		if (n < 9) { return; }
+		if (n < 1) { return; }
 		var snlen i64 = buf[0] as i64;
-		if (n < 1 + snlen + 8) { return; }
+		if (n < 1 + snlen) { return; }
 		var sname str;
 		sname.ptr = buf + 1;
 		sname.len = snlen;
-		var sv i64 = abi_decode_u64(buf + 1 + snlen);
-		__eval_set_dispatch(sname, sv);
+		__eval_set_dispatch(sname, buf + 1 + snlen);
 		var srb [8]u8;
 		*(&srb[0] as *i64) = 0;
 		abi_send_frame(abi_in, 1 as u8, &srb[0], 8);
