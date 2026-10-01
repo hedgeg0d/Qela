@@ -2280,6 +2280,14 @@ var gen_frameless bool;
 // STXR's status register keeps the CMP's EQ flag alive for the result.
 fn gen_atomic_cas(n *Node) {
 	gen_args(n, false, false, -1, false);    // ptr->X0, expected->X1, new->X2
+	// gen_args only appends IR; code.n has to reflect the actually-flushed
+	// byte position before it's captured as the retry loop's target, or a
+	// STXR failure retries into whatever code happened to follow instead of
+	// back to the LDXR (found by a spurious STXR failure on real hardware --
+	// architecturally permitted even with no real contention, but something
+	// qemu-aarch64's user-mode emulation never produces, so this was
+	// invisible under qemu).
+	ir_flush();
 	var top i64 = code.n;
 	arm64_ldxr(X9, X0);                      // x9 = old
 	arm64_cmp_reg(X9, X1);
@@ -2293,6 +2301,7 @@ fn gen_atomic_cas(n *Node) {
 // atomic_add(ptr, val) -> old value.
 fn gen_atomic_add(n *Node) {
 	gen_args(n, false, false, -1, false);    // ptr->X0, val->X1
+	ir_flush();
 	var top i64 = code.n;
 	arm64_ldxr(X9, X0);                      // x9 = old
 	arm64_alu_reg(ALU_ADD, X10, X9, X1);     // x10 = old + val
