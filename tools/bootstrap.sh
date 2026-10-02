@@ -332,6 +332,56 @@ EOF
 printf '    ok\n'
 
 
+step "interpreted functions calling each other"
+cat > "$tmp2/interpchain.qela" <<'EOF'
+import "std/io.qela";
+fn interpreted square(x i64) i64 {
+	return x * x;
+}
+fn interpreted quad(x i64) i64 {
+	return square(square(x));
+}
+fn main() int {
+	write_str(STDOUT, "r=${quad(2)}\n");
+	return 0;
+}
+EOF
+( cd "$tmp2" &&
+  "$root/$OUT/s2" interpchain.qela -o interpchain &&
+  [ "$(QELAPATH="$root/$OUT/s2" ./interpchain)" = "r=16" ] &&
+  [ "$(QELAPATH="$root/$OUT/s2" "$root/$OUT/s2" irun interpchain.qela)" = "r=16" ] ) ||
+	fail "one interpreted function cannot call another"
+printf '    ok\n'
+
+
+step "--interpreted and --jit global flags"
+cat > "$tmp2/globalflag.qela" <<'EOF'
+import "std/io.qela";
+fn square(x i64) i64 {
+	return x * x;
+}
+fn add3(a i64, b i64, c i64) i64 {
+	return a + b + c;
+}
+fn main() int {
+	var s i64 = square(7);
+	var t i64 = add3(1, 2, 3);
+	fmt_i64_to_fd(STDOUT, s);
+	write_str(STDOUT, " ");
+	fmt_i64_to_fd(STDOUT, t);
+	write_str(STDOUT, "\n");
+	return 0;
+}
+EOF
+( cd "$tmp2" &&
+  "$root/$OUT/s2" --interpreted globalflag.qela -o globalflag_i &&
+  [ "$(QELAPATH="$root/$OUT/s2" ./globalflag_i)" = "49 6" ] &&
+  "$root/$OUT/s2" --jit globalflag.qela -o globalflag_j &&
+  [ "$(QELAPATH="$root/$OUT/s2" ./globalflag_j)" = "49 6" ] ) ||
+	fail "--interpreted or --jit does not force every function through the abi"
+printf '    ok\n'
+
+
 step "stdin compile and shebang"
 cat > "$tmp2/btcrash.qela" <<'EOF'
 fn deep(n i64) i64 {
