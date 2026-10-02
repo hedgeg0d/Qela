@@ -1,9 +1,11 @@
 // expect-exit: 97
 // The loop condition already proves these accesses in bounds, so the
 // duplicate check is dropped: the while shape with the init right before
-// it, the for-in desugar and the C-style for. The sieve still counts 97
-// primes below 512, and the non-elided inner loop (increment by a
-// variable) keeps its check and still works.
+// it, the for-in desugar and the C-style for. The inner loop's increment by
+// a variable is elided as well now that the enclosing loop bounds that
+// variable -- tests/boundsstep.qela pins the shape, tests/boundsnegstep.qela
+// the step that must keep its check. The sieve still counts 97 primes below
+// 512.
 var flags [512]u8;
 fn main() int {
 	var i int = 0;

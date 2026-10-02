@@ -2,26 +2,57 @@ import "comp.qela";
 import "type.qela";
 
 // Elides the bounds check on an array access the enclosing loop already
-// proves safe. Sound only for the exact shape:
+// proves safe. Sound only for shapes where the loop variable starts
+// non-negative and never moves backwards:
 //
-//   for (i = c; i < K; i += 1) { ... a[i] ... }     c >= 0, len(a) == K
-//   i = c;                                          c >= 0
-//   while (i < K) { ... a[i] ...; i += 1; }
+//   for (i = c; i < K; i += s) { ... a[i] ... }   c >= 0, s >= 0, len(a) == K
+//   i = c;                                        c >= 0
+//   while (i < K) { ... a[i] ...; i += s; }
 //
 // The condition is `i < K` with K a literal equal to the array's length, so
 // the loop already proves the upper bound at the top of the body. The lower
-// bound is induction: the entry value is a constant c >= 0, the increment is
-// exactly +1, and it only runs while i < K, so i + 1 cannot wrap (K is an
-// i64 literal, so K <= 2^63 - 1). The body must not write i anywhere else,
-// and taking i's address would let a write slip through a pointer, so loops
-// of a var whose address is taken anywhere in the function are never
-// elided. For the while shape the access must precede the increment.
+// bound is induction: the entry is a non-negative expression, the step is
+// non-negative, and the step only runs after the test held, so i + s cannot
+// wrap as long as K + (bound of s) <= 2^63 - 1. A step that may be negative,
+// or large enough to wrap, keeps its check -- that is the whole argument.
+//
+// `s` is a literal, or a variable whose bound came from an enclosing loop
+// that was itself elided:
+//
+//   while (i < K) { var j = i + i; while (j < K) { a[j]; j = j + i; } }
+//
+// elides the inner access because 0 <= i < K holds across the outer body,
+// and so at every point the inner loop reads i. The body must not write i
+// anywhere else, and taking i's address would let a write slip through a
+// pointer, so loops of a var whose address is taken anywhere in the function
+// are never elided. For the while shape the access must precede the
+// increment.
+
+// 2^63 - 1, the largest i64: the no-wrap rule above is stated against it.
+let NN_MAX = 9223372036854775807;
+
+// A variable proven to satisfy 0 <= v < ub by an enclosing elided loop.
+struct Nn {
+	v  *Var,
+	ub i64,
+}
+
+// The ranges in force, innermost last. `n` is a length passed by value, so
+// appending at index n is invisible to the caller's own prefix.
+struct NnEnv {
+	slots *Nn,
+	n     int,
+}
 
 fn elide_bounds(f *Func) {
 	var taken [64]*Var;
 	var ntaken int = 0;
+	var slots [64]Nn;
+	var env NnEnv;
+	env.slots = &slots[0];
+	env.n = 0;
 	ntaken = addr_scan(f.body, &taken[0], ntaken);
-	elide_chain(f.body, null, &taken[0], ntaken);
+	elide_chain(f.body, null, &taken[0], ntaken, env);
 }
 
 // ── address-of scan ──
@@ -69,73 +100,111 @@ fn addr_node(n *Node, taken **Var, ntaken int) int {
 	return addr_scan(n.args, taken, ntaken);
 }
 
+// ── non-negative ranges from enclosing elided loops ──
+
+fn nn_find(env NnEnv, v *Var) i64 {
+	var i int = 0;
+	while (i < env.n) {
+		if (env.slots[i].v == v) { return env.slots[i].ub; }
+		i = i + 1;
+	}
+	return -1;
+}
+
+// The bound of an expression proven non-negative, or -1 when there is no
+// such proof (or when the sum itself could overflow).
+fn nn_ub(e *Node, env NnEnv) i64 {
+	if (e as i64 == 0) { return -1; }
+	if (e.kind == ND_NUM) { if (e.val < 0) { return -1; } return e.val; }
+	if (e.kind == ND_VAR) { return nn_find(env, e.varp); }
+	if (e.kind == ND_ADD) {
+		var a i64 = nn_ub(e.lhs, env);
+		if (a < 0) { return -1; }
+		var b i64 = nn_ub(e.rhs, env);
+		if (b < 0) { return -1; }
+		if (a > NN_MAX - b) { return -1; }
+		return a + b;
+	}
+	return -1;
+}
+
 // ── the walk over statements, tracking the previous one ──
 
-fn elide_chain(n *Node, prev *Node, taken **Var, ntaken int) {
+fn elide_chain(n *Node, prev *Node, taken **Var, ntaken int, env NnEnv) {
 	while (n as i64 != 0) {
-		elide_stmt(n, prev, taken, ntaken);
+		elide_stmt(n, prev, taken, ntaken, env);
 		prev = n;
 		n = n.next;
 	}
 }
 
-fn elide_stmt(n *Node, prev *Node, taken **Var, ntaken int) {
+fn elide_stmt(n *Node, prev *Node, taken **Var, ntaken int, env NnEnv) {
 	if (n.kind == ND_FOR) {
-		elide_loop(n, prev, taken, ntaken);
-		elide_chain(n.body, null, taken, ntaken);
+		elide_loop(n, prev, taken, ntaken, env);
 	} else if (n.kind == ND_BLOCK) {
-		elide_chain(n.body, null, taken, ntaken);
+		elide_chain(n.body, null, taken, ntaken, env);
 	} else if (n.kind == ND_IF) {
-		elide_chain(n.then, null, taken, ntaken);
-		elide_chain(n.els, null, taken, ntaken);
+		elide_chain(n.then, null, taken, ntaken, env);
+		elide_chain(n.els, null, taken, ntaken, env);
 	} else if (n.kind == ND_DEFER) {
-		elide_chain(n.lhs, null, taken, ntaken);
+		elide_chain(n.lhs, null, taken, ntaken, env);
 	} else if (n.kind == ND_MATCH) {
-		elide_chain(n.body, null, taken, ntaken);
+		elide_chain(n.body, null, taken, ntaken, env);
 	} else if (n.kind == ND_ARM) {
-		elide_chain(n.body, null, taken, ntaken);
+		elide_chain(n.body, null, taken, ntaken, env);
 	}
 }
 
 // ── pattern pieces ──
 
-// The entry: `i = c` or `var i = c` or a bare `var i` (zeroed), c >= 0.
-fn entry_const(st *Node, iv *Var) bool {
-	if (st as i64 == 0 || st.kind != ND_EXPRSTMT) { return false; }
+// The entry: `i = e`, `var i = e` or a bare `var i` (zeroed). Returns the
+// non-negative bound of e, or -1 when e is not provably non-negative.
+fn entry_ub(st *Node, iv *Var, env NnEnv) i64 {
+	if (st as i64 == 0 || st.kind != ND_EXPRSTMT) { return -1; }
 	var a *Node = st.lhs;
 	if (a.kind == ND_ZERO) {
-		return (a.varp as i64) == (iv as i64);
+		if (a.varp == iv) { return 0; }
+		return -1;
 	}
-	if (a.kind != ND_ASSIGN || a.lhs.kind != ND_VAR) { return false; }
-	if ((a.lhs.varp as i64) != (iv as i64) || a.rhs.kind != ND_NUM) { return false; }
-	return a.rhs.val >= 0;
+	if (a.kind != ND_ASSIGN) { return -1; }
+	if (a.lhs.kind != ND_VAR && a.lhs.kind != ND_ZERO) { return -1; }
+	if (a.lhs.varp != iv) { return -1; }
+	return nn_ub(a.rhs, env);
 }
 
-// `i = i + 1` or `i += 1`.
-fn step_add1(st *Node, iv *Var) bool {
-	if (st as i64 == 0) { return false; }
+// `i = i + s` or `i += s`. Returns the non-negative bound of s, or -1; *sv
+// is s itself when it is a bare variable, so that the caller can require
+// that nothing in the loop writes it.
+fn step_ub(st *Node, iv *Var, env NnEnv, sv **Var) i64 {
+	*sv = null;
+	if (st as i64 == 0) { return -1; }
+	var e *Node = null;
 	if (st.kind == ND_ASSIGN) {
-		if (st.lhs.kind != ND_VAR || (st.lhs.varp as i64) != (iv as i64)) { return false; }
-		if (st.rhs.kind != ND_ADD || st.rhs.lhs.kind != ND_VAR) { return false; }
-		if ((st.rhs.lhs.varp as i64) != (iv as i64)) { return false; }
-		return st.rhs.rhs.kind == ND_NUM && st.rhs.rhs.val == 1;
+		if (st.lhs.kind != ND_VAR || st.lhs.varp != iv) { return -1; }
+		if (st.rhs.kind != ND_ADD || st.rhs.lhs.kind != ND_VAR) { return -1; }
+		if (st.rhs.lhs.varp != iv) { return -1; }
+		e = st.rhs.rhs;
+	} else if (st.kind == ND_OPASSIGN) {
+		if (st.val != ND_ADD) { return -1; }
+		if (st.lhs.kind != ND_VAR || st.lhs.varp != iv) { return -1; }
+		e = st.rhs;
+	} else {
+		return -1;
 	}
-	if (st.kind != ND_OPASSIGN) { return false; }
-	if (st.val != ND_ADD) { return false; }
-	if (st.lhs.kind != ND_VAR || (st.lhs.varp as i64) != (iv as i64)) { return false; }
-	return st.rhs.kind == ND_NUM && st.rhs.val == 1;
+	if (e.kind == ND_VAR) { *sv = e.varp; }
+	return nn_ub(e, env);
 }
 
 fn is_iwrite(st *Node, iv *Var) bool {
 	if (st.kind != ND_EXPRSTMT) { return false; }
 	var a *Node = st.lhs;
 	if (a.kind != ND_ASSIGN && a.kind != ND_OPASSIGN) { return false; }
-	return a.lhs.kind == ND_VAR && (a.lhs.varp as i64) == (iv as i64);
+	return a.lhs.kind == ND_VAR && a.lhs.varp == iv;
 }
 
 fn node_write(n *Node, iv *Var) bool {
 	if (n.kind == ND_ASSIGN || n.kind == ND_OPASSIGN) {
-		if (n.lhs.kind == ND_VAR && (n.lhs.varp as i64) == (iv as i64)) { return true; }
+		if (n.lhs.kind == ND_VAR && n.lhs.varp == iv) { return true; }
 	}
 	return false;
 }
@@ -164,15 +233,17 @@ fn field_scan(n *Node, iv *Var) bool {
 }
 
 // For the while shape: the increment must be a top-level statement of the
-// block, shaped `i = i + 1` / `i += 1`, and it must be the only write to i.
-fn body_inc(n *Node, iv *Var, out **Node) bool {
+// block, shaped `i = i + s` / `i += s` (step_ub proves the form), and it
+// must be the only write to i. The statement comes back through *out.
+fn body_inc(n *Node, iv *Var, env NnEnv, out **Node) bool {
 	if (n.kind != ND_BLOCK) { return false; }
 	var found *Node = null;
 	var i *Node = n.body;
 	while (i as i64 != 0) {
 		if (is_iwrite(i, iv)) {
 			if (found as i64 != 0) { return false; }
-			if (!stmt_add1(i, iv)) { return false; }
+			var tsv *Var = null;
+			if (step_ub(i.lhs, iv, env, &tsv) < 0) { return false; }
 			found = i;
 		} else {
 			if (field_scan(i, iv)) { return false; }
@@ -184,36 +255,92 @@ fn body_inc(n *Node, iv *Var, out **Node) bool {
 	return true;
 }
 
-fn stmt_add1(st *Node, iv *Var) bool {
-	if (st.kind != ND_EXPRSTMT) { return false; }
-	return step_add1(st.lhs, iv);
-}
-
 // ── the loop itself ──
 
-fn elide_loop(n *Node, prev *Node, taken **Var, ntaken int) {
-	if (n.cond as i64 == 0 || n.cond.kind != ND_LT) { return; }
-	if (n.cond.lhs.kind != ND_VAR || n.cond.rhs.kind != ND_NUM) { return; }
-	var iv *Var = n.cond.lhs.varp;
-	var K i64 = n.cond.rhs.val;
-	if (K < 0) { return; }
-	if (iv.is_global) { return; }
-	if (addr_taken(taken, ntaken, iv)) { return; }
+fn elide_loop(n *Node, prev *Node, taken **Var, ntaken int, env NnEnv) {
+	var iv *Var = null;
+	var K i64 = 0;
+	var inc *Node = null;
+	var sub i64 = 0;
+	var sv *Var = null;
+	var elide bool = false;
 
-	if (n.init as i64 != 0) {
-		if (!entry_const(n.init, iv)) { return; }
-	} else {
-		if (!entry_const(prev, iv)) { return; }
+	if (n.cond as i64 != 0 && n.cond.kind == ND_LT && n.cond.lhs.kind == ND_VAR &&
+	    n.cond.rhs.kind == ND_NUM && n.cond.rhs.val >= 0) {
+		var c *Var = n.cond.lhs.varp;
+		var k i64 = n.cond.rhs.val;
+		if (!c.is_global && !addr_taken(taken, ntaken, c)) {
+			var eub i64 = -1;
+			if (n.init as i64 != 0) { eub = entry_ub(n.init, c, env); }
+			else { eub = entry_ub(prev, c, env); }
+			if (eub >= 0) {
+				if (n.step as i64 != 0) {
+					var s i64 = step_ub(n.step, c, env, &sv);
+					if (s >= 0 && !scan_write(n.body, c)) {
+						iv = c; K = k; sub = s; elide = true;
+					}
+				} else if (body_inc(n.body, c, env, &inc)) {
+					var ssv *Var = null;
+					var s i64 = step_ub(inc.lhs, c, env, &ssv);
+					if (s >= 0) {
+						iv = c; K = k; sub = s; sv = ssv; elide = true;
+					}
+				}
+			}
+		}
 	}
 
+	if (elide) {
+		// The step runs only after the test held, i.e. with i < K, so
+		// i + s <= K - 1 + sub has to stay inside i64 for the induction to
+		// be valid. A step variable the loop itself writes could be made
+		// negative there, so it must be left alone.
+		if (sub > NN_MAX - K) { elide = false; }
+	}
+	if (elide && sv as i64 != 0) {
+		if (scan_write(n.body, sv)) { elide = false; }
+		if (n.step as i64 != 0 && scan_write(n.step, sv)) { elide = false; }
+	}
+
+	if (elide) {
+		if (n.step as i64 != 0) { mark_chain(n.body, iv, K); }
+		else { mark_until(n.body, iv, K, inc); }
+	}
+	if (!elide) {
+		elide_chain(n.body, null, taken, ntaken, env);
+		return;
+	}
+
+	// Nested loops. The elided variable's range holds across a for shape's
+	// whole body, but only up to the increment for a while shape -- past it
+	// the variable has already stepped -- so the body gets the extended
+	// ranges in the first case, and only the statements before the increment
+	// do in the second. Everything else keeps the parent's ranges.
+	var env2 NnEnv;
+	env2.slots = env.slots;
+	env2.n = env.n;
+	if (env.n < 64) {
+		env2.slots[env.n].v = iv;
+		env2.slots[env.n].ub = K;
+		env2.n = env.n + 1;
+	}
 	if (n.step as i64 != 0) {
-		if (!step_add1(n.step, iv)) { return; }
-		if (scan_write(n.body, iv)) { return; }
-		mark_chain(n.body, iv, K);
-	} else {
-		var inc *Node = null;
-		if (!body_inc(n.body, iv, &inc)) { return; }
-		mark_until(n.body, iv, K, inc);
+		elide_chain(n.body, null, taken, ntaken, env2);
+		return;
+	}
+	var blk *Node = n.body;
+	var i *Node = blk.body;
+	var p *Node = null;
+	while (i as i64 != 0 && i != inc) {
+		elide_stmt(i, p, taken, ntaken, env2);
+		p = i;
+		i = i.next;
+	}
+	p = null;
+	while (i as i64 != 0) {
+		elide_stmt(i, p, taken, ntaken, env);
+		p = i;
+		i = i.next;
 	}
 }
 
@@ -227,7 +354,7 @@ fn mark_chain(n *Node, iv *Var, K i64) {
 }
 
 fn mark_node(n *Node, iv *Var, K i64) {
-	if (n.kind == ND_INDEX && n.rhs.kind == ND_VAR && (n.rhs.varp as i64) == (iv as i64) &&
+	if (n.kind == ND_INDEX && n.rhs.kind == ND_VAR && n.rhs.varp == iv &&
 	    n.lhs.ty as i64 != 0 && n.lhs.ty.kind == TY_ARRAY && n.lhs.ty.len == K) {
 		n.nobounds = true;
 	}
