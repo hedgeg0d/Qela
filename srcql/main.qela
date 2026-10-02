@@ -2156,10 +2156,6 @@ fn cmd_abi_server(argc int, argv **u8) int {
 			// and skips this.
 			if (acls == REPL_PATH_STMT) {
 				var cap *Node = ast_take_tail_expr(&anode);
-				// An enum tail is skipped: an enum is an aggregate, so
-				// `(lvl) as i64` would hand over its address, not its
-				// tag (the compiler has no enum-to-int cast).
-				if (cap as i64 != 0 && cap.ty.kind == TY_ENUM) { cap = 0 as *Node; }
 				if (cap as i64 != 0) {
 					var tvn *Node = new_node(ND_VAR, 0);
 					tvn.varp = result_var;
