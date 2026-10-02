@@ -1,0 +1,10 @@
+// expect-compile-error
+// stage1-only
+// A multi-assignment needs exactly one right-hand value per left-hand
+// target.
+fn main() int {
+	var a i64 = 0;
+	var b i64 = 0;
+	a, b = 1, 2, 3;
+	return 0;
+}
