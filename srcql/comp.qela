@@ -237,6 +237,10 @@ struct Var {
 	// every non-parameter Var and for a parameter with no default.
 	default   *Node,
 	eval_export bool,
+	// Set on the hidden frame temp an array literal writes into (only
+	// type_arrlit sets it); coerce uses it to re-back a literal onto the
+	// arena when the literal coerces to an escaping slice.
+	lit_temp  bool,
 	reachable bool,
 }
 
