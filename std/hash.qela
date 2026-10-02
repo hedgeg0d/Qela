@@ -1,0 +1,37 @@
+// Small non-cryptographic hashes: FNV-1a 64-bit and CRC-32 (IEEE 802.3).
+
+fn hash_fnv1a(s str) i64 {
+	var h i64 = -3750763034362895579;
+	var i i64 = 0;
+	while (i < s.len) {
+		h = (h ^ (s.ptr[i] as i64)) * 0x100000001b3;
+		i = i + 1;
+	}
+	return h;
+}
+
+fn hash_fnv1a_bytes(p *u8, n i64) i64 {
+	var h i64 = -3750763034362895579;
+	var i i64 = 0;
+	while (i < n) {
+		h = (h ^ (p[i] as i64)) * 0x100000001b3;
+		i = i + 1;
+	}
+	return h;
+}
+
+fn hash_crc32(s str) i64 {
+	var c i64 = 0xffffffff;
+	var i i64 = 0;
+	while (i < s.len) {
+		c = c ^ (s.ptr[i] as i64);
+		var k int = 0;
+		while (k < 8) {
+			if ((c & 1) != 0) { c = (c >> 1) ^ 0xedb88320; }
+			else { c = c >> 1; }
+			k = k + 1;
+		}
+		i = i + 1;
+	}
+	return c ^ 0xffffffff;
+}
