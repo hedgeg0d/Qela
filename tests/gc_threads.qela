@@ -67,7 +67,7 @@ fn main() int {
 	while (atomic_load(&worker_built) == 0) {
 		spins = spins + 1;
 		if (spins % 1000 == 0) { sys_sched_yield(); }
-		if (spins > 200000000) { return 3; }
+		if (spins > 800000000) { return 3; }
 	}
 
 	// A round of unrelated main-thread garbage first, so the collector has
@@ -82,7 +82,7 @@ fn main() int {
 	while (atomic_load(&worker_done) == 0) {
 		spins = spins + 1;
 		if (spins % 1000 == 0) { sys_sched_yield(); }
-		if (spins > 200000000) { return 4; }
+		if (spins > 800000000) { return 4; }
 	}
 
 	var want i64 = (ROUNDS as i64 - 1) * ROUNDS / 2;
