@@ -1,8 +1,11 @@
 import "sys.qela";
+import "arena.qela";
 import "abiwire.qela";
 import "abiconn.qela";
 
 let ABI_REQ_RUN = 1;
+let ABI_REQ_PARSE = 7;
+let ABI_REQ_RUN_AST = 8;
 let ABI_RESP_ERR = 2;
 
 fn eval(src str) i64 {
@@ -17,6 +20,49 @@ fn eval(src str) i64 {
 	}
 	if (kind == (ABI_RESP_ERR as u8)) {
 		eprint("eval: compile or runtime error in the evaluated source\n");
+		sys_exit(1);
+	}
+	return *(&buf[0] as *i64);
+}
+
+struct Ast;
+struct Ast {
+	id i64,
+}
+
+fn parse_ast(src str) *Ast {
+	abi_spawn();
+	abi_send_frame(abi_in, ABI_REQ_PARSE as u8, src.ptr, src.len);
+	var buf [8]u8;
+	var kind u8 = 0;
+	var n i64 = abi_wait_result(&kind, &buf[0], 8);
+	if (n < 0) {
+		eprint("parse_ast: the qela subprocess died\n");
+		sys_exit(1);
+	}
+	if (kind == (ABI_RESP_ERR as u8)) {
+		eprint("parse_ast: could not parse the source (only a single expression is supported)\n");
+		sys_exit(1);
+	}
+	var a *Ast = arena_alloc(sizeof(Ast), 8) as *Ast;
+	a.id = *(&buf[0] as *i64);
+	return a;
+}
+
+fn run_ast(a *Ast) i64 {
+	abi_spawn();
+	var hb [8]u8;
+	*(&hb[0] as *i64) = a.id;
+	abi_send_frame(abi_in, ABI_REQ_RUN_AST as u8, &hb[0], 8);
+	var buf [8]u8;
+	var kind u8 = 0;
+	var n i64 = abi_wait_result(&kind, &buf[0], 8);
+	if (n < 0) {
+		eprint("run_ast: the qela subprocess died\n");
+		sys_exit(1);
+	}
+	if (kind == (ABI_RESP_ERR as u8)) {
+		eprint("run_ast: runtime error, or an unknown ast handle\n");
 		sys_exit(1);
 	}
 	return *(&buf[0] as *i64);
