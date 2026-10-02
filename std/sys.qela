@@ -20,6 +20,7 @@ let SYS_MUNMAP = 11;
 let SYS_CLONE = 56;
 let SYS_ARCH_PRCTL = 158;
 let SYS_FUTEX = 202;
+let SYS_SCHED_YIELD = 24;
 
 $if (TARGET == "arm64") {
 let SYS_READ_N  = 63;
@@ -39,6 +40,7 @@ let SYS_IOCTL_N = 29;
 let SYS_MUNMAP_N = 215;
 let SYS_CLONE_N = 220;
 let SYS_FUTEX_N = 98;
+let SYS_SCHED_YIELD_N = 124;
 let AT_FDCWD = -100;
 }
 
@@ -142,6 +144,16 @@ fn sys_futex(uaddr *i64, op i64, val i64, timeout i64) i64 {
 		return syscall(SYS_FUTEX_N, uaddr as i64, op, val, timeout, 0, 0);
 	}
 	return syscall(SYS_FUTEX, uaddr as i64, op, val, timeout, 0, 0);
+}
+
+// Gives up the rest of this thread's timeslice, so a spin-wait doesn't
+// starve another thread of the core it needs to make progress.
+fn sys_sched_yield() {
+	$if (TARGET == "arm64") {
+		syscall(SYS_SCHED_YIELD_N, 0, 0, 0, 0, 0, 0);
+		return;
+	}
+	syscall(SYS_SCHED_YIELD, 0, 0, 0, 0, 0, 0);
 }
 
 fn sys_exit(code i64) {
