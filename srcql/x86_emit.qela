@@ -45,7 +45,7 @@ fn ilist_set(l *I64List, i i64, v i64) {
 
 
 struct CallFixup;
-struct CallFixup { next *CallFixup, at i64, name str, pos i64, }
+struct CallFixup { next *CallFixup, at i64, name str, pos i64, abs32 bool, }
 
 
 struct StrFixup;
@@ -267,7 +267,22 @@ fn rbp_mem(op i64, reg int, disp i64) {
 		b1(disp);
 	} else {
 		modrm(2, reg, RBP);
-		b4(disp);
+		b4(disp);	}
+}
+
+
+// mov reg, [rsp + disp8] (op 0x8b) or mov [rsp + disp8], reg (op 0x89).
+// Unlike rbp_mem, rm=4 forces a SIB byte; disp must fit in 8 bits.
+fn rsp_mem(op i64, reg int, disp i64) {
+	rex_w(reg, RSP);
+	b1(op);
+	if (disp == 0) {
+		modrm(0, reg, RSP);
+		b1(0x24);
+	} else {
+		modrm(1, reg, RSP);
+		b1(0x24);
+		b1(disp);
 	}
 }
 
@@ -476,6 +491,22 @@ fn add_absref(name str, pos i64) {
 	if (asmrefs_tail as i64 == 0) { asmrefs_head = f; } else { asmrefs_tail.next = f; }
 	asmrefs_tail = f;
 	if (opt_object) { push_reloc(f.at, name, REL_ABS64); }
+}
+
+
+// `$abs name` in asm operands: the same absolute address as `$name`, but
+// in a 4-byte slot -- for 32-bit code, where the 8-byte form would spill
+// into the following instructions.
+fn add_absref32(name str, pos i64) {
+	b4(0);
+	var f *CallFixup = arena_alloc(sizeof(CallFixup), 8) as *CallFixup;
+	f.at = code.n - 4;
+	f.name = name;
+	f.pos = pos;
+	f.abs32 = true;
+	if (asmrefs_tail as i64 == 0) { asmrefs_head = f; } else { asmrefs_tail.next = f; }
+	asmrefs_tail = f;
+	if (opt_object) { push_reloc(f.at, name, REL_ABS32S); }
 }
 
 
