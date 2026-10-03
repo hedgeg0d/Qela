@@ -1921,8 +1921,8 @@ fn ir_cmp_rm_imm(n *Node, v i64, pos i64) {
 }
 
 
-// cmp <width> [rax], imm -- gen_compare's addressable_load path; gen_addr put
-// the address in the accumulator.
+// cmp <width> [rax], imm -- gen_compare consumes only the flags. The
+// accumulator's address is dead afterwards, allowing address/load fusion.
 fn ir_cmp_at_acc_imm(ty *Type, v i64, pos i64) {
 	var op *IrOp = ir_emit(IR_CMP, pos);
 	op.src0 = operand_mem(0, ty);
