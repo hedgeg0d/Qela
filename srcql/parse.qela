@@ -3112,6 +3112,15 @@ fn parse_generator_rewrite(f *Func) {
 	}
 	set_func_param(hf, f.nparams, gen_g_var);
 	hf.body = gen_rewrite(f.body, f, hf);
+	// Directed generator switches name a local coroutine slot. Keep that
+	// coroutine on its spawning worker even if its body calls coro_yield.
+	var pin *Node = new_node(ND_CALL, f.pos);
+	pin.name = "coro_pin";
+	pin.nargs = 0;
+	var pes *Node = new_node(ND_EXPRSTMT, f.pos);
+	pes.lhs = pin;
+	pes.next = hf.body.body;
+	hf.body.body = pes;
 	// The body must end by switching back to the consumer even when it
 	// falls off the end, or the coroutine trampoline's round-robin
 	// coro_finish would switch away from the wrong context.
