@@ -1,0 +1,50 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: 60
+// expect-out: 63
+// expect-out: 30
+// expect-out: 6
+import "std/io.qela";
+import "std/vec.qela";
+import "std/gen.qela";
+
+struct Ring { data [4]i64, n i64 }
+fn ring_view(r *Ring) []i64 { return r.data[0..r.n]; }
+
+struct Steps { lo i64, hi i64 }
+fn steps_iter(s *Steps) *Gen(i64) {
+	var i i64 = s.lo;
+	while (i < s.hi) {
+		yield i;
+		i = i + 1;
+	}
+	return;
+}
+
+fn main() int {
+	var v Vec(i64);
+	vec_init(&v);
+	vec_push(&v, 10);
+	vec_push(&v, 20);
+	vec_push(&v, 30);
+	var t i64 = 0;
+	for x in v { t = t + x; }
+	println("${t}");
+
+	var r Ring;
+	r.data[0] = 1; r.data[1] = 2; r.n = 2;
+	for x in r { t = t + x; }
+	println("${t}");
+
+	var g i64 = 0;
+	for x in v { g = x; }
+	println("${g}");
+
+	var s Steps;
+	s.lo = 1;
+	s.hi = 4;
+	var q i64 = 0;
+	for x in s { q = q + x; }
+	println("${q}");
+	return 0;
+}
