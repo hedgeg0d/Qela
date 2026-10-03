@@ -47,8 +47,11 @@ fn coro_alloc_stack() *u8 {
 // itself. Everything else here -- the slot table, coro_next, the alive/done
 // bookkeeping -- is unchanged and stays interpreted, so std/chan.qela and
 // std/gc.qela keep reading the state they already read.
-fn coro_spawn(target i64, a0 i64, a1 i64, a2 i64, a3 i64, a4 i64) {
-	if (ncoros + 1 >= CORO_SLOTS) { return; }
+// Returns the new coroutine's id, or 0 when the slot table is full (the
+// same silent rejection a void coro_spawn used to give -- a generator sets
+// its Gen.coro from this, and gen_resume treats 0 as "never spawned").
+fn coro_spawn(target i64, a0 i64, a1 i64, a2 i64, a3 i64, a4 i64) int {
+	if (ncoros + 1 >= CORO_SLOTS) { return 0; }
 	ncoros = ncoros + 1;
 	var id int = ncoros;
 
@@ -58,7 +61,7 @@ fn coro_spawn(target i64, a0 i64, a1 i64, a2 i64, a3 i64, a4 i64) {
 		coros[id].top = 0;
 		coros[id].done = false;
 		coros[id].alive = true;
-		return;
+		return id;
 	}
 
 	var stack *u8 = coro_alloc_stack();
@@ -115,11 +118,11 @@ fn coro_spawn(target i64, a0 i64, a1 i64, a2 i64, a3 i64, a4 i64) {
 	coros[id].top = top;
 	coros[id].done = false;
 	coros[id].alive = true;
+	return id;
 }
 
 fn coro_next(from int) int {
 	var i int = from + 1;
-	var n int = ncoros + 1;
 	var seen int = 0;
 	while (seen <= ncoros) {
 		if (i > ncoros) { i = 0; }
