@@ -1,0 +1,36 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: [hello]
+// expect-out: 2 -1
+// expect-out: true false true
+// expect-out: [ab] [ab  ] [  ab]
+// expect-out: abcdef xyxyxy
+// expect-out: ABC abc
+// expect-out: -1 0 1
+// expect-out: a-b-c
+// expect-out: 42 -7 0
+// expect-out: true false
+import "std/io.qela";
+import "std/str.qela";
+
+fn main() int {
+	println("[${str_trim("  hello  ")}]");
+	println("${str_index("abcabc", "ca")} ${str_index("abc", "zz")}");
+	println("${str_contains("hello", "ell")} ${str_starts_with("hello", "he!")} ${str_ends_with("hello", "llo")}");
+	println("[${str_trim("  ab  ")}] [${str_trim_left("  ab  ")}] [${str_trim_right("  ab  ")}]");
+	println("${str_cat("abc", "def")} ${str_repeat("xy", 3)}");
+	println("${str_upper("abc")} ${str_lower("ABC")}");
+	println("${str_cmp("a", "b")} ${str_cmp("a", "a")} ${str_cmp("b", "a")}");
+	println(str_replace("a b c", " ", "-"));
+	var ok bool = false;
+	var a i64 = str_to_int(" 42 ", &ok);
+	var b i64 = str_to_int("-7", &ok);
+	var c i64 = str_to_int("x", &ok);
+	println("${a} ${b} ${c}");
+	var ok1 bool = false;
+	var ok2 bool = false;
+	str_to_int("5", &ok1);
+	str_to_int("5x", &ok2);
+	println("${ok1} ${ok2}");
+	return 0;
+}
