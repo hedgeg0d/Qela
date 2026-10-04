@@ -6141,8 +6141,8 @@ fn parse(tok *Token) *Unit {
 		}
 		// `extern fn f(...) t;` -- a declaration without a body -- declares a
 		// symbol the linker must provide, and `extern fn f(...) t { ... }`
-		// exports the function's symbol for the C side. Both only matter
-		// under `-c`; a plain compile cannot resolve the former (no linker).
+		// exports the function's symbol for the C side. Imports resolve from
+		// linked ELF objects/archives or through an external linker under -c.
 		var is_ext bool = false;
 		if (tok_eq(tok, "extern")) {
 			if (tok.next.kind != TK_KW || !str_eq(tok.next.text, "fn")) {
