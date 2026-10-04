@@ -6,56 +6,11 @@
 // records which thread actually ran it; if only worker 0 ever shows up,
 // stealing never happened.
 import "std/thread.qela";
-import "std/io.qela";
-import "std/fmt.qela";
 
 let TASKS = 400;
 
 var seen [32]i64;
 var done_count i64 = 0;
-var dbg_log Buf;
-
-fn dbg_snapshot(tag str) {
-	fmt_str(&dbg_log, tag);
-	fmt_str(&dbg_log, " done=");
-	fmt_i64(&dbg_log, atomic_load(&done_count));
-	fmt_str(&dbg_log, " seen=[");
-	fmt_i64(&dbg_log, atomic_load(&seen[0]));
-	fmt_str(&dbg_log, ",");
-	fmt_i64(&dbg_log, atomic_load(&seen[1]));
-	fmt_str(&dbg_log, ",");
-	fmt_i64(&dbg_log, atomic_load(&seen[2]));
-	fmt_str(&dbg_log, ",");
-	fmt_i64(&dbg_log, atomic_load(&seen[3]));
-	fmt_str(&dbg_log, "] head=[");
-	fmt_i64(&dbg_log, pool_head[0]);
-	fmt_str(&dbg_log, ",");
-	fmt_i64(&dbg_log, pool_head[1]);
-	fmt_str(&dbg_log, ",");
-	fmt_i64(&dbg_log, pool_head[2]);
-	fmt_str(&dbg_log, ",");
-	fmt_i64(&dbg_log, pool_head[3]);
-	fmt_str(&dbg_log, "] tail=[");
-	fmt_i64(&dbg_log, pool_tail[0]);
-	fmt_str(&dbg_log, ",");
-	fmt_i64(&dbg_log, pool_tail[1]);
-	fmt_str(&dbg_log, ",");
-	fmt_i64(&dbg_log, pool_tail[2]);
-	fmt_str(&dbg_log, ",");
-	fmt_i64(&dbg_log, pool_tail[3]);
-	fmt_str(&dbg_log, "] lock=[");
-	fmt_i64(&dbg_log, pool_lock[0]);
-	fmt_str(&dbg_log, ",");
-	fmt_i64(&dbg_log, pool_lock[1]);
-	fmt_str(&dbg_log, ",");
-	fmt_i64(&dbg_log, pool_lock[2]);
-	fmt_str(&dbg_log, ",");
-	fmt_i64(&dbg_log, pool_lock[3]);
-	fmt_str(&dbg_log, "] pool_n=");
-	fmt_i64(&dbg_log, pool_n);
-	fmt_str(&dbg_log, "\n");
-	write_file("/tmp/thread_steal_debug.log", dbg_log.p, dbg_log.n);
-}
 
 fn task(n i64) i64 {
 	atomic_add(&seen[pool_worker_id], 1);
@@ -90,26 +45,19 @@ fn push_to_zero(fn_ptr i64, n i64) {
 
 fn main() int {
 	thread_pool_init(4);
-	dbg_snapshot("init");
 
 	var i i64 = 0;
 	while (i < TASKS) {
 		push_to_zero(task, i);
 		i = i + 1;
 	}
-	dbg_snapshot("pushed");
 
 	var spins i64 = 0;
 	while (atomic_load(&done_count) < TASKS) {
 		spins = spins + 1;
 		if (spins % 1000 == 0) { sys_sched_yield(); }
-		if (spins % 50000000 == 0) { dbg_snapshot("wait"); }
-		if (spins > 2000000000) {
-			dbg_snapshot("timeout");
-			return 1;
-		}
+		if (spins > 2000000000) { return 1; }
 	}
-	dbg_snapshot("caught_up");
 
 	if (atomic_load(&seen[0]) + atomic_load(&seen[1]) + atomic_load(&seen[2]) + atomic_load(&seen[3]) != TASKS) {
 		return 2;
