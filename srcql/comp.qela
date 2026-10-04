@@ -216,6 +216,8 @@ struct Node {
 	name    str,
 	pos     i64,
 	stack_tmp *Var,
+	clo_code *Var,
+	clo_env *Var,
 	ip_fn   *Func,
 	ip_off  i64,
 	ip_cached bool,

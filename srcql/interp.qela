@@ -102,6 +102,9 @@ var ip_cur int = 0;
 
 // ── raw memory ──
 
+var ip_env_arg i64 = 0;
+var ip_env_set bool = false;
+
 fn ip_ld64(a i64) i64 { var p *i64 = a as *i64; return *p; }
 fn ip_st64(a i64, v i64) { var p *i64 = a as *i64; *p = v; }
 
@@ -1075,7 +1078,14 @@ fn ip_call_node(n *Node) i64 {
 		// Indirect: the value is the *Func ND_FUNCADDR handed out.
 		var target i64 = ip_load(ip_var_addr(n.varp), n.varp.ty);
 		if (target == 0) { ip_panic("call through a null function pointer\n"); }
-		f = target as *Func;
+		if ((target & 1) != 0) {
+			var rec i64 = target - 1;
+			f = ip_ld64(rec) as *Func;
+			ip_env_arg = rec;
+			ip_env_set = true;
+		} else {
+			f = target as *Func;
+		}
 	} else if (n.ip_fn as i64 != 0) {
 		f = n.ip_fn;
 	} else {
@@ -1098,6 +1108,9 @@ fn ip_body_of(f *Func) *Node {
 }
 
 fn ip_call(f *Func, args *Node, dst i64, pos i64) i64 {
+	var env_val i64 = ip_env_arg;
+	var env_have bool = ip_env_set;
+	ip_env_set = false;
 	if (f.extern) { error_at(pos, "interpreter: cannot call an extern function"); }
 	if (f.naked) {
 		ip_warn_once(f.pos, "interpreter: a naked function has no body to run, returning 0");
@@ -1160,6 +1173,13 @@ fn ip_call(f *Func, args *Node, dst i64, pos i64) i64 {
 			ip_store(slot, p.ty, vals[i]);
 		}
 		i = i + 1;
+	}
+	if (env_have && given < f.nparams) {
+		var ep *Var = func_param(f, given);
+		var eslot i64 = 0;
+		if (ep.arg_stack) { eslot = ip_fp + (ep.offset as i64); }
+		else { eslot = ip_fp - (ep.offset as i64); }
+		ip_st64(eslot, env_val);
 	}
 
 	ip_block(body);
