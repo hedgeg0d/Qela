@@ -1,0 +1,38 @@
+enum Res(T, E) {
+	Ok(T),
+	Err(E),
+}
+
+fn res_is_ok(comptime T: type, comptime E: type, r Res(T, E)) bool {
+	match (r) {
+		Ok(_v) => { return true; }
+		Err(_e) => { return false; }
+	}
+}
+
+fn res_val(comptime T: type, comptime E: type, r Res(T, E)) T {
+	match (r) {
+		Ok(v) => { return v; }
+		Err(_e) => {
+			var z T;
+			return z;
+		}
+	}
+}
+
+fn res_err(comptime T: type, comptime E: type, r Res(T, E)) E {
+	match (r) {
+		Ok(_v) => {
+			var z E;
+			return z;
+		}
+		Err(e) => { return e; }
+	}
+}
+
+fn res_or(comptime T: type, comptime E: type, r Res(T, E), alt T) T {
+	match (r) {
+		Ok(v) => { return v; }
+		Err(_e) => { return alt; }
+	}
+}

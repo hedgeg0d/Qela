@@ -175,7 +175,7 @@ fn is_punct_single(c u8) bool {
 	       c == '(' || c == ')' || c == '[' || c == ']' || c == '{' || c == '}' ||
 	       c == ';' || c == ',' || c == '=' || c == '<' || c == '>' ||
 	       c == '!' || c == '&' || c == '|' || c == '^' || c == '~' || c == '.' || c == ':' ||
-	       c == '$';
+	       c == '$' || c == '?';
 }
 
 // ── decimal literal -> f64 bits, pure integer arithmetic ──
