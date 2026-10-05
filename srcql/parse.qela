@@ -1875,14 +1875,497 @@ fn func_param_index(f *Func, name str) int {
 	return -1;
 }
 
+// ── interpreted/dynamic signature classes ──
+//
+// A function crosses the runtime ABI in one of two shapes. The scalar
+// shape (every parameter and the return is a one-word, non-float value:
+// integers, bool, pointers, void) packs arguments into an i64 array and
+// returns a plain i64. Everything else -- str, floats, structs, arrays,
+// payloadless enums -- is the marshalled shape: the trampoline serializes
+// each value type-directed into a byte payload, and the return value comes
+// back as marshalled bytes (or, under the jit, through a hidden
+// out-parameter in a rewritten signature).
+//
+// A scalar crossing the wire is always 8 bytes; a str is u64 length plus
+// the bytes; a POD struct/array (every field a scalar, float or array of
+// those) is its raw size-byte image; any other struct is its fields in
+// member order (scalars as 8-byte slots, strs as length-prefixed, nested
+// structs recursively). Both sides generate from the same parsed types,
+// so the conventions can never drift.
+
+fn interp_pod_ok(ty *Type) bool {
+	if (ty.kind == TY_ARRAY) { return interp_pod_ok(ty.base); }
+	if (ty.kind == TY_ENUM) {
+		var v *Variant = ty.variants;
+		while (v as i64 != 0) {
+			if (v.fields as i64 != 0) { return false; }
+			v = v.next;
+		}
+		return true;
+	}
+	return is_float(ty) || is_integer(ty);
+}
+
+fn interp_struct_pod(ty *Type) bool {
+	var m *Member = ty.members;
+	while (m as i64 != 0) {
+		if (!interp_pod_ok(m.ty)) { return false; }
+		m = m.next;
+	}
+	return true;
+}
+
+fn interp_struct_ok(ty *Type) bool {
+	var m *Member = ty.members;
+	while (m as i64 != 0) {
+		var mt *Type = m.ty;
+		if (interp_pod_ok(mt)) { m = m.next; continue; }
+		if (mt.kind == TY_SLICE && mt.base as i64 == ty_u8 as i64) { m = m.next; continue; }
+		if (mt.kind == TY_STRUCT && interp_struct_ok(mt)) { m = m.next; continue; }
+		return false;
+	}
+	return true;
+}
+
+fn interp_marshal_ok(ty *Type) bool {
+	if (ty.kind == TY_SLICE) { return ty.base as i64 == ty_u8 as i64; }
+	if (ty.kind == TY_STRUCT) { return interp_struct_ok(ty); }
+	return interp_pod_ok(ty);
+}
+
+fn interp_scalar_ok(ty *Type) bool {
+	if (is_float(ty)) { return false; }
+	if (ty.kind == TY_PTR) { return true; }
+	return is_integer(ty);
+}
+
+// The marshalled class: at least one parameter or the return is not a
+// one-word scalar. Void counts as scalar (there is no value to carry).
+fn interp_marshalled(f *Func) bool {
+	if (f.ret.kind != TY_VOID && !interp_scalar_ok(f.ret)) { return true; }
+	var i int = 0;
+	while (i < f.nparams) {
+		if (!interp_scalar_ok(func_param(f, i).ty)) { return true; }
+		i = i + 1;
+	}
+	return false;
+}
+
+fn interp_sig_reject(ty *Type, pos i64, what str) {
+	if (ty.kind == TY_VOID) { return; }
+	if (interp_scalar_ok(ty) || interp_marshal_ok(ty)) { return; }
+	var b Buf;
+	fmt_str(&b, "a '");
+	fmt_str(&b, type_name(ty));
+	fmt_str(&b, "' ");
+	fmt_str(&b, what);
+	fmt_str(&b, " cannot cross the interpreted/dynamic ABI: only scalars, str, floats and structs of those are supported (see docs/INTERPRETED.md)");
+	error_at(pos, buf_str(&b));
+}
+
+// The eval fn/eval var ABI is still scalar-only (phase 2 of the
+// marshalling work); kept as the classic aggregate/float rejection.
 fn interp_check_scalar(ty *Type, pos i64, what str) {
 	if (is_aggregate(ty) || is_float(ty)) {
 		var b Buf;
-		fmt_str(&b, "interpreted/dynamic functions currently support only scalar integer ");
+		fmt_str(&b, "an 'eval fn'/'eval var' ");
 		fmt_str(&b, what);
-		fmt_str(&b, " (see docs/INTERPRETED.md)");
+		fmt_str(&b, " must be a scalar integer type for now (see docs/INTERPRETED.md)");
 		error_at(pos, buf_str(&b));
 	}
+}
+
+// How many argument registers a value occupies under the compiled ABI: an
+// aggregate up to 16 bytes rides raw in words, a bigger one passes by
+// pointer in one word. The jit path packs this many slots per parameter.
+fn interp_jit_words(ty *Type) int {
+	if (is_aggregate(ty) && !abi_by_ref(ty.size)) { return ((ty.size + 7) / 8) as int; }
+	return 1;
+}
+
+// The rewritten jit signature appends a hidden out-pointer parameter, so
+// the total register budget is six words including it.
+fn interp_jit_budget(f *Func) bool {
+	var w int = 0;
+	var i int = 0;
+	while (i < f.nparams) {
+		w = w + interp_jit_words(func_param(f, i).ty);
+		i = i + 1;
+	}
+	if (f.ret.kind != TY_VOID) { w = w + 1; }
+	return w <= 6;
+}
+
+// Appends the payload-build code for one parameter value. `expr` is the
+// source expression naming the value (a parameter name or dotted path).
+fn interp_gen_marshal(b *Buf, expr str, ty *Type) {
+	if (ty.kind == TY_SLICE) {
+		fmt_str(b, " buf_u64(&__b, ");
+		fmt_str(b, expr);
+		fmt_str(b, ".len); buf_bytes(&__b, ");
+		fmt_str(b, expr);
+		fmt_str(b, ".ptr, ");
+		fmt_str(b, expr);
+		fmt_str(b, ".len);");
+		return;
+	}
+	if (ty.kind == TY_STRUCT && !interp_struct_pod(ty)) {
+		interp_gen_marshal_fields(b, expr, ty);
+		return;
+	}
+	if (ty.kind == TY_STRUCT || ty.kind == TY_ARRAY) {
+		// A POD struct or array is its raw image; `&f` of an aggregate is
+		// its memory (never a promoted register), and for a by-ref value
+		// `&f` already is the data pointer.
+		fmt_str(b, " buf_bytes(&__b, &");
+		fmt_str(b, expr);
+		fmt_str(b, " as *u8, ");
+		fmt_i64(b, ty.size as i64);
+		fmt_str(b, ");");
+		return;
+	}
+	if (is_float(ty)) {
+		if (ty.size == 4) {
+			fmt_str(b, " { var __st [4]u8; *(&__st[0] as *f32) = ");
+			fmt_str(b, expr);
+			fmt_str(b, "; buf_u64(&__b, *(&__st[0] as *u32) as i64); }");
+		} else {
+			fmt_str(b, " { var __st [8]u8; *(&__st[0] as *f64) = ");
+			fmt_str(b, expr);
+			fmt_str(b, "; buf_u64(&__b, *(&__st[0] as *u64) as i64); }");
+		}
+		return;
+	}
+	fmt_str(b, " buf_u64(&__b, ");
+	fmt_str(b, expr);
+	fmt_str(b, " as i64);");
+}
+
+fn interp_gen_marshal_fields(b *Buf, expr str, ty *Type) {
+	var m *Member = ty.members;
+	while (m as i64 != 0) {
+		var pb Buf;
+		fmt_str(&pb, expr);
+		fmt_str(&pb, ".");
+		fmt_str(&pb, m.name);
+		var path str = buf_str(&pb);
+		var mt *Type = m.ty;
+		if (mt.kind == TY_STRUCT && !interp_struct_pod(mt)) {
+			interp_gen_marshal_fields(b, path, mt);
+		} else if (mt.kind == TY_STRUCT || mt.kind == TY_ARRAY) {
+			// A POD struct or array is its raw image; `&f` of an aggregate
+			// is its memory (never a promoted register), and for a by-ref
+			// value `&f` already is the data pointer.
+			fmt_str(b, " buf_bytes(&__b, &");
+			fmt_str(b, path);
+			fmt_str(b, " as *u8, ");
+			fmt_i64(b, mt.size as i64);
+			fmt_str(b, ");");
+		} else {
+			interp_gen_marshal(b, path, mt);
+		}
+		m = m.next;
+	}
+}
+
+// Appends the register-word packing for one parameter; returns the next
+// free slot index. The staging arrays keep floats out of gen_addr's
+// promoted-local trap (a float local can live in a register).
+fn interp_gen_slot(b *Buf, expr str, ty *Type, idx int) int {
+	if (ty.kind == TY_SLICE) {
+		fmt_str(b, " __ia[");
+		fmt_i64(b, idx as i64);
+		fmt_str(b, "] = ");
+		fmt_str(b, expr);
+		fmt_str(b, ".ptr as i64; __ia[");
+		fmt_i64(b, (idx + 1) as i64);
+		fmt_str(b, "] = ");
+		fmt_str(b, expr);
+		fmt_str(b, ".len;");
+		return idx + 2;
+	}
+	if (is_float(ty)) {
+		var st i64 = 4;
+		var rt str = "f32";
+		var ut str = "*u32";
+		if (ty.size == 8) { st = 8; rt = "f64"; ut = "*u64"; }
+		fmt_str(b, " { var __st [");
+		fmt_i64(b, st);
+		fmt_str(b, "]u8; *(&__st[0] as *");
+		fmt_str(b, rt);
+		fmt_str(b, ") = ");
+		fmt_str(b, expr);
+		fmt_str(b, "; __ia[");
+		fmt_i64(b, idx as i64);
+		fmt_str(b, "] = *(&__st[0] as ");
+		fmt_str(b, ut);
+		fmt_str(b, ") as i64; }");
+		return idx + 1;
+	}
+	if (is_aggregate(ty)) {
+		if (abi_by_ref(ty.size)) {
+			fmt_str(b, " __ia[");
+			fmt_i64(b, idx as i64);
+			fmt_str(b, "] = &");
+			fmt_str(b, expr);
+			fmt_str(b, " as i64;");
+			return idx + 1;
+		}
+		var nw int = ((ty.size + 7) / 8) as int;
+		var j int = 0;
+		while (j < nw) {
+			fmt_str(b, " __ia[");
+			fmt_i64(b, (idx + j) as i64);
+			fmt_str(b, "] = *((&");
+			fmt_str(b, expr);
+			fmt_str(b, " as *i64) + ");
+			fmt_i64(b, j as i64);
+			fmt_str(b, ");");
+			j = j + 1;
+		}
+		return idx + nw;
+	}
+	fmt_str(b, " __ia[");
+	fmt_i64(b, idx as i64);
+	fmt_str(b, "] = ");
+	fmt_str(b, expr);
+	fmt_str(b, " as i64;");
+	return idx + 1;
+}
+
+// `return *(BASE as *T);` -- the value sits in memory in its real image.
+// Covers scalars (the wire carries a full 8-byte slot, the read takes the
+// value's own width), floats, and every aggregate including str.
+fn interp_gen_mem_ret(b *Buf, base str, ty *Type) {
+	fmt_str(b, " return *(");
+	fmt_str(b, base);
+	fmt_str(b, " as *");
+	fmt_str(b, type_name(ty));
+	fmt_str(b, ");");
+}
+
+// The wire-shaped return decode: str arrives length-prefixed, a non-POD
+// struct field by field, everything else as its own-type read.
+fn interp_gen_wire_ret(b *Buf, base str, ty *Type) {
+	if (ty.kind == TY_SLICE) {
+		fmt_str(b, " var __rs str; __rs.len = *(");
+		fmt_str(b, base);
+		fmt_str(b, " as *i64); __rs.ptr = ");
+		fmt_str(b, base);
+		fmt_str(b, " + 8; return __rs;");
+		return;
+	}
+	if (ty.kind == TY_STRUCT && !interp_struct_pod(ty)) {
+		fmt_str(b, " var __rs ");
+		fmt_str(b, type_name(ty));
+		fmt_str(b, "; var __cur *u8 = ");
+		fmt_str(b, base);
+		fmt_str(b, ";");
+		interp_gen_wire_fields(b, "__rs", ty);
+		fmt_str(b, " return __rs;");
+		return;
+	}
+	interp_gen_mem_ret(b, base, ty);
+}
+
+fn interp_gen_wire_fields(b *Buf, path str, ty *Type) {
+	var m *Member = ty.members;
+	while (m as i64 != 0) {
+		var mt *Type = m.ty;
+		var pb Buf;
+		fmt_str(&pb, path);
+		fmt_str(&pb, ".");
+		fmt_str(&pb, m.name);
+		var fpath str = buf_str(&pb);
+		if (mt.kind == TY_SLICE) {
+			fmt_str(b, " ");
+			fmt_str(b, fpath);
+			fmt_str(b, ".len = *(__cur as *i64); ");
+			fmt_str(b, fpath);
+			fmt_str(b, ".ptr = __cur + 8; __cur = __cur + 8 + ");
+			fmt_str(b, fpath);
+			fmt_str(b, ".len;");
+		} else if (mt.kind == TY_STRUCT && !interp_struct_pod(mt)) {
+			interp_gen_wire_fields(b, fpath, mt);
+		} else if (mt.kind == TY_STRUCT || mt.kind == TY_ARRAY) {
+			fmt_str(b, " ");
+			fmt_str(b, fpath);
+			fmt_str(b, " = *(__cur as *");
+			fmt_str(b, type_name(mt));
+			fmt_str(b, "); __cur = __cur + ");
+			fmt_i64(b, mt.size as i64);
+			fmt_str(b, ";");
+		} else {
+			fmt_str(b, " ");
+			fmt_str(b, fpath);
+			fmt_str(b, " = *(__cur as *");
+			fmt_str(b, type_name(mt));
+			fmt_str(b, "); __cur = __cur + 8;");
+		}
+		m = m.next;
+	}
+}
+
+// The child re-parses the bundle from scratch, so every type an
+// interpreted/dynamic function can mention has to come along: user structs
+// and enums, and the templates the child instantiates on use. Generic
+// instances are skipped -- their "Name(Args)" names are not source text.
+fn interp_emit_struct_body(b *Buf, ty *Type) {
+	fmt_str(b, "{ ");
+	var m *Member = ty.members;
+	while (m as i64 != 0) {
+		fmt_str(b, m.name);
+		fmt_str(b, " ");
+		fmt_str(b, type_name(m.ty));
+		fmt_str(b, ", ");
+		m = m.next;
+	}
+	fmt_str(b, "}\n");
+}
+
+fn interp_emit_struct(b *Buf, ty *Type) {
+	fmt_str(b, "struct ");
+	fmt_str(b, ty.name);
+	fmt_str(b, " ");
+	interp_emit_struct_body(b, ty);
+}
+
+fn interp_emit_enum_body(b *Buf, ty *Type) {
+	fmt_str(b, "{ ");
+	var v *Variant = ty.variants;
+	while (v as i64 != 0) {
+		fmt_str(b, v.name);
+		if (v.fields as i64 != 0) {
+			fmt_str(b, "(");
+			var m *Member = v.fields;
+			while (m as i64 != 0) {
+				fmt_str(b, type_name(m.ty));
+				if (m.next as i64 != 0) { fmt_str(b, ", "); }
+				m = m.next;
+			}
+			fmt_str(b, ")");
+		}
+		fmt_str(b, ", ");
+		v = v.next;
+	}
+	fmt_str(b, "}\n");
+}
+
+fn interp_emit_enum(b *Buf, ty *Type) {
+	fmt_str(b, "enum ");
+	fmt_str(b, ty.name);
+	fmt_str(b, " ");
+	interp_emit_enum_body(b, ty);
+}
+
+fn interp_emit_tmpl(b *Buf, tm *Tmpl) {
+	if (tm.proto.kind == TY_STRUCT) { fmt_str(b, "struct "); }
+	else { fmt_str(b, "enum "); }
+	fmt_str(b, tm.name);
+	fmt_str(b, "(");
+	fmt_str(b, tm.tv0.name);
+	if (tm.nparams == 2) {
+		fmt_str(b, ", ");
+		fmt_str(b, tm.tv1.name);
+	}
+	fmt_str(b, ") ");
+	if (tm.proto.kind == TY_STRUCT) { interp_emit_struct_body(b, tm.proto); }
+	else { interp_emit_enum_body(b, tm.proto); }
+}
+
+fn interp_emit_types(b *Buf) {
+	var nt *Named = named_types;
+	while (nt as i64 != 0) {
+		var nty *Type = nt.ty;
+		if (str_find(nt.name, '(' as u8) < 0) {
+			if (nty.kind == TY_STRUCT && nty.members as i64 != 0) {
+				interp_emit_struct(b, nty);
+			} else if (nty.kind == TY_ENUM && nty.variants as i64 != 0) {
+				interp_emit_enum(b, nty);
+			}
+		}
+		nt = nt.next;
+	}
+	var tml *Tmpl = tmpls;
+	while (tml as i64 != 0) {
+		interp_emit_tmpl(b, tml);
+		tml = tml.next;
+	}
+}
+
+fn interp_gen_scalar_body(b *Buf, f *Func) {
+	fmt_str(b, "{ var __ia [14]i64;");
+	var i int = 0;
+	while (i < 14) {
+		fmt_str(b, " __ia[");
+		fmt_i64(b, i as i64);
+		fmt_str(b, "] = ");
+		if (i < f.nparams) {
+			fmt_str(b, func_param(f, i).name);
+			fmt_str(b, " as i64");
+		} else { fmt_str(b, "0"); }
+		fmt_str(b, ";");
+		i = i + 1;
+	}
+	if (f.ret.kind != TY_VOID) {
+		fmt_str(b, " return ");
+	} else {
+		fmt_str(b, " ");
+	}
+	// The jit call goes through a six-slot function pointer, so a
+	// scalar-signature function with more than six parameters skips it.
+	if (f.dynamic && f.nparams <= 6) { fmt_str(b, "__dyn_jit_call(\""); }
+	else { fmt_str(b, "__interp_call_dispatch(\""); }
+	fmt_str(b, f.name);
+	fmt_str(b, "\", &__ia[0])");
+	if (f.ret.kind != TY_VOID) {
+		fmt_str(b, " as ");
+		fmt_str(b, type_name(f.ret));
+	}
+	fmt_str(b, "; }");
+}
+
+fn interp_gen_marshalled_body(b *Buf, f *Func) {
+	fmt_str(b, "{ var __b Buf; buf_u8(&__b, ");
+	fmt_i64(b, f.name.len as i64);
+	fmt_str(b, " as u8); buf_bytes(&__b, (\"");
+	fmt_str(b, f.name);
+	fmt_str(b, "\").ptr, ");
+	fmt_i64(b, f.name.len as i64);
+	fmt_str(b, ");");
+	var i int = 0;
+	while (i < f.nparams) {
+		interp_gen_marshal(b, func_param(f, i).name, func_param(f, i).ty);
+		i = i + 1;
+	}
+	if (f.dynamic && interp_jit_budget(f)) {
+		fmt_str(b, " var __ia [6]i64;");
+		var si int = 0;
+		var pi int = 0;
+		while (pi < f.nparams) {
+			si = interp_gen_slot(b, func_param(f, pi).name, func_param(f, pi).ty, si);
+			pi = pi + 1;
+		}
+		if (f.ret.kind != TY_VOID) {
+			fmt_str(b, " var __r [");
+			fmt_i64(b, f.ret.size as i64);
+			fmt_str(b, "]u8; __ia[");
+			fmt_i64(b, si as i64);
+			fmt_str(b, "] = &__r[0] as i64;");
+		}
+		fmt_str(b, " if (__dyn_jit_call_marshalled(\"");
+		fmt_str(b, f.name);
+		fmt_str(b, "\", &__ia[0]) == 1) {");
+		if (f.ret.kind != TY_VOID) {
+			interp_gen_mem_ret(b, "&__r[0]", f.ret);
+		}
+		fmt_str(b, " }");
+	}
+	fmt_str(b, " var __resp str = __interp_call_marshalled(buf_str(&__b));");
+	if (f.ret.kind != TY_VOID) {
+		interp_gen_wire_ret(b, "__resp.ptr", f.ret);
+	}
+	fmt_str(b, " }");
 }
 
 fn interp_escape_src(raw str, pos i64) str {
@@ -1908,11 +2391,21 @@ fn interp_escape_src(raw str, pos i64) str {
 
 var interp_trampoline_seq int = 0;
 
-fn interp_synthesize_trampoline(f *Func, fn_start i64, body_start i64, end_pos i64) {
-	interp_check_scalar(f.ret, f.pos, "return types");
+// The scalar trampoline body is parsed in place (it references only
+// deferred call names). A marshalled body needs the `Buf` type, which
+// does not exist until std/interpcall.qela and its imports are spliced
+// in -- and the splice happens at the next top-level loop iteration, not
+// synchronously here. So the marshalled body is emitted as a real
+// top-level function (`__tramp<N>`) whose tokens are injected into the
+// main stream right after the function being synthesized: the loop then
+// splices the interp modules first, parses the tramp with `Buf` in
+// scope, and `f.body` is a thin forwarder that calls it. The tramp is
+// `__`-internal, so the --interpreted/--jit flags never touch it.
+fn interp_synthesize_trampoline(t **Token, f *Func, fn_start i64, body_start i64, end_pos i64) {
+	interp_sig_reject(f.ret, f.pos, "return type");
 	var i int = 0;
 	while (i < f.nparams) {
-		interp_check_scalar(func_param(f, i).ty, f.pos, "parameters");
+		interp_sig_reject(func_param(f, i).ty, f.pos, "parameter type");
 		i = i + 1;
 	}
 
@@ -1925,27 +2418,54 @@ fn interp_synthesize_trampoline(f *Func, fn_start i64, body_start i64, end_pos i
 	f.body_start = body_start;
 
 	var b Buf;
-	fmt_str(&b, "{ var __ia [6]i64;");
-	i = 0;
-	while (i < 6) {
-		fmt_str(&b, " __ia[");
-		fmt_i64(&b, i as i64);
-		fmt_str(&b, "] = ");
-		if (i < f.nparams) { fmt_str(&b, func_param(f, i).name); }
-		else { fmt_str(&b, "0"); }
-		fmt_str(&b, ";");
-		i = i + 1;
+	if (interp_marshalled(f)) {
+		var mb Buf;
+		fmt_str(&mb, "fn __tramp");
+		fmt_i64(&mb, interp_trampoline_seq as i64);
+		fmt_str(&mb, "(");
+		i = 0;
+		while (i < f.nparams) {
+			if (i > 0) { fmt_str(&mb, ", "); }
+			fmt_str(&mb, func_param(f, i).name);
+			fmt_str(&mb, " ");
+			fmt_str(&mb, type_name(func_param(f, i).ty));
+			i = i + 1;
+		}
+		fmt_str(&mb, ") ");
+		if (f.ret.kind != TY_VOID) {
+			fmt_str(&mb, type_name(f.ret));
+			fmt_str(&mb, " ");
+		}
+		interp_gen_marshalled_body(&mb, f);
+		var tb str = buf_str(&mb);
+		var tfile int = diag_add_file("<interp-marshalled>", tb);
+		var ttoks *Token = lex(tb, (tfile as i64) << FILE_SHIFT);
+		var ttail *Token = ttoks;
+		while (ttail.next as i64 != 0 && ttail.next.kind != TK_EOF) { ttail = ttail.next; }
+		ttail.next = *t;
+		*t = ttoks;
+
+		fmt_str(&b, "{ ");
+		if (f.ret.kind != TY_VOID) { fmt_str(&b, "return "); }
+		fmt_str(&b, "__tramp");
+		fmt_i64(&b, interp_trampoline_seq as i64);
+		fmt_str(&b, "(");
+		i = 0;
+		while (i < f.nparams) {
+			if (i > 0) { fmt_str(&b, ", "); }
+			fmt_str(&b, func_param(f, i).name);
+			i = i + 1;
+		}
+		fmt_str(&b, "); }");
+	} else {
+		interp_gen_scalar_body(&b, f);
 	}
-	if (f.dynamic) { fmt_str(&b, " return __dyn_jit_call(\""); }
-	else { fmt_str(&b, " return __interp_call_dispatch(\""); }
-	fmt_str(&b, f.name);
-	fmt_str(&b, "\", &__ia[0]); }");
+	interp_trampoline_seq = interp_trampoline_seq + 1;
 
 	var nameb Buf;
 	fmt_str(&nameb, "<interp-trampoline:");
 	fmt_i64(&nameb, interp_trampoline_seq as i64);
 	buf_u8(&nameb, '>');
-	interp_trampoline_seq = interp_trampoline_seq + 1;
 
 	var synth_file int = diag_add_file(buf_str(&nameb), buf_str(&b));
 	var synth_toks *Token = lex(buf_str(&b), (synth_file as i64) << FILE_SHIFT);
@@ -2088,7 +2608,7 @@ fn parse_function(t **Token, is_extern bool) *Func {
 		var body_start i64 = (*t).pos;
 		f.body = parse_block(t);
 		if (f.interpreted || f.dynamic) {
-			interp_synthesize_trampoline(f, fn_start, body_start, (*t).pos);
+			interp_synthesize_trampoline(t, f, fn_start, body_start, (*t).pos);
 		}
 	}
 	leave_scope();
@@ -2748,6 +3268,7 @@ fn parse(tok *Token) *Unit {
 
 	if (find_func("abi_spawn") as i64 != 0 && find_func("__interp_all_src") as i64 == 0) {
 		var cb Buf;
+		interp_emit_types(&cb);
 		var cf *Func = all_funcs;
 		while (cf as i64 != 0) {
 			if ((cf.interpreted || cf.dynamic) && cf.nct == 0) {
