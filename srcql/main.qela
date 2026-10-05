@@ -1509,6 +1509,13 @@ fn abi_handle_jit(f *Func) {
 	if (pid == 0) {
 		var devnull i64 = sys_open_append(cstr("/dev/null"));
 		sys_dup2(devnull, STDOUT);
+		// A rejected jit attempt (the body calls a std function, reads a
+		// global, ...) is a normal control-flow outcome, not a bug: the
+		// reparse legitimately fails on names outside the isolated unit.
+		// Its compile error would be pure noise on the user's terminal,
+		// so stderr goes to /dev/null too -- the fallback to interpreted
+		// is silent by design.
+		sys_dup2(devnull, STDERR);
 		type_abi_mode = false;
 
 		var fid int = diag_file_of(f.pos);
