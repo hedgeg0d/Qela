@@ -137,8 +137,17 @@ fn fmt_run(src str, tok *Token) {
 			fmt_emit(tok.text);
 			var t2 *Token = tok.next;
 			var bdepth int = 0;
+			// A gap between two inner tokens is a real space in the source
+			// and must survive: without it, `k.len for k in m` would round
+			// trip as `k.lenforkinm`, one token, a different program. The
+			// gap is measured from the source positions, which only the
+			// tokens of this run share.
+			var pt *Token = t2;
 			while (true) {
 				if (t2 as i64 == 0 || t2.kind == TK_EOF) { break; }
+				if (pt as i64 != 0 && pt != t2 && tok_start(t2) > tok_end(pt)) {
+					buf_u8(&fmt_out, ' ');
+				}
 				fmt_emit(t2.text);
 				if (is_text(t2, "{")) { bdepth = bdepth + 1; }
 				else if (is_text(t2, "}")) {
@@ -147,6 +156,7 @@ fn fmt_run(src str, tok *Token) {
 					if (bdepth <= 1) { break; }
 					bdepth = bdepth - 1;
 				}
+				pt = t2;
 				t2 = t2.next;
 			}
 			fmt_interp_tail = true;

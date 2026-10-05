@@ -1,0 +1,21 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: abc-42
+// `x.method(args)` sugar: the receiver's type prefix is tried when no
+// function of that name exists, so s.trim() means str_trim(s) and
+// m.get(k) means map_get(m, k). A bare function name still wins.
+import "std/fmt.qela";
+import "std/map.qela";
+
+fn main() int {
+	var s str = "a-b-c";
+	var m Map(i64);
+	map_put(&m, "k", 42);
+	var o = fmt_begin();
+	o = fmt_put_str(o, s.replace("-", ""));
+	o = fmt_put_str(o, "-");
+	o = fmt_put_i64(o, m.get("k"));
+	var r = fmt_result(o);
+	sys_write(1, r.ptr, r.len);
+	return 0;
+}
