@@ -17,6 +17,7 @@ struct SigAction {
 // The kernel pops the signal frame through this: rt_sigreturn restores
 // the interrupted context. It must be naked -- a prologue would push
 // above the frame the kernel reads from rsp.
+/// Restores the interrupted context after a signal.
 fn naked sig_restore() {
 	syscall(SYS_RT_SIGRETURN);
 }
@@ -24,6 +25,7 @@ fn naked sig_restore() {
 // Installs handler for sig; 0 on success, a negated errno otherwise.
 // The handler's address must be even (every function entry is padded to
 // an even address, so a bare `fn` name always is).
+/// Installs a handler for a signal.
 fn sig_set(sig i64, handler i64) i64 {
 	var act SigAction;
 	act.handler = handler;
@@ -33,7 +35,7 @@ fn sig_set(sig i64, handler i64) i64 {
 	return sys_rt_sigaction(sig, &act as *u8, null as *u8);
 }
 
-// The default disposition for a signal: the kernel handles it.
+/// Restores the default disposition for a signal.
 fn sig_default(sig i64) i64 {
 	var act SigAction;
 	act.handler = SIG_DFL;
@@ -43,6 +45,7 @@ fn sig_default(sig i64) i64 {
 	return sys_rt_sigaction(sig, &act as *u8, null as *u8);
 }
 
+/// Sets a signal to be ignored.
 fn sig_ignore(sig i64) i64 {
 	var act SigAction;
 	act.handler = SIG_IGN;
@@ -52,6 +55,7 @@ fn sig_ignore(sig i64) i64 {
 	return sys_rt_sigaction(sig, &act as *u8, null as *u8);
 }
 
+/// Delivers a signal to this process.
 fn sig_raise(sig i64) i64 {
 	return sys_kill(sys_getpid(), sig);
 }

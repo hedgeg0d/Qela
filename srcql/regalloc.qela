@@ -181,7 +181,7 @@ fn ra_walk(n *Node) {
 		return;
 	}
 	if (k == ND_FOR) {
-		ra_walk(n.init);
+		ra_list(n.init);
 		var top i64 = ra_pos;
 		ra_loop = ra_loop + 1;
 		ra_walk(n.cond);
@@ -197,11 +197,33 @@ fn ra_walk(n *Node) {
 		ra_extend(top, RA_FOREVER);
 		return;
 	}
+	// A chain expression (ND_IN, ND_ARRCOMP) runs its init statements
+	// first and evaluates `.lhs` afterwards -- the walk mirrors that, or
+	// a var live across the whole node would not overlap the lifetimes
+	// nested in the chain.
+	if (k == ND_IN || k == ND_ARRCOMP) {
+		ra_list(n.init);
+		ra_walk(n.lhs);
+		return;
+	}
+	// The binop kinds evaluate their right operand first (the acc
+	// machine pushes it, then the left operand), so the walk visits
+	// right first too: a lifetime nested in the right subtree runs
+	// between a register's write on the left and its read there, and
+	// must be seen as overlapping.
+	if (k == ND_ADD || k == ND_SUB || k == ND_MUL || k == ND_DIV ||
+	    k == ND_MOD || k == ND_BITAND || k == ND_BITOR || k == ND_BITXOR ||
+	    k == ND_SHL || k == ND_SHR || k == ND_EQ || k == ND_NE ||
+	    k == ND_LT || k == ND_LE) {
+		ra_walk(n.rhs);
+		ra_walk(n.lhs);
+		return;
+	}
 
 	ra_walk(n.lhs);
 	ra_walk(n.rhs);
 	ra_walk(n.cond);
-	ra_walk(n.init);
+	ra_list(n.init);
 	ra_walk(n.step);
 	ra_walk(n.then);
 	ra_walk(n.els);
@@ -334,7 +356,7 @@ fn reads_walk(n *Node) {
 	reads_walk(n.lhs);
 	reads_walk(n.rhs);
 	reads_walk(n.cond);
-	reads_walk(n.init);
+	reads_list(n.init);
 	reads_walk(n.step);
 	reads_walk(n.then);
 	reads_walk(n.els);

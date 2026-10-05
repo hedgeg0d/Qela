@@ -38,6 +38,7 @@ struct Json {
 	next *Json,
 }
 
+/// Allocates a node with the given kind.
 fn json_alloc(kind i64) *Json {
 	var j *Json = arena_alloc(sizeof(Json), 8) as *Json;
 	j.kind = kind;
@@ -46,16 +47,19 @@ fn json_alloc(kind i64) *Json {
 
 // --- parser -------------------------------------------------------------
 
+/// Advances past whitespace in the input.
 fn jskip(s str, i *i64) {
 	while (*i < s.len && (s.ptr[*i] == ' ' || s.ptr[*i] == 9 as u8 ||
 	    s.ptr[*i] == 10 as u8 || s.ptr[*i] == 13 as u8)) { *i = *i + 1; }
 }
 
+/// Parses a JSON document into a node tree.
 fn json_parse(s str) *Json {
 	var i i64 = 0;
 	return json_value(s, &i);
 }
 
+/// Parses one JSON value at the cursor.
 fn json_value(s str, i *i64) *Json {
 	jskip(s, i);
 	if (*i >= s.len) { return null; }
@@ -76,6 +80,7 @@ fn json_value(s str, i *i64) *Json {
 	return json_number(s, i);
 }
 
+/// Matches a literal keyword at the cursor.
 fn json_word(s str, i *i64, w str) bool {
 	if (*i + w.len > s.len) { return false; }
 	var k i64 = 0;
@@ -87,6 +92,7 @@ fn json_word(s str, i *i64, w str) bool {
 	return true;
 }
 
+/// Parses a JSON object at the cursor.
 fn json_object(s str, i *i64) *Json {
 	var obj *Json = json_alloc(J_OBJ);
 	var head *Json = null;
@@ -118,6 +124,7 @@ fn json_object(s str, i *i64) *Json {
 	return null;
 }
 
+/// Parses a JSON array at the cursor.
 fn json_array(s str, i *i64) *Json {
 	var arr *Json = json_alloc(J_ARR);
 	var head *Json = null;
@@ -141,6 +148,7 @@ fn json_array(s str, i *i64) *Json {
 
 // One UTF-8 code point from the escape \uXXXX, with the surrogate-pair
 // combine for astral characters.
+/// Reads four hex digits into a code point.
 fn json_hex4(s str, i *i64) i64 {
 	if (*i + 4 > s.len) { return -1; }
 	var v i64 = 0;
@@ -159,6 +167,7 @@ fn json_hex4(s str, i *i64) i64 {
 	return v;
 }
 
+/// Encodes a code point into the buffer.
 fn json_utf8(b *Buf, cp i64) {
 	if (cp < 0x80) { buf_u8(b, cp as u8); return; }
 	if (cp < 0x800) {
@@ -178,6 +187,7 @@ fn json_utf8(b *Buf, cp i64) {
 	buf_u8(b, (0x80 | (cp & 63)) as u8);
 }
 
+/// Parses a quoted JSON string at the cursor.
 fn json_string(s str, i *i64) *Json {
 	var j *Json = json_alloc(J_STR);
 	var b Buf;
@@ -219,6 +229,7 @@ fn json_string(s str, i *i64) *Json {
 	return null;
 }
 
+/// Parses an integer or float literal at the cursor.
 fn json_number(s str, i *i64) *Json {
 	var start i64 = *i;
 	var is_float bool = false;
@@ -250,6 +261,7 @@ fn json_number(s str, i *i64) *Json {
 // A hand-rolled decimal parse for the fraction/exponent forms; the
 // exponent multiplies by powers of ten with plain f64 arithmetic, so
 // precision is good enough for configs, not for accounting.
+/// Converts a decimal number string to a float.
 fn json_str_to_f64(num str) f64 {
 	var i i64 = 0;
 	var neg bool = false;
@@ -293,18 +305,25 @@ fn json_str_to_f64(num str) f64 {
 
 // --- accessors ----------------------------------------------------------
 
+/// Returns the node's kind constant.
 fn json_type(v *Json) i64 { return v.kind; }
 
+/// Reports whether the node is a null value.
 fn json_is_null(v *Json) bool { return v.kind == J_NULL; }
 
+/// Returns the node's boolean value.
 fn json_bool(v *Json) bool { return v.i != 0; }
 
+/// Returns the node's integer value.
 fn json_int(v *Json) i64 { return v.i; }
 
+/// Returns the node's floating point value.
 fn json_float(v *Json) f64 { return v.num; }
 
+/// Returns the node's string value.
 fn json_str(v *Json) str { return v.s; }
 
+/// Returns the number of array elements.
 fn json_arr_len(v *Json) i64 {
 	var n i64 = 0;
 	var e *Json = v.head;
@@ -312,6 +331,7 @@ fn json_arr_len(v *Json) i64 {
 	return n;
 }
 
+/// Returns the array element at a position.
 fn json_arr_at(v *Json, at i64) *Json {
 	var e *Json = v.head;
 	var n i64 = 0;
@@ -323,6 +343,7 @@ fn json_arr_at(v *Json, at i64) *Json {
 	return null;
 }
 
+/// Looks up an object value by key.
 fn json_get(v *Json, key str) *Json {
 	var p *Json = v.head;
 	while (p as i64 != 0) {
@@ -332,54 +353,61 @@ fn json_get(v *Json, key str) *Json {
 	return null;
 }
 
+/// Reports whether the object has a key.
 fn json_has(v *Json, key str) bool { return json_get(v, key) as i64 != 0; }
 
 // --- building ----------------------------------------------------------
 
-// An empty object; json_put fills it. Values chain in insertion order.
+/// Creates an empty object node.
 fn json_obj_new() *Json {
 	var o *Json = json_alloc(J_OBJ);
 	o.head = null;
 	return o;
 }
 
-// An empty array; json_arr_push appends.
+/// Creates an empty array node.
 fn json_arr_new() *Json {
 	var a *Json = json_alloc(J_ARR);
 	a.head = null;
 	return a;
 }
 
+/// Creates a string value node.
 fn json_str_new(s str) *Json {
 	var v *Json = json_alloc(J_STR);
 	v.s = s;
 	return v;
 }
 
+/// Creates an integer value node.
 fn json_int_new(i i64) *Json {
 	var v *Json = json_alloc(J_INT);
 	v.i = i;
 	return v;
 }
 
+/// Creates a floating point value node.
 fn json_num_new(num f64) *Json {
 	var v *Json = json_alloc(J_FLOAT);
 	v.num = num;
 	return v;
 }
 
+/// Creates a boolean value node.
 fn json_bool_new(b bool) *Json {
 	var v *Json = json_alloc(J_BOOL);
 	v.i = b as i64;
 	return v;
 }
 
+/// Creates a null value node.
 fn json_null_new() *Json {
 	return json_alloc(J_NULL);
 }
 
 // Adds a key/value pair to an object. Keys are stored as given; the
 // caller owns the string's lifetime (arena strings are fine).
+/// Adds a key and value pair to an object.
 fn json_put(v *Json, key str, val *Json) {
 	var p *Json = json_alloc(J_PAIR);
 	p.s = key;
@@ -390,7 +418,7 @@ fn json_put(v *Json, key str, val *Json) {
 	last.next = p;
 }
 
-// Appends an element to an array.
+/// Appends an element to an array.
 fn json_arr_push(v *Json, x *Json) {
 	var last *Json = v.head;
 	if (last as i64 == 0) { v.head = x; return; }
@@ -398,6 +426,7 @@ fn json_arr_push(v *Json, x *Json) {
 	last.next = x;
 }
 
+/// Returns the number of object pairs.
 fn json_obj_len(v *Json) i64 {
 	var n i64 = 0;
 	var p *Json = v.head;
@@ -408,6 +437,7 @@ fn json_obj_len(v *Json) i64 {
 // The elements of a JSON array as a slice, so `for e in json_view(a)`
 // iterates them with the language's checked loop. A non-array yields an
 // empty slice.
+/// Returns the array elements as a slice.
 fn json_view(v *Json) []*Json {
 	var n i64 = json_arr_len(v);
 	var out **Json = arena_alloc(n * 8, 8) as **Json;
@@ -426,12 +456,14 @@ fn json_view(v *Json) []*Json {
 
 // --- printing -----------------------------------------------------------
 
+/// Serializes a node tree to a JSON string.
 fn json_strify(v *Json) str {
 	var b Buf;
 	json_emit(&b, v);
 	return buf_str(&b);
 }
 
+/// Writes the JSON text of a node to a buffer.
 fn json_emit(b *Buf, v *Json) {
 	if (v.kind == J_NULL) { fmt_str(b, "null"); return; }
 	if (v.kind == J_BOOL) {
@@ -480,6 +512,7 @@ fn json_emit(b *Buf, v *Json) {
 	}
 }
 
+/// Writes a string escaped and quoted to a buffer.
 fn json_emit_str(b *Buf, s str) {
 	buf_u8(b, '"');
 	var i i64 = 0;

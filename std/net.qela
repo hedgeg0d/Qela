@@ -35,14 +35,17 @@ struct SockAddr {
 	pad    [8]u8,
 }
 
+/// Converts a port number to network byte order.
 fn net_htons(p i64) u16 {
 	return (((p & 255) << 8) | ((p >> 8) & 255)) as u16;
 }
 
+/// Packs four octets into a 32-bit address.
 fn net_ip4(a i64, b i64, c i64, d i64) u32 {
 	return (a | (b << 8) | (c << 16) | (d << 24)) as u32;
 }
 
+/// Parses a dotted decimal IP string into an address.
 fn net_parse_ip(s str) u32 {
 	var part [4]i64;
 	var n i64 = 0;
@@ -62,14 +65,17 @@ fn net_parse_ip(s str) u32 {
 	return net_ip4(part[0], part[1], part[2], part[3]);
 }
 
+/// Creates a stream socket and returns its descriptor.
 fn net_socket() i64 {
 	return syscall(SYS_SOCKET_N2, AF_INET, SOCK_STREAM, 0);
 }
 
+/// Closes a socket descriptor.
 fn net_close(fd i64) i64 {
 	return sys_close(fd);
 }
 
+/// Binds and listens on the given port.
 fn net_listen(port i64) i64 {
 	var fd i64 = net_socket();
 	if (fd < 0) { return fd; }
@@ -92,6 +98,7 @@ fn net_listen(port i64) i64 {
 	return fd;
 }
 
+/// Accepts a connection and returns its descriptor.
 fn net_accept(fd i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_ACCEPT_N2, fd, 0, 0, 0);
@@ -99,6 +106,7 @@ fn net_accept(fd i64) i64 {
 	return syscall(SYS_ACCEPT_N2, fd, 0, 0);
 }
 
+/// Connects to a host and port over TCP.
 fn net_connect(host str, port i64) i64 {
 	var fd i64 = net_socket();
 	if (fd < 0) { return fd; }
@@ -114,10 +122,12 @@ fn net_connect(host str, port i64) i64 {
 	return fd;
 }
 
+/// Writes a string to the socket descriptor.
 fn net_send(fd i64, s str) i64 {
 	return sys_write(fd, s.ptr, s.len);
 }
 
+/// Reads up to n bytes from the socket into buf.
 fn net_recv(fd i64, buf *u8, n i64) i64 {
 	return sys_read(fd, buf, n);
 }

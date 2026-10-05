@@ -9,6 +9,7 @@ struct Buf {
 
 // Doubles through the arena; the old block is never freed because the
 // compiler lives for exactly one compilation.
+/// Ensures the buffer has room for need more bytes, reallocating if not.
 fn buf_grow(b *Buf, need i64) {
 	if (b.n + need <= b.cap) { return; }
 	var cap i64 = b.cap;
@@ -25,6 +26,7 @@ fn buf_grow(b *Buf, need i64) {
 	b.cap = cap;
 }
 
+/// Views the buffer's bytes as a string without copying.
 fn buf_str(b *Buf) str {
 	var s str;
 	s.ptr = b.p;
@@ -32,6 +34,7 @@ fn buf_str(b *Buf) str {
 	return s;
 }
 
+/// Appends one byte.
 fn buf_u8(b *Buf, v u8) {
 	buf_grow(b, 1);
 	var p *u8 = b.p + b.n;
@@ -39,11 +42,13 @@ fn buf_u8(b *Buf, v u8) {
 	b.n = b.n + 1;
 }
 
+/// Appends v as two little-endian bytes.
 fn buf_u16(b *Buf, v i64) {
 	buf_u8(b, (v & 255) as u8);
 	buf_u8(b, ((v >> 8) & 255) as u8);
 }
 
+/// Appends v as four little-endian bytes.
 fn buf_u32(b *Buf, v i64) {
 	buf_u8(b, (v & 255) as u8);
 	buf_u8(b, ((v >> 8) & 255) as u8);
@@ -51,11 +56,13 @@ fn buf_u32(b *Buf, v i64) {
 	buf_u8(b, ((v >> 24) & 255) as u8);
 }
 
+/// Appends v as eight little-endian bytes.
 fn buf_u64(b *Buf, v i64) {
 	buf_u32(b, v);
 	buf_u32(b, v >> 32);
 }
 
+/// Appends n raw bytes from data.
 fn buf_bytes(b *Buf, data *u8, n i64) {
 	buf_grow(b, n);
 	var i i64 = 0;
@@ -67,6 +74,7 @@ fn buf_bytes(b *Buf, data *u8, n i64) {
 	b.n = b.n + n;
 }
 
+/// Overwrites four bytes at offset at with v, little-endian.
 fn buf_patch32(b *Buf, at i64, v i64) {
 	var p *u8 = b.p + at;
 	*p = (v & 255) as u8;
