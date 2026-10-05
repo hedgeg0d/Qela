@@ -1,23 +1,63 @@
 # Where the project stands
 
-Updated 2026-08-10. Read `BOOTSTRAP.md` first; it constrains everything below.
+Updated 2026-08-11. Read `BOOTSTRAP.md` first; it constrains everything below.
 
 ## Numbers
 
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **615 512 B** |
-| stage1 sources | 20 608 lines of Qela |
+| **S2 — the shipped compiler, Qela compiled by itself** | **664 752 B** (63.4% of the 1 MiB budget) |
+| stage1 sources | ~21 500 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
 
-Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 147-test corpus under S2, the embedded stdlib resolving outside the source tree,
+Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 158-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
 backtrace, interpolation and the repl, the compiler flags (`-g`,
 `--backtrace`, `--no-bounds-checks`, `--dump-std`), and a scripted language
 server conversation.
 
 ## Done
+
+**The scripting and OS batch (2026-08-11).** Eleven features in one pass;
+this file covers each batch in full, including the two bugs found on
+the way. Costs +49 240 B in S2 (615 512 -> 664 752), corpus 147 -> 158.
+
+- **Closures.** A lambda captures the enclosing function's locals by value.
+  A closure value is one word — a pointer to an arena record
+  `[code, captures...]` with bit 0 tagged — so `fn(...)` types, the calling
+  convention and every existing function value are unchanged; the env
+  travels in the argument register after the declared ones. x86 function
+  entries are padded to an even address so an untagged code pointer can
+  never look like a closure. Works compiled and under `qela irun`.
+- **`Opt(T)`, `Res(T, E)` and `?`.** `expr?` returns the enclosing
+  function's `None`/`Err(...)` early and evaluates to the payload
+  otherwise, hoisted to the statement boundary at parse time.
+- **Composite literals.** `[1, 2, 3]` array literals (nested, inferred or
+  declared element type) and `["a": 1]` map literals. Arrays assign now,
+  so `var a [3]i64 = [...]` and `b = a` copy.
+- **`Map(V)`.** A typed open-addressing hash map with `str` keys, dense
+  insertion-ordered storage and a `[]str` view. `m[k]` and `m[k] = v`
+  work through a general rule: indexing a struct calls `<prefix>_get` /
+  `<prefix>_put` / `<prefix>_set`, so `v[0] = x` works on a `Vec` too.
+- **for-in over any type.** `for x in v` uses `<prefix>_iter` (a
+  `*Gen(T)`) or `<prefix>_view` (a slice), where the prefix is the type
+  name lowercased with generic arguments cut.
+- **`${}` prints structs, enums, arrays, slices and bools**, through a
+  printer generated per interpolated type on first use — a program that
+  never prints a struct carries no printing code.
+- **String library**: index/contains/starts/ends/trim/cat/repeat/lower/
+  upper/cmp/count/replace/to_int.
+- **std: time, TCP sockets, process spawn** (`std/time.qela`,
+  `std/net.qela`, `std/proc.qela`), verified over real loopback.
+- **`packed struct` and bit fields** (`flags u8 : 3`), rewritten into
+  shifts and masks at type time.
+- **Machine intrinsics and `fn interrupt`**: `outb`/`inb` and friends,
+  `cli`/`sti`/`hlt`, `lgdt`/`lidt`/`invlpg`, `write_cr3`/`read_cr2`/
+  `read_cr3`, `rdmsr`/`wrmsr` (x86_64 only), plus a handler that saves
+  every register and ends in `iretq`.
+- **`--base` with 64-bit absolute addressing**, so a higher-half kernel
+  at `0xffffffff80000000` builds.
 
 **`for x in ch` over a channel (2026-08-10).** Go's `for v := range ch`:
 receive until the channel is closed and drained. The loop desugars to
