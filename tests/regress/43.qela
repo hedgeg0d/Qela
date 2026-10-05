@@ -1,0 +1,78 @@
+// expect-exit: 6
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = 29;
+fn min2(a int, b int) int { if (a < b) { return a; } else { return b; } }
+fn fact(n int) int { if (n <= 1) { return 1; } return n * fact(n - 1); }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn wide_sum(w Wide) int { return w.a + w.b + w.c; }
+fn bag_sum(b Bag) int { return b.p + b.q + b.r + b.s; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 8;
+    var v1 int = 6;
+    var v2 int = 6;
+    var sv0 str = "xyz";
+    var sv1 str = "abc";
+    var fv double = 2.0;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    w = Wide{a: ((((gv as double) >= fv) as u16) as i8), b: ("xyz").len, c: opt_d(D.None)};
+    match (e) {
+        A => {
+            return v2;
+        }
+        B(mb0) => {
+            return (-1 * mb0);
+        }
+        C(mb0, mb1) => {
+            return (((-tag_e(e)) as i16) * mb1);
+        }
+    }
+    i0 = 0;
+    while ((i0 < 4)) {
+        e = E.B((1 >= (opt_d(D.Some((gv & gv))) <= fact((p.x & 15)))));
+        a[i0] = str_eq("hi", "zz");
+        i0 = (i0 + 1);
+    }
+    e = E.C(((117 - ((-804 - '1') % ((('g' != 3) & 15) + 1))) > ((false < (-620 <= true)) < str_eq("hello", sv1))), ((((((sv0)[0..2])[0..2]).len as u16) as u16) as u8));
+    v0, v1 = (("hello")[1..4]).len, -618;
+    p = pair_swap(p);
+    v2 >>= str_eq(sv0, sv0);
+    gv = (((!fact(('1' & 15))) as i32) * ((v1 | (127 >> 494)) as i16));
+    var ob Buf;
+    fmt_i64(&ob, v0);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return (((!(1 as i16)) << (p.y - ('e' ^ '0'))) | ("aa")[0]);
+}

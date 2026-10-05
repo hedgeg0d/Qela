@@ -1,0 +1,85 @@
+// expect-exit: 0
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+fn sum3(a int, b int, c int) int { return a + b + c; }
+fn diff4(a int, b int, c int, d int) int { return a - b - c - d; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn wide_sum(w Wide) int { return w.a + w.b + w.c; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 10;
+    var v1 int = 8;
+    var v2 int = 8;
+    var sv0 str = "abcd";
+    var sv1 str = "42";
+    var fv double = 10.5;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    p = pair_swap(p);
+    v0 = (!(((-592 + v0) <= ('\t' as u16)) != ((42 == 127) < (("xyzzy")[2..4])[0])));
+    match (e) {
+        A => {
+            return opt_d(D.None);
+        }
+        B(mb0) => {
+            return ((("aa")[0] - (!sum3((!'c'), (464 > false), (!'3')))) | mb0);
+        }
+        C(mb0, mb1) => {
+            return (sv1)[1];
+        }
+    }
+    fv = 3.75;
+    sv1 = "qwerty";
+    if ((((fv / 1.7) < fv) >= str_eq("foobar", "zz"))) {
+        i1 = 0;
+        while ((i1 < 3)) {
+            i1 = (i1 + 1);
+            v1 = (((str_eq(("qwerty")[0..4], "hi") as double) / 0.125) == (((v2 as u8) as double) / 0.5));
+            v0, v2 = v2, v0;
+            a[(((((-v2) as i16) != (1 - a[(436 & 3)])) + (!sum3((2.5 as i64), (v0 < 10), tag_e(e)))) & 3)] = ((((996 != v1) & (-755)) >> -801) << ((!(2 + false)) as u32));
+        }
+        n.tag = 3;
+        return -634;
+    } else {
+        v0 = (str_eq(sv0, (("abcd")[1..4])[0..2]) as u32);
+    }
+    v2 *= ((sum3(('1' >= 'b'), 'g', (-273)) + ((v1 < true) == (860 as i16))) & false);
+    v0 = v0;
+    v0 = (((sum3(false, v0, 'g') as i8) as u16) == ('3' as u32));
+    n.tag = (((v2 != (10 >> v0)) as i32) as u16);
+    var ob Buf;
+    fmt_i64(&ob, v1);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return str_eq("zz", (sv0)[0..2]);
+}

@@ -1,0 +1,68 @@
+// expect-exit: 0
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = -5;
+fn add2(a int, b int) int { return a + b; }
+fn max2(a int, b int) int { if (a > b) { return a; } else { return b; } }
+fn sum3(a int, b int, c int) int { return a + b + c; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn nest_sum(n Nest) int { return n.tag + n.p.x + n.p.y; }
+fn wide_sum(w Wide) int { return w.a + w.b + w.c; }
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 3;
+    var v1 int = 1;
+    var v2 int = 10;
+    var sv0 str = "hi";
+    var sv1 str = "xyz";
+    var fv double = 2.0;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    e = E.C(p.y, str_eq(("hi")[0..2], (("qwerty")[0..6])[0..2]));
+    p.x = (((fv / 0.3) != ((fv / 0.125) / 0.125)) & (fv < ((100.0 / 10.5) * fv)));
+    p = pair_swap(p);
+    a[((v0 ^ ((!(-673)) + ((1 as u8) >> true))) & 3)] = (fv > (fv / 0.25));
+    p.y = (!(!0));
+    match (e) {
+        A => {
+            return (-(!wide_sum(w)));
+        }
+        B(mb0) => {
+            return (('d' * ((((("foobar")[1..5])[0..2])[0] as i8) == ((false < 472) >= ('2' >> v0)))) + mb0);
+        }
+        C(mb0, mb1) => {
+            return ((v1 >> ("no")[1]) - mb1);
+        }
+    }
+    a[(((((fv / 10.5) == (2.0 * 10.5)) as u16) << '3') & 3)] = (-(('f' | (sv1).len) + a[(a[('f' & 3)] & 3)]));
+    n.p.x = a[(((-('d' ^ 900)) ^ (-('\n' | gv))) & 3)];
+    var ob Buf;
+    fmt_i64(&ob, v2);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return ((a[(sum3(42, 514, 100) & 3)] <= ((!-466) <= ('d' & false))) as u8);
+}

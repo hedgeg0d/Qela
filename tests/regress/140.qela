@@ -1,0 +1,63 @@
+// expect-exit: 100
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+fn add2(a int, b int) int { return a + b; }
+fn min2(a int, b int) int { if (a < b) { return a; } else { return b; } }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn wide_sum(w Wide) int { return w.a + w.b + w.c; }
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 6;
+    var v1 int = 4;
+    var v2 int = 0;
+    var sv0 str = "xyz";
+    var sv1 str = "abcd";
+    var fv double = 0.25;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    i0 = 0;
+    while ((i0 < 4)) {
+        v2 = a[(((false & (("xyzzy")[0..4])[0]) << (str_eq(("xyzzy")[2..4], sv0) as u32)) & 3)];
+        p = Pair{x: 'd', y: ((((true == 255) / (((3 & -214) & 15) + 1)) | (true as u8)) >= ((('b' ^ v0) != (v1 <= 42)) >= ((false < v2) as u32)))};
+        a[i0] = (((('0' * v2) | v2) / (((100 % (((381 as u32) & 15) + 1)) & 15) + 1)) < (-(-true)));
+        i0 = (i0 + 1);
+    }
+    n.p.x = 'd';
+    b = Bag{p: min2(((2.5 / 3.75) as i64), (str_eq("aa", sv1) << (1 | v1))), q: (((wide_sum(w) as u16) != str_eq("hello", (sv1)[0..2])) << opt_d(D.Some(pair_sum(p)))), r: (!((v0 > (-1 + false)) < ((-1.5 / 0.1) as i64))), s: (true % ((add2(add2((1.0 as i64), str_eq(("xyzzy")[1..4], ("xyz")[0..2])), wide_sum(w)) & 15) + 1))};
+    v2 &= (!((!(-2.0 as i64)) == ((false > '1') - (false == v1))));
+    e = E.B(-17);
+    v2 /= ((-764 & 15) + 1);
+    a[((v0 / (((((-v1) + (v2 as i32)) << (str_eq((sv0)[0..2], sv0) * (791 as i16))) & 15) + 1)) & 3)] = ((((--872) | ("42")[1]) as u32) <= (((("qwerty")[0..3])[1] as i32) <= ((-v1) * ("xyz")[1])));
+    v1 = (a[((((("qwerty")[0..4])[0..2])[0..2]).len & 3)] & (-(661 == p.x)));
+    v2 = -217;
+    fv = (10.5 / 100.0);
+    v0 = 'c';
+    var ob Buf;
+    fmt_i64(&ob, v1);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return p.x;
+}

@@ -1,0 +1,69 @@
+// expect-exit: 0
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = 2;
+fn add2(a int, b int) int { return a + b; }
+fn zero() int { return 3; }
+fn sub2(a int, b int) int { return a - b; }
+fn fact(n int) int { if (n <= 1) { return 1; } return n * fact(n - 1); }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn nest_sum(n Nest) int { return n.tag + n.p.x + n.p.y; }
+fn wide_swap(w Wide) Wide { return Wide{a: w.b, b: w.a, c: w.c}; }
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 5;
+    var v1 int = 4;
+    var v2 int = 1;
+    var sv0 str = "hi";
+    var sv1 str = "qwerty";
+    var fv double = 0.5;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    match (e) {
+        A => {
+            return (fv as i64);
+        }
+        B(mb0) => {
+            return gv;
+        }
+        C(mb0, mb1) => {
+            return ((2.0 / 1.7) < (((fv * fv) / 1.7) / -1.5));
+        }
+    }
+    fv = fv;
+    w = wide_swap(w);
+    n.tag = str_eq(("abc")[0..3], "foobar");
+    a[((((fact(('b' & 15)) <= opt_d(D.Some(1))) as u32) as u32) & 3)] = (add2((!true), ((gv > -585) * true)) | (((false - -572) > ('e' % ((127 & 15) + 1))) as u16));
+    n.p.x = (-(((false as double) / 1.0) as i64));
+    fv = (fv - ((-0.5 + fv) * 0.25));
+    v2 *= (opt_d(D.None) / (((((false as double) * ('0' as double)) as i64) & 15) + 1));
+    a[(v0 & 3)] = ((opt_d(D.Some(str_eq(sv1, sv0))) as i16) > (-1 == (nest_sum(Nest{tag: (!(!gv)), p: Pair{x: 'g', y: true}}) != sub2(302, gv))));
+    var ob Buf;
+    fmt_i64(&ob, v1);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return 'e';
+}

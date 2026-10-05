@@ -1,0 +1,97 @@
+// expect-exit: 0
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = -36;
+fn sub2(a int, b int) int { return a - b; }
+fn zero() int { return 3; }
+fn sum3(a int, b int, c int) int { return a + b + c; }
+fn diff4(a int, b int, c int, d int) int { return a - b - c - d; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn wide_make(a int, b int, c int) Wide { return Wide{a: a, b: b, c: c}; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 6;
+    var v1 int = 8;
+    var v2 int = 5;
+    var sv0 str = "hi";
+    var sv1 str = "hi";
+    var fv double = 3.75;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    match (e) {
+        A => {
+            return opt_d(D.None);
+        }
+        B(mb0) => {
+            return 'f';
+        }
+        C(mb0, mb1) => {
+            return (((((1.7 >= 1.7) as double) / 1.7) >= 0.5) + mb1);
+        }
+    }
+    gv, v1 = false, (str_eq("xyz", "abcd") & true);
+    v1, v2 = (tag_e(e) * (a[('e' & 3)] - (gv as u8))), ((v2 * ((-521 == -481) + (gv as i16))) % ((a[(gv & 3)] & 15) + 1));
+    v0 = ('c' > 989);
+    a[(((fv / 2.0) as i64) & 3)] = (("42").len > (((gv as double) as i64) as i16));
+    p.x = (v1 - gv);
+    match (e) {
+        A => {
+            return (a[(str_eq(("zz")[0..2], sv0) & 3)] << (fv == fv));
+        }
+        B(mb0) => {
+            return (((((true % ((-314 & 15) + 1)) ^ true) + ((-v1) as i16)) as u8) - mb0);
+        }
+        C(mb0, mb1) => {
+            return (v2 / (((!((false as double) as i64)) & 15) + 1));
+        }
+    }
+    fv = (((708 ^ (-781)) as u16) as double);
+    v0 = '\n';
+    fv = -2.0;
+    match (e) {
+        A => {
+            return (p.y > ((3 as i8) >> ((fv < fv) * 795)));
+        }
+        B(mb0) => {
+            return (((((-402 < 127) as u16) as i8) != (gv == ((false ^ gv) >= 'c'))) * mb0);
+        }
+        C(mb0, mb1) => {
+            return gv;
+        }
+    }
+    var ob Buf;
+    fmt_i64(&ob, v1);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return (fv >= 2.5);
+}

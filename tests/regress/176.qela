@@ -1,0 +1,68 @@
+// expect-exit: 1
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+fn add2(a int, b int) int { return a + b; }
+fn max2(a int, b int) int { if (a > b) { return a; } else { return b; } }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn nest_sum(n Nest) int { return n.tag + n.p.x + n.p.y; }
+fn bag_sum(b Bag) int { return b.p + b.q + b.r + b.s; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn main() int {
+    var v0 int = 4;
+    var v1 int = 9;
+    var v2 int = 5;
+    var sv0 str = "hi";
+    var sv1 str = "no";
+    var fv double = 10.5;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    match (e) {
+        A => {
+            return ((-v1) <= (true as u8));
+        }
+        B(mb0) => {
+            return ((!((v1 * (-'a')) == (!a[(true & 3)]))) * mb0);
+        }
+        C(mb0, mb1) => {
+            return ((("aa").len as u16) - mb1);
+        }
+    }
+    v0 >>= ((-((-302 * -663) >= (10 > 2))) > v1);
+    v1, v2 = v2, v1;
+    v2 = (((p.y as u8) & ((false - -218) << v1)) <= v0);
+    p.y = ((2 == ((-1.5 / 0.1) >= (fv / 0.1))) / ((v0 & 15) + 1));
+    b = Bag{p: (((-(fv as i64)) * (127 >= str_eq(("hello")[2..4], ((sv1)[0..2])[0..2]))) / (((fv > 1.5) & 15) + 1)), q: v0, r: ("hi")[0], s: '1'};
+    v1 = ((true ^ (((sv1)[0..2])[0..2])[0]) < (p.x >= (('0' - 985) * (255 << -836))));
+    v1 += (str_eq(((sv0)[0..2])[0..2], ((("abc")[0..3])[0..2])[0..2]) * 'f');
+    p.x = (fv as i64);
+    v1 /= (((p.y < a[((('1' != false) - (-461 >= 'd')) & 3)]) & 15) + 1);
+    var ob Buf;
+    fmt_i64(&ob, v0);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return (sv1)[1];
+}

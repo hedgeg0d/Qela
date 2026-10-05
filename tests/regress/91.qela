@@ -1,0 +1,91 @@
+// expect-exit: 4
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = -3;
+fn mix5(a int, b int, c int, d int, e int) int { return a + b - c + d - e; }
+fn mul2(a int, b int) int { return a * b; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn bag_sum(b Bag) int { return b.p + b.q + b.r + b.s; }
+fn nest_sum(n Nest) int { return n.tag + n.p.x + n.p.y; }
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn main() int {
+    var v0 int = 7;
+    var v1 int = 3;
+    var v2 int = 3;
+    var sv0 str = "xyzzy";
+    var sv1 str = "hello";
+    var fv double = 1.5;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    i0 = 0;
+    while ((i0 < 2)) {
+        i0 = (i0 + 1);
+        e = E.C((((a[('3' & 3)] <= gv) != opt_d(D.Some(v0))) <= p.x), ((((gv ^ 869) | a[(-982 & 3)]) != (!(("hello")[2..5]).len)) != (("xyzzy")[1..4]).len));
+        match (e) {
+            A => {
+                return (((true % (((true as u8) & 15) + 1)) << (('2' as u8) != a[(3 & 3)])) as i32);
+            }
+            B(mb0) => {
+                return ((-mul2((("zz")[1] > (10 >= gv)), str_eq(sv0, ("xyz")[0..3]))) * mb0);
+            }
+            C(mb0, mb1) => {
+                return ((255 % (('\t' & 15) + 1)) ^ mb1);
+            }
+        }
+    }
+    gv = (gv as i16);
+    v1 = ((str_eq("xyzzy", sv1) | (true - opt_d(D.Some(-600)))) > gv);
+    v1 = (v0 == (-(sv1).len));
+    e = E.C((-1 as u8), (!(((fv as i64) << (2 * -1)) >= tag_e(e))));
+    v1 = (1 * (fv > ((true as double) / -2.0)));
+    e = E.C(tag_e(e), (((p.y % (((582 as u32) & 15) + 1)) as u8) != (sv1).len));
+    fv = ((100.0 + ((3.75 / 1.7) / 2.5)) * (((1.0 / 2.0) / -0.5) * fv));
+    fv = ((('g' as i32) - (-(10 < gv))) as double);
+    v1 = ((bag_sum(b) / ((((gv as u32) <= ('f' ^ false)) & 15) + 1)) as u16);
+    match (e) {
+        A => {
+            return mul2((false & ((-'3') < (-67))), 'g');
+        }
+        B(mb0) => {
+            return ((-("aa")[0]) & mb0);
+        }
+        C(mb0, mb1) => {
+            return 255;
+        }
+    }
+    var ob Buf;
+    fmt_i64(&ob, v0);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return (((!(v0 as u32)) >> ((-434 != 'b') > (106 << 1))) as i8);
+}

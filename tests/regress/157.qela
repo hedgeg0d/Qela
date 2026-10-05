@@ -1,0 +1,72 @@
+// expect-exit: 7
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = 44;
+fn twice(n int) int { return n + n; }
+fn max2(a int, b int) int { if (a > b) { return a; } else { return b; } }
+fn mul2(a int, b int) int { return a * b; }
+fn add2(a int, b int) int { return a + b; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn wide_make(a int, b int, c int) Wide { return Wide{a: a, b: b, c: c}; }
+fn wide_swap(w Wide) Wide { return Wide{a: w.b, b: w.a, c: w.c}; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn main() int {
+    var v0 int = 1;
+    var v1 int = 0;
+    var v2 int = 1;
+    var sv0 str = "zz";
+    var sv1 str = "zz";
+    var fv double = 0.3;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    b = Bag{p: 100, q: ((0.125 < ((false as double) - fv)) as i16), r: tag_e(e), s: ((sv1)[0] - gv)};
+    match (e) {
+        A => {
+            return ((str_eq(sv1, ("foobar")[2..6]) % (((-p.y) & 15) + 1)) | (tag_e(e) as i16));
+        }
+        B(mb0) => {
+            return ((((!(0.125 <= fv)) >> add2((fv >= fv), (gv << v2))) >= (sv1)[1]) + mb0);
+        }
+        C(mb0, mb1) => {
+            return (((((gv as i32) >> (-42)) % ((gv & 15) + 1)) as u32) - mb1);
+        }
+    }
+    sv0 = "hi";
+    fv = ((((!true) >= (fv > fv)) - ('d' + (561 as u32))) as double);
+    v1 = ((((!-59) - (0 as u32)) < gv) as u8);
+    n.tag = (!str_eq((("abcd")[1..4])[0..2], sv1));
+    e = E.C(add2((false <= tag_e(e)), (((-1.5 as i64) as double) <= 0.25)), ((-2.0 == (-1.5 - (-294 as double))) <= false));
+    a[((((('e' ^ 761) / ((mul2(gv, 'b') & 15) + 1)) / ((p.x & 15) + 1)) > ((v2 as i8) as i16)) & 3)] = ((((0.25 / 100.0) as i64) as u8) < (((false >> -133) != ('e' << 983)) % (('c' & 15) + 1)));
+    sv1 = ("qwerty")[0..4];
+    fv = 1.5;
+    fv = (fv / 2.5);
+    var ob Buf;
+    fmt_i64(&ob, v0);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return 'b';
+}

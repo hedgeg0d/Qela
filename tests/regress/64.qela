@@ -1,0 +1,69 @@
+// expect-exit: 1
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = 42;
+fn sub2(a int, b int) int { return a - b; }
+fn mix6(a int, b int, c int, d int, e int, f int) int { return a - b + c - d + e - f; }
+fn mix5(a int, b int, c int, d int, e int) int { return a + b - c + d - e; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn wide_make(a int, b int, c int) Wide { return Wide{a: a, b: b, c: c}; }
+fn nest_sum(n Nest) int { return n.tag + n.p.x + n.p.y; }
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 0;
+    var v1 int = 1;
+    var v2 int = 6;
+    var sv0 str = "aa";
+    var sv1 str = "abc";
+    var fv double = 1.5;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    v2 = (((fv / 10.5) >= fv) >> 'b');
+    e = E.C((((!(10 ^ true)) + ((true >> -1) & gv)) % ((((-(true >> 313)) >= (-997 as u8)) & 15) + 1)), true);
+    v0 = ((((-2.0 / 0.125) - (-891 as double)) * ((true | 26) as double)) as i64);
+    e = E.B((((89 as u32) + (!(0.1 < fv))) < (p.y | ((false ^ v1) <= ("qwerty")[0]))));
+    e = E.B((((a[('b' & 3)] as u16) as double) as i64));
+    v0 = (p.x != '3');
+    v1 = '1';
+    w = Wide{a: ((!'1') % (((-((-0.5 as i64) as u16)) & 15) + 1)), b: ((((-v2) < str_eq(sv1, "no")) + p.y) == (((!'1') ^ (false % ((v1 & 15) + 1))) ^ (false as i16))), c: a[((!(!p.y)) & 3)]};
+    match (e) {
+        A => {
+            return ((p.x <= str_eq(("qwerty")[1..6], "zz")) + '3');
+        }
+        B(mb0) => {
+            return ((fv as i64) - mb0);
+        }
+        C(mb0, mb1) => {
+            return (((182 <= (str_eq(("hello")[0..2], "hello") & (false > v0))) ^ (-(('1' ^ '0') * a[('0' & 3)]))) ^ mb1);
+        }
+    }
+    var ob Buf;
+    fmt_i64(&ob, v0);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return 42;
+}
