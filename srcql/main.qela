@@ -1067,7 +1067,6 @@ let ABI_REQ_JIT = 6;
 let ABI_REQ_PARSE = 7;
 let ABI_REQ_RUN_AST = 8;
 let ABI_RESP_OK = 1;
-let ABI_RESP_ERR = 2;
 
 struct AstEntry;
 struct AstEntry {
@@ -1185,61 +1184,6 @@ fn abi_build_var_args(mv *Marshalled, n int) *Node {
 // The layout is the mirror of what interp_gen_marshal emits on the host:
 // scalars as 8-byte slots, strs length-prefixed, POD aggregates as raw
 // images, everything else field by field in member order.
-fn abi_unmarshal_value(p *u8, addr i64, ty *Type) *u8 {
-	if (ty.kind == TY_SLICE) {
-		var slen i64 = abi_decode_u64(p);
-		var sp *u8 = 0 as *u8;
-		if (slen > 0) {
-			var tmp str;
-			tmp.ptr = p + 8;
-			tmp.len = slen;
-			sp = str_dup(tmp).ptr;
-		}
-		ip_st64(addr, sp as i64);
-		ip_st64(addr + 8, slen);
-		return p + 8 + slen;
-	}
-	if (ty.kind == TY_STRUCT && !interp_struct_pod(ty)) {
-		var m *Member = ty.members;
-		while (m as i64 != 0) {
-			p = abi_unmarshal_value(p, addr + m.offset, m.ty);
-			m = m.next;
-		}
-		return p;
-	}
-	if (is_aggregate(ty)) {
-		ip_memcpy(addr, p as i64, ty.size as i64);
-		return p + ty.size;
-	}
-	var v i64 = abi_decode_u64(p);
-	ip_store(addr, ty, v);
-	return p + 8;
-}
-
-fn abi_marshal_value(b *Buf, addr i64, ty *Type) {
-	if (ty.kind == TY_SLICE) {
-		var sp i64 = ip_ld64(addr);
-		var slen i64 = ip_ld64(addr + 8);
-		buf_u64(b, slen);
-		if (slen > 0) { buf_bytes(b, sp as *u8, slen); }
-		return;
-	}
-	if (ty.kind == TY_STRUCT && !interp_struct_pod(ty)) {
-		var m *Member = ty.members;
-		while (m as i64 != 0) {
-			abi_marshal_value(b, addr + m.offset, m.ty);
-			m = m.next;
-		}
-		return;
-	}
-	if (is_aggregate(ty)) {
-		buf_bytes(b, addr as *u8, ty.size as i64);
-		return;
-	}
-	var v i64 = ip_load(addr, ty);
-	buf_u64(b, v);
-}
-
 fn abi_try_call_nodes(f *Func, arghead *Node) bool {
 	var pid i64 = sys_fork();
 	if (pid == 0) {
