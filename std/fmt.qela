@@ -249,9 +249,8 @@ fn fdig_allzero(a *u8, start i64, end i64) bool {
 	return true;
 }
 
-// bits: the raw IEEE754 double bit pattern. Ties round half-up rather than
-// half-to-even and denormals print as 0 -- acceptable for a hobby compiler,
-// not for a libc (dec_to_f64_bits carries the same limitations).
+// bits: the raw IEEE754 double bit pattern.  Both normal and subnormal
+// values use the same binary expansion below.
 /// Appends a double given as its raw IEEE754 bit pattern.
 fn fmt_f64_bits(b *Buf, bits i64) {
 	var sign i64 = (bits >> 63) & 1;
@@ -353,7 +352,7 @@ fn fdig_print_int(b *Buf, arr *u8, n i64) {
 }
 
 // `${x:.2f}`: fixed-point with exactly `prec` digits after the point,
-// rounding half-up on the prec+1-th digit. The carry can ripple into the
+// rounding to nearest with ties to even. The carry can ripple into the
 // integer part, so the fraction is fully rounded before it is printed.
 /// Appends a double fixed to prec digits after the point.
 fn fmt_f64_fixed(b *Buf, bits i64, prec i64) {
@@ -426,7 +425,12 @@ fn fmt_f64_fixed(b *Buf, bits i64, prec i64) {
 		digs[k] = fdig_mul10(frac, 0, w) as u8;
 		k = k + 1;
 	}
-	var round_up bool = fdig_mul10(frac, 0, w) >= 5;
+	var round_digit i64 = fdig_mul10(frac, 0, w);
+	var sticky bool = !fdig_allzero(frac, 0, w);
+	var odd bool = (intv & 1) != 0;
+	if (prec > 0) { odd = (digs[prec - 1] as i64 & 1) != 0; }
+	var round_up bool = round_digit > 5 ||
+		(round_digit == 5 && (sticky || odd));
 	var carry bool = round_up;
 	k = prec;
 	while (k > 0 && carry) {
