@@ -1966,9 +1966,6 @@ fn x86_lower_op(op *IrOp) {
 		return;
 	}
 	if (op.kind == IR_ASSERT) {
-		// test; jnz over a direct call to the message's stub. The call is a
-		// fixed five bytes, so the jnz is always in short range and nothing
-		// here needs branch relaxation.
 		test_rax();
 		var id i64 = jump(0x85);
 		b1(0xe8);
