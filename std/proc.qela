@@ -1,0 +1,71 @@
+import "sys.qela";
+import "str.qela";
+import "arena.qela";
+import "buf.qela";
+
+fn proc_argv(path str, args []str) *u8 {
+	var n i64 = args.len + 2;
+	var v *i64 = arena_alloc(n * 8, 8) as *i64;
+	*(v + 0) = cstr(path) as i64;
+	var i i64 = 0;
+	while (i < args.len) {
+		*(v + i + 1) = cstr(args[i]) as i64;
+		i = i + 1;
+	}
+	*(v + args.len + 1) = 0;
+	return v as *u8;
+}
+
+fn proc_status(raw i64) i64 {
+	return (raw >> 8) & 255;
+}
+
+fn proc_run(path str, args []str) i64 {
+	var argv *u8 = proc_argv(path, args);
+	var pid i64 = sys_fork();
+	if (pid == 0) {
+		sys_execve(cstr(path), argv, 0 as *u8);
+		sys_exit(127);
+	}
+	if (pid < 0) { return -1; }
+	var raw i64 = 0;
+	sys_wait4(pid, &raw as *u8);
+	return proc_status(raw);
+}
+
+fn proc_capture(path str, args []str, code *i64) str {
+	var argv *u8 = proc_argv(path, args);
+	var fds [2]i32;
+	if (sys_pipe2(&fds[0], 0) < 0) {
+		*code = -1;
+		return "";
+	}
+	var rd i64 = fds[0] as i64;
+	var wr i64 = fds[1] as i64;
+	var pid i64 = sys_fork();
+	if (pid == 0) {
+		sys_close(rd);
+		sys_dup2(wr, 1);
+		sys_close(wr);
+		sys_execve(cstr(path), argv, 0 as *u8);
+		sys_exit(127);
+	}
+	sys_close(wr);
+	if (pid < 0) {
+		sys_close(rd);
+		*code = -1;
+		return "";
+	}
+	var b Buf;
+	var chunk [4096]u8;
+	while (true) {
+		var got i64 = sys_read(rd, &chunk[0], 4096);
+		if (got <= 0) { break; }
+		buf_bytes(&b, &chunk[0], got);
+	}
+	sys_close(rd);
+	var raw i64 = 0;
+	sys_wait4(pid, &raw as *u8);
+	*code = proc_status(raw);
+	return buf_str(&b);
+}
