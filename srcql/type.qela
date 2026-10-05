@@ -1346,6 +1346,59 @@ fn type_intrinsic(n *Node) bool {
 	return false;
 }
 
+// Whether gen_addr can materialise the expression's address. Everything
+// gen_addr handles natively (a var, a deref, a member or index of an
+// addressable, a slice header) plus the literals that materialise in a
+// temp. A call result is never addressable: gen_addr falls through to
+// gen_expr and leaves the value in the accumulator, not an address, so
+// auto-& must reject it here rather than silently corrupt the call.
+fn is_addr_expr(n *Node) bool {
+	var k int = n.kind;
+	if (k == ND_VAR) { return true; }
+	if (k == ND_DEREF) { return true; }
+	if (k == ND_SLICE) { return true; }
+	if (k == ND_STRUCTLIT) { return true; }
+	if (k == ND_ENUMLIT) { return true; }
+	if (k == ND_MEMBER) { return is_addr_expr(n.lhs); }
+	if (k == ND_INDEX) { return is_addr_expr(n.lhs); }
+	return false;
+}
+
+// The receiver of a dot-call (`x.foo(args)` desugared to `foo(x, args)`)
+// may be a value or a pointer; the first parameter of foo decides which
+// form to pass. A value receiver for a pointer parameter becomes an
+// address-of; a pointer receiver for a value parameter becomes a deref.
+// Anything else passes through unchanged, so a genuine type error still
+// surfaces from the ordinary argument checking.
+fn dot_receiver(a *Node, want *Type, pos i64) *Node {
+	if (want.kind == TY_PTR) {
+		if (a.ty.kind == TY_PTR) { return a; }
+		if (same_type(want.base, a.ty)) {
+			if (!is_addr_expr(a)) {
+				error_at(pos, "cannot call a method with a pointer first parameter on a temporary");
+			}
+			var ad *Node = node_alloc();
+			ad.kind = ND_ADDR;
+			ad.lhs = a;
+			ad.ty = want;
+			ad.typed = true;
+			ad.pos = a.pos;
+			return ad;
+		}
+		return a;
+	}
+	if (a.ty.kind == TY_PTR && same_type(want, a.ty.base)) {
+		var d *Node = node_alloc();
+		d.kind = ND_DEREF;
+		d.lhs = a;
+		d.ty = want;
+		d.typed = true;
+		d.pos = a.pos;
+		return d;
+	}
+	return a;
+}
+
 fn type_call(n *Node) {
 	if (type_intrinsic(n)) { return; }
 	if (n.varp as i64 != 0) { type_indirect_call(n); return; }
@@ -1369,6 +1422,7 @@ fn type_call(n *Node) {
 		a.next = 0 as *Node;
 		var pv *Var = func_param(f, i);
 		var want *Type = pv.ty;
+		if (n.dotcall && i == 0) { a = dot_receiver(a, want, n.pos); }
 		i = i + 1;
 		a = coerce(a, want);
 		if (is_aggregate(want)) {
