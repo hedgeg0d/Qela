@@ -368,6 +368,7 @@ fn expect_reject_target(src str) bool {
 			while (j < src.len && src.ptr[j] == ' ') { j = j + 1; }
 			if (j + 3 < src.len && src.ptr[j] == 'x') { return opt_target == TARGET_X86_64; }
 			if (j + 4 < src.len && src.ptr[j] == 'a') { return opt_target == TARGET_ARM64; }
+			if (j + 6 < src.len && src.ptr[j] == 'r') { return opt_target == TARGET_RISCV64; }
 			return true;
 		}
 		i = i + 1;
@@ -740,13 +741,14 @@ fn main(argc int, argv **u8) int {
 			opt_debug = true;
 		} else if (str_eq(a, "-c")) {
 			opt_object = true;
-		} else if (str_eq(a, "--target") || str_eq(a, "-t")) {
+		} else 		if (str_eq(a, "--target") || str_eq(a, "-t")) {
 			i = i + 1;
-			if (i == argc) { die("error: --target needs x86_64 or arm64"); }
+			if (i == argc) { die("error: --target needs x86_64, arm64 or riscv64"); }
 			var t str = str_from_cstr(argv[i]);
 			if (str_eq(t, "x86_64")) { opt_target = TARGET_X86_64; }
 			else if (str_eq(t, "arm64")) { opt_target = TARGET_ARM64; }
-			else { die("error: --target must be x86_64 or arm64"); }
+			else if (str_eq(t, "riscv64")) { opt_target = TARGET_RISCV64; }
+			else { die("error: --target must be x86_64, arm64 or riscv64"); }
 		} else if (str_eq(a, "-D")) {
 			i = i + 1;
 			if (i == argc) { die("error: -D needs NAME=VALUE"); }
@@ -784,6 +786,7 @@ fn main(argc int, argv **u8) int {
 		i = i + 1;
 	}
 
+	if (opt_target == TARGET_RISCV64) { comptime_set("TARGET", "riscv64"); }
 	if (opt_target == TARGET_ARM64) { comptime_set("TARGET", "arm64"); }
 
 	if (!have_input) {

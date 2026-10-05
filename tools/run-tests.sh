@@ -11,6 +11,8 @@ TARGET="${TARGET:-x86_64}"
 QEMU="${QEMU:-}"
 if [ "$TARGET" = "arm64" ]; then
 	QELA="$QELA --target arm64"
+elif [ "$TARGET" = "riscv64" ]; then
+	QELA="$QELA --target riscv64"
 fi
 OUT="tests/out"
 mkdir -p "$OUT"
@@ -27,12 +29,16 @@ for src in tests/*.qela; do
 		continue
 	fi
 
-	if [ "$TARGET" = "arm64" ] && grep -q '^// x86-only' "$src"; then
+	if [ "$TARGET" != "x86_64" ] && grep -q '^// x86-only' "$src"; then
 		printf 'skip %-16s x86-only\n' "$name"
 		continue
 	fi
 	if [ "$TARGET" != "arm64" ] && grep -q '^// arm64-only' "$src"; then
 		printf 'skip %-16s arm64-only\n' "$name"
+		continue
+	fi
+	if [ "$TARGET" = "riscv64" ] && grep -q '^// riscv-only' "$src"; then
+		printf 'skip %-16s riscv-only\n' "$name"
 		continue
 	fi
 
@@ -44,9 +50,12 @@ for src in tests/*.qela; do
 	if grep -q '^// expect-compile-error arm64' "$src"; then
 		want_reject=1
 		[ "$TARGET" = "arm64" ] || want_reject=0
+	elif grep -q '^// expect-compile-error riscv64' "$src"; then
+		want_reject=1
+		[ "$TARGET" = "riscv64" ] || want_reject=0
 	elif grep -q '^// expect-compile-error x86' "$src"; then
 		want_reject=1
-		[ "$TARGET" != "arm64" ] || want_reject=0
+		[ "$TARGET" != "arm64" ] && [ "$TARGET" != "riscv64" ] || want_reject=0
 	elif grep -q '^// expect-compile-error' "$src"; then
 		want_reject=1
 	fi
