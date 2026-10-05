@@ -1,0 +1,53 @@
+// stage1-only
+// interp-skip
+// expect-exit: 42
+packed struct Gdtr {
+	limit u16,
+	base  u64,
+}
+
+struct PageEntry {
+	present u64 : 1,
+	write   u64 : 1,
+	user    u64 : 1,
+	ignored u64 : 9,
+	frame   u64 : 40,
+}
+
+var ticks i64 = 0;
+
+fn interrupt timer() {
+	ticks = ticks + 1;
+	outb(0x20, 0x20);
+}
+
+fn setup(port i64) i64 {
+	cli();
+	outb(port, 0x11);
+	outw(port, 0x1234);
+	outl(port, 0x12345678);
+	var v i64 = inb(port) + inw(port) + inl(port);
+	var g Gdtr;
+	g.limit = 23 as u16;
+	g.base = 0x1000 as u64;
+	lgdt(&g as i64);
+	lidt(&g as i64);
+	invlpg(0x1000);
+	write_cr3(0x2000);
+	v = v + read_cr2() + read_cr3() + rdmsr(0xc0000080);
+	wrmsr(0xc0000080, v);
+	sti();
+	hlt();
+	return v;
+}
+
+fn main() int {
+	var e PageEntry;
+	e.present = 1 as u64;
+	e.write = 1 as u64;
+	e.frame = 0xabcde as u64;
+	if (sizeof(Gdtr) != 10) { return 1; }
+	if (e.present != 1 || e.write != 1 || e.user != 0) { return 2; }
+	if (e.frame != 0xabcde) { return 3; }
+	return 42;
+}

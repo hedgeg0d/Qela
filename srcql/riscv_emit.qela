@@ -851,9 +851,9 @@ var riscv_image_hdr i64 = 0;   // EHDR+PHDR bytes before the code, set by codege
 
 fn riscv_patch_auipc_addi(at i64, addr i64) {
 	// The AUIPC's own address is `at` (code.n coordinates), its absolute
-	// position ELF_BASE + riscv_image_hdr + at; the immediate is the
+	// position opt_base + riscv_image_hdr + at; the immediate is the
 	// PC-relative delta.
-	var pc i64 = ELF_BASE + riscv_image_hdr + at;
+	var pc i64 = opt_base + riscv_image_hdr + at;
 	var delta i64 = addr - pc;
 	var hi i64 = (delta + 0x800) >> 12;
 	var lo i64 = delta - (hi << 12);
@@ -1328,7 +1328,7 @@ fn riscv_bt_walker() {
 	riscv_mov_reg(A4, ZERO);                  // i
 	var scan_at i64 = code.n;
 	riscv_i(0, A2, 2, A5, 0x03);              // lw a5, 0(a2): delta
-	riscv_li64(T2, ELF_BASE);
+	riscv_li64(T2, opt_base);
 	riscv_r(0, T2, A5, 0, A5, 0x33);          // a5 = a5 + t2 (start addr)
 	riscv_b(0, A5, T0, 6, 0x63);              // bltu t0, a5, endscan
 	var endscan_at i64 = code.n - 4;
