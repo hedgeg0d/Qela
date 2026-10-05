@@ -1847,10 +1847,13 @@ fn type_call(n *Node) {
 			if (!same_type(want, a.ty)) {
 				emsg("argument must have type '"); emsg_ty(want); emsg("'"); efail(a.pos);
 			}
-			if (want.size > 16) {
+			if (want.size > 16 || (pv.arg_stack && f.extern && want.size > 8)) {
 				a.tmp = alloc_temp(want);
 				if (a.tmp as i64 == 0) {
 					error_at(a.pos, "this call needs a function scope");
+				}
+				if (want.size > 8 && want.size <= 16) {
+					a.byval_spill = true;
 				}
 			}
 			tail.next = a;
@@ -1864,14 +1867,17 @@ fn type_call(n *Node) {
 			reject_float_mismatch(a, want, a.pos);
 			tail.next = cast_to(a, want);
 		}
-		// A stack-passed argument's final one-word value (a scalar, or the
+		// The stack-passed argument's final one-word value (a scalar, or the
 		// address of a by-ref/small-aggregate copy) is staged in its own
 		// temp, then pushed in reverse order after every register argument
 		// is placed -- see gen_args. An extern MEMORY-class argument (a
 		// struct wider than 16 bytes passed by value) skips this temp
-		// entirely: the spill block copies the bytes from a.tmp, staged
-		// above, straight into the outgoing stack area.
-		if (pv.arg_stack && !(f.extern && is_aggregate(want) && abi_by_ref(want.size))) {
+		// entirely, and so does a straddling two-word value (a str or
+		// 16-byte struct that no longer fits the GPRs): the spill block
+		// copies the bytes from a.tmp, staged above, straight into the
+		// outgoing stack area.
+		if (pv.arg_stack && !(f.extern && is_aggregate(want) &&
+		    (abi_by_ref(want.size) || want.size > 8))) {
 			tail.next.stack_tmp = alloc_temp(ty_i64);
 		}
 		tail = tail.next;
