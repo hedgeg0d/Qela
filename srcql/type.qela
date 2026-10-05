@@ -746,7 +746,9 @@ fn clone_func(f *Func) *Func {
 
 	i = subst_n;
 	while (i < f.nparams) {
-		set_func_param(f2, f2.nparams, remap_var(func_param(f, i)));
+		var pv *Var = remap_var(func_param(f, i));
+		pv.by_ref = is_aggregate(pv.ty) && abi_by_ref(pv.ty.size);
+		set_func_param(f2, f2.nparams, pv);
 		f2.nparams = f2.nparams + 1;
 		i = i + 1;
 	}
