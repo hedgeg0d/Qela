@@ -1,0 +1,65 @@
+import "comp.qela";
+import "std_blob.qela";
+
+var blob_unpacked *u8;
+
+fn blob_unpack() *u8 {
+	if (blob_unpacked as i64 != 0) { return blob_unpacked; }
+	var total i64 = std_blob_total();
+	var src *u8 = arena_alloc(std_blob_packed_len() + 1, 1);
+	var n i64 = 0;
+	var ci int = 0;
+	var nc int = std_blob_nchunks();
+	while (ci < nc) {
+		var part str = std_blob_chunk(ci);
+		var k i64 = 0;
+		while (k < part.len) {
+			src[n] = part.ptr[k];
+			n = n + 1;
+			k = k + 1;
+		}
+		ci = ci + 1;
+	}
+	var out *u8 = arena_alloc(total + 1, 1);
+	var si i64 = 0;
+	var oi i64 = 0;
+	while (oi < total) {
+		var flags i64 = src[si] as i64;
+		si = si + 1;
+		var bit int = 0;
+		while (bit < 8 && oi < total) {
+			if ((flags & (1 << (bit as i64))) != 0) {
+				out[oi] = src[si];
+				si = si + 1;
+				oi = oi + 1;
+			} else {
+				var code i64 = ((src[si] as i64) << 8) | (src[si + 1] as i64);
+				si = si + 2;
+				var dist i64 = (code >> 4) + 1;
+				var len i64 = (code & 15) + 3;
+				var from i64 = oi - dist;
+				var k2 i64 = 0;
+				while (k2 < len) {
+					out[oi] = out[from + k2];
+					oi = oi + 1;
+					k2 = k2 + 1;
+				}
+			}
+			bit = bit + 1;
+		}
+	}
+	out[total] = 0;
+	blob_unpacked = out;
+	return out;
+}
+
+fn std_blob_src(i int) str {
+	var s str;
+	s.ptr = 0 as *u8;
+	s.len = 0;
+	var off i64 = std_blob_off(i);
+	if (off < 0) { return s; }
+	s.ptr = blob_unpack() + off;
+	s.len = std_blob_len(i);
+	return s;
+}
