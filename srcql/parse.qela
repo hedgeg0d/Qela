@@ -2705,6 +2705,35 @@ fn parse(tok *Token) *Unit {
 		all_funcs = head.next;
 	}
 
+	if (find_func("abi_spawn") as i64 != 0 && find_func("__eval_set_dispatch") as i64 == 0) {
+		var sb Buf;
+		fmt_str(&sb, "fn __eval_set_dispatch(name str, v i64) { if (name.ptr as i64 == v) { return; }");
+		var sv *Var = global_vars;
+		while (sv as i64 != 0) {
+			if (sv.eval_export) {
+				interp_check_scalar(sv.ty, sv.pos, "global types");
+				fmt_str(&sb, " if (str_eq(name, \"");
+				fmt_str(&sb, sv.name);
+				fmt_str(&sb, "\")) { ");
+				fmt_str(&sb, sv.name);
+				fmt_str(&sb, " = v as ");
+				fmt_str(&sb, type_name(sv.ty));
+				fmt_str(&sb, "; return; }");
+			}
+			sv = sv.next;
+		}
+		fmt_str(&sb, " }");
+
+		var sfile int = diag_add_file("<eval-set-dispatch>", buf_str(&sb));
+		var stoks *Token = lex(buf_str(&sb), (sfile as i64) << FILE_SHIFT);
+		var snf *Func = parse_function(&stoks, false);
+		if (funcs_tail as i64 == 0) { head.next = snf; }
+		else { funcs_tail.next = snf; }
+		funcs_tail = snf;
+		if (head.next as i64 == 0) { head.next = all_funcs; }
+		all_funcs = head.next;
+	}
+
 	leave_scope();
 
 	var f *Func = head.next;
