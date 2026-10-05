@@ -434,9 +434,7 @@ fn gen_tls_init_stub_arm64() {
 	arm64_svc();
 
 	arm64_mov_reg(X2, X0);               // x2 = dst (the new block)
-	arm64_movz(X1, 0, 0);                // x1 = template address (placeholder)
-	arm64_movk(X1, 0, 1);
-	ilist_push(&tls_src_refs, code.n - 8);
+	ilist_push(&tls_src_refs, arm64_addr_slot(X1));
 	arm64_mov_imm64(X3, tls_block_size / 8);
 	var loop i64 = code.n;
 	arm64_ld_at(X9, X1, 0);              // copy one 8-byte word
@@ -755,6 +753,22 @@ fn arm64_patch_movz_movk_addr(at i64, addr i64) {
 	var w1 i64 = buf_read32(&code, at + 4);
 	buf_patch32(&code, at, w0 | ((addr & 0xffff) << 5));
 	buf_patch32(&code, at + 4, w1 | (((addr >> 16) & 0xffff) << 5));
+	if (!base_is_wide()) { return; }
+	var w2 i64 = buf_read32(&code, at + 8);
+	var w3 i64 = buf_read32(&code, at + 12);
+	buf_patch32(&code, at + 8, w2 | (((addr >> 32) & 0xffff) << 5));
+	buf_patch32(&code, at + 12, w3 | (((addr >> 48) & 0xffff) << 5));
+}
+
+fn arm64_addr_slot(reg int) i64 {
+	arm64_movz(reg, 0, 0);
+	var at i64 = code.n - 4;
+	arm64_movk(reg, 0, 1);
+	if (base_is_wide()) {
+		arm64_movk(reg, 0, 2);
+		arm64_movk(reg, 0, 3);
+	}
+	return at;
 }
 
 // Object mode (-c) loads every absolute address through an ADRP+ADD_LO12
@@ -797,10 +811,8 @@ fn arm64_gen_panic_stub(msg_id int, msg_len i64) {
 		arm64_svc();
 		return;
 	}
-	ilist_push(&panic_msg_at, code.n);
 	ilist_push(&panic_msg_ids, msg_id as i64);
-	arm64_movz(X1, 0, 0);
-	arm64_movk(X1, 0, 1);
+	ilist_push(&panic_msg_at, arm64_addr_slot(X1));
 	arm64_mov_imm64(X0, 2);
 	arm64_mov_imm64(X2, msg_len);
 	arm64_mov_imm64(X8, SYS_ARM64_WRITE);
@@ -864,12 +876,10 @@ fn arm64_add_strref(id int) {
 		return;
 	}
 	var f *StrFixup = arena_alloc(sizeof(StrFixup), 8) as *StrFixup;
-	f.at = code.n;
 	f.id = id;
 	if (strrefs_tail as i64 == 0) { strrefs_head = f; } else { strrefs_tail.next = f; }
 	strrefs_tail = f;
-	arm64_movz(X0, 0, 0);
-	arm64_movk(X0, 0, 1);
+	f.at = arm64_addr_slot(X0);
 }
 
 
@@ -895,12 +905,10 @@ fn arm64_add_dataref_reg(reg int, v *Var) {
 		return;
 	}
 	var f *DataFixup = arena_alloc(sizeof(DataFixup), 8) as *DataFixup;
-	f.at = code.n;
 	f.varp = v;
 	if (datarefs_tail as i64 == 0) { datarefs_head = f; } else { datarefs_tail.next = f; }
 	datarefs_tail = f;
-	arm64_movz(reg, 0, 0);
-	arm64_movk(reg, 0, 1);
+	f.at = arm64_addr_slot(reg);
 }
 
 
@@ -923,8 +931,7 @@ fn arm64_add_funcaddr(name str, pos i64) {
 	f.pos = pos;
 	if (funcaddrs_tail as i64 == 0) { funcaddrs_head = f; } else { funcaddrs_tail.next = f; }
 	funcaddrs_tail = f;
-	arm64_movz(X0, 0, 0);
-	arm64_movk(X0, 0, 1);
+	arm64_addr_slot(X0);
 }
 
 
