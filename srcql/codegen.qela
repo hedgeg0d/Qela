@@ -1969,6 +1969,15 @@ fn gen_expr(n *Node) {
 			buf_u64(&code, 0);
 			return;
 		}
+		if (str_eq(n.name, "cli") || str_eq(n.name, "sti") || str_eq(n.name, "hlt") ||
+		    str_eq(n.name, "outb") || str_eq(n.name, "outw") || str_eq(n.name, "outl") ||
+		    str_eq(n.name, "inb") || str_eq(n.name, "inw") || str_eq(n.name, "inl") ||
+		    str_eq(n.name, "lgdt") || str_eq(n.name, "lidt") || str_eq(n.name, "invlpg") ||
+		    str_eq(n.name, "write_cr3") || str_eq(n.name, "read_cr2") ||
+		    str_eq(n.name, "read_cr3") || str_eq(n.name, "rdmsr") || str_eq(n.name, "wrmsr")) {
+			gen_machine(n);
+			return;
+		}
 		if (str_eq(n.name, "atomic_cas")) {
 			if (opt_target == TARGET_RISCV64) { riscv_gen_atomic_cas(n); return; }
 			if (opt_target == TARGET_ARM64) { gen_atomic_cas(n); return; }
@@ -2599,6 +2608,20 @@ fn add_absref_arm64(name str, pos i64) {
 }
 
 
+fn gen_isr_save() {
+	push_reg(RAX); push_reg(RCX); push_reg(RDX); push_reg(RBX);
+	push_reg(RSI); push_reg(RDI);
+	var r int = 8;
+	while (r < 16) { push_reg(r); r = r + 1; }
+}
+
+fn gen_isr_restore() {
+	var r int = 15;
+	while (r >= 8) { pop_reg(r); r = r - 1; }
+	pop_reg(RDI); pop_reg(RSI);
+	pop_reg(RBX); pop_reg(RDX); pop_reg(RCX); pop_reg(RAX);
+}
+
 fn gen_epilogue(pos i64) {
 	gen_restore();
 	// An exported extern function returns a float in xmm0 (SysV) / d0 or s0
@@ -2611,6 +2634,12 @@ fn gen_epilogue(pos i64) {
 	if (!gen_frameless && opt_target == TARGET_RISCV64) { riscv_leave_frame(); }
 	else if (!gen_frameless && opt_target == TARGET_ARM64) { arm64_leave_frame(); }
 	else if (!gen_frameless) { b1(0xc9); }
+	if (gen_fn.interrupt) {
+		ir_flush();
+		gen_isr_restore();
+		b1(0x48); b1(0xcf);
+		return;
+	}
 	ir_ret(pos);
 }
 
@@ -2720,6 +2749,77 @@ fn gen_extern_params_arm64(f *Func) {
 }
 
 
+fn gen_machine(n *Node) {
+	if (opt_target != TARGET_X86_64) {
+		error_at(n.pos, "this instruction exists only on x86_64");
+	}
+	if (n.nargs > 0) { gen_args(n, false, false, -1, false); }
+	ir_flush();
+	if (str_eq(n.name, "cli")) { b1(0xfa); return; }
+	if (str_eq(n.name, "sti")) { b1(0xfb); return; }
+	if (str_eq(n.name, "hlt")) { b1(0xf4); return; }
+	if (str_eq(n.name, "outb") || str_eq(n.name, "outw") || str_eq(n.name, "outl")) {
+		b1(0x89); modrm(3, RDI, RDX);
+		b1(0x89); modrm(3, RSI, RAX);
+		if (str_eq(n.name, "outb")) { b1(0xee); return; }
+		if (str_eq(n.name, "outw")) { b1(0x66); }
+		b1(0xef);
+		return;
+	}
+	if (str_eq(n.name, "inb") || str_eq(n.name, "inw") || str_eq(n.name, "inl")) {
+		b1(0x89); modrm(3, RDI, RDX);
+		b1(0x31); modrm(3, RAX, RAX);
+		if (str_eq(n.name, "inb")) { b1(0xec); return; }
+		if (str_eq(n.name, "inw")) { b1(0x66); }
+		b1(0xed);
+		return;
+	}
+	if (str_eq(n.name, "lgdt")) {
+		b1(0x0f); b1(0x01); modrm(0, 2, RDI);
+		return;
+	}
+	if (str_eq(n.name, "lidt")) {
+		b1(0x0f); b1(0x01); modrm(0, 3, RDI);
+		return;
+	}
+	if (str_eq(n.name, "invlpg")) {
+		b1(0x0f); b1(0x01); modrm(0, 7, RDI);
+		return;
+	}
+	if (str_eq(n.name, "write_cr3")) {
+		b1(0x0f); b1(0x22); modrm(3, 3, RDI);
+		return;
+	}
+	if (str_eq(n.name, "read_cr2")) {
+		b1(0x0f); b1(0x20); modrm(3, 2, RAX);
+		return;
+	}
+	if (str_eq(n.name, "read_cr3")) {
+		b1(0x0f); b1(0x20); modrm(3, 3, RAX);
+		return;
+	}
+	if (str_eq(n.name, "rdmsr")) {
+		b1(0x89); modrm(3, RDI, RCX);
+		b1(0x0f); b1(0x32);
+		b1(0x48); b1(0xc1); modrm(3, 4, RDX); b1(32);
+		b1(0x48); b1(0x09); modrm(3, RDX, RAX);
+		return;
+	}
+	b1(0x89); modrm(3, RDI, RCX);
+	b1(0x89); modrm(3, RSI, RAX);
+	b1(0x48); b1(0x89); modrm(3, RSI, RDX);
+	b1(0x48); b1(0xc1); modrm(3, 5, RDX); b1(32);
+	b1(0x0f); b1(0x30);
+}
+
+fn patch64(b *Buf, at i64, v i64) {
+	var k i64 = 0;
+	while (k < 8) {
+		b.p[at + k] = ((v >> (k * 8)) & 255) as u8;
+		k = k + 1;
+	}
+}
+
 fn gen_func(f *Func) {
 	// An extern declaration has no body; the symbol comes from the linker
 	// (only valid under -c, which skips this whole path).
@@ -2730,6 +2830,15 @@ fn gen_func(f *Func) {
 	if (opt_target == TARGET_X86_64 && (code.n & 1) != 0) { b1(0x90); }
 	f.addr = code.n;
 	line_mark(f.pos);
+	if (f.interrupt) {
+		if (opt_target != TARGET_X86_64) {
+			error_at(f.pos, "an interrupt handler exists only on x86_64");
+		}
+		if (f.ret.kind != TY_VOID) {
+			error_at(f.pos, "an interrupt handler returns nothing");
+		}
+		gen_isr_save();
+	}
 	depth = 0;
 	gen_fn = f;
 	cur_loop = 0 as *Loop;
@@ -3257,7 +3366,7 @@ fn emit_code(u *Unit, main_fn *Func, panic_id int, hdr i64) {
 		else { gen_coro_stub(); }
 		var si i64 = 0;
 		while (si < coro_stub_refs.n) {
-			var abs i64 = ELF_BASE + hdr + coro_stub_at;
+			var abs i64 = opt_base + hdr + coro_stub_at;
 			if (opt_target == TARGET_RISCV64) { riscv_patch_auipc_addi(coro_stub_refs.p[si], abs); }
 			else if (opt_target == TARGET_ARM64) { arm64_patch_movz_movk_addr(coro_stub_refs.p[si], abs); }
 			else {
@@ -3449,7 +3558,7 @@ fn codegen(u *Unit, img *Image) {
 	}
 
 	// The backtrace's function table: u64 count, then one {u32 delta from
-	// ELF_BASE, u32 name_off} per function in source order, then the
+	// opt_base, u32 name_off} per function in source order, then the
 	// NUL-terminated names. The walker resolves an address with a linear
 	// scan, so the table is deliberately unsorted.
 	var bt_table_off i64 = -1;
@@ -3499,7 +3608,7 @@ fn codegen(u *Unit, img *Image) {
 	}
 	while ((rodata.n & 7) != 0) { buf_u8(&rodata, 0); }
 
-	var dbase i64 = ELF_BASE + SEG_GAP + hdr + code.n + rodata.n;
+	var dbase i64 = opt_base + SEG_GAP + hdr + code.n + rodata.n;
 	embed_patch(dbase);
 	if (opt_target == TARGET_RISCV64) {
 		var bi i64 = 0;
@@ -3560,7 +3669,7 @@ fn codegen(u *Unit, img *Image) {
 			emsg("extern '"); emsg(af.name);
 			emsg("' is not linked (extern needs -c and the linker)"); efail(af.pos);
 		}
-		var abs2 i64 = ELF_BASE + hdr + at.addr;
+		var abs2 i64 = opt_base + hdr + at.addr;
 		if (opt_target == TARGET_RISCV64) { riscv_patch_auipc_addi(af.at, abs2); }
 		else if (opt_target == TARGET_ARM64) { arm64_patch_movz_movk_addr(af.at, abs2); }
 		else {
@@ -3594,7 +3703,7 @@ fn codegen(u *Unit, img *Image) {
 		var afn *Func = find_func(ar.name);
 		var aval i64 = 0;
 		if (afn as i64 != 0) {
-			aval = ELF_BASE + hdr + afn.addr;
+			aval = opt_base + hdr + afn.addr;
 		} else {
 			var gv *Var = find_global(ar.name);
 			if (gv as i64 == 0) {
@@ -3616,14 +3725,15 @@ fn codegen(u *Unit, img *Image) {
 
 	var sf *StrFixup = strrefs_head;
 	while (sf as i64 != 0) {
-		var sf_addr i64 = ELF_BASE + hdr + code.n + str_off[sf.id];
+		var sf_addr i64 = opt_base + hdr + code.n + str_off[sf.id];
 		if (opt_target == TARGET_RISCV64) { riscv_patch_auipc_addi(sf.at, sf_addr); }
 		else if (opt_target == TARGET_ARM64) { arm64_patch_movz_movk_addr(sf.at, sf_addr); }
+		else if (base_is_wide()) { patch64(&code, sf.at, sf_addr); }
 		else { buf_patch32(&code, sf.at, sf_addr); }
 		sf = sf.next;
 	}
 
-	var rodata_vaddr i64 = ELF_BASE + hdr + code.n;
+	var rodata_vaddr i64 = opt_base + hdr + code.n;
 	var pm i64 = 0;
 	while (pm < panic_msg_at.n) {
 		var pm_addr i64 = rodata_vaddr + bytes_off[panic_msg_ids.p[pm]];
@@ -3659,6 +3769,7 @@ fn codegen(u *Unit, img *Image) {
 			riscv_patch_auipc_addi(df.at, dbase + df.varp.data_off);
 		}
 		else if (opt_target == TARGET_ARM64) { arm64_patch_movz_movk_addr(df.at, dbase + df.varp.data_off); }
+		else if (base_is_wide()) { patch64(&code, df.at, dbase + df.varp.data_off); }
 		else { buf_patch32(&code, df.at, dbase + df.varp.data_off); }
 		df = df.next;
 	}

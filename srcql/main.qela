@@ -2375,6 +2375,31 @@ fn cmd_repl(argc int, argv **u8) int {
 
 }
 
+fn parse_addr(s str) i64 {
+	var v i64 = 0;
+	var i i64 = 0;
+	if (s.len > 2 && s.ptr[0] == '0' && (s.ptr[1] == 'x' || s.ptr[1] == 'X')) {
+		i = 2;
+		while (i < s.len) {
+			var c u8 = s.ptr[i];
+			var d i64 = -1;
+			if (c >= '0' && c <= '9') { d = c as i64 - '0' as i64; }
+			else if (c >= 'a' && c <= 'f') { d = c as i64 - 'a' as i64 + 10; }
+			else if (c >= 'A' && c <= 'F') { d = c as i64 - 'A' as i64 + 10; }
+			if (d < 0) { die("error: --base needs a hex or decimal address"); }
+			v = (v << 4) | d;
+			i = i + 1;
+		}
+		return v;
+	}
+	while (i < s.len) {
+		if (s.ptr[i] < '0' || s.ptr[i] > '9') { die("error: --base needs a hex or decimal address"); }
+		v = v * 10 + (s.ptr[i] as i64 - '0' as i64);
+		i = i + 1;
+	}
+	return v;
+}
+
 fn cmd_help() int {
 	write_str(STDOUT, "usage: qela <file.qela> [-o output] [options]\n       qela . [dir]   build a project from a directory\n       qela run <file.qela> [args]\n       qela irun <file.qela|dir> [args]\n       qela test <file.qela|dir> [files...] [-- args]\n       qela fmt <file.qela>\n       qela repl\n       qela --lsp\n       qela --dump-std <module>\n\ncompile a Qela program to a static binary; '-' reads the source\nfrom stdin. A directory merges every .qela file under it,\nrecursively, into one program (entry: main.qela, or the sole file) --\nno imports needed between project files. 'run' compiles to a temp file and executes\nit, and panics print a backtrace there. 'irun' interprets the\nprogram in this process instead of compiling it -- no binary is\nwritten, and asm, naked functions and 'entry' are ignored with a\nwarning. 'test' runs the program and\nchecks its leading comments: // expect-exit: N, // expect-out: text\n(one line each, compared in order) and // expect-compile-error;\nseveral files can be tested in one run -- '--' separates the\nprogram arguments, e.g. qela test a.qela b.qela -- 5 6. 'repl'\ncompiles each line as an expression and prints its value.\n\nstrings interpolate, so n = ${40 + 2} prints 42 and pointers\nrender as hex; the expression is evaluated at runtime.\n\noptions:\n  -o <file>        output path (default: input name without .qela)\n  -c               emit a relocatable object (.o) for an external linker\n  --target, -t <t> x86_64 (default: the host architecture), arm64 or riscv64\n  -g               DWARF line info and symbols for gdb\n  --backtrace         print function frames on panic\n  --no-bounds-checks  disable index checks\n  --no-warn           suppress warnings\n  --interpreted       treat every function of your own as 'interpreted'\n  --jit               treat every function of your own as 'dynamic'\n  --color=auto|always|never  control coloured diagnostics (auto: tty + NO_COLOR)\n  -h, --help          this text\n");
 	return 0;
@@ -2466,6 +2491,11 @@ fn main(argc int, argv **u8) int {
 			var eq i64 = str_find(d, '=');
 			if (eq < 0) { die("error: -D needs NAME=VALUE"); }
 			comptime_set(str_slice(d, 0, eq), str_slice(d, eq + 1, d.len));
+		} else if (str_eq(a, "--base")) {
+			i = i + 1;
+			if (i == argc) { die("error: --base needs an address"); }
+			opt_base = parse_addr(str_from_cstr(argv[i]));
+			if ((opt_base & 4095) != 0) { die("error: --base must be page aligned"); }
 		} else if (str_eq(a, "--no-bounds-checks")) {
 			opt_no_bounds = true;
 		} else if (str_eq(a, "--backtrace")) {
