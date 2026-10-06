@@ -1,0 +1,66 @@
+// expect-exit: 2
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+fn diff4(a int, b int, c int, d int) int { return a - b - c - d; }
+fn mix5(a int, b int, c int, d int, e int) int { return a + b - c + d - e; }
+fn mul2(a int, b int) int { return a * b; }
+fn max2(a int, b int) int { if (a > b) { return a; } else { return b; } }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn wide_sum(w Wide) int { return w.a + w.b + w.c; }
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 0;
+    var v1 int = 7;
+    var v2 int = 7;
+    var sv0 str = "zz";
+    var sv1 str = "aa";
+    var fv double = 2.0;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    e = E.B(((!(((sv1)[0..2])[1] as i8)) as i32));
+    n.tag = (fv as i64);
+    p.y = v0;
+    v2, v0 = ((((10 >> 292) >= (false | '1')) / ((str_eq((sv0)[0..2], ("foobar")[1..4]) & 15) + 1)) as i16), (sv1)[0];
+    if (((false as i16) == opt_d(D.None))) {
+        p = Pair{x: ((!(!-834)) / ((str_eq(("xyz")[0..3], "abc") & 15) + 1)), y: ((!(a[(-15 & 3)] % (((true > '3') & 15) + 1))) <= (((0.5 as i64) % ((p.x & 15) + 1)) >= ((!10) as i16)))};
+        a[(false & 3)] = v2;
+    } else {
+        a[(false & 3)] = opt_d(D.None);
+    }
+    if (((((('0' > 'f') >> (true >> v1)) >= ('f' == (v1 >> false))) >> 'e') <= (-2))) {
+        fv = (((p.x / (((!'g') & 15) + 1)) as double) / 0.25);
+    } else {
+        v0 = (!(((v1 as u16) >> (100 > -616)) >> 'b'));
+        return (fv as i64);
+    }
+    e = E.B((a[((-1.5 as i64) & 3)] * (((!10) as i32) << ((true / ((v2 & 15) + 1)) != 255))));
+    a[('1' & 3)] = ((((-1 as double) as i64) as i16) as i8);
+    var ob Buf;
+    fmt_i64(&ob, v0);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return (255 ^ (((false ^ v0) as u8) << ((true - '1') ^ (-false))));
+}

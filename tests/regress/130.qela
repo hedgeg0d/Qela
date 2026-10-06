@@ -1,0 +1,87 @@
+// expect-exit: 0
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = 17;
+fn diff4(a int, b int, c int, d int) int { return a - b - c - d; }
+fn min2(a int, b int) int { if (a < b) { return a; } else { return b; } }
+fn mix6(a int, b int, c int, d int, e int, f int) int { return a - b + c - d + e - f; }
+fn twice(n int) int { return n + n; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn nest_sum(n Nest) int { return n.tag + n.p.x + n.p.y; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 10;
+    var v1 int = 1;
+    var v2 int = 8;
+    var sv0 str = "aa";
+    var sv1 str = "aa";
+    var fv double = 0.25;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    v1 = 340;
+    match (e) {
+        A => {
+            return ((!((121 < 359) as i32)) as i32);
+        }
+        B(mb0) => {
+            return ((sv0)[1] - mb0);
+        }
+        C(mb0, mb1) => {
+            return (((10.5 / 1.7) >= (0.1 / 3.75)) * mb1);
+        }
+    }
+    n = Nest{tag: str_eq(("xyz")[0..2], sv0), p: Pair{x: gv, y: nest_sum(n)}};
+    i0 = 0;
+    while ((i0 < 4)) {
+        if (((p.y < ((('\t' != '0') >= (gv / ((true & 15) + 1))) << ((1.0 as i64) & (gv > false)))) >= 383)) {
+            v2 = 269;
+            b = Bag{p: ((-v1) as u16), q: ((0.3 > fv) ^ (opt_d(D.None) >= (sv1).len)), r: gv, s: ((!(-(!true))) * '\n')};
+        } else {
+            v0, gv = gv, v0;
+        }
+        a[i0] = p.y;
+        i0 = (i0 + 1);
+    }
+    p.y = str_eq("hi", "xyz");
+    gv = gv;
+    v0, v2 = (((-false) - (mix6(v2, '1', gv, gv, -527, true) as u32)) <= pair_sum(p)), ((p.x == ((10 as i32) % ((min2(291, gv) & 15) + 1))) as u16);
+    e = E.B((('2' >> ((true | gv) as u8)) >= (diff4(twice(true), (-265 as i32), (42 < 120), str_eq(("xyz")[0..2], "42")) as u8)));
+    n = Nest{tag: (gv as u8), p: Pair{x: (str_eq(sv0, sv1) % (((false ^ ((sv1)[0] | (!-203))) & 15) + 1)), y: ((-true) % ((42 & 15) + 1))}};
+    v2 ^= ((-((100 & true) & (sv0).len)) + ((str_eq("foobar", sv1) as u8) * ((true << '0') > (true == -488))));
+    var ob Buf;
+    fmt_i64(&ob, v2);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return p.y;
+}
