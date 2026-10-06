@@ -275,6 +275,7 @@ struct StrLit {
 	s    str,
 	id   int,
 	off  i64,
+	nullhdr bool,
 }
 
 // A parse-time expression macro: the body is parsed once with the

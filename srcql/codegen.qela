@@ -3527,6 +3527,7 @@ fn codegen(u *Unit, img *Image) {
 		// reset_code clears the relocation lists at every pass boundary.
 		var sr *StrLit = u.strs;
 		while (sr as i64 != 0) {
+			if (sr.nullhdr) { sr = sr.next; continue; }
 			var fr *Reloc = arena_alloc(sizeof(Reloc), 8) as *Reloc;
 			fr.at = str_off[sr.id];
 			fr.id = sr.id as i64;
@@ -3758,6 +3759,7 @@ fn codegen(u *Unit, img *Image) {
 	s = u.strs;
 	while (s as i64 != 0) {
 		var abs i64 = rodata_vaddr + bytes_off[s.id];
+		if (s.nullhdr) { s = s.next; continue; }
 		var k i64 = 0;
 		while (k < 8) {
 			rodata.p[str_off[s.id] + k] = ((abs >> (k * 8)) & 255) as u8;

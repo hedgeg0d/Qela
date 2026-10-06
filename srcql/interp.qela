@@ -279,7 +279,8 @@ fn ip_layout(u *Unit, write bool) {
 		ip_lay_align(8);
 		if (write) {
 			s.off = ip_data + ip_lay;
-			ip_st64(ip_data + ip_lay, ip_data + bytes);
+			if (s.nullhdr) { ip_st64(ip_data + ip_lay, 0); }
+			else { ip_st64(ip_data + ip_lay, ip_data + bytes); }
 			ip_st64(ip_data + ip_lay + 8, s.s.len);
 		}
 		ip_lay = ip_lay + 16;
@@ -319,7 +320,8 @@ fn ip_repl_layout_strs(s *StrLit) {
 		ip_lay = ip_lay + s.s.len + 1;
 		ip_lay_align(8);
 		s.off = ip_data + ip_lay;
-		ip_st64(ip_data + ip_lay, ip_data + bytes);
+		if (s.nullhdr) { ip_st64(ip_data + ip_lay, 0); }
+		else { ip_st64(ip_data + ip_lay, ip_data + bytes); }
 		ip_st64(ip_data + ip_lay + 8, s.s.len);
 		ip_lay = ip_lay + 16;
 		s = s.next;
