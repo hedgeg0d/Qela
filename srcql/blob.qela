@@ -48,7 +48,7 @@ fn blob_unpack() *u8 {
 
 fn std_blob_src(i int) str {
 	var s str;
-	s.ptr = 0 as *u8;
+	s.ptr = null;
 	s.len = 0;
 	var off i64 = std_blob_off(i);
 	if (off < 0) { return s; }

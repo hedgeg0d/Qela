@@ -205,13 +205,13 @@ fn js_value() *JVal {
 }
 
 fn j_get(o *JVal, key str) *JVal {
-	if (o as i64 == 0) { return 0 as *JVal; }
+	if (o as i64 == 0) { return null; }
 	var m *JVal = o.item;
 	while (m as i64 != 0) {
 		if (str_eq(m.key, key)) { return m; }
 		m = m.next;
 	}
-	return 0 as *JVal;
+	return null;
 }
 
 // ── JSON writer ──
@@ -294,14 +294,14 @@ fn lsp_frame() *JVal {
 			i = i + 1;
 		}
 		if (end < 0) {
-			if (!lsp_read_more()) { return 0 as *JVal; }
+			if (!lsp_read_more()) { return null; }
 			continue;
 		}
 		var hdr str = str_slice(buf_str(&lsp_in), 0, end);
 		var len i64 = lsp_header_len(hdr);
 		var total i64 = end + 4 + len;
 		if (lsp_in.n < total) {
-			if (!lsp_read_more()) { return 0 as *JVal; }
+			if (!lsp_read_more()) { return null; }
 			continue;
 		}
 		var body str = str_slice(buf_str(&lsp_in), end + 4, total);
@@ -662,7 +662,7 @@ fn lsp_hover(params *JVal) *JVal {
 	var line *JVal = j_get(pos, "line");
 	var ch *JVal = j_get(pos, "character");
 	var k int = lsp_find(line.n as int, ch.n as int);
-	if (k < 0) { return 0 as *JVal; }
+	if (k < 0) { return null; }
 	var o *JVal = j_new(J_OBJ);
 	j_push(o, "contents", j_strv(idx_info[k]));
 	return o;
@@ -673,7 +673,7 @@ fn lsp_def(params *JVal) *JVal {
 	var line *JVal = j_get(pos, "line");
 	var ch *JVal = j_get(pos, "character");
 	var k int = lsp_find(line.n as int, ch.n as int);
-	if (k < 0 || idx_dline[k] == 0) { return 0 as *JVal; }
+	if (k < 0 || idx_dline[k] == 0) { return null; }
 	var ub Buf;
 	fmt_str(&ub, "file://");
 	fmt_str(&ub, idx_dfile[k]);
@@ -705,7 +705,7 @@ fn lsp_handle(req *JVal) {
 		lsp_respond(id, res);
 	} else if (str_eq(m, "initialized")) {
 	} else if (str_eq(m, "shutdown")) {
-		lsp_respond(id, 0 as *JVal);
+		lsp_respond(id, null);
 		lsp_shutdown = true;
 	} else if (str_eq(m, "exit")) {
 		sys_exit(0);
@@ -718,7 +718,7 @@ fn lsp_handle(req *JVal) {
 		var td *JVal = j_get(params, "textDocument");
 		var uri *JVal = j_get(td, "uri");
 		var cc *JVal = j_get(params, "contentChanges");
-		var first *JVal = 0 as *JVal;
+		var first *JVal = null;
 		if (cc as i64 != 0) { first = cc.item; }
 		var text *JVal = j_get(first, "text");
 		if (uri as i64 != 0 && text as i64 != 0) { lsp_doc(uri.s, text.s); }
@@ -732,7 +732,7 @@ fn lsp_handle(req *JVal) {
 	} else if (str_eq(m, "textDocument/definition")) {
 		lsp_respond(id, lsp_def(params));
 	} else {
-		if (id as i64 != 0) { lsp_respond(id, 0 as *JVal); }
+		if (id as i64 != 0) { lsp_respond(id, null); }
 	}
 }
 

@@ -37,7 +37,7 @@ fn list_push(l *List, p *u8) {
 }
 
 fn list_get(l *List, i i64) *u8 {
-	if (i < 0 || i >= l.len) { return 0 as *u8; }
+	if (i < 0 || i >= l.len) { return null; }
 	var slot *i64 = (l.data as *i64) + i;
 	return *slot as *u8;
 }

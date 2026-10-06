@@ -79,24 +79,24 @@ fn dump_std(name str) int {
 fn reset_compile() {
 	nfiles = 0;
 	nstrs = 0;
-	strlist_head = 0 as *StrLit;
-	strlist_tail = 0 as *StrLit;
+	strlist_head = null;
+	strlist_tail = null;
 	o_nsyms = 0;
-	global_vars = 0 as *Var;
-	scope_root = 0 as *Scope;
-	cur_func = 0 as *Func;
+	global_vars = null;
+	scope_root = null;
+	cur_func = null;
 	ntype_vars = 0;
-	all_funcs = 0 as *Func;
-	funcs_tail = 0 as *Func;
+	all_funcs = null;
+	funcs_tail = null;
 	fmtgen_reset();
-	macro_list = 0 as *Macro;
-	macro_tail = 0 as *Macro;
-	top_asm_head = 0 as *Node;
-	top_asm_tail = 0 as *Node;
+	macro_list = null;
+	macro_tail = null;
+	top_asm_head = null;
+	top_asm_tail = null;
 	entry_name = "";
-	named_types = 0 as *Named;
-	tmpls = 0 as *Tmpl;
-	ct_stack = 0 as *CTFrame;
+	named_types = null;
+	tmpls = null;
+	ct_stack = null;
 	ct_returning = false;
 	ct_broke = false;
 	ct_continued = false;
@@ -112,15 +112,15 @@ fn reset_compile() {
 	lex_keep_comments = false;
 	need_fmt = false;
 	need_dyn = false;
-	ty_dynval_cache = 0 as *Type;
-	dyn_types_head = 0 as *TypeIdEnt;
+	ty_dynval_cache = null;
+	dyn_types_head = null;
 	dyn_types_n = 0;
 	depth = 0;
 	overflow_pushed = 0;
-	cur_loop = 0 as *Loop;
-	cur_defers = 0 as *DeferScope;
+	cur_loop = null;
+	cur_defers = null;
 	defer_depth = 0;
-	gen_unit = 0 as *Unit;
+	gen_unit = null;
 	dw_line.n = 0;
 	dw_info.n = 0;
 	dw_abbrev.n = 0;
@@ -132,7 +132,7 @@ fn reset_compile() {
 	// tty state for each compile).
 	sec_set = false;
 	sec_pos = -1;
-	macro_top = 0 as *MacroSite;
+	macro_top = null;
 	diag_setup_done = false;
 	diag_colored = false;
 	// Keyword list for "did you mean" suggestions is built once and the
@@ -276,8 +276,8 @@ fn parse_dir(dir str) *Unit {
 	fmt_str(&dp, dir);
 	if (dp.n == 0 || dp.p[dp.n - 1] != '/') { buf_u8(&dp, '/'); }
 
-	var head *Token = 0 as *Token;
-	var tail *Token = 0 as *Token;
+	var head *Token = null;
+	var tail *Token = null;
 	var idx int = 0;
 	while (idx < g_dir_n) {
 		var fp Buf;
@@ -672,10 +672,10 @@ let REPL_PATH_EXPR = 3;
 var repl_fn *Func;
 var repl_unit *Unit;
 var repl_off i64 = 0;
-var repl_locals_done *Var = 0 as *Var;
-var repl_globals_done *Var = 0 as *Var;
-var repl_strs_done *StrLit = 0 as *StrLit;
-var repl_bootstrap_funcs *Func = 0 as *Func;
+var repl_locals_done *Var = null;
+var repl_globals_done *Var = null;
+var repl_strs_done *StrLit = null;
+var repl_bootstrap_funcs *Func = null;
 var repl_line_seq int = 0;
 
 fn repl_skip_ws(s str, i i64) i64 {
@@ -745,7 +745,7 @@ fn repl_wrap_expr(line str) str {
 
 fn repl_unshadow(name str) {
 	var vs *VarScope = scope_root.vars;
-	var prev *VarScope = 0 as *VarScope;
+	var prev *VarScope = null;
 	while (vs as i64 != 0) {
 		if (str_eq(vs.name, name)) {
 			if (prev as i64 == 0) { scope_root.vars = vs.next; }
@@ -829,8 +829,8 @@ fn repl_run_source(src str, name str, path_a bool) {
 	var file int = diag_add_file(name, src);
 	var toks *Token = lex(src, (file as i64) << FILE_SHIFT);
 	if (path_a) {
-		cur_func = 0 as *Func;
-		type_set_fn(0 as *Func);
+		cur_func = null;
+		type_set_fn(null);
 		parse(toks);
 		cur_func = repl_fn;
 		type_set_fn(repl_fn);
@@ -957,8 +957,8 @@ fn repl_init() {
 	opt_interp = true;
 	comptime_set("INTERP", "1");
 	diag_setup();
-	cur_func = 0 as *Func;
-	type_set_fn(0 as *Func);
+	cur_func = null;
+	type_set_fn(null);
 	enter_scope();
 
 	var boot str = "import \"std/io.qela\";\nimport \"std/fmt.qela\";\nimport \"std/rand.qela\";\n";
@@ -968,9 +968,9 @@ fn repl_init() {
 	repl_bootstrap_funcs = funcs_tail;
 
 	repl_off = 0;
-	repl_locals_done = 0 as *Var;
-	repl_globals_done = 0 as *Var;
-	repl_strs_done = 0 as *StrLit;
+	repl_locals_done = null;
+	repl_globals_done = null;
+	repl_strs_done = null;
 	repl_unit = arena_alloc(sizeof(Unit), 8) as *Unit;
 
 	type_init();
@@ -1083,7 +1083,7 @@ struct AstEntry {
 	node *Node,
 	next *AstEntry,
 }
-var ast_table *AstEntry = 0 as *AstEntry;
+var ast_table *AstEntry = null;
 var ast_next_id i64 = 1;
 
 fn ast_store(node *Node) i64 {
@@ -1102,7 +1102,7 @@ fn ast_find(id i64) *Node {
 		if (e.id == id) { return e.node; }
 		e = e.next;
 	}
-	return 0 as *Node;
+	return null;
 }
 
 // ── marshalled calls ──
@@ -1122,7 +1122,7 @@ struct Marshalled {
 	n     int,
 	vars  [14]*Var,
 }
-var marshalled_cache *Marshalled = 0 as *Marshalled;
+var marshalled_cache *Marshalled = null;
 var marshalled_seq i64 = 0;
 
 fn abi_find_global(name str) *Var {
@@ -1131,13 +1131,13 @@ fn abi_find_global(name str) *Var {
 		if (str_eq(v.name, name)) { return v; }
 		v = v.next;
 	}
-	return 0 as *Var;
+	return null;
 }
 
 fn abi_declare_global(name str, ty *Type) *Var {
 	var saved *Func = cur_func;
-	cur_func = 0 as *Func;
-	type_set_fn(0 as *Func);
+	cur_func = null;
+	type_set_fn(null);
 	var v *Var = declare_var(name, ty, 0);
 	cur_func = saved;
 	type_set_fn(saved);
@@ -1323,7 +1323,7 @@ fn ast_child_at(n *Node, i i64) *Node {
 		idx = idx + 1;
 		a = a.next;
 	}
-	return 0 as *Node;
+	return null;
 }
 
 fn ast_count(n *Node) i64 {
@@ -1380,7 +1380,7 @@ fn ast_replace_child(n *Node, i i64, c *Node) bool {
 		}
 		k = k + 1;
 	}
-	var prev *Node = 0 as *Node;
+	var prev *Node = null;
 	var a *Node = n.args;
 	while (a as i64 != 0) {
 		if (idx == i) {
@@ -1701,7 +1701,7 @@ fn abi_jit_rewrite(body str, name str, ret *Type) str {
 // declaring the same name still errors normally.
 struct StrNode;
 struct StrNode { next *StrNode, s str, }
-var abi_chain_types *StrNode = 0 as *StrNode;
+var abi_chain_types *StrNode = null;
 
 fn abi_chain_has(name str) bool {
 	var s *StrNode = abi_chain_types;
@@ -1889,28 +1889,28 @@ fn abi_wrap_stmts(src str) str {
 // prepended. The cut is real, not a copy: the expression is not run
 // twice, so a trailing call's side effects happen once.
 fn ast_take_tail_expr(head **Node) *Node {
-	var prev *Node = 0 as *Node;
+	var prev *Node = null;
 	var cur *Node = *head;
-	if (cur as i64 == 0) { return 0 as *Node; }
+	if (cur as i64 == 0) { return null; }
 	while (cur.next as i64 != 0) { prev = cur; cur = cur.next; }
 	if (cur.kind == ND_EXPRSTMT) {
 		var expr *Node = cur.lhs;
-		if (prev as i64 == 0) { *head = 0 as *Node; }
-		else { prev.next = 0 as *Node; }
+		if (prev as i64 == 0) { *head = null; }
+		else { prev.next = null; }
 		return expr;
 	}
 	if (cur.kind == ND_BLOCK && cur.body as i64 != 0) {
-		var bprev *Node = 0 as *Node;
+		var bprev *Node = null;
 		var bcur *Node = cur.body;
 		while (bcur.next as i64 != 0) { bprev = bcur; bcur = bcur.next; }
 		if (bcur.kind == ND_EXPRSTMT) {
 			var bexpr *Node = bcur.lhs;
-			if (bprev as i64 == 0) { cur.body = 0 as *Node; }
-			else { bprev.next = 0 as *Node; }
+			if (bprev as i64 == 0) { cur.body = null; }
+			else { bprev.next = null; }
 			return bexpr;
 		}
 	}
-	return 0 as *Node;
+	return null;
 }
 
 fn abi_try_run(src str, name str, path_a bool) bool {
@@ -2138,8 +2138,8 @@ fn cmd_abi_server(argc int, argv **u8) int {
 			var afile int = diag_add_file(pname, to_parse);
 			var at *Token = lex(to_parse, (afile as i64) << FILE_SHIFT);
 			resolve_comptime(&at);
-			var anode *Node = 0 as *Node;
-			var atail *Node = 0 as *Node;
+			var anode *Node = null;
+			var atail *Node = null;
 			while (at.kind != TK_EOF) {
 				var sn *Node = parse_stmt(&at);
 				while (sn as i64 != 0) {
