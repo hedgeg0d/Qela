@@ -406,6 +406,27 @@ EOF
 printf '    ok\n'
 
 
+step "parse_ast/run_ast: parse once, run repeatedly against fresh state"
+cat > "$tmp2/asttest.qela" <<'EOF'
+import "std/eval.qela";
+import "std/io.qela";
+eval var price i64 = 10;
+fn main() int {
+	var a *Ast = parse_ast("price * 2");
+	var r1 i64 = run_ast(a);
+	eval("price = 100;");
+	var r2 i64 = run_ast(a);
+	write_str(STDOUT, "r1=${r1} r2=${r2}\n");
+	return 0;
+}
+EOF
+( cd "$tmp2" &&
+  "$root/$OUT/s2" asttest.qela -o asttest &&
+  [ "$(QELAPATH="$root/$OUT/s2" ./asttest)" = "r1=20 r2=200" ] ) ||
+	fail "parse_ast/run_ast does not cache and re-run against live state"
+printf '    ok\n'
+
+
 step "stdin compile and shebang"
 cat > "$tmp2/btcrash.qela" <<'EOF'
 fn deep(n i64) i64 {
