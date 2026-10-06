@@ -1,0 +1,18 @@
+// expect-exit: 0
+import "std/hash.qela";
+
+fn main() int {
+	var fails int = 0;
+
+	if (hash_fnv1a("") != -3750763034362895579) { fails = fails + 1; }
+	if (hash_fnv1a("a") != -5808556873153909620) { fails = fails + 1; }
+	if (hash_fnv1a_bytes("hello".ptr, 5) != hash_fnv1a("hello")) { fails = fails + 1; }
+
+	if (hash_crc32("") != 0) { fails = fails + 1; }
+	if (hash_crc32("123456789") != 0xcbf43926) { fails = fails + 1; }
+	if (hash_crc32("hello") != 0x3610a686) { fails = fails + 1; }
+
+	if (hash_fnv1a("a") == hash_fnv1a("b")) { fails = fails + 1; }
+
+	return fails;
+}

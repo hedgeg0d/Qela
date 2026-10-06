@@ -1,4 +1,4 @@
-// Scalar helpers, bootstrap-subset-safe.
+// Integer helpers, bootstrap-subset-safe.
 
 fn abs(v i64) i64 {
 	if (v < 0) { return -v; }
@@ -13,4 +13,22 @@ fn min(a i64, b i64) i64 {
 fn max(a i64, b i64) i64 {
 	if (a > b) { return a; }
 	return b;
+}
+
+fn clamp(v i64, lo i64, hi i64) i64 {
+	if (v < lo) { return lo; }
+	if (v > hi) { return hi; }
+	return v;
+}
+
+fn gcd(a i64, b i64) i64 {
+	var x i64 = a;
+	var y i64 = b;
+	while (y != 0) {
+		var t i64 = x % y;
+		x = y;
+		y = t;
+	}
+	if (x < 0) { return -x; }
+	return x;
 }

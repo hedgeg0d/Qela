@@ -1,0 +1,44 @@
+import "arena.qela";
+import "str.qela";
+
+// Path helpers. Slashes only; trailing slashes are stripped first, so
+// path_basename("a/b/") == "b" and path_dirname("a/b/") == "a".
+
+fn path_basename(p str) str {
+	var end i64 = p.len;
+	while (end > 0 && p.ptr[end - 1] == '/') { end = end - 1; }
+	var start i64 = end;
+	while (start > 0 && p.ptr[start - 1] != '/') { start = start - 1; }
+	return str_slice(p, start, end);
+}
+
+fn path_dirname(p str) str {
+	var end i64 = p.len;
+	while (end > 0 && p.ptr[end - 1] == '/') { end = end - 1; }
+	while (end > 0 && p.ptr[end - 1] != '/') { end = end - 1; }
+	while (end > 1 && p.ptr[end - 1] == '/') { end = end - 1; }
+	return str_slice(p, 0, end);
+}
+
+fn path_ext(p str) str {
+	var b str = path_basename(p);
+	var i i64 = b.len;
+	while (i > 1 && b.ptr[i - 1] != '.') { i = i - 1; }
+	if (i <= 1) { return ""; }
+	return str_slice(b, i - 1, b.len);
+}
+
+fn path_stem(p str) str {
+	var b str = path_basename(p);
+	var i i64 = b.len;
+	while (i > 1 && b.ptr[i - 1] != '.') { i = i - 1; }
+	if (i <= 1) { return b; }
+	return str_slice(b, 0, i - 1);
+}
+
+fn path_join(a str, b str) str {
+	if (a.len == 0) { return b; }
+	if (b.len == 0) { return a; }
+	if (a.ptr[a.len - 1] == '/') { return str_cat(a, b); }
+	return str_cat(a, str_cat("/", b));
+}

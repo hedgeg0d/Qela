@@ -1,0 +1,33 @@
+// expect-exit: 0
+import "std/path.qela";
+import "std/str.qela";
+
+fn main() int {
+	var fails int = 0;
+
+	if (!str_eq(path_basename("/a/b/c.txt"), "c.txt")) { fails = fails + 1; }
+	if (!str_eq(path_basename("c.txt"), "c.txt")) { fails = fails + 1; }
+	if (!str_eq(path_basename("a/b/"), "b")) { fails = fails + 1; }
+	if (!str_eq(path_basename("/"), "")) { fails = fails + 1; }
+
+	if (!str_eq(path_dirname("/a/b/c.txt"), "/a/b")) { fails = fails + 1; }
+	if (!str_eq(path_dirname("a/b/c.txt"), "a/b")) { fails = fails + 1; }
+	if (!str_eq(path_dirname("c.txt"), "")) { fails = fails + 1; }
+	if (!str_eq(path_dirname("a/b/"), "a")) { fails = fails + 1; }
+
+	if (!str_eq(path_ext("c.txt"), ".txt")) { fails = fails + 1; }
+	if (!str_eq(path_ext("a.tar.gz"), ".gz")) { fails = fails + 1; }
+	if (!str_eq(path_ext("noext"), "")) { fails = fails + 1; }
+	if (!str_eq(path_ext(".hidden"), "")) { fails = fails + 1; }
+
+	if (!str_eq(path_stem("c.txt"), "c")) { fails = fails + 1; }
+	if (!str_eq(path_stem("noext"), "noext")) { fails = fails + 1; }
+
+	if (!str_eq(path_join("a", "b"), "a/b")) { fails = fails + 1; }
+	if (!str_eq(path_join("a/", "b"), "a/b")) { fails = fails + 1; }
+	if (!str_eq(path_join("", "b"), "b")) { fails = fails + 1; }
+	if (!str_eq(path_join("a", ""), "a")) { fails = fails + 1; }
+	if (!str_eq(path_join("a/b", "c"), "a/b/c")) { fails = fails + 1; }
+
+	return fails;
+}
