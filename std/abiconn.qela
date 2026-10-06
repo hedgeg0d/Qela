@@ -12,21 +12,43 @@ var abi_out i64 = -1;
 // A handle into the child's parsed-AST cache. Every handle is opaque and
 // sequential: the child's ids run from 1 in parse order, which is exactly
 // why a respawn can replay the sources and keep every handle valid.
+// A child handle (from ast_child/ast_next) also records how it was
+// reached -- its parent handle and the child index (or -1 for the
+// statement chain) -- so the replay can rebuild it with the same id.
 // The chain also carries each handle's source so the replay knows what to
 // re-parse.
 struct Ast;
 struct Ast {
-	id   i64,
-	src  str,
-	next *Ast,
+	id     i64,
+	src    str,
+	next   *Ast,
+	parent *Ast,
+	index  i64,
 }
 var abi_asts *Ast = 0 as *Ast;
 var abi_asts_tail *Ast = 0 as *Ast;
 var abi_respawned bool = false;
 
-// Lives here (not in eval.qela, which defines the other request kinds)
-// because the respawn replay uses it.
+// A recorded ast_set: (handle, index, replacement handle). The replay
+// re-applies them in order after the handles are rebuilt, so a mutated
+// tree comes back mutated.
+struct AstSet;
+struct AstSet {
+	parent *Ast,
+	index  i64,
+	child  *Ast,
+	next   *AstSet,
+}
+var abi_sets *AstSet = 0 as *AstSet;
+var abi_sets_tail *AstSet = 0 as *AstSet;
+
+// The ast request kinds live here (not in eval.qela) because the respawn
+// replay uses them too.
 let ABI_REQ_PARSE = 7;
+let ABI_REQ_AST_INFO = 9;
+let ABI_REQ_AST_CHILD = 10;
+let ABI_REQ_AST_NEXT = 11;
+let ABI_REQ_AST_SET = 12;
 
 fn abi_ast_register(a *Ast) {
 	if (abi_asts_tail as i64 == 0) { abi_asts = a; }
@@ -34,13 +56,26 @@ fn abi_ast_register(a *Ast) {
 	abi_asts_tail = a;
 }
 
+fn abi_set_record(parent *Ast, index i64, child *Ast) {
+	var s *AstSet = arena_alloc(sizeof(AstSet), 8) as *AstSet;
+	s.parent = parent;
+	s.index = index;
+	s.child = child;
+	if (abi_sets_tail as i64 == 0) { abi_sets = s; }
+	else { abi_sets_tail.next = s; }
+	abi_sets_tail = s;
+}
+
 // Binds a fresh child after the old one died and rebuilds the session:
 // the registration bundle (interpreted/dynamic functions, eval vars) and
-// every cached ast, in creation order, so the sequential ids come out
-// identical and the host's handles stay valid. One respawn per process;
-// a second death means the session is genuinely broken and the caller
-// reports it. At-least-once: a request that was in flight when the child
-// died is re-sent by its caller and may have already run.
+// every cached ast handle, in creation order -- the child's ids are
+// sequential, so the replay reproduces them exactly. Handles obtained
+// through ast_child/ast_next are rebuilt by re-traversing their recorded
+// parent, and every recorded ast_set is re-applied, so a mutated tree
+// comes back mutated. One respawn per process; a second death means the
+// session is genuinely broken and the caller reports it. At-least-once:
+// a request that was in flight when the child died is re-sent by its
+// caller and may have already run.
 fn abi_respawn() bool {
 	if (abi_respawned) { return false; }
 	abi_respawned = true;
@@ -52,12 +87,46 @@ fn abi_respawn() bool {
 	abi_spawn();
 	var a *Ast = abi_asts;
 	while (a as i64 != 0) {
-		abi_send_frame(abi_in, ABI_REQ_PARSE as u8, a.src.ptr, a.src.len);
-		var k u8 = 0;
-		var bb [8]u8;
-		var bn i64 = abi_wait_result(&k, &bb[0], 8);
-		if (bn < 0 || k == 2) { return false; }
+		var ok bool = false;
+		if (a.parent as i64 == 0) {
+			abi_send_frame(abi_in, ABI_REQ_PARSE as u8, a.src.ptr, a.src.len);
+			var k u8 = 0;
+			var bb [8]u8;
+			var bn i64 = abi_wait_result(&k, &bb[0], 8);
+			ok = bn >= 0 && k != 2;
+		} else if (a.index < 0) {
+			var hb [8]u8;
+			*(&hb[0] as *i64) = a.parent.id;
+			abi_send_frame(abi_in, ABI_REQ_AST_NEXT as u8, &hb[0], 8);
+			var k2 u8 = 0;
+			var bb2 [8]u8;
+			var bn2 i64 = abi_wait_result(&k2, &bb2[0], 8);
+			ok = bn2 >= 0 && k2 != 2;
+		} else {
+			var cb [16]u8;
+			*(&cb[0] as *i64) = a.parent.id;
+			*(&cb[8] as *i64) = a.index;
+			abi_send_frame(abi_in, ABI_REQ_AST_CHILD as u8, &cb[0], 16);
+			var k3 u8 = 0;
+			var bb3 [8]u8;
+			var bn3 i64 = abi_wait_result(&k3, &bb3[0], 8);
+			ok = bn3 >= 0 && k3 != 2;
+		}
+		if (!ok) { return false; }
 		a = a.next;
+	}
+	var s *AstSet = abi_sets;
+	while (s as i64 != 0) {
+		var sb [24]u8;
+		*(&sb[0] as *i64) = s.parent.id;
+		*(&sb[8] as *i64) = s.index;
+		*(&sb[16] as *i64) = s.child.id;
+		abi_send_frame(abi_in, ABI_REQ_AST_SET as u8, &sb[0], 24);
+		var k4 u8 = 0;
+		var bb4 [8]u8;
+		var bn4 i64 = abi_wait_result(&k4, &bb4[0], 8);
+		if (bn4 < 0 || k4 == 2) { return false; }
+		s = s.next;
 	}
 	return true;
 }
