@@ -180,12 +180,14 @@ Str read_file(const char *path) {
 	i64 fd = sys3(SYS_open, (i64)(usize)path, O_RDONLY, 0);
 	if (fd < 0) die("cannot open %c\n", path);
 	i64 size = sys3(SYS_lseek, fd, 0, 2);
+	if (size < 0) die("cannot read %c: not a regular file\n", path);
 	sys3(SYS_lseek, fd, 0, 0);
 	char *buf = anew_n(char, size + 1);
 	isize got = 0;
 	while (got < size) {
 		i64 r = sys3(SYS_read, fd, (i64)(usize)(buf + got), size - got);
-		if (r <= 0) break;
+		if (r < 0) die("cannot read %c\n", path);
+		if (r == 0) break;
 		got += r;
 	}
 	sys1(SYS_close, fd);
