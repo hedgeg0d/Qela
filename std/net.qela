@@ -1,0 +1,123 @@
+import "sys.qela";
+import "str.qela";
+
+$if (TARGET != "x86_64") {
+let SYS_SOCKET_N2 = 198;
+let SYS_CONNECT_N2 = 203;
+let SYS_ACCEPT_N2 = 242;
+let SYS_SENDTO_N2 = 206;
+let SYS_RECVFROM_N2 = 207;
+let SYS_BIND_N2 = 200;
+let SYS_LISTEN_N2 = 201;
+let SYS_SETSOCKOPT_N2 = 208;
+let ACCEPT_TAKES_FLAGS = 1;
+}
+$else {
+let SYS_SOCKET_N2 = 41;
+let SYS_CONNECT_N2 = 42;
+let SYS_ACCEPT_N2 = 43;
+let SYS_SENDTO_N2 = 44;
+let SYS_RECVFROM_N2 = 45;
+let SYS_BIND_N2 = 49;
+let SYS_LISTEN_N2 = 50;
+let SYS_SETSOCKOPT_N2 = 54;
+let ACCEPT_TAKES_FLAGS = 0;
+}
+
+let AF_INET = 2;
+let SOL_SOCKET = 1;
+let SO_REUSEADDR = 2;
+
+struct SockAddr {
+	family u16,
+	port   u16,
+	addr   u32,
+	pad    [8]u8,
+}
+
+fn net_htons(p i64) u16 {
+	return (((p & 255) << 8) | ((p >> 8) & 255)) as u16;
+}
+
+fn net_ip4(a i64, b i64, c i64, d i64) u32 {
+	return (a | (b << 8) | (c << 16) | (d << 24)) as u32;
+}
+
+fn net_parse_ip(s str) u32 {
+	var part [4]i64;
+	var n i64 = 0;
+	var cur i64 = 0;
+	var i i64 = 0;
+	while (i < s.len && n < 4) {
+		if (s.ptr[i] == '.') {
+			part[n] = cur;
+			n = n + 1;
+			cur = 0;
+		} else {
+			cur = cur * 10 + (s.ptr[i] as i64 - '0' as i64);
+		}
+		i = i + 1;
+	}
+	if (n < 4) { part[n] = cur; }
+	return net_ip4(part[0], part[1], part[2], part[3]);
+}
+
+fn net_socket() i64 {
+	return syscall(SYS_SOCKET_N2, AF_INET, SOCK_STREAM, 0);
+}
+
+fn net_close(fd i64) i64 {
+	return sys_close(fd);
+}
+
+fn net_listen(port i64) i64 {
+	var fd i64 = net_socket();
+	if (fd < 0) { return fd; }
+	var one i64 = 1;
+	syscall(SYS_SETSOCKOPT_N2, fd, SOL_SOCKET, SO_REUSEADDR, &one as i64, 4, 0);
+	var sa SockAddr;
+	sa.family = AF_INET as u16;
+	sa.port = net_htons(port);
+	sa.addr = 0 as u32;
+	var r i64 = syscall(SYS_BIND_N2, fd, &sa as i64, 16);
+	if (r < 0) {
+		net_close(fd);
+		return r;
+	}
+	r = syscall(SYS_LISTEN_N2, fd, 16, 0);
+	if (r < 0) {
+		net_close(fd);
+		return r;
+	}
+	return fd;
+}
+
+fn net_accept(fd i64) i64 {
+	$if (TARGET != "x86_64") {
+		return syscall(SYS_ACCEPT_N2, fd, 0, 0, 0);
+	}
+	return syscall(SYS_ACCEPT_N2, fd, 0, 0);
+}
+
+fn net_connect(host str, port i64) i64 {
+	var fd i64 = net_socket();
+	if (fd < 0) { return fd; }
+	var sa SockAddr;
+	sa.family = AF_INET as u16;
+	sa.port = net_htons(port);
+	sa.addr = net_parse_ip(host);
+	var r i64 = syscall(SYS_CONNECT_N2, fd, &sa as i64, 16);
+	if (r < 0) {
+		net_close(fd);
+		return r;
+	}
+	return fd;
+}
+
+fn net_send(fd i64, s str) i64 {
+	return sys_write(fd, s.ptr, s.len);
+}
+
+fn net_recv(fd i64, buf *u8, n i64) i64 {
+	return sys_read(fd, buf, n);
+}
