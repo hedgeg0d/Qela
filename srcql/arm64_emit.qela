@@ -1199,8 +1199,34 @@ fn arm64_pool_pass(head *IrOp) {
 	// (too deep, or a pop into the accumulator -- nothing to win there).
 	pool_n = 0;
 	op = head;
+	// The OP2 override (arm64_op2_ov): a pooled pop into OP2 leaves its
+	// staging register as the value's home until some op redefines or
+	// clobbers it. When an op writes that register, arm64_lower_op first
+	// materialises the value into X1 -- and that write must never land on a
+	// pooled push staged in X1 (a real bug: the argument staging for a
+	// by-ref aggregate followed by a value expression used x1 for both).
+	// Pushes are the only ops that write a pool register (the acc/op2/vreg
+	// shapes hit X0/X1/x19-x28), so a push must never pool into the staging
+	// register itself; the rare non-push triggers (memcpy/store2) dirt the
+	// pending X1 homes right there and reserve X1 until OP2 is redefined.
+	var pool_ov_reg int = -1;
 	while (op as i64 != 0) {
 		var k int = op.kind;
+		if (pool_ov_reg != -1) {
+			var reads2 bool = op.src0.kind == OP_OP2 || op.src1.kind == OP_OP2 ||
+				(op.dst.kind == OP_OP2 && op.kind == IR_STORE);
+			if (!reads2) {
+				if (arm64_op_writes(op, pool_ov_reg) || k == IR_STORE2) {
+					// The lowering emits mov x1, ov here: retire any
+					// pending X1 home, then reserve X1 (the value now
+					// lives there) until an op redefines it.
+					arm64_pool_dirty_wr(X1);
+					pool_ov_reg = X1;
+				} else if (arm64_op_writes(op, X1) || k == IR_CALL || k == IR_SYSCALL || k == IR_ASSERT || k == IR_POP || k == IR_RET) {
+					pool_ov_reg = -1;
+				}
+			}
+		}
 		if (k == IR_PUSH) {
 			op.pooled = false;
 			var pr int = -1;
@@ -1208,9 +1234,6 @@ fn arm64_pool_pass(head *IrOp) {
 				var pair *IrOp = op.pair;
 				if (pair as i64 != 0) {
 					if (pair.kind == IR_POP && pair.dst.kind == OP_OP2) {
-						// Depth 1..5 pool into x5..x1: a nested region's own
-						// pool registers and its pops (x1) never collide
-						// with an outer staging's.
 						if (pool_n + 1 <= ARM64_POOL_OP2N) { pr = X5 + 1 - (pool_n + 1); }
 					} else if (pair.kind == IR_POP && pair.dst.kind == OP_REG) {
 						pr = pair.dst.reg;
@@ -1218,10 +1241,8 @@ fn arm64_pool_pass(head *IrOp) {
 						pr = X2;
 					}
 				}
-				// A MEM push reads its base from X0: pooling it into X0
-				// itself would clobber the base for the next staged word
-				// (the two-word aggregate protocol reads [X0] then [X0+8]).
 				if (pr == X0 && op.src0.kind == OP_MEM) { pr = -1; }
+				if (pr == pool_ov_reg) { pr = -1; }
 			}
 			if (pool_n < ARM64_POOL_MAX) {
 				pool_push_op[pool_n] = op;
@@ -1248,6 +1269,12 @@ fn arm64_pool_pass(head *IrOp) {
 					else if (op.dst.kind == OP_REG) { arm64_pool_dirty_wr(op.dst.reg); }
 					else { arm64_pool_dirty_wr(X0); }
 				}
+			}
+			if (op.pooled && op.dst.kind == OP_OP2) {
+				// The override is born: its staging register is the value's
+				// home until an op writes it (or OP2 is redefined), so no
+				// new push may pool into it.
+				pool_ov_reg = op.poolreg;
 			}
 		} else if (k == IR_MEMCPY && op.dst.kind == OP_NONE) {
 			if (pool_n > 0) { pool_n = pool_n - 1; }
