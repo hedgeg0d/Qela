@@ -1,0 +1,51 @@
+// expect-exit: 0
+// expect-out: multi assign ok
+// stage1-only
+// `a, b = 1, 2` assigns several targets at once; the whole right side is
+// evaluated into hidden temps before any target is written, so
+// `a, b = b, a` swaps, members and indexes work, and a target keeps its
+// own type (fitting constants stay implicit).
+import "std/io.qela";
+
+struct Pair { x i64, y i64 }
+
+fn main() int {
+	var fails i64 = 0;
+	var a i64 = 0;
+	var b i64 = 0;
+	a, b = 1, 2;
+	if (a != 1 || b != 2) { fails = fails + 1; }
+	a, b = b, a;
+	if (a != 2 || b != 1) { fails = fails + 1; }
+	var c i64 = 5;
+	var d i64 = 9;
+	c, d = c + 1, d * 2;
+	if (c != 6 || d != 18) { fails = fails + 1; }
+	var p Pair = Pair{x: 1, y: 2};
+	var q Pair = Pair{x: 3, y: 4};
+	p, q = q, p;
+	if (p.x != 3 || q.y != 2) { fails = fails + 1; }
+	p.x, p.y = p.y, p.x;
+	if (p.x != 4 || p.y != 3) { fails = fails + 1; }
+	var arr [3]i64;
+	arr[0] = 7;
+	arr[1] = 8;
+	arr[0], arr[1] = arr[1], arr[0];
+	if (arr[0] != 8 || arr[1] != 7) { fails = fails + 1; }
+	var s1 str = "x";
+	var s2 str = "y";
+	s1, s2 = s2, s1;
+	if (!str_eq(s1, "y") || !str_eq(s2, "x")) { fails = fails + 1; }
+	var w i64 = 0;
+	var z i64 = 0;
+	var t i64 = 0;
+	w, z, t = 1, 2, 3;
+	w, z, t = t, w, z;
+	if (w != 3 || z != 1 || t != 2) { fails = fails + 1; }
+	var i8a i8 = 0;
+	var i8b i64 = 0;
+	i8a, i8b = 5, 6;
+	if (i8a != 5 || i8b != 6) { fails = fails + 1; }
+	if (fails == 0) { write_str(STDOUT, "multi assign ok\n"); }
+	return fails as int;
+}
