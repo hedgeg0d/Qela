@@ -205,6 +205,7 @@ struct Var {
 	// every non-parameter Var and for a parameter with no default.
 	default   *Node,
 	eval_export bool,
+	reachable bool,
 }
 
 struct Node {
@@ -290,6 +291,7 @@ struct StrLit {
 	id   int,
 	off  i64,
 	nullhdr bool,
+	keep bool,
 }
 
 // A parse-time expression macro: the body is parsed once with the
