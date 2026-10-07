@@ -31,17 +31,14 @@ PML4/PDPT/PD, sets PAE + EFER.LME + CR0.PG, loads a 2-descriptor GDT
 embedded in the stub itself, and far-jumps to the 64-bit continuation,
 which sets RSP from `$kstack` and calls `kernel_main`.
 
-## Ring 0 policy: interrupts allowed since the isr-frame fix
+## Ring 0 policy: interrupts allowed
 
-`fn interrupt` handlers save every register and end in `iretq`. An
-interrupt taken at ring 3 arrives with a five-word frame
-(RIP/CS/RFLAGS/RSP/SS), but a ring-0 entry pushes only RIP/CS/RFLAGS —
-no stack switch happened — and iretq would pop whatever the interrupted
-stack held below RFLAGS as RSP/SS when it returns to a less privileged
-ring, or #GP on the wrong segment. The compiler's `gen_isr_save` now
-tests the CPL of the CS on the entry stack and pads a ring-0 frame up to
-the same five words (shifts the three-word frame up 16 bytes and stores
-the real RSP and SS below it), so handlers work from either ring.
+`fn interrupt` handlers save every register and end in `iretq`. The
+CPU pushed RIP/CS/RFLAGS for a ring-0 entry and
+RIP/CS/RFLAGS/RSP/SS for a ring-3 one; iretq pops exactly as many words
+as the target CS:CPL asks for, so the handler only has to save the
+registers below the frame — no padding is needed and the stack pointer
+comes back untouched.
 
 The kernel therefore runs with IF enabled: FMASK (MSR 0xC0000084) keeps
 the syscall entry path non-preemptible, and `sys_read` blocks on
