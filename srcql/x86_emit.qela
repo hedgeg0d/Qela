@@ -271,22 +271,6 @@ fn rbp_mem(op i64, reg int, disp i64) {
 }
 
 
-// mov reg, [rsp + disp8] (op 0x8b) or mov [rsp + disp8], reg (op 0x89).
-// Unlike rbp_mem, rm=4 forces a SIB byte; disp must fit in 8 bits.
-fn rsp_mem(op i64, reg int, disp i64) {
-	rex_w(reg, RSP);
-	b1(op);
-	if (disp == 0) {
-		modrm(0, reg, RSP);
-		b1(0x24);
-	} else {
-		modrm(1, reg, RSP);
-		b1(0x24);
-		b1(disp);
-	}
-}
-
-
 fn lea_local(reg int, off i64) { rbp_mem(0x8d, reg, -off); }
 
 fn ld_local(reg int, off i64) { rbp_mem(0x8b, reg, -off); }
