@@ -53,7 +53,6 @@ fn lev_dist(a str, b str) i64 {
 	// Two-row DP. Cost: (a.len+1) * (b.len+1) cells; with short keywords
 	// (~10 chars max) this is ~144 ops per candidate, 22 candidates → 3 KiB
 	// worth of stack per call. We use a flat int array on the arena.
-	var n i64 = a.len + 1;
 	var m i64 = b.len + 1;
 	var prev *i64 = arena_alloc(m * 8, 8) as *i64;
 	var cur  *i64 = arena_alloc(m * 8, 8) as *i64;
@@ -294,7 +293,6 @@ fn parse_top_asm(t **Token) {
 }
 
 fn parse_entry(t **Token) {
-	var p i64 = (*t).pos;
 	*t = (*t).next;
 	if ((*t).kind != TK_IDENT) { error_at((*t).pos, "entry needs a function name"); }
 	entry_name = (*t).text;
@@ -343,7 +341,6 @@ fn macro_decl_param(name str, pos i64) *Var {
 }
 
 fn parse_macro(t **Token) {
-	var mp i64 = (*t).pos;
 	*t = (*t).next;
 	if ((*t).kind != TK_IDENT) { error_at((*t).pos, "macro needs a name"); }
 	var name str = (*t).text;
@@ -731,7 +728,6 @@ fn parse_type(t **Token) *Type {
 	}
 	var tm *Tmpl = tmpl_find((*t).text);
 	if (tm as i64 != 0) {
-		var tp i64 = (*t).pos;
 		*t = (*t).next;
 		tok_expect(t, "(");
 		var a0 *Type = parse_type(t);
@@ -1044,15 +1040,6 @@ fn parse_comprehension(t **Token, p i64, first *Token, ft *Token) *Node {
 	chain_tail.next = f;
 	chain_tail = f;
 
-	var vv2 *Node = new_node(ND_VAR, np);
-	vv2.varp = vv;
-	var av *Node = new_node(ND_ADDR, np);
-	av.lhs = vv2;
-	var vc *Node = new_node(ND_CALL, np);
-	vc.name = "vec_view";
-	vc.args = av;
-	vc.nargs = 1;
-
 	leave_scope();
 
 	var n *Node = new_node(ND_ARRCOMP, p);
@@ -1128,7 +1115,6 @@ fn parse_primary(t **Token) *Node {
 		return n;
 	}
 	if (tok_consume(t, "(")) {
-		var p i64 = (*t).pos;
 		var n *Node = parse_expr(t);
 		tok_expect(t, ")");
 		return n;
@@ -5155,14 +5141,6 @@ fn parse_global(t **Token, is_extern bool, is_eval bool) {
 	gv.is_tls = is_tls;
 	gv.eval_export = is_eval;
 	tok_expect(t, ";");
-}
-
-fn save_type_vars(vars **Type, n *int) {
-	*n = ntype_vars;
-}
-
-fn restore_type_vars(vars **Type, n int) {
-	ntype_vars = n;
 }
 
 // "dir/../std/x.qela" normalizes to "std/x.qela", so the same module
