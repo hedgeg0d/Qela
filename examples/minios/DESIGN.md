@@ -31,28 +31,22 @@ PML4/PDPT/PD, sets PAE + EFER.LME + CR0.PG, loads a 2-descriptor GDT
 embedded in the stub itself, and far-jumps to the 64-bit continuation,
 which sets RSP from `$kstack` and calls `kernel_main`.
 
-## Ring 0 policy: IF is never set
+## Ring 0 policy: interrupts allowed since the isr-frame fix
 
-`fn interrupt` handlers in the compiler save 13 registers and end in a
-plain `iretq`. That frame is correct when the interrupt came from ring 3
-(the CPU pushed RIP/CS/RFLAGS/RSP/SS), but an interrupt taken at ring 0
-has only 4 words pushed, so iretq pops one word of garbage as SS/RSP.
-The kernel therefore guarantees interrupts can only fire at ring 3:
+`fn interrupt` handlers save every register and end in `iretq`. An
+interrupt taken at ring 3 arrives with a five-word frame
+(RIP/CS/RFLAGS/RSP/SS), but a ring-0 entry pushes only RIP/CS/RFLAGS —
+no stack switch happened — and iretq would pop whatever the interrupted
+stack held below RFLAGS as RSP/SS when it returns to a less privileged
+ring, or #GP on the wrong segment. The compiler's `gen_isr_save` now
+tests the CPL of the CS on the entry stack and pads a ring-0 frame up to
+the same five words (shifts the three-word frame up 16 bytes and stores
+the real RSP and SS below it), so handlers work from either ring.
 
-- FMASK (MSR 0xC0000084) is 0x200, so every `syscall` entry arrives
-  with IF cleared;
-- the CPU clears IF on interrupt entry itself, and iretq restores the
-  user's RFLAGS;
-- `sys_read` never waits in the kernel: it polls the PS/2 controller
-  and returns -EAGAIN when idle, the user program retries. The keyboard
-  IRQ handler feeds the same queue the poll feeds.
-
-Consequence: ring 0 sections (boot, syscall dispatch, ELF load) are
-brief and non-preemptible; the timer only advances while user code runs.
-That is a trade, not a limit: the compiler fix is a CPL check in
-`gen_isr_save` that inserts the missing SS/RSP words for ring-0 entries
-(`test` the CS on the entry stack, `sub rsp, 16` + store SS/RSP if
-ring 0, then push the 13 registers as usual).
+The kernel therefore runs with IF enabled: FMASK (MSR 0xC0000084) keeps
+the syscall entry path non-preemptible, and `sys_read` blocks on
+`sti; hlt; cli` until the keyboard or timer IRQ wakes it — the timer
+ticks inside ring 0 just as well as it does under user code.
 
 ## Syscalls
 
@@ -85,19 +79,23 @@ the code; `ring3_enter`'s iretq uses the same pair (CS 0x23 / SS 0x1B).
 
 ## Bug log
 
-1. `fn interrupt` at ring 0 misbuilds the iretq frame (see above).
-   Worked around by never enabling IF in ring 0; the compiler fix is
-   described above. stage0 must mirror it (frozen: fix + corpus test
-   only).
+1. ~~`fn interrupt` at ring 0 misbuilds the iretq frame~~ fixed in the
+   compiler (`gen_isr_save` pads ring-0 frames with the missing
+   RSP/SS pair; see above). The workaround — never enabling IF in
+   ring 0 — is gone: `sys_read` blocks on `sti; hlt; cli` and the
+   timer ticks in the kernel. (Two compiler bugs were found on the way:
+   `jump()` was handed a short-form opcode so the CPL branch emitted
+   `GS; DAS` = #UD, and the segment-store modrm used the FS encoding
+   instead of SS's — both fixed.)
 2. The multiboot header must be 4-byte aligned inside the first 8 KiB
    and the ELF entry must not point at it: the header is a top-level
    `asm` block and `start` follows it.
 3. `$bytes` on a missing file is a warning, not an error — the kernel
    checks `ptr == 0` and panics with "user.elf missing: run make".
-4. A 32-bit far jump cannot take `$rel` (it patches a rel32, and the
-   far form needs an absolute target), so the stub computes its target
-   from EIP and writes it into an embedded 6-byte slot before
-   `jmp far [ebx+disp]`.
+4. ~~A 32-bit far jump cannot take `$rel`~~ fixed in the compiler:
+   `$abs name` embeds a symbol's address in a 4-byte slot, so the stub
+   can write `jmp far [ebx+disp]` with the target patched at link time
+   instead of computing it from EIP by hand.
 5. The GDT in the stub must be referenced with a disp32 modrm: its
    offset from EIP exceeds the disp8 range.
 6. `sysretq` loads CS = STAR[63:48]+16 and SS = STAR[63:48]+8 — not

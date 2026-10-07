@@ -1,0 +1,23 @@
+// expect-exit: 0
+// A local's initializer must survive the condition of the loop that
+// follows it: `var n = 0;` + a while whose condition is several calls
+// used to deliver the first call's result into n instead of 0.
+var a i64 = 0;
+var b i64 = 0;
+
+fn fa() i64 { a = a + 2; return a; }
+fn fb() i64 { b = b + 1; return b; }
+
+fn main() int {
+	var n i64 = 0;
+	while (fa() != fb() && n < 50) {
+		n = n + 1;
+	}
+	if (n != 50) { return 1; }
+	var m i64 = 0;
+	while (fa() != fb() && m < 50) {
+		m = m + 1;
+	}
+	if (m != 50) { return 2; }
+	return 0;
+}
