@@ -1,0 +1,62 @@
+// expect-exit: 0
+// expect-out: ok
+// stage1-only
+// A statement sequence typed at a prompt may end in `};` or `;;`. The
+// language has no empty statement, so that stray semicolon used to be a
+// parse error reported after the statements before it had already run; the
+// eval wrapper now drops it. What this pins: the whole sequence runs, the
+// line reports no error, and a semicolon that ends a real statement is
+// still part of the source.
+import "std/eval.qela";
+import "std/io.qela";
+import "std/sys.qela";
+
+var fails i64 = 0;
+
+fn stderr_to(path str) i64 {
+	var saved i64 = 90;
+	if (sys_dup2(2, saved) < 0) { return -1; }
+	var fd i64 = sys_open_append(cstr(path));
+	if (fd < 0) { return -1; }
+	sys_dup2(fd, 2);
+	sys_close(fd);
+	return saved;
+}
+
+fn check(what str, src str, want_out str, want_err bool) {
+	var path str = "/tmp/qela_tailsemi_err";
+	sys_unlink(cstr(path));
+	var saved i64 = stderr_to(path);
+	if (saved < 0) { println("no stderr"); return; }
+	var v i64 = eval(src);
+	sys_dup2(saved, 2);
+	sys_close(saved);
+	var said str = read_file(path);
+	sys_unlink(cstr(path));
+	if (str_index(said, "expected expression") >= 0) {
+		fails = fails + 1;
+		print("FAIL ${what}: ${said}\\n");
+	}
+	if (want_err && str_index(said, "error") < 0) {
+		fails = fails + 1;
+		print("FAIL ${what}: no error reported\n");
+	}
+}
+
+fn main() int {
+	// A block followed by a redundant semicolon runs and reports nothing.
+	if (eval("var i = 0; while (i < 3) { i = i + 1; };") != 0) { fails = fails + 1; }
+	if (eval("var i = 0; while (i < 3) { i = i + 1; }") != 0) { fails = fails + 1; }
+	check("loop with a trailing semicolon", "var i = 0; while (i < 3) { i = i + 1; };", "", false);
+	check("a doubled semicolon", "var i = 0;;", "", false);
+	check("a trailing semicolon after a block", "var i = 0; if (i == 0) { i = 1; };", "", false);
+	// A real mistake still reports.
+	check("an undefined name", "nosuchname_zzz;", "", true);
+
+	if (fails != 0) {
+		print("failed\n");
+		return 1;
+	}
+	println("ok");
+	return 0;
+}
