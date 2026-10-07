@@ -1,0 +1,57 @@
+// POSIX-style signal handling: sig_set installs a handler, sig_raise
+// delivers a signal to this process, sig_restore is the naked trampoline
+// the kernel returns through. A handler is an ordinary `fn` with no
+// parameters, called by the kernel on the interrupted stack; keep it
+// small (a flag write, a sys_write) -- it runs asynchronously, and only
+// the arena's bump allocator is safe to touch from it.
+import "sys.qela";
+import "io.qela";
+
+struct SigAction {
+	handler  i64,
+	flags    i64,
+	restorer i64,
+	mask     i64,
+}
+
+// The kernel pops the signal frame through this: rt_sigreturn restores
+// the interrupted context. It must be naked -- a prologue would push
+// above the frame the kernel reads from rsp.
+fn naked sig_restore() {
+	syscall(SYS_RT_SIGRETURN);
+}
+
+// Installs handler for sig; 0 on success, a negated errno otherwise.
+// The handler's address must be even (every function entry is padded to
+// an even address, so a bare `fn` name always is).
+fn sig_set(sig i64, handler i64) i64 {
+	var act SigAction;
+	act.handler = handler;
+	act.flags = SA_RESTORER | SA_RESTART;
+	act.restorer = sig_restore;
+	act.mask = 0;
+	return sys_rt_sigaction(sig, &act as *u8, null as *u8);
+}
+
+// The default disposition for a signal: the kernel handles it.
+fn sig_default(sig i64) i64 {
+	var act SigAction;
+	act.handler = SIG_DFL;
+	act.flags = 0;
+	act.restorer = 0;
+	act.mask = 0;
+	return sys_rt_sigaction(sig, &act as *u8, null as *u8);
+}
+
+fn sig_ignore(sig i64) i64 {
+	var act SigAction;
+	act.handler = SIG_IGN;
+	act.flags = 0;
+	act.restorer = 0;
+	act.mask = 0;
+	return sys_rt_sigaction(sig, &act as *u8, null as *u8);
+}
+
+fn sig_raise(sig i64) i64 {
+	return sys_kill(sys_getpid(), sig);
+}

@@ -972,6 +972,25 @@ fn type_addsub(n *Node) {
 	n.rhs = to_value(n.rhs);
 	var lt *Type = n.lhs.ty;
 	var rt *Type = n.rhs.ty;
+	// `"a" + "b"`: string concatenation, the twin of `s += "b"`. Rewrites
+	// into str_cat at type time, like the opassign form.
+	if (lt.kind == TY_SLICE && lt.base as i64 == ty_u8 as i64 && n.kind == ND_ADD) {
+		if (rt as i64 != type_str() as i64) {
+			emsg("cannot add '"); emsg_ty(rt); emsg("' to a string with '+'"); efail(n.pos);
+		}
+		var call *Node = node_alloc();
+		call.kind = ND_CALL;
+		call.name = "str_cat";
+		call.args = n.lhs;
+		n.lhs.next = n.rhs;
+		call.nargs = 2;
+		call.pos = n.pos;
+		add_type(call);
+		var nxt *Node = n.next;
+		*n = *call;
+		n.next = nxt;
+		return;
+	}
 	if (lt.kind == TY_PTR && rt.kind == TY_PTR) {
 		if (n.kind == ND_ADD) { error_at(n.pos, "cannot add two pointers"); }
 		n.ty = ty_i64;
@@ -1987,6 +2006,35 @@ fn add_type(n *Node) {
 
 	if (k == ND_OPASSIGN) {
 		var lt *Type = n.lhs.ty;
+		// `s += "x"`: string concatenation through the ordinary opassign.
+		// Desugars to `s = str_cat(s, rhs)` at type time -- the same shape
+		// the interpolation rewrite builds, so codegen needs no new case.
+		if (lt.kind == TY_SLICE && lt.base as i64 == ty_u8 as i64 && n.val == ND_ADD as i64) {
+			if (n.rhs.ty as i64 != type_str() as i64) {
+				emsg("cannot append '"); emsg_ty(n.rhs.ty); emsg("' to a string with '+='"); efail(n.pos);
+			}
+			var lhs *Node = n.lhs;
+			var call *Node = node_alloc();
+			call.kind = ND_CALL;
+			call.name = "str_cat";
+			call.args = lhs;
+			lhs.next = n.rhs;
+			call.nargs = 2;
+			call.pos = n.pos;
+			add_type(call);
+			// `s += "x"` must write s back: the whole opassign becomes
+			// `s = str_cat(s, "x")`.
+			var assign *Node = node_alloc();
+			assign.kind = ND_ASSIGN;
+			assign.lhs = n.lhs;
+			assign.rhs = call;
+			assign.pos = n.pos;
+			add_type(assign);
+			var nxt *Node = n.next;
+			*n = *assign;
+			n.next = nxt;
+			return;
+		}
 		if (lt.kind == TY_PTR) {
 			if (n.val != ND_ADD as i64 && n.val != ND_SUB as i64) {
 				error_at(n.pos, "operator not defined for pointers");

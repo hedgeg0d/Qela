@@ -334,6 +334,96 @@ fn json_get(v *Json, key str) *Json {
 
 fn json_has(v *Json, key str) bool { return json_get(v, key) as i64 != 0; }
 
+// --- building ----------------------------------------------------------
+
+// An empty object; json_put fills it. Values chain in insertion order.
+fn json_obj_new() *Json {
+	var o *Json = json_alloc(J_OBJ);
+	o.head = null;
+	return o;
+}
+
+// An empty array; json_arr_push appends.
+fn json_arr_new() *Json {
+	var a *Json = json_alloc(J_ARR);
+	a.head = null;
+	return a;
+}
+
+fn json_str_new(s str) *Json {
+	var v *Json = json_alloc(J_STR);
+	v.s = s;
+	return v;
+}
+
+fn json_int_new(i i64) *Json {
+	var v *Json = json_alloc(J_INT);
+	v.i = i;
+	return v;
+}
+
+fn json_num_new(num f64) *Json {
+	var v *Json = json_alloc(J_FLOAT);
+	v.num = num;
+	return v;
+}
+
+fn json_bool_new(b bool) *Json {
+	var v *Json = json_alloc(J_BOOL);
+	v.i = b as i64;
+	return v;
+}
+
+fn json_null_new() *Json {
+	return json_alloc(J_NULL);
+}
+
+// Adds a key/value pair to an object. Keys are stored as given; the
+// caller owns the string's lifetime (arena strings are fine).
+fn json_put(v *Json, key str, val *Json) {
+	var p *Json = json_alloc(J_PAIR);
+	p.s = key;
+	p.head = val;
+	var last *Json = v.head;
+	if (last as i64 == 0) { v.head = p; return; }
+	while (last.next as i64 != 0) { last = last.next; }
+	last.next = p;
+}
+
+// Appends an element to an array.
+fn json_arr_push(v *Json, x *Json) {
+	var last *Json = v.head;
+	if (last as i64 == 0) { v.head = x; return; }
+	while (last.next as i64 != 0) { last = last.next; }
+	last.next = x;
+}
+
+fn json_obj_len(v *Json) i64 {
+	var n i64 = 0;
+	var p *Json = v.head;
+	while (p as i64 != 0) { n = n + 1; p = p.next; }
+	return n;
+}
+
+// The elements of a JSON array as a slice, so `for e in json_view(a)`
+// iterates them with the language's checked loop. A non-array yields an
+// empty slice.
+fn json_view(v *Json) []*Json {
+	var n i64 = json_arr_len(v);
+	var out **Json = arena_alloc(n * 8, 8) as **Json;
+	var e *Json = v.head;
+	var k i64 = 0;
+	while (e as i64 != 0) {
+		out[k] = e;
+		k = k + 1;
+		e = e.next;
+	}
+	var s []*Json;
+	s.ptr = out;
+	s.len = n;
+	return s;
+}
+
 // --- printing -----------------------------------------------------------
 
 fn json_strify(v *Json) str {
