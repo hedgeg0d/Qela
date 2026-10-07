@@ -1,0 +1,25 @@
+// stage1-only
+// expect-exit: 0
+// An asm-return function left pending IR that flushed inside add_strref,
+// so the string header address was patched with the raw image offset
+// instead of the absolute one and the string copied garbage.
+fn syscall6(nr i64, a0 i64, a1 i64, a2 i64, a3 i64, a4 i64) i64 {
+	return asm(
+		0x48, 0x89, 0xf8,
+		0x48, 0x89, 0xf7,
+		0x48, 0x89, 0xd6,
+		0x48, 0x89, 0xca,
+		0x4d, 0x89, 0xc2,
+		0x4d, 0x89, 0xc8,
+		0x0f, 0x05
+	);
+}
+
+fn main() int {
+	var s str = "strref fix";
+	if (s.len != 10) { return 1; }
+	if (s.ptr as i64 == 0) { return 2; }
+	syscall6(999, 1, s.ptr as i64, s.len, 0, 0);
+	if (s.len != 10) { return 3; }
+	return 0;
+}
