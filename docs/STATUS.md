@@ -7,17 +7,46 @@ Updated 2026-08-12. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **605 528 B** (57.8% of the 1 MiB budget) |
-| stage1 sources | ~21 500 lines of Qela |
+| **S2 — the shipped compiler, Qela compiled by itself** | **623 616 B** (59.5% of the 1 MiB budget) |
+| stage1 sources | ~21 700 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
 
-Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 169-test corpus under S2, the embedded stdlib resolving outside the source tree,
+Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 175-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
 backtrace, interpolation and the repl, the compiler flags (`-g`,
 `--backtrace`, `--no-bounds-checks`, `--dump-std`), and a scripted language
 server conversation.
 
 ## Done
+
+**The scripting batch (2026-08-12).** Six Python-style features aimed at the
+scripting half of the two-worlds goal; the kernel side already has
+interrupts, asm and intrinsics. S2 604 976 -> 623 616 B (+18 640),
+corpus 169 -> 175, gate green, torture 200/200, subset clean. Full
+writeup in this file.
+
+- **Format specs in interpolation**: `${x:08x}`, `${x:5d}`, `${x:05d}`,
+  `${x:08X}`, `${f:.2f}`, `${s!r}`. The lexer splits the part at the
+  first top-level `:` / `!r` into a TK_FMTSPEC token; type_interp picks
+  a padded/fixed fmt function per spec. `tests/interpformat.qela`.
+- **`x in coll` / `x not in coll`**: `str_contains` for strings,
+  `<prefix>_has` for structs (new `vec_has`), a hidden bounds-checked
+  scan loop for arrays and slices. `tests/membership.qela`.
+- **Method-call sugar on any std function**: `s.trim()`, `m.get(k)`
+  resolve to `str_trim(s)` / `map_get(m, k)` when no bare function
+  exists; generic receivers are address-wrapped before inference.
+  `tests/methodcall.qela`.
+- **Comprehensions**: `[f(x) for x in coll if cond]` -> a hidden Vec
+  loop; works over arrays, slices, strings, Vecs, Maps and generators,
+  the result is a fresh slice. `tests/comprehension.qela`.
+- **Ternary**: `a if c else b`, right-nested, aggregates allowed.
+  `tests/ternary.qela`.
+- **Chained comparisons**: `a < b <= c` with each middle operand
+  evaluated once, lazily. `tests/chaincmp.qela`.
+
+Bonus fix: `qela fmt` dropped the spaces inside `${...}` (token texts
+only), which broke round-tripping `[k.len for k in m]` into one
+identifier; the interpolation run now emits a space per source gap.
 
 **The minios kernel batch (2026-08-12).** Five items that fell out of
 writing a real x86_64 kernel in Qela (`examples/minios`, boots in QEMU,

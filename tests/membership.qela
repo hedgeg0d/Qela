@@ -1,0 +1,42 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: truefalsetruetruefalsetruefalsetruefalsetruetrue
+// `x in coll` and `x not in coll`: a Vec goes through vec_has, a Map
+// through map_has, a string is a substring test, and an array or slice
+// scans with a hidden loop that stops at the first hit. A collection or
+// left side that is not a plain variable is hoisted, so a call runs once.
+import "std/fmt.qela";
+import "std/vec.qela";
+import "std/map.qela";
+
+fn make_vec() Vec(i64) {
+	var v Vec(i64);
+	vec_push(&v, 2);
+	vec_push(&v, 9);
+	return v;
+}
+
+fn main() int {
+	var v Vec(i64);
+	vec_push(&v, 7);
+	vec_push(&v, 42);
+	var arr [3]i64 = [1, 2, 3];
+	var s str = "hello world";
+	var m Map(i64);
+	map_put(&m, "k", 5);
+	var o = fmt_begin();
+	o = fmt_put_str(o, "${42 in v}");
+	o = fmt_put_str(o, "${99 in v}");
+	o = fmt_put_str(o, "${3 not in v}");
+	o = fmt_put_str(o, "${2 in arr}");
+	o = fmt_put_str(o, "${5 in arr}");
+	o = fmt_put_str(o, "${"world" in s}");
+	o = fmt_put_str(o, "${"xyz" in s}");
+	o = fmt_put_str(o, "${"k" in m}");
+	o = fmt_put_str(o, "${"zz" in m}");
+	o = fmt_put_str(o, "${"zz" not in m}");
+	o = fmt_put_str(o, "${2 in make_vec()}");
+	var r = fmt_result(o);
+	sys_write(1, r.ptr, r.len);
+	return 0;
+}
