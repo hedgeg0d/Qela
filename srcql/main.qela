@@ -2374,7 +2374,24 @@ fn cmd_repl(argc int, argv **u8) int {
 }
 
 fn cmd_help() int {
-	write_str(STDOUT, "usage: qela <file.qela> [-o output] [options]\n       qela . [dir]   build a project from a directory\n       qela run <file.qela> [args]\n       qela irun <file.qela|dir> [args]\n       qela test <file.qela|dir> [files...] [-- args]\n       qela fmt <file.qela>\n       qela repl\n       qela --lsp\n       qela --dump-std <module>\n\ncompile a Qela program to a static binary; '-' reads the source\nfrom stdin. A directory merges every .qela file under it,\nrecursively, into one program (entry: main.qela, or the sole file) --\nno imports needed between project files. 'run' compiles to a temp file and executes\nit, and panics print a backtrace there. 'irun' interprets the\nprogram in this process instead of compiling it -- no binary is\nwritten, and asm, naked functions and 'entry' are ignored with a\nwarning. 'test' runs the program and\nchecks its leading comments: // expect-exit: N, // expect-out: text\n(one line each, compared in order) and // expect-compile-error;\nseveral files can be tested in one run -- '--' separates the\nprogram arguments, e.g. qela test a.qela b.qela -- 5 6. 'repl'\ncompiles each line as an expression and prints its value.\n\nstrings interpolate, so n = ${40 + 2} prints 42 and pointers\nrender as hex; the expression is evaluated at runtime.\n\noptions:\n  -o <file>        output path (default: input name without .qela)\n  -c               emit a relocatable object (.o) for an external linker\n  --target, -t <t> x86_64 (default), arm64 or riscv64\n  -g               DWARF line info and symbols for gdb\n  --backtrace         print function frames on panic\n  --no-bounds-checks  disable index checks\n  --no-warn           suppress warnings\n  --interpreted       treat every function of your own as 'interpreted'\n  --jit               treat every function of your own as 'dynamic'\n  --color=auto|always|never  control coloured diagnostics (auto: tty + NO_COLOR)\n  -h, --help          this text\n");
+	write_str(STDOUT, "usage: qela <file.qela> [-o output] [options]\n       qela . [dir]   build a project from a directory\n       qela run <file.qela> [args]\n       qela irun <file.qela|dir> [args]\n       qela test <file.qela|dir> [files...] [-- args]\n       qela fmt <file.qela>\n       qela repl\n       qela --lsp\n       qela --dump-std <module>\n\ncompile a Qela program to a static binary; '-' reads the source\nfrom stdin. A directory merges every .qela file under it,\nrecursively, into one program (entry: main.qela, or the sole file) --\nno imports needed between project files. 'run' compiles to a temp file and executes\nit, and panics print a backtrace there. 'irun' interprets the\nprogram in this process instead of compiling it -- no binary is\nwritten, and asm, naked functions and 'entry' are ignored with a\nwarning. 'test' runs the program and\nchecks its leading comments: // expect-exit: N, // expect-out: text\n(one line each, compared in order) and // expect-compile-error;\nseveral files can be tested in one run -- '--' separates the\nprogram arguments, e.g. qela test a.qela b.qela -- 5 6. 'repl'\ncompiles each line as an expression and prints its value.\n\nstrings interpolate, so n = ${40 + 2} prints 42 and pointers\nrender as hex; the expression is evaluated at runtime.\n\noptions:\n  -o <file>        output path (default: input name without .qela)\n  -c               emit a relocatable object (.o) for an external linker\n  --target, -t <t> x86_64 (default: the host architecture), arm64 or riscv64\n  -g               DWARF line info and symbols for gdb\n  --backtrace         print function frames on panic\n  --no-bounds-checks  disable index checks\n  --no-warn           suppress warnings\n  --interpreted       treat every function of your own as 'interpreted'\n  --jit               treat every function of your own as 'dynamic'\n  --color=auto|always|never  control coloured diagnostics (auto: tty + NO_COLOR)\n  -h, --help          this text\n");
+	return 0;
+}
+
+// The host's architecture from uname(2)'s machine field, or 0 when it
+// is not one of the supported ones (or uname failed). The field is the
+// fourth of six 65-byte NUL-terminated strings.
+fn host_arch() int {
+	var ut [390]u8;
+	if (sys_uname(&ut[0]) != 0) { return 0; }
+	var m *u8 = &ut[0] + 195;
+	var n i64 = 0;
+	while (n < 64 && m[n] != 0) { n = n + 1; }
+	var ms str;
+	ms.ptr = m;
+	ms.len = n;
+	if (str_eq(ms, "aarch64")) { return TARGET_ARM64; }
+	if (str_eq(ms, "riscv64")) { return TARGET_RISCV64; }
 	return 0;
 }
 
@@ -2413,6 +2430,7 @@ fn main(argc int, argv **u8) int {
 	var output str;
 	var have_input bool = false;
 	var have_output bool = false;
+	var target_set bool = false;
 
 	var i int = 1;
 	while (i < argc) {
@@ -2438,6 +2456,7 @@ fn main(argc int, argv **u8) int {
 			else if (str_eq(t, "arm64")) { opt_target = TARGET_ARM64; }
 			else if (str_eq(t, "riscv64")) { opt_target = TARGET_RISCV64; }
 			else { die("error: --target must be x86_64, arm64 or riscv64"); }
+			target_set = true;
 		} else if (str_eq(a, "-D")) {
 			i = i + 1;
 			if (i == argc) { die("error: -D needs NAME=VALUE"); }
@@ -2481,6 +2500,14 @@ fn main(argc int, argv **u8) int {
 		i = i + 1;
 	}
 
+	// No explicit --target: compile for the host architecture, so a
+	// native arm64/riscv64 build of the compiler does the right thing
+	// without flags (under qemu user-mode the host is x86, which is
+	// also right: the emitted binary runs on the same kernel).
+	if (!target_set) {
+		var ha int = host_arch();
+		if (ha != 0) { opt_target = ha; }
+	}
 	if (opt_target == TARGET_RISCV64) { comptime_set("TARGET", "riscv64"); }
 	if (opt_target == TARGET_ARM64) { comptime_set("TARGET", "arm64"); }
 
