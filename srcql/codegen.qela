@@ -901,7 +901,7 @@ fn stmt_update(v *Node, k int, e *Node) bool {
 	}
 	if (!v.varp.has_reg) { return false; }
 	gen_expr(e);
-	ir_alu_vreg_acc(alu_ir_for(k), v.varp.reg, e.pos);
+	ir_alu_vreg_acc(alu_ir_for(k), v.varp.reg, v.varp.ty, e.pos);
 	return true;
 }
 
@@ -947,7 +947,7 @@ fn emit_spine(e *Node, dst *Node) {
 	if (e.kind == ND_VAR) { return; }
 	emit_spine(e.lhs, dst);
 	gen_expr(e.rhs);
-	ir_alu_vreg_acc(alu_ir_for(e.kind), dst.varp.reg, e.pos);
+	ir_alu_vreg_acc(alu_ir_for(e.kind), dst.varp.reg, dst.varp.ty, e.pos);
 }
 
 
@@ -1611,9 +1611,9 @@ fn ir_alu_rm_reg(aop int, dst IrOperand, src IrOperand, pos i64) {
 
 // stmt_update: <v.reg> op= rax, after gen_expr left the right side in the
 // accumulator.
-fn ir_alu_vreg_acc(aop int, reg int, pos i64) {
+fn ir_alu_vreg_acc(aop int, reg int, ty *Type, pos i64) {
 	var op *IrOp = ir_emit(IR_ALU, pos);
-	op.dst = operand_vreg(reg, 0 as *Type);
+	op.dst = operand_vreg(reg, ty);
 	op.src0 = op.dst;
 	op.src1 = operand_acc();
 	op.aux = aop as i64;
@@ -2357,7 +2357,9 @@ fn loop_has_break(n *Node) bool {
 // Promoted locals live in callee-saved registers, so each function saves the
 // ones it uses into reserved slots at the top of its own frame.
 fn reg_used(f *Func, reg int) bool {
-	if (reg < 12 && reg != 3) { return false; }
+	if (opt_target == TARGET_RISCV64) {
+		if (reg != 9 && (reg < 18 || reg > 26)) { return false; }
+	} else if (reg < 12 && reg != 3) { return false; }
 	var v *Var = f.locals;
 	while (v as i64 != 0) {
 		if (v.has_reg && v.reg == reg) { return true; }
