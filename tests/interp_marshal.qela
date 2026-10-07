@@ -38,8 +38,78 @@ fn dynamic dsumrec(s str, n i64) i64 {
 	return dsumrec(s, n - 1) + dsumrec(s, n - 2);
 }
 
+// Slices of POD elements and POD-payload enums cross the wire as raw
+// images now; a >16-byte enum rides the by-ref parameter path.
+enum E { A(i64), B }
+enum BigE { N(i64, i64, i64), Z }
+struct H { tag i64, xs []i64 }
+
+eval var gsl [4]i64;
+
+fn dynamic dsumsl(a []i64) i64 {
+	var s i64 = 0;
+	for x in a { s = s + x; }
+	return s;
+}
+fn interpreted isumsl(a []i64) i64 {
+	var s i64 = 0;
+	for x in a { s = s + x; }
+	return s;
+}
+fn dynamic dmksl(n i64) []i64 { return gsl[0..n]; }
+fn interpreted imksl(n i64) []i64 { return gsl[0..n]; }
+fn dynamic dopt(o E) i64 {
+	match (o) {
+		A(v) => return v;
+		B => return 0;
+	}
+	return 0;
+}
+fn interpreted iopt(o E) i64 {
+	match (o) {
+		A(v) => return v;
+		B => return 0;
+	}
+	return 0;
+}
+fn dynamic dmkopt(v i64) E {
+	if (v > 0) { return E.A(v); }
+	return E.B;
+}
+fn interpreted imkopt(v i64) E {
+	if (v > 0) { return E.A(v); }
+	return E.B;
+}
+fn dynamic dbe(b BigE) i64 {
+	match (b) {
+		N(x, y, z) => return x + y + z;
+		Z => return 0;
+	}
+	return 0;
+}
+fn interpreted ibe(b BigE) i64 {
+	match (b) {
+		N(x, y, z) => return x + y + z;
+		Z => return 0;
+	}
+	return 0;
+}
+fn dynamic dmkbig() BigE { return BigE.N(1, 2, 3); }
+fn interpreted imkbig() BigE { return BigE.N(1, 2, 3); }
+fn dynamic dh(h H) i64 {
+	var s i64 = h.tag;
+	for x in h.xs { s = s + x; }
+	return s;
+}
+fn interpreted ih(h H) i64 {
+	var s i64 = h.tag;
+	for x in h.xs { s = s + x; }
+	return s;
+}
+
 fn main() int {
 	var fails i64 = 0;
+	gsl[0] = 1; gsl[1] = 2; gsl[2] = 3; gsl[3] = 4;
 	if (dlen("abcd") != 4) { fails = fails + 1; }
 	if (ilen("xyz") != 3) { fails = fails + 1; }
 	if (dgreet("hi").len != 2) { fails = fails + 1; }
@@ -60,6 +130,30 @@ fn main() int {
 	if (dlenrec("abcd", 4) != 4) { fails = fails + 1; }
 	if (dgreetrec("yo", 3).len != 2) { fails = fails + 1; }
 	if (dsumrec("ab", 5) != 26) { fails = fails + 1; }
+
+	var arr [4]i64 = [1, 2, 3, 4];
+	if (dsumsl(arr[0..4]) != 10) { fails = fails + 1; }
+	if (isumsl(arr[0..3]) != 6) { fails = fails + 1; }
+	var sl []i64 = dmksl(3);
+	if (sl.len != 3 || sl[0] != 1 || sl[2] != 3) { fails = fails + 1; }
+	var sl2 []i64 = imksl(4);
+	if (sl2.len != 4 || sl2[3] != 4) { fails = fails + 1; }
+	if (dopt(E.A(5)) != 5) { fails = fails + 1; }
+	if (dopt(E.B) != 0) { fails = fails + 1; }
+	if (iopt(E.A(7)) != 7) { fails = fails + 1; }
+	if ((dmkopt(9) as i64) != 0) { fails = fails + 1; }
+	if ((dmkopt(0) as i64) != 1) { fails = fails + 1; }
+	if ((imkopt(9) as i64) != 0) { fails = fails + 1; }
+	if (dbe(BigE.N(1, 2, 3)) != 6) { fails = fails + 1; }
+	if (dbe(BigE.Z) != 0) { fails = fails + 1; }
+	if (ibe(BigE.N(4, 5, 6)) != 15) { fails = fails + 1; }
+	var be BigE = dmkbig();
+	if (be as i64 != 0) { fails = fails + 1; }
+	var be2 BigE = imkbig();
+	if (be2 as i64 != 0) { fails = fails + 1; }
+	var h H = H{tag: 3, xs: arr[0..2]};
+	if (dh(h) != 6) { fails = fails + 1; }
+	if (ih(h) != 6) { fails = fails + 1; }
 	if (fails == 0) { write_str(STDOUT, "all marshalled paths ok\n"); }
 	return fails as int;
 }
