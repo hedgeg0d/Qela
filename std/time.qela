@@ -17,26 +17,31 @@ struct TimeSpec {
 	nsec i64,
 }
 
+/// Reads the clock into a time specification.
 fn time_get(clock i64) TimeSpec {
 	var ts TimeSpec;
 	syscall(SYS_CLOCK_GETTIME_T, clock, &ts as i64, 0);
 	return ts;
 }
 
+/// Returns the monotonic time in nanoseconds.
 fn time_ns() i64 {
 	var ts TimeSpec = time_get(CLOCK_MONOTONIC);
 	return ts.sec * 1000000000 + ts.nsec;
 }
 
+/// Returns the monotonic time in milliseconds.
 fn time_ms() i64 {
 	return time_ns() / 1000000;
 }
 
+/// Returns the wall clock time in seconds.
 fn time_unix() i64 {
 	var ts TimeSpec = time_get(CLOCK_REALTIME);
 	return ts.sec;
 }
 
+/// Suspends execution for the given milliseconds.
 fn sleep_ms(ms i64) {
 	if (ms <= 0) { return; }
 	var ts TimeSpec;

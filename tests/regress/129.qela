@@ -1,4 +1,4 @@
-// expect-exit: 0
+// expect-exit: 1
 // got: CRASH
 struct Pair { x int, y int, }
 struct Wide { a int, b int, c int, }
@@ -27,7 +27,7 @@ fn tag_e(e E) int {
 fn main() int {
     var v0 int = 9;
     var v1 int = 3;
-    var v2 int = 2;
+    var v2 int = 0x2;
     var sv0 str = "no";
     var sv1 str = "zz";
     var fv double = 100.0;
@@ -45,21 +45,25 @@ fn main() int {
     var i5 int = 0;
     gv = (p.y * (-(v1 ^ '0')));
     e = E.B(('\t' as u8));
-    e = E.C(((((("xyz")[0..2])[0..2])[0..2])[0..2])[0], ((-699 / (((p.y * (-0)) & 15) + 1)) << 'c'));
+    e = E.C((("xyzzy")[1..5])[1], ((((3 in 0..((912 & 15) + 1)) | (gv / ((255 & 0xf) + 1))) != (("xyz")[0..2])[0]) in 0..((p.y & 15) + 1)));
+    gv = (((((((((("abcd")[0..3])[0..2] + "42") + ((("""x
+yz""")[0..4] + ((sv1 + "aa") + (sv0 + ("42" + (("""ab
+cd""")[1..5] + """ab
+cd"""))))))[0..2]) + "zz"))[0..2] + sv1))[0..2]).len as u16);
     i0 = 0;
-    while ((i0 < 3)) {
+    while ((i0 < 2)) {
         i0 = (i0 + 1);
-        b = Bag{p: ((("foobar")[3..6]).len < ((("xyzzy")[0..2])[1] % ((((10 << '0') << (263 as i16)) & 15) + 1))), q: ("hello")[0], r: a[((!p.y) & 3)], s: ((-p.x) >> (-((gv as i32) / (((v2 as u8) & 15) + 1))))};
-        e = E.B(((0.125 as i64) | (add2((-319 <= -236), (false as i32)) as i16)));
+        sv1 += (("qwerty")[1..6])[0..2];
+        v1 = (v2 as u8);
+        n.tag = p.y;
     }
-    v1 = 3;
-    v1 %= ((false & 15) + 1);
-    n.tag = ((((728 * false) & ('a' % (('\n' & 15) + 1))) < ((fv / -0.5) as i64)) <= (((-963 as double) >= -1.5) << ((255 % ((gv & 15) + 1)) == v1)));
-    v0 = ((!((100 as u16) as i8)) as i32);
-    fv = -2.0;
+    v0 = (((p.y | (add2('2', 'a') as i16)) > (("abc")[0..2]).len) && ((("abc")[0..2]).len < (gv in a)));
+    v1 = (((((gv <= false) && (false < 255)) | (fv != 0.3)) <= (-(4 | gv))) % ((((('f' <= false) in a) if ((gcd2((add2((42 in 0..(('d' & 15) + 1)), (!'e')) & 0xf), (((901 & 'f') <= (fv as i64)) & 15)) + (p.y == (str_eq(("foobar")[3..5], (("42" + ("abcd")[0..3]) + ((sv0)[0..2])[0..2])) ^ (v1 if (-955 != (v0 % ((((('a' % (('\n' & 15) + 1)) - (916 == false)) as i16) & 15) + 1))) else 548)))) < (((('\t' - true) in a) & 0x1) as u8)) else (p.x in a)) & 0xf) + 1));
+    fv = ((add2(('a' % ((0x3 & 15) + 1)), (fv >= 3.75)) as double) - ((((false / (('e' & 15) + 1)) < zero()) && (zero() < (v2 <= 10))) as double));
+    a[(-549 & 3)] = (v1 as i32);
     var ob Buf;
     fmt_i64(&ob, v2);
     write_str(STDOUT, buf_str(&ob));
     write_str(STDOUT, "\n");
-    return ((961 as u16) << ((-236 as i16) as i8));
+    return gcd2(((sv0).len & 15), (((('\t' * v0) + (255 < gv)) ^ ((min2(true, v2) <= 0x295) && (661 > (-false)))) & 15));
 }

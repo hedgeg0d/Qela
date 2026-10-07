@@ -3,6 +3,7 @@ import "str.qela";
 import "arena.qela";
 import "buf.qela";
 
+/// Builds an argv array for process execution.
 fn proc_argv(path str, args []str) *u8 {
 	var n i64 = args.len + 2;
 	var v *i64 = arena_alloc(n * 8, 8) as *i64;
@@ -16,10 +17,12 @@ fn proc_argv(path str, args []str) *u8 {
 	return v as *u8;
 }
 
+/// Extracts the exit code from a status word.
 fn proc_status(raw i64) i64 {
 	return (raw >> 8) & 255;
 }
 
+/// Runs a program and waits for its exit.
 fn proc_run(path str, args []str) i64 {
 	var argv *u8 = proc_argv(path, args);
 	var pid i64 = sys_fork();
@@ -33,6 +36,7 @@ fn proc_run(path str, args []str) i64 {
 	return proc_status(raw);
 }
 
+/// Runs a program and captures its output.
 fn proc_capture(path str, args []str, code *i64) str {
 	var argv *u8 = proc_argv(path, args);
 	var fds [2]i32;

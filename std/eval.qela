@@ -6,6 +6,7 @@ import "abiconn.qela";
 let ABI_REQ_RUN = 1;
 let ABI_REQ_RUN_AST = 8;
 
+/// Evaluates source code and returns its result value.
 fn eval(src str) i64 {
 	abi_spawn();
 	abi_send_frame(abi_in, ABI_REQ_RUN as u8, src.ptr, src.len);
@@ -24,6 +25,7 @@ fn eval(src str) i64 {
 	return *(&buf[0] as *i64);
 }
 
+/// Parses source code into a manipulable abstract tree.
 fn parse_ast(src str) *Ast {
 	abi_spawn();
 	var attempt bool = false;
@@ -49,6 +51,7 @@ fn parse_ast(src str) *Ast {
 	}
 }
 
+/// Runs a previously parsed abstract tree.
 fn run_ast(a *Ast) i64 {
 	abi_spawn();
 	var attempt bool = false;
@@ -82,6 +85,7 @@ struct AstInfo {
 
 // The payload of ABI_REQ_AST_INFO: [u64 kind-name length][kind-name
 // bytes][u64 value][u64 count].
+/// Returns the kind, value, and count of an abstract node.
 fn ast_info(a *Ast) AstInfo {
 	if (a as i64 == 0) {
 		var empty AstInfo;
@@ -114,12 +118,16 @@ fn ast_info(a *Ast) AstInfo {
 	}
 }
 
+/// Returns the kind name of an abstract node.
 fn ast_kind(a *Ast) str { return ast_info(a).kind; }
+/// Returns the stored value of an abstract node.
 fn ast_value(a *Ast) i64 { return ast_info(a).value; }
+/// Returns the child count of an abstract node.
 fn ast_count(a *Ast) i64 { return ast_info(a).count; }
 
 // One request that returns a child node handle (ABI_REQ_AST_CHILD and
 // ABI_REQ_AST_NEXT share the response shape: an id, 0 for none).
+/// Resolves a child index or successor to an abstract node.
 fn ast_node_req(parent *Ast, index i64, req u8, payload *u8, plen i64) *Ast {
 	abi_spawn();
 	var attempt bool = false;
@@ -148,6 +156,7 @@ fn ast_node_req(parent *Ast, index i64, req u8, payload *u8, plen i64) *Ast {
 	}
 }
 
+/// Returns the i-th child of an abstract node.
 fn ast_child(a *Ast, i i64) *Ast {
 	var hb [16]u8;
 	*(&hb[0] as *i64) = a.id;
@@ -155,12 +164,14 @@ fn ast_child(a *Ast, i i64) *Ast {
 	return ast_node_req(a, i, ABI_REQ_AST_CHILD as u8, &hb[0], 16);
 }
 
+/// Returns the sibling following an abstract node.
 fn ast_next(a *Ast) *Ast {
 	var hb [8]u8;
 	*(&hb[0] as *i64) = a.id;
 	return ast_node_req(a, -1, ABI_REQ_AST_NEXT as u8, &hb[0], 8);
 }
 
+/// Replaces the i-th child with the given node.
 fn ast_set(a *Ast, i i64, c *Ast) bool {
 	if (a as i64 == 0 || c as i64 == 0) { return false; }
 	abi_spawn();

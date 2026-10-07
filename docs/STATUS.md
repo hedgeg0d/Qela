@@ -1,13 +1,13 @@
 # Where the project stands
 
-Updated 2026-08-12. Read `BOOTSTRAP.md` first; it constrains everything below.
+Updated 2026-08-14. Read `BOOTSTRAP.md` first; it constrains everything below.
 
 ## Numbers
 
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **633 496 B** (60.4% of the 1 MiB budget) |
+| **S2 — the shipped compiler, Qela compiled by itself** | **648 784 B** (61.9% of the 1 MiB budget) |
 | stage1 sources | ~21 900 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
 
@@ -18,6 +18,18 @@ backtrace, interpolation and the repl, the compiler flags (`-g`,
 server conversation.
 
 ## Done
+
+**The stdlib docs batch (2026-08-14).** Every `fn` in the bundled std now
+carries a one-line `///` doc comment read by `qela doc std <name>`: exact
+match first, then substring, then `lev_dist` fuzzy "did you mean". The whole
+36-module std is covered — `qela doc std` lists each module's documented
+function count, `qela doc file.qela name` does the same for user sources
+(that path already existed). Blob (the embedded std, `srcql/std.lzss`)
+grew 51 505 -> 57 893 B from the doc text; the wrapped `///`'s only cost is
+that blob growth. Gate green (S2 == S3, 648 784 B), corpus 184/184 compiled
+and interpreted, the doc path pinned by two checks in `tools/bootstrap.sh`,
+`qela doc` documented in `docs/GUIDE.md`. Also dropped a stray `ra_dump`
+debug that was wedging the interp corpus.
 
 **The scripting ergonomics batch (2026-08-12).** Six small language
 features and three std modules on top of the scripting batch. S2

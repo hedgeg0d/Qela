@@ -1,0 +1,17 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: a"b\c-5
+// A raw multi-line string keeps quotes and backslashes verbatim (no
+// escapes are processed), and interpolation stays off inside it.
+import "std/fmt.qela";
+
+fn main() int {
+	var s str = """a"b\c""";
+	var o = fmt_begin();
+	o = fmt_put_str(o, s);
+	o = fmt_put_str(o, "-");
+	o = fmt_put_i64(o, s.len);
+	var r = fmt_result(o);
+	sys_write(1, r.ptr, r.len);
+	return 0;
+}

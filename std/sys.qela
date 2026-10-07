@@ -112,6 +112,7 @@ let STDERR = 2;
 let O_WRITE_NEW   = 577;  // O_WRONLY | O_CREAT | O_TRUNC
 let O_WRITE_APPEND = 1089; // O_WRONLY | O_CREAT | O_APPEND
 
+/// Reads up to n bytes from fd into buf; returns bytes read or an errno.
 fn sys_read(fd i64, buf *u8, n i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_READ_N, fd, buf as i64, n);
@@ -119,6 +120,7 @@ fn sys_read(fd i64, buf *u8, n i64) i64 {
 	return syscall(SYS_READ, fd, buf as i64, n);
 }
 
+/// Writes n bytes to fd; returns bytes written or an errno.
 fn sys_write(fd i64, buf *u8, n i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_WRITE_N, fd, buf as i64, n);
@@ -126,6 +128,7 @@ fn sys_write(fd i64, buf *u8, n i64) i64 {
 	return syscall(SYS_WRITE, fd, buf as i64, n);
 }
 
+/// Opens path read-only; returns a descriptor or an errno.
 fn sys_open_read(path *u8) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_OPENAT_N, AT_FDCWD, path as i64, 0, 0);
@@ -133,6 +136,7 @@ fn sys_open_read(path *u8) i64 {
 	return syscall(SYS_OPEN, path as i64, 0, 0);
 }
 
+/// Opens path for writing, truncating; returns a descriptor or an errno.
 fn sys_open_exec(path *u8) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_OPENAT_N, AT_FDCWD, path as i64, O_WRITE_NEW, 493);
@@ -140,6 +144,7 @@ fn sys_open_exec(path *u8) i64 {
 	return syscall(SYS_OPEN, path as i64, O_WRITE_NEW, 493);
 }
 
+/// Opens path for appending; returns a descriptor or an errno.
 fn sys_open_append(path *u8) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_OPENAT_N, AT_FDCWD, path as i64, O_WRITE_APPEND, 493);
@@ -147,6 +152,7 @@ fn sys_open_append(path *u8) i64 {
 	return syscall(SYS_OPEN, path as i64, O_WRITE_APPEND, 493);
 }
 
+/// Closes a descriptor; returns 0 or an errno.
 fn sys_close(fd i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_CLOSE_N, fd, 0, 0);
@@ -154,6 +160,7 @@ fn sys_close(fd i64) i64 {
 	return syscall(SYS_CLOSE, fd, 0, 0);
 }
 
+/// Maps n anonymous read-write bytes; returns the address or an errno.
 fn sys_mmap_anon(n i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_MMAP_N, 0, n, 3, 34, -1, 0);
@@ -161,6 +168,7 @@ fn sys_mmap_anon(n i64) i64 {
 	return syscall(SYS_MMAP, 0, n, 3, 34, -1, 0);
 }
 
+/// Unmaps n bytes at addr; returns 0 or an errno.
 fn sys_munmap(addr i64, n i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_MUNMAP_N, addr, n, 0);
@@ -171,6 +179,7 @@ fn sys_munmap(addr i64, n i64) i64 {
 // A full mmap: an anonymous mapping is sys_mmap_anon(0, n, rw, anon,
 // -1, 0); a file mapping passes the fd and offset. Returns the mapping
 // address or a negative errno.
+/// Maps a file or anonymous region of len bytes; returns the address or an errno.
 fn sys_mmap(addr i64, len i64, prot i64, flags i64, fd i64, off i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_MMAP_N, addr, len, prot, flags, fd, off);
@@ -178,6 +187,7 @@ fn sys_mmap(addr i64, len i64, prot i64, flags i64, fd i64, off i64) i64 {
 	return syscall(SYS_MMAP, addr, len, prot, flags, fd, off);
 }
 
+/// Creates a directory; returns 0 or an errno.
 fn sys_mkdir(path *u8) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_MKDIR_N, path as i64, 0, 0);
@@ -185,6 +195,7 @@ fn sys_mkdir(path *u8) i64 {
 	return syscall(SYS_MKDIR, path as i64, 0, 0);
 }
 
+/// Removes an empty directory; returns 0 or an errno.
 fn sys_rmdir(path *u8) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_RMDIR_N, path as i64, 0, 0);
@@ -192,6 +203,7 @@ fn sys_rmdir(path *u8) i64 {
 	return syscall(SYS_RMDIR, path as i64, 0, 0);
 }
 
+/// Renames a file, old to new; returns 0 or an errno.
 fn sys_rename(old *u8, new *u8) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_RENAME_N, old as i64, new as i64, 0);
@@ -199,6 +211,7 @@ fn sys_rename(old *u8, new *u8) i64 {
 	return syscall(SYS_RENAME, old as i64, new as i64, 0);
 }
 
+/// Writes the current working directory into buf; returns length or an errno.
 fn sys_getcwd(buf *u8, n i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_GETCWD_N, buf as i64, n, 0);
@@ -208,6 +221,7 @@ fn sys_getcwd(buf *u8, n i64) i64 {
 
 // The rt_sigaction layout is the same on every target: handler, flags,
 // restorer, then the 8-byte kernel sigset. act may be null to read only.
+/// Installs or queries the handler for a signal; returns 0 or an errno.
 fn sys_rt_sigaction(sig i64, act *u8, old *u8) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_RT_SIGACTION_N, sig, act as i64, old as i64, 8);
@@ -215,6 +229,7 @@ fn sys_rt_sigaction(sig i64, act *u8, old *u8) i64 {
 	return syscall(SYS_RT_SIGACTION, sig, act as i64, old as i64, 8);
 }
 
+/// Sends signal sig to pid; returns 0 or an errno.
 fn sys_kill(pid i64, sig i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_KILL_N, pid, sig, 0);
@@ -222,6 +237,7 @@ fn sys_kill(pid i64, sig i64) i64 {
 	return syscall(SYS_KILL, pid, sig, 0);
 }
 
+/// Restores the interrupted context after a signal handler returns.
 fn sys_sigreturn() i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_RT_SIGRETURN_N, 0, 0, 0);
@@ -233,6 +249,7 @@ fn sys_sigreturn() i64 {
 // pointer, child tid pointer, tls base. The caller builds the child's
 // initial stack image itself -- there is no libc clone() wrapper to hide
 // that behind. ARM64 clone() takes the same argument order.
+/// Creates a new process or thread sharing the address space.
 fn sys_clone(flags i64, stack i64, ptid i64, ctid i64, tls i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_CLONE_N, flags, stack, ptid, ctid, tls);
@@ -240,10 +257,12 @@ fn sys_clone(flags i64, stack i64, ptid i64, ctid i64, tls i64) i64 {
 	return syscall(SYS_CLONE, flags, stack, ptid, ctid, tls);
 }
 
+/// Sets or gets an architecture-specific thread state (x86_64 %fs/%gs).
 fn sys_arch_prctl(code i64, addr i64) i64 {
 	return syscall(SYS_ARCH_PRCTL, code, addr, 0);
 }
 
+/// A futex fast-path wait or wake on a shared word.
 fn sys_futex(uaddr *i64, op i64, val i64, timeout i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_FUTEX_N, uaddr as i64, op, val, timeout, 0, 0);
@@ -253,6 +272,7 @@ fn sys_futex(uaddr *i64, op i64, val i64, timeout i64) i64 {
 
 // Gives up the rest of this thread's timeslice, so a spin-wait doesn't
 // starve another thread of the core it needs to make progress.
+/// Gives up the rest of this thread's timeslice.
 fn sys_sched_yield() {
 	$if (TARGET != "x86_64") {
 		syscall(SYS_SCHED_YIELD_N, 0, 0, 0, 0, 0, 0);
@@ -272,6 +292,7 @@ fn sys_sched_yield() {
 // run once its debug-log write hit a permission error and called die(),
 // confirmed with `strace -f` showing a bare exit(1) (not exit_group) while
 // four pool-worker threads kept running.
+/// Ends the whole process, killing every thread, with the given code.
 fn sys_exit(code i64) {
 	$if (TARGET != "x86_64") {
 		syscall(SYS_EXIT_GROUP_N, code, 0, 0, 0, 0, 0);
@@ -280,6 +301,7 @@ fn sys_exit(code i64) {
 	}
 }
 
+/// Forks a child process copying this address space.
 fn sys_fork() i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_CLONE_N, 17, 0, 0, 0, 0);
@@ -287,6 +309,7 @@ fn sys_fork() i64 {
 	return syscall(SYS_FORK, 0, 0, 0);
 }
 
+/// Replaces this process image with the program at path.
 fn sys_execve(path *u8, argv *u8, envp *u8) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_EXECVE_N, path as i64, argv as i64, envp as i64);
@@ -294,6 +317,7 @@ fn sys_execve(path *u8, argv *u8, envp *u8) i64 {
 	return syscall(SYS_EXECVE, path as i64, argv as i64, envp as i64);
 }
 
+/// Waits for a child and writes its exit status into status.
 fn sys_wait4(pid i64, status *u8) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_WAIT4_N, pid, status as i64, 0, 0);
@@ -301,6 +325,7 @@ fn sys_wait4(pid i64, status *u8) i64 {
 	return syscall(SYS_WAIT4, pid, status as i64, 0, 0);
 }
 
+/// Removes a file; returns 0 or an errno.
 fn sys_unlink(path *u8) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_UNLINKAT_N, AT_FDCWD, path as i64, 0);
@@ -312,6 +337,7 @@ fn sys_unlink(path *u8) i64 {
 // not. The string is the slice between this 'name=' and the next NUL byte.
 // Used by diagnostics to honour NO_COLOR and check TERM. Empty when not on
 // Linux; the caller treats "" as "not set".
+/// Reads /proc/self/environ and returns the value of name, or "" if unset.
 fn sys_getenv(name str) str {
 	var path str = "/proc/self/environ";
 	var fd i64 = sys_open_read(cstr(path));
@@ -352,6 +378,7 @@ fn sys_getenv(name str) str {
 	return e;
 }
 
+/// Returns the calling process's id.
 fn sys_getpid() i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_GETPID_N, 0, 0, 0);
@@ -359,6 +386,7 @@ fn sys_getpid() i64 {
 	return syscall(SYS_GETPID, 0, 0, 0);
 }
 
+/// Fills a stat buf with metadata about path; returns 0 or an errno.
 fn sys_stat(path *u8, buf *u8) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_NEWFSTATAT_N, AT_FDCWD, path as i64, buf as i64, 0);
@@ -366,6 +394,7 @@ fn sys_stat(path *u8, buf *u8) i64 {
 	return syscall(SYS_STAT, path as i64, buf as i64, 0);
 }
 
+/// Reads a chunk of directory entries from fd into buf.
 fn sys_getdents(fd i64, buf *u8, n i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_GETDENTS_N, fd, buf as i64, n);
@@ -373,6 +402,7 @@ fn sys_getdents(fd i64, buf *u8, n i64) i64 {
 	return syscall(SYS_GETDENTS, fd, buf as i64, n);
 }
 
+/// Duplicates descriptor old onto new; returns 0 or an errno.
 fn sys_dup2(old i64, new i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_DUP3_N, old, new, 0);
@@ -380,7 +410,7 @@ fn sys_dup2(old i64, new i64) i64 {
 	return syscall(SYS_DUP2, old, new, 0);
 }
 
-// TIOCGETS succeeds on a terminal: 0 on a tty, -1 elsewhere.
+/// TIOCGETS succeeds on a terminal: 0 on a tty, -1 elsewhere.
 fn sys_isatty() i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_IOCTL_N, 0, 0x5401, 0);
@@ -388,6 +418,7 @@ fn sys_isatty() i64 {
 	return syscall(SYS_IOCTL, 0, 0x5401, 0);
 }
 
+/// Resolves a symlink into buf; returns length or an errno.
 fn sys_readlink(path *u8, buf *u8, n i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_READLINKAT_N, AT_FDCWD, path as i64, buf as i64, n);
@@ -395,6 +426,7 @@ fn sys_readlink(path *u8, buf *u8, n i64) i64 {
 	return syscall(SYS_READLINK, path as i64, buf as i64, n);
 }
 
+/// Creates an anonymous in-memory file; returns its descriptor or an errno.
 fn sys_memfd_create(name *u8, flags i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_MEMFD_CREATE_N, name as i64, flags, 0);
@@ -406,6 +438,7 @@ fn sys_memfd_create(name *u8, flags i64) i64 {
 // not NULL -- the kernel faults on the latter.
 var fexec_empty [1]u8;
 
+/// Replaces the process image with the file open on fd (execveat).
 fn sys_fexecve(fd i64, argv *u8, envp *u8) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_EXECVEAT_N, fd, &fexec_empty[0] as i64, argv as i64, envp as i64, AT_EMPTY_PATH, 0);
@@ -413,6 +446,7 @@ fn sys_fexecve(fd i64, argv *u8, envp *u8) i64 {
 	return syscall(SYS_EXECVEAT, fd, &fexec_empty[0] as i64, argv as i64, envp as i64, AT_EMPTY_PATH, 0);
 }
 
+/// Creates a pipe; the two ends are written into fds[0] and fds[1].
 fn sys_pipe2(fds *i32, flags i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_PIPE2_N, fds as i64, flags, 0);
@@ -420,6 +454,7 @@ fn sys_pipe2(fds *i32, flags i64) i64 {
 	return syscall(SYS_PIPE2, fds as i64, flags, 0);
 }
 
+/// Creates a connected pair of sockets; the two ends go in fds.
 fn sys_socketpair(domain i64, kind i64, protocol i64, fds *i32) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_SOCKETPAIR_N, domain, kind, protocol, fds as i64, 0);
@@ -427,6 +462,7 @@ fn sys_socketpair(domain i64, kind i64, protocol i64, fds *i32) i64 {
 	return syscall(SYS_SOCKETPAIR, domain, kind, protocol, fds as i64, 0);
 }
 
+/// Changes the protection of len bytes at addr; returns 0 or an errno.
 fn sys_mprotect(addr i64, len i64, prot i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_MPROTECT_N, addr, len, prot);
@@ -438,6 +474,7 @@ fn sys_mprotect(addr i64, len i64, prot i64) i64 {
 // sysname, nodename, release, version, machine, domainname). The machine
 // field starts at offset 195. Used by the compiler to detect the host
 // architecture when no --target was given.
+/// Fills the 390-byte utsname with kernel and machine information.
 fn sys_uname(buf *u8) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_UNAME_N, buf as i64, 0, 0);
@@ -450,14 +487,17 @@ fn sys_uname(buf *u8) i64 {
 // arguments arrive through a pointer because a function takes at most six
 // parameters and a syscall takes six plus its number. Unused trailing
 // arguments must be zero, which every caller here arranges.
+/// Performs a syscall whose number is known at runtime (for the interpreter).
 fn sys_call6(nr i64, a *i64) i64 {
 	return syscall(nr, a[0], a[1], a[2], a[3], a[4], a[5]);
 }
 
+/// Writes str to a file descriptor.
 fn write_str(fd i64, s str) {
 	sys_write(fd, s.ptr, s.len);
 }
 
+/// Writes str to standard error.
 fn eprint(s str) {
 	sys_write(STDERR, s.ptr, s.len);
 }

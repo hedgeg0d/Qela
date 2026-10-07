@@ -1,0 +1,75 @@
+// expect-exit: 2
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+fn sum3(a int, b int, c int) int { return a + b + c; }
+fn sub2(a int, b int) int { return a - b; }
+fn mix6(a int, b int, c int, d int, e int, f int) int { return a - b + c - d + e - f; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn nest_sum(n Nest) int { return n.tag + n.p.x + n.p.y; }
+fn wide_make(a int, b int, c int) Wide { return Wide{a: a, b: b, c: c}; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 0;
+    var v1 int = 3;
+    var v2 int = 3;
+    var sv0 str = "hi";
+    var sv1 str = "xyz";
+    var fv double = -1.5;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0x0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0x0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    n.p.x = ((sub2((-v0), (('c' >= false) && (false >= 590))) as u16) if ((((("xyzzy" + ("abcd")[1..4]))[1] if ((((('a' in 0..((true & 15) + 1)) == (930 as u8)) != ((516 >= 100) | (42 + false))) as i32) <= (!(((42 as u16) in a) in 0..(((!(0x1ae ^ 0)) & 15) + 1)))) else (a[(-489 & 3)] >= p.x)) + (a[((true / ((404 & 15) + 1)) & 3)] >> str_eq(("hello")[2..4], (("qwerty")[1..4] + (("xyz" + "hi"))[0..2])))) >= ((((true <= 933) in a) % ((((2 in a) | (1 as i32)) & 15) + 1)) in a)) else ((((v2 as u16) <= (100 as i32)) && ((100 as i32) < (!true))) in a));
+    w = wide_make((str_eq((((("abcd")[1..3])[0..2] + "hello") + """x
+yz"""), (("hello")[1..3] + ("hi" + ("abcd")[0..2]))) << (!false)), ((((('\t' as i16) as u16) < (true in a)) >= a[((p.y | (!false)) & 3)]) && (a[((p.y | (!false)) & 3)] <= (((fv >= fv) <= ((10 >= '\t') && ('\t' < 671))) < '0'))), 100);
+    a[(((true if (a[(p.y & 0x3)] == ((((-818 in 0..(('0' & 15) + 1)) in 0..((a[('b' & 3)] & 15) + 1)) as u8) <= true)) else v2) >> ((pair_sum(Pair{x: v0, y: 'g'}) << (3 as i16)) in a)) & 3)] = (((((("abcd")[1..3])[0..2]).len >= (-(v2 / ((-60 & 15) + 1)))) > ((((42 in a) >= (v1 in 0..((30 & 15) + 1))) <= ((v2 == 127) as u32)) && (((v2 == 127) as u32) <= (1.7 as i64)))) && (((((42 in a) >= (v1 in 0..((30 & 15) + 1))) <= ((v2 == 127) as u32)) && (((v2 == 127) as u32) <= (1.7 as i64))) > str_eq((sv0)[0..2], ("xyzzy")[0..3])));
+    sv1 += ((("""ab
+cd""")[0..3])[0..2] + sv1);
+    v2 = ("zz")[0];
+    sv1 = (("qwerty")[0..2] + "hi");
+    e = E.B(((!((true as i32) if ((!-384) >= (-str_eq(("aa" + ("qwerty")[1..4]), "hi"))) else (2 if (((((100 in a) as u32) >> ((true if ((p.x >= true) != (nest_sum(n) + (v2 + (((0xa == true) > (v2 in 0..((10 & 15) + 1))) && ((v2 in 0..((10 & 15) + 1)) > (v2 as i16)))))) else -616) >= p.x)) <= 0x32) >= ((('d' != (-1 in a)) - ((v0 == '2') % ((false & 0xf) + 1))) as u32)) else 0x2a))) ^ ((('\t' > 0x7f) && (127 <= '3')) != (a[('b' & 3)] | (0xcc in a)))));
+    match (e) {
+        A => {
+            return (v2 + ((sub2('g', true) as u8) % ((((-1.5 >= fv) - 'd') & 15) + 1)));
+        }
+        B(mb0) => {
+            return ((((false + 2) as double) - ((fv + 0.3) + (-2.0 * -0.5))) as i64);
+        }
+        C(mb0, mb1) => {
+            return (((((!sub2(0x1fd, '\n')) in 0..((sub2((-465 in 0..((42 & 15) + 1)), (((sv0)[0..2])[0..2]).len) & 15) + 0x1)) >= (!((2.5 + 1.0) <= ('g' as double)))) && ((!((2.5 + 1.0) <= ('g' as double))) <= (sub2(v0, ('c' * -881)) >> ((127 as i8) in 0..(((100 + 827) & 15) + 1))))) | mb1);
+        }
+    }
+    v2 = (((-str_eq(("""x
+yz""")[1..4], "qwerty")) ^ '\n') as i16);
+    write_str(STDOUT, "${v1:08x}\n");
+    return ((('d' as i32) + ((v0 > true) / ((opt_d(D.None) & 15) + 1))) <= 10);
+}

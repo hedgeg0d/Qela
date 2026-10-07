@@ -16,6 +16,7 @@ struct DynEntry {
 }
 var dyn_cache *DynEntry = null;
 
+/// Looks up a cached dynamic function by name.
 fn dyn_find(name str) i64 {
 	var e *DynEntry = dyn_cache;
 	while (e as i64 != 0) {
@@ -25,6 +26,7 @@ fn dyn_find(name str) i64 {
 	return 0;
 }
 
+/// Caches a compiled dynamic function by name.
 fn dyn_store(name str, ptr i64) {
 	var e *DynEntry = arena_alloc(sizeof(DynEntry), 8) as *DynEntry;
 	e.name = name;
@@ -33,6 +35,7 @@ fn dyn_store(name str, ptr i64) {
 	dyn_cache = e;
 }
 
+/// JIT-compiles a dynamic function and returns its address.
 fn interp_jit_compile(name str) i64 {
 	abi_send_frame(abi_in, ABI_REQ_JIT as u8, name.ptr, name.len);
 	var buf [8192]u8;
@@ -77,6 +80,7 @@ fn interp_jit_compile(name str) i64 {
 	return addr;
 }
 
+/// Calls a dynamic function through its jitted code.
 fn __dyn_jit_call(name str, args *i64) i64 {
 	abi_spawn();
 	var ptr i64 = dyn_find(name);
@@ -96,6 +100,7 @@ fn __dyn_jit_call(name str, args *i64) i64 {
 // -1 when it could not (not self-contained, or the signature was rejected)
 // and the caller must fall back to __interp_call_marshalled with the
 // payload it already built.
+/// Calls a jitted function with a marshalled return value.
 fn __dyn_jit_call_marshalled(name str, args *i64) i64 {
 	abi_spawn();
 	var ptr i64 = dyn_find(name);
@@ -109,6 +114,7 @@ fn __dyn_jit_call_marshalled(name str, args *i64) i64 {
 	return 1;
 }
 
+/// Calls an interpreted function in the child process.
 fn __interp_call_dispatch(name str, args *i64) i64 {
 	abi_spawn();
 
@@ -146,6 +152,7 @@ fn __interp_call_dispatch(name str, args *i64) i64 {
 // type-directed argument bytes) and the response payload is the marshalled
 // return value, received into the arena and returned as a str for the
 // trampoline to decode by its own return type.
+/// Calls an interpreted function with a marshalled payload.
 fn __interp_call_marshalled(msg str) str {
 	abi_spawn();
 	abi_send_frame(abi_in, ABI_REQ_CALL as u8, msg.ptr, msg.len);

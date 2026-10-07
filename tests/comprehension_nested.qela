@@ -1,0 +1,29 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: [[1, 2, 3], [4, 5, 6]] 6 4 9
+// A comprehension whose element is itself a comprehension builds nested
+// slices (the inner one gets its own loop variable and accumulator), a
+// string iterates its bytes, and a map comprehension with a filter keeps
+// only the pairs that pass.
+import "std/fmt.qela";
+import "std/vec.qela";
+import "std/map.qela";
+
+fn main() int {
+	var grid [2][3]i64 = [[1, 2, 3], [4, 5, 6]];
+	var nested = [[y * 1 for y in row] for row in grid];
+	var chars = [c for c in "abcabc"];
+	var m Map(i64);
+	map_put(&m, "a", 1);
+	map_put(&m, "b", 2);
+	map_put(&m, "c", 3);
+	var sq = [k: m[k] * m[k] for k in m if m[k] > 1];
+	var o = fmt_begin();
+	o = fmt_put_str(o, "${nested}");
+	o = fmt_put_str(o, " ${chars.len}");
+	o = fmt_put_str(o, " ${sq.get("b")}");
+	o = fmt_put_str(o, " ${sq.get("c")}");
+	var r = fmt_result(o);
+	sys_write(1, r.ptr, r.len);
+	return 0;
+}
