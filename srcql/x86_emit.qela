@@ -1816,6 +1816,11 @@ fn x86_lower_op(op *IrOp) {
 		// 32-bit form, which the bounds code emits unconditionally.
 		var r int = op2_reg(op.src0.reg);
 		var v i64 = op.src1.off;
+		if (v == 0 && op.aux == 0) {
+			rex_w(r, r);
+			b1(0x85); modrm(3, r, r);
+			return;
+		}
 		rex_w(0, r);
 		if (op.aux == 0 && v >= -128 && v <= 127) {
 			b1(0x83); modrm(3, 7, r); b1(v);
@@ -1825,6 +1830,7 @@ fn x86_lower_op(op *IrOp) {
 		return;
 	}
 	if (op.kind == IR_CMP && op.src0.kind == OP_ACC && op.src1.kind == OP_IMM) {
+		if (op.src1.off == 0 && op.aux == 0) { test_rax(); return; }
 		if (op.aux != 0) {
 			// A bounds check's forced 32-bit form: cmp rax, imm32 as 48 3d.
 			b1(0x48); b1(0x3d); b4(op.src1.off);
@@ -1843,6 +1849,11 @@ fn x86_lower_op(op *IrOp) {
 		// cmp <direct local>, imm -- gen_compare's direct-local fast path,
 		// alu_rm_imm with /digit 7 replayed on the operand.
 		var v i64 = op.src1.off;
+		if (v == 0 && op.aux == 0 && op.src0.kind == OP_VREG) {
+			rex_w(op.src0.reg, op.src0.reg);
+			b1(0x85); modrm(3, op.src0.reg, op.src0.reg);
+			return;
+		}
 		if (op.src0.kind == OP_VREG) {
 			rex_w(0, op.src0.reg);
 			if (op.aux == 0 && v >= -128 && v <= 127) {
