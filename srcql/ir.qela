@@ -170,8 +170,8 @@ var ir_tail *IrOp;
 // function -- label ids stay the backend's concern, keyed off the frontend's
 // ir_new_label below, and are zeroed per function by gen_func.
 fn ir_reset() {
-	ir_head = 0 as *IrOp;
-	ir_tail = 0 as *IrOp;
+	ir_head = null;
+	ir_tail = null;
 }
 
 fn operand_none() IrOperand {

@@ -20,7 +20,7 @@ fn heap_morecore(nu i64) *Header {
 	} $else {
 		r = syscall(9, 0, bytes, 3, 34, -1, 0);
 	}
-	if (r < 0 && r > -4096) { return 0 as *Header; }
+	if (r < 0 && r > -4096) { return null; }
 	var p *Header = r as *Header;
 	p.size = n;
 	heap_free((p + 1) as *u8);
@@ -28,10 +28,10 @@ fn heap_morecore(nu i64) *Header {
 }
 
 fn heap_alloc(nbytes i64) *u8 {
-	if (nbytes <= 0) { return 0 as *u8; }
+	if (nbytes <= 0) { return null; }
 	var nunits i64 = (nbytes + sizeof(Header) - 1) / sizeof(Header) + 1;
 
-	if (heap_freep == (0 as *Header)) {
+	if (heap_freep == (null)) {
 		heap_base.nextf = &heap_base;
 		heap_base.size = 0;
 		heap_freep = &heap_base;
@@ -53,17 +53,17 @@ fn heap_alloc(nbytes i64) *u8 {
 		}
 		if (p == heap_freep) {
 			var np *Header = heap_morecore(nunits);
-			if (np == (0 as *Header)) { return 0 as *u8; }
+			if (np == (null)) { return null; }
 			p = np;
 		}
 		prevp = p;
 		p = p.nextf;
 	}
-	return 0 as *u8;
+	return null;
 }
 
 fn heap_free(ap *u8) {
-	if (ap == (0 as *u8)) { return; }
+	if (ap == (null)) { return; }
 	var bp *Header = (ap as *Header) - 1;
 	var p *Header = heap_freep;
 	while (true) {
@@ -87,14 +87,14 @@ fn heap_free(ap *u8) {
 }
 
 fn heap_realloc(ap *u8, nbytes i64) *u8 {
-	if (ap == (0 as *u8)) { return heap_alloc(nbytes); }
-	if (nbytes <= 0) { heap_free(ap); return 0 as *u8; }
+	if (ap == (null)) { return heap_alloc(nbytes); }
+	if (nbytes <= 0) { heap_free(ap); return null; }
 
 	var bp *Header = (ap as *Header) - 1;
 	var oldbytes i64 = (bp.size - 1) * sizeof(Header);
 
 	var r *u8 = heap_alloc(nbytes);
-	if (r == (0 as *u8)) { return 0 as *u8; }
+	if (r == (null)) { return null; }
 
 	var n i64 = oldbytes;
 	if (nbytes < n) { n = nbytes; }

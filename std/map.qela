@@ -22,11 +22,11 @@ fn map_hash(k str) i64 {
 }
 
 fn map_init(comptime V: type, m *Map(V)) {
-	m.keys = 0 as *str;
-	m.vals = 0 as *V;
+	m.keys = null;
+	m.vals = null;
 	m.n = 0;
 	m.cap = 0;
-	m.idx = 0 as *i64;
+	m.idx = null;
 	m.nb = 0;
 }
 
