@@ -2048,6 +2048,13 @@ fn gen_expr(n *Node) {
 			return;
 		}
 		if (str_eq(n.name, "tls_init")) {
+			// The placeholder site must be captured after any pending IR
+			// flushes: b4() flushes before appending, so a ref pushed with
+			// the pre-flush code.n would patch the wrong word (an earlier
+			// statement's promoted-local moves) and the real placeholder
+			// would keep its zero displacement -- a bl to itself, pinned
+			// by tests/tlsreg.qela under qemu-aarch64.
+			ir_flush();
 			if (opt_target == TARGET_RISCV64) {
 				ilist_push(&tls_init_refs, code.n);
 				b4(0x6f | (RA << 7));        // jal ra, <tls init stub>
@@ -3123,6 +3130,19 @@ fn embed_prepare() {
 	if (embed_lenv as i64 == 0 || embed_ptrv as i64 == 0) { return; }
 	if (!embed_lenv.reachable && !opt_object) { return; }
 	if (opt_object) { return; }
+	// The embed is this compiler's own image: it can only run where this
+	// compiler itself runs. A cross-compiled output would embed an ELF the
+	// target kernel refuses to exec (the child is not emulated), so the
+	// runtime falls back to $QELAPATH/$PATH instead.
+	$if (TARGET == "x86_64") {
+		if (opt_target != TARGET_X86_64) { return; }
+	} $else {
+		$if (TARGET == "arm64") {
+			if (opt_target != TARGET_ARM64) { return; }
+		} $else {
+			if (opt_target != TARGET_RISCV64) { return; }
+		}
+	}
 	var self_path [4096]u8;
 	var plen i64 = sys_readlink(cstr("/proc/self/exe"), &self_path[0], 4096);
 	if (plen <= 0 || plen >= 4096) { return; }
