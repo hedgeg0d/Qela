@@ -98,6 +98,7 @@ tvar pool_worker_id i64 = -1;
 /// Runs one pool thread's scheduling loop forever.
 fn pool_worker(id i64) i64 {
 	tls_init();
+	chan_thread_enter();
 	pool_worker_id = id;
 	while (true) {
 		pool_drain(id);
@@ -130,12 +131,21 @@ fn thread_pool_init(n i64) {
 		i = i + 1;
 	}
 	pool_n = n;
+	// The cross-thread deadlock check never reports before every pool
+	// thread has registered (registration is a worker's first act):
+	// a worker that has not registered yet cannot have done anything.
+	atomic_store(&chan_pool_threads, n);
 }
 
 // Round-robins a goroutine onto one of the pool's threads. fn takes up to
 // five i64/pointer-sized arguments, the same convention coro_spawn uses.
 /// Schedules a goroutine onto one of the pool threads.
 fn go(fn_ptr i64, a0 i64, a1 i64, a2 i64, a3 i64, a4 i64) {
+	// A go() source is a channel-progress source for the cross-thread
+	// deadlock check: register it, so a stalled world never mistakes
+	// this thread for one that can no longer act. (Requires tls_init,
+	// like every tvar touch -- true for main and for pool workers.)
+	if (chan_my_slot < 0) { chan_thread_enter(); }
 	var id i64 = atomic_add(&pool_next, 1) % pool_n;
 	while (!atomic_cas(&pool_lock[id], 0, 1)) { sys_sched_yield(); }
 	while (pool_tail[id] - pool_head[id] >= POOL_QUEUE) {
