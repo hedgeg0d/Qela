@@ -5499,8 +5499,19 @@ fn parse(tok *Token) *Unit {
 		if (find_func(f.name) as i64 != f as i64) {
 			emsg("redefinition of function '"); emsg(f.name); emsg("'"); efail(f.pos);
 		}
+		if (f.nct == 0) { type_func(f); }
+		f = f.next;
+	}
+	// Inlining runs once every body is typed: a caller may sit before its
+	// callee in the list, and the clone needs the callee's types.
+	f = head.next;
+	while (f as i64 != 0) {
+		if (f.nct == 0) { inline_func(f); }
+		f = f.next;
+	}
+	f = head.next;
+	while (f as i64 != 0) {
 		if (f.nct == 0) {
-			type_func(f);
 			opt_func(f);
 			elide_bounds(f);
 			regalloc(f);
