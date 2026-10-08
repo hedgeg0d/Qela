@@ -79,6 +79,12 @@ fn fmt_put_hex(b Buf, v i64) Buf {
 	return b;
 }
 
+fn fmt_put_bool(b Buf, v bool) Buf {
+	if (v) { fmt_str(&b, "true"); }
+	else { fmt_str(&b, "false"); }
+	return b;
+}
+
 fn fmt_result(b Buf) str {
 	var s str;
 	s.ptr = b.p;
