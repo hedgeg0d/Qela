@@ -7,7 +7,7 @@ Updated 2026-08-11. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **604 952 B** (57.7% of the 1 MiB budget) |
+| **S2 — the shipped compiler, Qela compiled by itself** | **605 728 B** (57.8% of the 1 MiB budget) |
 | stage1 sources | ~21 500 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
 
@@ -19,14 +19,25 @@ server conversation.
 
 ## Done
 
+**`$bytes("path")` (2026-08-11).** A compile-time file embed, the shape C23
+spells `#embed` and Zig spells `@embedFile`: the expression is the file's
+bytes as a `str`, so `.len` is the size and `.ptr` the data, NULs and all.
+The path resolves relative to the source file that writes it (absolute paths
+are taken as they are). A file the compiler cannot read is a **warning**, not
+an error, and the expression becomes a `str` with a null `ptr` and zero
+`len` -- the program can test for it. That null costs nothing extra: the
+string literal's rodata header is simply left unpatched, which is also what
+the interpreter's layout does. Costs +680 B in S2. The blob below is its
+first user; `tests/embed.qela` pins both halves.
+
 **The embedded stdlib is LZSS-packed (2026-08-11).** The 29 std modules are
 100 951 bytes of source; they now travel through the binary compressed to
 39 835 (39.5%), unpacked once into the arena on the first blob import.
 `tools/genblob.py` holds the compressor and verifies the round trip in
-Python; only the 65-line decoder (`srcql/blob.qela`) ships. The packed bytes
-sit in ordinary string literals -- raw, with `"`/`\\`/LF/CR/NUL escaped and a
-chunk boundary forced between any `$` and `{`, since the lexer has no escape
-for `$`. Costs about 1 ms on a compile that touches the blob (18.2 ms ->
+Python; only the 55-line decoder (`srcql/blob.qela`) ships. The packed bytes
+live in `srcql/std.lzss` and reach the binary through `$bytes`, so no source
+file carries escaped binary and a std module may now use string
+interpolation itself. Costs about 1 ms on a compile that touches the blob (18.2 ms ->
 19.0 ms on a two-import program) and nothing on a self-compile, which reads
 `std/` from disk. **S2 664 752 -> 604 952 B (-60 128, -9.0%).**
 
