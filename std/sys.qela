@@ -285,6 +285,15 @@ fn sys_isatty() i64 {
 	return syscall(SYS_IOCTL, 0, 0x5401, 0);
 }
 
+// A syscall whose number is only known at runtime, for srcql/interp.qela:
+// an interpreted `syscall(...)` forwards straight to the host kernel. The
+// arguments arrive through a pointer because a function takes at most six
+// parameters and a syscall takes six plus its number. Unused trailing
+// arguments must be zero, which every caller here arranges.
+fn sys_call6(nr i64, a *i64) i64 {
+	return syscall(nr, a[0], a[1], a[2], a[3], a[4], a[5]);
+}
+
 fn write_str(fd i64, s str) {
 	sys_write(fd, s.ptr, s.len);
 }
