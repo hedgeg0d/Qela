@@ -406,6 +406,31 @@ EOF
 printf '    ok\n'
 
 
+step "interpreted/dynamic str and struct marshalling over the abi"
+cat > "$tmp2/marshalled.qela" <<'EOF'
+import "std/io.qela";
+struct Pair { a i64, b i64 }
+struct Bag { tag i64, s str, n i64 }
+fn dynamic dlen(s str) i64 { return s.len; }
+fn interpreted ilen(s str) i64 { return s.len; }
+fn dynamic dgreet(s str) str { return s; }
+fn interpreted igreet(s str) str { return s; }
+fn dynamic dsum(p Pair) i64 { return p.a + p.b; }
+fn interpreted ibag(b Bag) i64 { return b.tag + b.s.len + b.n; }
+fn main() int {
+	var p Pair = Pair{a: 3, b: 4};
+	var bag Bag = Bag{tag: 10, s: "abc", n: 5};
+	write_str(STDOUT, "dlen=${dlen("hello")} ilen=${ilen("hi")} g=${dgreet("yo")} g2=${igreet("yo")} sum=${dsum(p)} bag=${ibag(bag)}\n");
+	return 0;
+}
+EOF
+( cd "$tmp2" &&
+  "$root/$OUT/s2" marshalled.qela -o marshalled &&
+  [ "$(QELAPATH="$root/$OUT/s2" ./marshalled)" = "dlen=5 ilen=2 g=yo g2=yo sum=7 bag=18" ] ) ||
+	fail "str/struct marshalling misbehaves across the runtime abi"
+printf '    ok\n'
+
+
 step "parse_ast/run_ast: parse once, run repeatedly against fresh state"
 cat > "$tmp2/asttest.qela" <<'EOF'
 import "std/eval.qela";
