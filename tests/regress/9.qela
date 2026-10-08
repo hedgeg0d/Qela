@@ -1,0 +1,129 @@
+// expect-exit: 1
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = 28;
+fn mix5(a int, b int, c int, d int, e int) int { return a + b - c + d - e; }
+fn sum3(a int, b int, c int) int { return a + b + c; }
+fn min2(a int, b int) int { if (a < b) { return a; } else { return b; } }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn wide_swap(w Wide) Wide { return Wide{a: w.b, b: w.a, c: w.c}; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 0;
+    var v1 int = 6;
+    var v2 int = 2;
+    var sv0 str = "zz";
+    var sv1 str = "no";
+    var fv double = 1.7;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    gv = false;
+    match (e) {
+        A => {
+            return ((10.5 / 0.25) != fv);
+        }
+        B(mb0) => {
+            return (-(("hello").len << ((100 >= 0) / ((('a' - 0) & 15) + 1))));
+        }
+        C(mb0, mb1) => {
+            return ((((fv as i64) as u16) << (gv + false)) ^ mb1);
+        }
+    }
+    if ((((((0 >= false) << sum3(gv, 63, 'a')) != 'a') as u32) >= ((((gv > '2') < (--434)) as u16) | (((100.0 + 0.125) as i64) - p.y)))) {
+        i1 = 0;
+        while ((i1 < 1)) {
+            i1 = (i1 + 1);
+            i2 = 0;
+            while ((i2 < 1)) {
+                i2 = (i2 + 1);
+                e = E.B(((-((-948 % ((59 & 15) + 1)) >> (!false))) - pair_sum(Pair{x: ((v2 as i8) ^ (507 as i16)), y: (a[(gv & 3)] & (-1 > 100))})));
+                n = Nest{tag: ((p.x >> a[((false & '1') & 3)]) as u32), p: Pair{x: ((-0.5 as i64) ^ (mix5((true % ((gv & 15) + 1)), (gv as i8), v0, (!255), (gv ^ false)) + ((fv + fv) <= 1.0))), y: (false as i8)}};
+            }
+            match (e) {
+                A => {
+                    return 'c';
+                }
+                B(mb0) => {
+                    return ((!false) as i32);
+                }
+                C(mb0, mb1) => {
+                    return (0 | mb1);
+                }
+            }
+            v2 -= gv;
+            if ((i1 == 1)) {
+                break;
+            } else {
+            }
+        }
+        return (("hi")[0] & -755);
+    } else {
+        i1 = 0;
+        while ((i1 < 1)) {
+            i1 = (i1 + 1);
+            match (e) {
+                A => {
+                    return ("hi")[0];
+                }
+                B(mb0) => {
+                    return ((-((p.y - 1) >= ((!gv) - ("aa").len))) + mb0);
+                }
+                C(mb0, mb1) => {
+                    return p.x;
+                }
+            }
+            v1 = a[((42 as u32) & 3)];
+        }
+    }
+    v0 = ((a[((42 as i32) & 3)] << ((371 << v0) | p.y)) * p.x);
+    e = E.B((-((v1 - true) << 'a')));
+    n.p.x = (gv | (((sv0).len != (gv << false)) as i16));
+    match (e) {
+        A => {
+            return (-(((255 != 184) ^ (117 | false)) % ((gv & 15) + 1)));
+        }
+        B(mb0) => {
+            return mix5(((('0' >= true) << (-v2)) << false), (-2), ((fv - (fv / 3.75)) as i64), (((false as double) as i64) as u8), 467);
+        }
+        C(mb0, mb1) => {
+            return ((((('e' as i8) / (((0 != gv) & 15) + 1)) | (v2 - (-1 | true))) == (((255 as double) as i64) | ((-true) % (((127 - -169) & 15) + 1)))) - mb1);
+        }
+    }
+    a[(gv & 3)] = ((fv as i64) + (("xyz")[0..3])[1]);
+    e = E.B(str_eq(sv0, "abcd"));
+    var ob Buf;
+    fmt_i64(&ob, v0);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return (v1 > ('2' != (2.0 != (fv / 3.75))));
+}

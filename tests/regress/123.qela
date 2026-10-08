@@ -1,0 +1,99 @@
+// expect-exit: 0
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = -7;
+fn min2(a int, b int) int { if (a < b) { return a; } else { return b; } }
+fn sub2(a int, b int) int { return a - b; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn bag_sum(b Bag) int { return b.p + b.q + b.r + b.s; }
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn main() int {
+    var v0 int = 8;
+    var v1 int = 5;
+    var v2 int = 3;
+    var sv0 str = "xyz";
+    var sv1 str = "abc";
+    var fv double = 1.7;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    match (e) {
+        A => {
+            return ((1.5 as i64) * p.y);
+        }
+        B(mb0) => {
+            return (false | mb0);
+        }
+        C(mb0, mb1) => {
+            return ((((!v1) as i32) >= ((fv * 0.125) > 0.3)) as i8);
+        }
+    }
+    n.tag = ((((fv - fv) + (0.125 / 0.5)) / 0.25) as i64);
+    sv1 = "hi";
+    gv, v2 = ((("foobar")[1..6])[0..2])[0], gv;
+    if (((((('f' | false) as double) / 2.5) == (((-true) & (1.0 == fv)) as double)) == (!(-gv)))) {
+        gv = (-v2);
+        v2 |= -1;
+    } else {
+        e = E.C(100, ((0.3 / 0.5) == ((0.125 / 1.7) - (fv + (2.5 / 0.1)))));
+    }
+    e = E.B(((((false << -603) << (gv / (('a' & 15) + 1))) as i8) & str_eq((sv1)[0..2], "qwerty")));
+    sv1 = sv0;
+    if ((v2 == ((((("hi")[0..2])[0..2])[0..2]).len != bag_sum(b)))) {
+        a[((bag_sum(b) + (((gv - 'g') << (!2)) >= (str_eq("hi", ("xyz")[0..3]) < (v1 | v2)))) & 3)] = (((!min2('1', 42)) - 0) * (((v1 >> '1') >> (!'2')) & ((v2 % ((-47 & 15) + 1)) == a[(200 & 3)])));
+        match (e) {
+            A => {
+                return ((((-789 as u16) % ((('d' as i16) & 15) + 1)) as i32) >> sub2(p.y, (min2(0, false) * (true % ((100 & 15) + 1)))));
+            }
+            B(mb0) => {
+                return (gv ^ mb0);
+            }
+            C(mb0, mb1) => {
+                return ((min2((-156 << (-174 - 3)), ((!10) + (fv as i64))) <= (-(("foobar")[3..6]).len)) - mb1);
+            }
+        }
+    } else {
+        i1 = 0;
+        while ((i1 < 1)) {
+            i1 = (i1 + 1);
+            gv, v0 = (!'g'), ((10.5 / 2.5) as i64);
+            a[(true & 3)] = (((fv / 0.5) as i64) + (!((100 * 100) != (v0 < -784))));
+        }
+        return ((((v2 % ((2 & 15) + 1)) != (-775 - 126)) > (gv >> (382 <= false))) > (-(false - true)));
+    }
+    var ob Buf;
+    fmt_i64(&ob, v0);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return (v2 * (gv ^ (('e' != '\t') > str_eq(sv1, "abcd"))));
+}

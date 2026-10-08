@@ -1,0 +1,102 @@
+// expect-exit: 0
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = -47;
+fn twice(n int) int { return n + n; }
+fn fact(n int) int { if (n <= 1) { return 1; } return n * fact(n - 1); }
+fn max2(a int, b int) int { if (a > b) { return a; } else { return b; } }
+fn sub2(a int, b int) int { return a - b; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn wide_swap(w Wide) Wide { return Wide{a: w.b, b: w.a, c: w.c}; }
+fn wide_sum(w Wide) int { return w.a + w.b + w.c; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 0;
+    var v1 int = 3;
+    var v2 int = 1;
+    var sv0 str = "zz";
+    var sv1 str = "xyz";
+    var fv double = 10.5;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    i0 = 0;
+    while ((i0 < 4)) {
+        v1, v0 = v0, v1;
+        sv1 = ((sv1)[0..2])[0..2];
+        a[i0] = ((max2(wide_sum(w), gv) % ((fact((a[(gv & 3)] & 15)) & 15) + 1)) as i8);
+        i0 = (i0 + 1);
+    }
+    match (e) {
+        A => {
+            return str_eq(("xyz")[0..3], ("abcd")[1..4]);
+        }
+        B(mb0) => {
+            return (true + mb0);
+        }
+        C(mb0, mb1) => {
+            return ('2' - mb1);
+        }
+    }
+    match (e) {
+        A => {
+            return (gv | (("abc")[0..3])[1]);
+        }
+        B(mb0) => {
+            return p.y;
+        }
+        C(mb0, mb1) => {
+            return (((((!'c') / (((-182 as i32) & 15) + 1)) ^ (!(gv % ((v2 & 15) + 1)))) & (!(str_eq(("xyz")[0..3], "abc") ^ gv))) ^ mb1);
+        }
+    }
+    fv = (127 as double);
+    match (e) {
+        A => {
+            return opt_d(D.None);
+        }
+        B(mb0) => {
+            return (!v2);
+        }
+        C(mb0, mb1) => {
+            return (gv | mb1);
+        }
+    }
+    p.x = v1;
+    p = Pair{x: (((("abc")[0..2])[0..2])[0] >= ((('\t' * '0') as u32) << (!(false == -272)))), y: ((!str_eq(sv1, sv1)) == (((gv ^ 'f') & a[(-386 & 3)]) != ((false | 'f') == (false & -863))))};
+    v2 = ((((-10) + ('e' != 3)) - opt_d(D.Some((true != true)))) <= gv);
+    sv1 = ("xyz")[0..2];
+    var ob Buf;
+    fmt_i64(&ob, v2);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return (-((!p.x) ^ (!(281 ^ true))));
+}

@@ -1,0 +1,87 @@
+// expect-exit: 0
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = -25;
+fn fact(n int) int { if (n <= 1) { return 1; } return n * fact(n - 1); }
+fn min2(a int, b int) int { if (a < b) { return a; } else { return b; } }
+fn mul2(a int, b int) int { return a * b; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn nest_sum(n Nest) int { return n.tag + n.p.x + n.p.y; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn main() int {
+    var v0 int = 4;
+    var v1 int = 4;
+    var v2 int = 0;
+    var sv0 str = "xyzzy";
+    var sv1 str = "zz";
+    var fv double = 2.0;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    a[('a' & 3)] = (str_eq((sv0)[0..2], ("xyzzy")[0..2]) ^ (((!-319) & 467) << a[((-v1) & 3)]));
+    e = E.B((-a[(((v1 >= false) - ('2' != gv)) & 3)]));
+    match (e) {
+        A => {
+            return ("hi").len;
+        }
+        B(mb0) => {
+            return (fv >= (((2.5 + -1.5) / 0.1) * ((1 as double) / 0.25)));
+        }
+        C(mb0, mb1) => {
+            return ('c' * mb1);
+        }
+    }
+    match (e) {
+        A => {
+            return (sv0).len;
+        }
+        B(mb0) => {
+            return ((((mul2('\t', true) != '0') << v0) / (((tag_e(e) | 127) & 15) + 1)) - mb0);
+        }
+        C(mb0, mb1) => {
+            return ((-(-(v0 >= 483))) >= ((-gv) as i8));
+        }
+    }
+    e = E.B((((('2' as double) as i64) * true) <= (str_eq(("abcd")[0..2], sv0) * 'c')));
+    p.x = ((42 as double) as i64);
+    match (e) {
+        A => {
+            return (!(((-15 >= -634) == (193 ^ 3)) >= ((2 / ((false & 15) + 1)) as u16)));
+        }
+        B(mb0) => {
+            return (a[((((-208 >> -976) > (false >> 378)) as i32) & 3)] & mb0);
+        }
+        C(mb0, mb1) => {
+            return ((3 / ((((false * 0) as i8) & 15) + 1)) << a[(((-951 % ((42 & 15) + 1)) as i8) & 3)]);
+        }
+    }
+    v2 = (true as i32);
+    var ob Buf;
+    fmt_i64(&ob, v2);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return 1;
+}
