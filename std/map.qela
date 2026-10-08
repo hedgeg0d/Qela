@@ -1,70 +1,136 @@
 import "arena.qela";
 import "str.qela";
 
-// str -> *u8 map with insertion-order iteration and O(N) lookup.
-// N is tiny in a compiler, so the array is fine.
-
-struct MapEntry {
-	key  str,
-	val  *u8,
+struct Map(V) {
+	keys *str,
+	vals *V,
+	n    i64,
+	cap  i64,
+	idx  *i64,
+	nb   i64,
 }
 
-struct Map {
-	entries *MapEntry,
-	n       i64,
-	cap     i64,
+fn map_hash(k str) i64 {
+	var h i64 = 2166136261;
+	var i i64 = 0;
+	while (i < k.len) {
+		h = (h ^ (k.ptr[i] as i64)) * 16777619;
+		h = h & 4611686018427387903;
+		i = i + 1;
+	}
+	return h;
 }
 
-fn map_grow(m *Map, need i64) {
-	if (m.n + need <= m.cap) { return; }
+fn map_init(comptime V: type, m *Map(V)) {
+	m.keys = 0 as *str;
+	m.vals = 0 as *V;
+	m.n = 0;
+	m.cap = 0;
+	m.idx = 0 as *i64;
+	m.nb = 0;
+}
+
+fn map_rehash(comptime V: type, m *Map(V), nb i64) {
+	m.idx = arena_alloc(nb * 8, 8) as *i64;
+	m.nb = nb;
+	var i i64 = 0;
+	while (i < nb) {
+		*(m.idx + i) = 0;
+		i = i + 1;
+	}
+	i = 0;
+	while (i < m.n) {
+		var b i64 = map_hash(*(m.keys + i)) % nb;
+		while (*(m.idx + b) != 0) {
+			b = b + 1;
+			if (b == nb) { b = 0; }
+		}
+		*(m.idx + b) = i + 1;
+		i = i + 1;
+	}
+}
+
+fn map_grow(comptime V: type, m *Map(V)) {
 	var cap i64 = m.cap;
-	if (cap == 0) { cap = 16; }
-	while (cap < m.n + need) { cap = cap * 2; }
-	var r *MapEntry = arena_alloc(cap * 24, 8) as *MapEntry;
+	if (cap == 0) { cap = 8; } else { cap = cap * 2; }
+	var nk *str = arena_alloc(cap * sizeof(str), 8) as *str;
+	var nv *V = arena_alloc(cap * sizeof(V), 8) as *V;
 	var i i64 = 0;
-	while (i < m.n) { *(r + i) = *(m.entries + i); i = i + 1; }
-	m.entries = r;
+	while (i < m.n) {
+		*(nk + i) = *(m.keys + i);
+		*(nv + i) = *(m.vals + i);
+		i = i + 1;
+	}
+	m.keys = nk;
+	m.vals = nv;
 	m.cap = cap;
+	map_rehash(m, cap * 4);
 }
 
-fn map_get(m *Map, key str) *u8 {
-	var i i64 = 0;
-	while (i < m.n) {
-		var e *MapEntry = m.entries + i;
-		if (str_eq(key, e.key)) { return e.val; }
-		i = i + 1;
+fn map_slot(comptime V: type, m *Map(V), k str) i64 {
+	var b i64 = map_hash(k) % m.nb;
+	while (true) {
+		var e i64 = *(m.idx + b);
+		if (e == 0) { return b; }
+		if (str_eq(*(m.keys + e - 1), k)) { return b; }
+		b = b + 1;
+		if (b == m.nb) { b = 0; }
 	}
-	return 0 as *u8;
+	return 0;
 }
 
-fn map_put(m *Map, key str, val *u8) {
-	var i i64 = 0;
-	while (i < m.n) {
-		var e *MapEntry = m.entries + i;
-		if (str_eq(key, e.key)) { e.val = val; return; }
-		i = i + 1;
+fn map_put(comptime V: type, m *Map(V), k str, v V) {
+	if (m.n + 1 > m.cap) { map_grow(m); }
+	var b i64 = map_slot(m, k);
+	var e i64 = *(m.idx + b);
+	if (e != 0) {
+		*(m.vals + e - 1) = v;
+		return;
 	}
-	map_grow(m, 1);
-	var e *MapEntry = m.entries + m.n;
-	e.key = key;
-	e.val = val;
+	*(m.keys + m.n) = k;
+	*(m.vals + m.n) = v;
 	m.n = m.n + 1;
+	*(m.idx + b) = m.n;
 }
 
-fn map_len(m *Map) i64 { return m.n; }
+fn map_has(comptime V: type, m *Map(V), k str) bool {
+	if (m.nb == 0) { return false; }
+	return *(m.idx + map_slot(m, k)) != 0;
+}
 
-fn map_key(m *Map, i i64) str {
-	if (i < 0 || i >= m.n) {
-		var s str;
-		s.ptr = 0 as *u8; s.len = 0;
-		return s;
+fn map_get(comptime V: type, m *Map(V), k str) V {
+	if (m.nb == 0) {
+		var z V;
+		return z;
 	}
-	var e *MapEntry = m.entries + i;
-	return e.key;
+	var e i64 = *(m.idx + map_slot(m, k));
+	if (e == 0) {
+		var z V;
+		return z;
+	}
+	return *(m.vals + e - 1);
 }
 
-fn map_val(m *Map, i i64) *u8 {
-	if (i < 0 || i >= m.n) { return 0 as *u8; }
-	var e *MapEntry = m.entries + i;
-	return e.val;
+fn map_len(comptime V: type, m *Map(V)) i64 {
+	return m.n;
+}
+
+fn map_key_at(comptime V: type, m *Map(V), i i64) str {
+	if (i < 0 || i >= m.n) { return ""; }
+	return *(m.keys + i);
+}
+
+fn map_val_at(comptime V: type, m *Map(V), i i64) V {
+	if (i < 0 || i >= m.n) {
+		var z V;
+		return z;
+	}
+	return *(m.vals + i);
+}
+
+fn map_view(comptime V: type, m *Map(V)) []str {
+	var s []str;
+	s.ptr = m.keys;
+	s.len = m.n;
+	return s;
 }

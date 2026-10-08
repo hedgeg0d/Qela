@@ -1087,6 +1087,10 @@ fn type_cast_from_dyn(n *Node) {
 }
 
 fn type_assign(n *Node) {
+	if (n.lhs.kind == ND_CALL && n.lhs.idxget) {
+		if (index_put(n)) { return; }
+		error_at(n.pos, "this type has no put or set function for indexed assignment");
+	}
 	if (ty_dynval_cache as i64 != 0 && n.lhs.ty as i64 == ty_dynval_cache as i64) {
 		type_assign_dyn(n);
 		return;
@@ -1761,6 +1765,9 @@ fn add_type(n *Node) {
 
 	if (k == ND_INDEX) {
 		var lt *Type = n.lhs.ty;
+		if (lt.kind == TY_STRUCT || (lt.kind == TY_PTR && lt.base.kind == TY_STRUCT)) {
+			if (index_sugar(n, "_get")) { return; }
+		}
 		if (lt.kind != TY_ARRAY && lt.kind != TY_PTR && lt.kind != TY_SLICE) {
 			emsg("cannot index a value of type '"); emsg_ty(lt); emsg("'"); efail(n.pos);
 		}
@@ -1889,6 +1896,7 @@ fn add_type(n *Node) {
 	if (k == ND_ASSERT) { type_assert(n); return; }
 	if (k == ND_INTERP) { type_interp(n); return; }
 	if (k == ND_ARRLIT) { type_arrlit(n); return; }
+	if (k == ND_MAPLIT) { type_maplit(n); return; }
 
 	if (n.ty as i64 == 0) { n.ty = ty_void; }
 }
@@ -1921,6 +1929,135 @@ fn mk_call2(name str, a0 *Node, a1 *Node) *Node {
 	a0.next = a1;
 	n.nargs = 2;
 	return n;
+}
+
+fn index_call_name(ty *Type, suffix str) str {
+	var base *Type = ty;
+	if (base.kind == TY_PTR) { base = base.base; }
+	if (base.name.len == 0) { return ""; }
+	var pre str = iter_prefix(base);
+	if (pre.len == 0) { return ""; }
+	var b Buf;
+	fmt_str(&b, pre);
+	fmt_str(&b, suffix);
+	var name str = buf_str(&b);
+	if (find_func(name) as i64 == 0) { return ""; }
+	return name;
+}
+
+fn index_recv(base *Node, f *Func) *Node {
+	var want *Type = func_param(f, f.nct).ty;
+	if (want.kind == TY_PTR && base.ty.kind != TY_PTR) {
+		if (!is_addr_expr(base)) { return 0 as *Node; }
+		var ad *Node = node_alloc();
+		ad.kind = ND_ADDR;
+		ad.lhs = base;
+		ad.pos = base.pos;
+		return ad;
+	}
+	if (want.kind != TY_PTR && base.ty.kind == TY_PTR) {
+		var dr *Node = node_alloc();
+		dr.kind = ND_DEREF;
+		dr.lhs = base;
+		dr.pos = base.pos;
+		return dr;
+	}
+	return base;
+}
+
+fn index_sugar(n *Node, suffix str) bool {
+	var name str = index_call_name(n.lhs.ty, suffix);
+	if (name.len == 0) { return false; }
+	var f *Func = find_func(name);
+	if (f.nparams <= f.nct + 1) { return false; }
+	var recv *Node = index_recv(n.lhs, f);
+	if (recv as i64 == 0) { return false; }
+	var call *Node = node_alloc();
+	call.kind = ND_CALL;
+	call.name = name;
+	call.args = recv;
+	recv.next = n.rhs;
+	n.rhs.next = 0 as *Node;
+	call.nargs = 2;
+	call.pos = n.pos;
+	add_type(call);
+	var nxt *Node = n.next;
+	*n = *call;
+	n.next = nxt;
+	n.idxget = true;
+	return true;
+}
+
+fn index_put(n *Node) bool {
+	var call *Node = n.lhs;
+	var recv *Node = call.args;
+	var key *Node = recv.next;
+	var base *Type = recv.ty;
+	var name str = index_call_name(base, "_put");
+	if (name.len == 0) { name = index_call_name(base, "_set"); }
+	if (name.len == 0) { return false; }
+	var put *Node = node_alloc();
+	put.kind = ND_CALL;
+	put.name = name;
+	put.args = recv;
+	recv.next = key;
+	key.next = n.rhs;
+	n.rhs.next = 0 as *Node;
+	put.nargs = 3;
+	put.pos = n.pos;
+	add_type(put);
+	var nxt *Node = n.next;
+	*n = *put;
+	n.next = nxt;
+	return true;
+}
+
+fn type_maplit(n *Node) {
+	if (n.nargs == 0) { error_at(n.pos, "a map literal needs at least one entry"); }
+	var tm *Tmpl = tmpl_find("Map");
+	if (tm as i64 == 0) { error_at(n.pos, "a map literal needs std/map.qela imported"); }
+	var vty *Type = to_value(n.args.rhs).ty;
+	var mty *Type = generic_instance(tm, vty, 0 as *Type);
+	var tmp *Var = alloc_temp(mty);
+	if (tmp as i64 == 0) { error_at(n.pos, "a map literal needs a function scope"); }
+
+	var mv *Node = node_alloc();
+	mv.kind = ND_VAR; mv.varp = tmp; mv.ty = mty; mv.typed = true; mv.pos = n.pos;
+	var ad *Node = node_alloc();
+	ad.kind = ND_ADDR; ad.lhs = mv; ad.pos = n.pos;
+	var init *Node = node_alloc();
+	init.kind = ND_CALL; init.name = "map_init"; init.args = ad; init.nargs = 1; init.pos = n.pos;
+	add_type(init);
+	var chain *Node = init;
+
+	var a *Node = n.args;
+	while (a as i64 != 0) {
+		var nxt *Node = a.next;
+		var mv2 *Node = node_alloc();
+		mv2.kind = ND_VAR; mv2.varp = tmp; mv2.ty = mty; mv2.typed = true; mv2.pos = n.pos;
+		var ad2 *Node = node_alloc();
+		ad2.kind = ND_ADDR; ad2.lhs = mv2; ad2.pos = n.pos;
+		var put *Node = node_alloc();
+		put.kind = ND_CALL; put.name = "map_put"; put.args = ad2; put.nargs = 3; put.pos = a.pos;
+		ad2.next = a.lhs;
+		a.lhs.next = a.rhs;
+		a.rhs.next = 0 as *Node;
+		add_type(put);
+		var cm *Node = node_alloc();
+		cm.kind = ND_COMMA; cm.lhs = chain; cm.rhs = put; cm.ty = put.ty;
+		cm.typed = true; cm.pos = n.pos;
+		chain = cm;
+		a = nxt;
+	}
+
+	var fin *Node = node_alloc();
+	fin.kind = ND_VAR; fin.varp = tmp; fin.ty = mty; fin.typed = true; fin.pos = n.pos;
+	var last *Node = node_alloc();
+	last.kind = ND_COMMA; last.lhs = chain; last.rhs = fin; last.ty = mty;
+	last.typed = true; last.pos = n.pos;
+	var nxt2 *Node = n.next;
+	*n = *last;
+	n.next = nxt2;
 }
 
 fn type_arrlit(n *Node) {
