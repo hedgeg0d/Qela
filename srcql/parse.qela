@@ -7,7 +7,7 @@ import "generic.qela";
 import "opt.qela";
 import "bounds.qela";
 import "../std/io.qela";
-import "std_blob.qela";
+import "blob.qela";
 
 // ── "did you mean?" suggestions ──
 //
