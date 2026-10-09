@@ -1,4 +1,3 @@
-// interp-todo
 // stage1-only
 // expect-exit: 1
 // expect-out: qela: deadlock, every coroutine is blocked on a channel receive
