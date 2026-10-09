@@ -22,7 +22,7 @@ library. The compiler writes the executable itself—and carries the language's
 standard library, interpreter, dynamic runtime, REPL, formatter, test runner,
 documentation browser, and LSP inside the same binary.
 
-The current local self-hosted x86-64 compiler is **792,688 bytes** (~774 KiB).
+The current local self-hosted x86-64 compiler is **712,808 bytes** (~696 KiB).
 That is the entire distribution, not a compressed installer. See the latest
 reproducible measurements in [Project status](docs/STATUS.md).
 
