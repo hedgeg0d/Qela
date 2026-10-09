@@ -1,0 +1,39 @@
+// stage1-only
+// expect-exit: 42
+// A pool goroutine computes for a long stretch before delivering: the
+// main thread's own coroutine stalls on the channel meanwhile, and the
+// cross-thread check must read that as a slow sibling (an active,
+// unparked registered thread), not as deadlock. With the pool active
+// the old single-scheduler heuristic would have reported this.
+import "std/thread.qela";
+import "std/chan.qela";
+
+var ch Chan(i64);
+var got i64 = 0;
+
+fn waiter() i64 {
+	var v i64 = chan_recv(&ch);
+	got = v;
+	return 0;
+}
+
+fn slow(_n i64) i64 {
+	var i i64 = 0;
+	var acc i64 = 0;
+	while (i < 1000000) {
+		acc = acc + (i & 7);
+		i = i + 1;
+	}
+	chan_send(&ch, acc);
+	return 0;
+}
+
+fn main() int {
+	chan_init(&ch, 4);
+	thread_pool_init(2);
+	go slow(0);
+	spawn waiter();
+	coro_run_all();
+	if (got != 3500000) { return 1; }
+	return 42;
+}

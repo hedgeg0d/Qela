@@ -79,43 +79,145 @@ fn chan_close(comptime T: type, c *Chan(T)) {
 // thread's own scheduler can make progress, nothing anywhere can -- true
 // for one cooperative scheduler, false the moment other OS threads are
 // also running coroutines against the same channel: another thread being
-// slow to get scheduled looks identical to real deadlock from here, and
-// unlike the coro_live()==0 case there is no way to tell them apart
-// without the scheduler knowing about other threads, which it doesn't.
+// slow to get scheduled looks identical to real deadlock from here.
+// With the pool, the stall instead consults the cross-thread registry
+// below: it is a real deadlock only when every registered thread is
+// parked inside chan_block (or idle).
 var chan_deadlock_check bool = true;
+
+var chan_dying i64 = 0;
 
 /// Reports deadlock and exits the process.
 fn chan_die(what str) {
+	// Two threads can reach the verdict at once; only one prints, the
+	// rest wait quietly -- a loser exiting with exit_group would cut
+	// the winner's message off mid-print.
+	if (!atomic_cas(&chan_dying, 0, 1)) {
+		while (true) { sys_sched_yield(); }
+	}
 	eprint("qela: deadlock, every coroutine is blocked on a channel ");
 	eprint(what);
 	eprint("\n");
 	sys_exit(1);
 }
 
+// ── cross-thread deadlock detection ──
+//
+// Registration is the contract, exactly like gc_thread_enter: pool
+// workers register automatically (thread_pool_init's worker loop), and
+// the first chan_block on a thread with a scheduler registers that
+// thread too. A raw clone thread that exchanges values with a pool
+// through channels or go() must call chan_thread_enter itself -- an
+// unregistered thread is invisible to detection, so a stalled world
+// with one still running is reported as deadlock. The contract is
+// load-bearing, the same way it is for gc roots.
+
+struct ChanWaiter {
+	active i64,
+	parked i64,
+}
+
+var chan_threads [64]ChanWaiter;
+var chan_pool_threads i64 = 0;
+tvar chan_my_slot i64 = -1;
+
+/// Registers the calling thread for cross-thread deadlock detection.
+fn chan_thread_enter() {
+	if (chan_my_slot >= 0) { return; }
+	var i i64 = 0;
+	while (i < 64) {
+		if (atomic_cas(&chan_threads[i].active, 0, 1)) {
+			chan_my_slot = i;
+			return;
+		}
+		i = i + 1;
+	}
+}
+
+/// Deregisters the calling thread.
+fn chan_thread_exit() {
+	var i i64 = chan_my_slot;
+	if (i < 0) { return; }
+	atomic_store(&chan_threads[i].parked, 0);
+	atomic_store(&chan_threads[i].active, 0);
+	chan_my_slot = -1;
+}
+
+// The stall verdict for a pool world: park this thread, then look for
+// anyone else who could still make progress. One active, unparked
+// thread means this is a slow sibling, not a deadlock -- reset the
+// stall and keep waiting. Fewer than chan_pool_threads registered
+// threads means a pool worker has not even started yet (registration is
+// its first act), so no verdict either. Only when every registered
+// thread is parked can nothing anywhere touch a channel again: report
+// it.
+fn chan_stall_global(what str) {
+	var i i64 = chan_my_slot;
+	if (i < 0) { chan_die(what); }
+	atomic_store(&chan_threads[i].parked, 1);
+	fence();
+	var nactive i64 = 0;
+	var alive i64 = 0;
+	var j i64 = 0;
+	while (j < 64) {
+		if (atomic_load(&chan_threads[j].active) != 0) {
+			nactive = nactive + 1;
+			if (atomic_load(&chan_threads[j].parked) == 0) { alive = alive + 1; }
+		}
+		j = j + 1;
+	}
+	if (alive != 0 || nactive < chan_pool_threads) {
+		atomic_store(&chan_threads[i].parked, 0);
+		fence();
+		chan_stall_epoch = -1;
+		chan_stall = 0;
+		return;
+	}
+	chan_die(what);
+}
+
 // coro_live()/coro_yield() only see this thread's own coroutines: on a
 // thread with no spawned coroutines at all (the common case for a bare OS
 // thread exchanging values over a channel), the stall/deadlock heuristic
-// below is meaningless -- there is nothing on this thread for it to have
-// caught anyway, so it is skipped rather than repurposed. Real cross-thread
-// deadlock detection needs the scheduler to know about other threads,
-// which it does not yet (that lands with the per-thread scheduler work).
+// is meaningless -- there is nothing on this thread for it to count, and
+// the caller's own retry loop is the wait. A registered thread (it ran
+// go() or chan_thread_enter, so its tls block exists) marks itself parked
+// while it spins, or a pool world would read it as alive forever.
 /// Blocks the caller until the channel makes progress.
 fn chan_block(what str) {
-	if (!chan_deadlock_check || coro_live() == 0) {
+	if (coro_live() == 0) {
+		if (chan_my_slot >= 0) {
+			atomic_store(&chan_threads[chan_my_slot].parked, 1);
+			fence();
+			if (!coro_yield()) { fence(); }
+			atomic_store(&chan_threads[chan_my_slot].parked, 0);
+			return;
+		}
 		if (!coro_yield()) { fence(); }
 		return;
 	}
+	if (chan_my_slot < 0) { chan_thread_enter(); }
 	chan_nblocked = chan_nblocked + 1;
 	if (chan_nblocked >= coro_live()) {
 		if (chan_epoch == chan_stall_epoch) {
 			chan_stall = chan_stall + 1;
-			if (chan_stall > coro_live() + 1) { chan_die(what); }
+			if (chan_stall > coro_live() + 1) {
+				if (!chan_deadlock_check) { chan_stall_global(what); }
+				else { chan_die(what); }
+			}
 		} else {
 			chan_stall_epoch = chan_epoch;
 			chan_stall = 1;
 		}
 	}
-	if (!coro_yield()) { chan_die(what); }
+	if (!chan_deadlock_check) {
+		// With a pool, a false coro_yield means this thread's own
+		// scheduler has nothing left to run -- a slow sibling may still
+		// deliver, which chan_stall_global decided above.
+		coro_yield();
+	} else if (!coro_yield()) {
+		chan_die(what);
+	}
 	chan_nblocked = chan_nblocked - 1;
 }
 
