@@ -1,8 +1,8 @@
 // expect-compile-error
 // stage1-only
-// A payload enum cannot cross the interpreted/dynamic ABI (only scalars,
-// str, floats and structs of those can).
-enum Opt { Some(x i64), None }
+// An enum whose payload holds a pointer-bearing type (a str) cannot cross
+// the interpreted/dynamic ABI: its raw image would carry a host address.
+enum E { Some(str), None }
 
-fn dynamic bad(o Opt) i64 { return 0; }
+fn dynamic bad(o E) i64 { return 0; }
 fn main() int { return 0; }
