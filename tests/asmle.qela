@@ -1,0 +1,19 @@
+// interp-skip
+// stage1-only
+// x86-only
+// expect-exit: 42
+// `$le N v` emits exactly N bytes, little-endian -- the fix for a bare
+// constant, which is a print-order byte string whose leading zeros are
+// truncated (0x00010000 came out as three bytes and broke the multiboot
+// header alignment).
+fn main() int {
+	var r i64 = asm(0xb8, $le 4 0x12345678);
+	if (r != 0x12345678) { return 1; }
+	var s i64 = asm(0x48, 0xb8, $le 8 42);
+	if (s != 42) { return 2; }
+	var t i64 = asm(0xb8, $le 4 0x00010000);
+	if (t != 0x00010000) { return 3; }
+	var u i64 = asm(0x66, 0xb8, $le 2 0x1234);
+	if ((u & 0xffff) != 0x1234) { return 4; }
+	return 42;
+}

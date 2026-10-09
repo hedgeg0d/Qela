@@ -1,0 +1,17 @@
+// interp-skip
+// stage1-only
+// x86-only
+// expect-exit: 42
+// `$abs name` embeds a symbol's address in a 4-byte slot -- `$name` is
+// 8 bytes and would spill into the following instructions of 32-bit
+// code, while `$rel name` is a rel32 that a far jump cannot take.
+fn naked a8() { asm(0x48, 0xb8, $main); asm(0xc3); }
+fn naked a4() { asm(0xb8, $abs main); asm(0xc3); }
+
+fn main() int {
+	var p8 i64 = a8();
+	var p4 i64 = a4();
+	if (p8 != p4) { return 1; }
+	if (p8 < 0x400000 || p8 > 0x500000) { return 2; }
+	return 42;
+}
