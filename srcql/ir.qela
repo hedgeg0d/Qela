@@ -160,6 +160,14 @@ struct IrOp {
 	src1 IrOperand,
 	aux  i64,
 	pos  i64,
+	// arm64_emit.qela's push/pop pooling (arm64_pool_pass): a pooled push
+	// stages its value in `poolreg` instead of the SP push/pop pair; a
+	// pooled pop lowers to nothing. Default false/0 = memory staging.
+	// `pair` links a push to its matching pop (or IR_MEMCPY with an empty
+	// dst, which consumes a staging entry) and back.
+	pooled  bool,
+	poolreg int,
+	pair    *IrOp,
 }
 
 var ir_head *IrOp;

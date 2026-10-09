@@ -2037,6 +2037,7 @@ fn x86_lower_op(op *IrOp) {
 
 fn ir_flush() {
 	if (ir_flushing) { return; }	ir_flushing = true;
+	if (opt_target == TARGET_ARM64) { arm64_pool_pass(ir_head); }
 	var op *IrOp = ir_head;
 	while (op as i64 != 0) {
 		if (opt_target == TARGET_RISCV64) { riscv_lower_op(op); }
