@@ -1,4 +1,5 @@
 // stage1-only
+// x86-only
 // expect-exit: 0
 // An asm-return function left pending IR that flushed inside add_strref,
 // so the string header address was patched with the raw image offset
