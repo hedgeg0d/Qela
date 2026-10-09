@@ -409,7 +409,7 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) {
 		if (fmm[nd] >= 0) {
 			ir_pop_acc(n.pos);
 			if (opt_target == TARGET_ARM64) { arm64_fmov_from_gpr(fmm[nd], X0, fsz[nd]); }
-			else if (opt_target == TARGET_RISCV64) { riscv_fmv_wx_to_f(fmm[nd], A0, fsz[nd]); }
+			else if (opt_target == TARGET_RISCV64) { riscv_fmv_wx_to_f(FA0 + fmm[nd], A0, fsz[nd]); }
 			else { gpr_to_xmm(fmm[nd], RAX, fsz[nd]); }
 		} else if (src[nd] == 0) {
 			ir_pop_reg(dest[nd], n.pos);
@@ -685,7 +685,7 @@ fn gen_call(n *Node) {
 	// accumulator.
 	if (marshall && is_float(n.ty)) {
 		if (opt_target == TARGET_ARM64) { arm64_fmov_to_gpr(X0, 0, n.ty.size); }
-		else if (opt_target == TARGET_RISCV64) { riscv_fmv_f_to_wx(A0, 0, n.ty.size); }
+		else if (opt_target == TARGET_RISCV64) { riscv_fmv_f_to_wx(A0, FA0, n.ty.size); }
 		else { xmm_to_gpr(RAX, 0, n.ty.size); }
 	}
 	// A marshalled sret callee writes through the hidden pointer and leaves
@@ -2565,7 +2565,7 @@ fn gen_epilogue(pos i64) {
 	// An exported extern function returns a float in xmm0 (SysV) / d0 or s0
 	// (AAPCS64) / fa0 (LP64D), where the body left it in the accumulator.
 	if (gen_fn.extern && gen_fn.ret as i64 != 0 && is_float(gen_fn.ret)) {
-		if (opt_target == TARGET_RISCV64) { riscv_fmv_wx_to_f(0, A0, gen_fn.ret.size); }
+		if (opt_target == TARGET_RISCV64) { riscv_fmv_wx_to_f(FA0, A0, gen_fn.ret.size); }
 		else if (opt_target == TARGET_ARM64) { arm64_fmov_from_gpr(0, X0, gen_fn.ret.size); }
 		else { gpr_to_xmm(0, RAX, gen_fn.ret.size); }
 	}
