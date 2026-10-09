@@ -1,4 +1,3 @@
-// interp-todo
 // stage1-only
 // expect-exit: 42
 // A bare clone()'d thread: no scheduler, no TLS yet -- just proof the raw
