@@ -1,0 +1,21 @@
+// expect-exit: 0
+// expect-out: 10
+// expect-out: 1010
+// expect-out: 00000101
+// expect-out: 00000000000000f0
+// expect-out: 255
+// expect-out: 240
+// Binary literals (0b, with _ digit separators) and the `:b` format
+// spec in interpolation -- plain, and zero-padded to a width.
+import "std/io.qela";
+
+fn main() int {
+	println("${0b1010}");
+	println("${0b1010:b}");
+	println("${5:08b}");
+	println("${0b1111_0000:x}");
+	println("${0b1111_1111}");
+	var m i64 = 0b1111_0000;
+	println("${m}");
+	return 0;
+}
