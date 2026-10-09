@@ -18,7 +18,7 @@ struct Vec(T) {
 }
 
 fn vec_init(comptime T: type, v *Vec(T)) {
-	v.data = 0 as *T;
+	v.data = null;
 	v.len = 0;
 	v.cap = 0;
 }
