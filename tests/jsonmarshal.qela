@@ -1,0 +1,75 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: {"x":3,"y":5}
+// expect-out: 11
+// expect-out: {"name":"qela","tags":["a","b"],"score":2.5,"ok":true,"inner":{"x":1,"y":2},"next":null,"pts":[{"x":3,"y":4},{"x":5,"y":6}],"nums":[1,2,3],"items":[{"x":9,"y":8}]}
+// expect-out: 32
+// expect-out: 2.5
+// expect-out: 42
+// expect-out: "hi"
+// expect-out: true
+// Go-style typed JSON: json_marshal(v) serializes any supported value and
+// json_unmarshal(s, &v) fills a struct, both through functions the compiler
+// generates per type on first use. Unknown keys and wrong-kind fields are
+// skipped; a non-object document yields false.
+import "std/io.qela";
+import "std/json.qela";
+
+struct Pt {
+	x i64,
+	y i64,
+}
+
+struct Rec {
+	name str,
+	tags []str,
+	score f64,
+	ok bool,
+	inner Pt,
+	next *Rec,
+	pts [2]Pt,
+	nums []i64,
+	items []Pt,
+}
+
+fn main() int {
+	var p Pt;
+	p.x = 3;
+	p.y = 5;
+	println(json_marshal(p));
+
+	var q Pt;
+	if (!json_unmarshal("{\"y\": 7, \"x\": 4, \"zzz\": 1}", &q)) { return 1; }
+	println("${q.x + q.y}");
+
+	var r Rec;
+	r.name = "qela";
+	r.tags = ["a", "b"];
+	r.score = 2.5;
+	r.ok = true;
+	r.inner.x = 1;
+	r.inner.y = 2;
+	r.pts[0].x = 3;
+	r.pts[0].y = 4;
+	r.pts[1].x = 5;
+	r.pts[1].y = 6;
+	r.nums = [1, 2, 3];
+	r.items = [Pt{x: 9, y: 8}];
+	var s str = json_marshal(r);
+	println(s);
+
+	var r2 Rec;
+	if (!json_unmarshal(s, &r2)) { return 1; }
+	if (r2.score != 2.5) { return 1; }
+	if (!str_eq(r2.tags[1], "b")) { return 1; }
+	println("${r2.inner.x + r2.inner.y + r2.tags.len + (r2.ok as i64) + r2.pts[1].y + r2.nums.len + r2.items[0].x + r2.items[0].y}");
+	println("${r2.score}");
+
+	if (json_unmarshal("not json", &r2)) { return 1; }
+	if (json_unmarshal("[1,2]", &r2)) { return 1; }
+	println(json_marshal(42));
+	println(json_marshal("hi"));
+	var bt bool = true;
+	println(json_marshal(bt));
+	return 0;
+}
