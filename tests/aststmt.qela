@@ -1,0 +1,53 @@
+// expect-exit: 0
+// expect-out: parse_ast statements ok
+// stage1-only
+// parse_ast beyond a single expression: statement sequences and blocks
+// are cached once and re-run, the value is the last expression
+// statement's, a `return` stops the sequence with its own value, and a
+// trailing call's side effect happens exactly once per run.
+import "std/eval.qela";
+import "std/io.qela";
+
+eval var price i64 = 10;
+eval var cnt i64;
+enum Lvl { Lo, Hi }
+eval var lvl Lvl;
+eval fn bump() i64 {
+	cnt = cnt + 1;
+	return 1;
+}
+
+fn main() int {
+	var fails i64 = 0;
+	var a *Ast = parse_ast("price * 2");
+	if (run_ast(a) != 20) { fails = fails + 1; }
+	eval("price = 100;");
+	if (run_ast(a) != 200) { fails = fails + 1; }
+	var b *Ast = parse_ast("var x = 5; x * 3;");
+	if (run_ast(b) != 15) { fails = fails + 1; }
+	if (run_ast(b) != 15) { fails = fails + 1; }
+	var c *Ast = parse_ast("{ var acc = 0; var i = 1; while (i <= 4) { acc = acc + i; i = i + 1; } acc; }");
+	if (run_ast(c) != 10) { fails = fails + 1; }
+	if (run_ast(c) != 10) { fails = fails + 1; }
+	var d *Ast = parse_ast("var y = 7; if (y > 3) { y = y * 2; } y;");
+	if (run_ast(d) != 14) { fails = fails + 1; }
+	cnt = 0;
+	var e *Ast = parse_ast("bump(); 7;");
+	if (run_ast(e) != 7) { fails = fails + 1; }
+	if (run_ast(e) != 7) { fails = fails + 1; }
+	if (cnt != 2) { fails = fails + 1; }
+	var f *Ast = parse_ast("var n = 3; n = n + 1;");
+	if (run_ast(f) != 4) { fails = fails + 1; }
+	var g *Ast = parse_ast("return 99;");
+	if (run_ast(g) != 99) { fails = fails + 1; }
+	if (run_ast(g) != 99) { fails = fails + 1; }
+	var h *Ast = parse_ast("var q = 2; return q * 5;");
+	if (run_ast(h) != 10) { fails = fails + 1; }
+	var i2 *Ast = parse_ast("var s = 0; var k = 1; while (k <= 3) { s = s + k; k = k + 1; } s;");
+	if (run_ast(i2) != 6) { fails = fails + 1; }
+	lvl = Lvl.Hi;
+	var j *Ast = parse_ast("var got = 0; match (lvl) { Hi => { got = 9; } _ => { got = 1; } } got;");
+	if (run_ast(j) != 9) { fails = fails + 1; }
+	if (fails == 0) { write_str(STDOUT, "parse_ast statements ok\n"); }
+	return fails as int;
+}
