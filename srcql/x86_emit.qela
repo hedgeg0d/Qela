@@ -177,7 +177,6 @@ var tls_stub_src_at i64 = -1;
 // single trailing u64 slot instead, tls_stub_src_at).
 var tls_src_refs I64List;
 
-var opt_backtrace bool = false;
 
 // `qela -c`: emit a relocatable object instead of a static binary. The
 // relocation list replaces the address patching, and the ELF writer's
