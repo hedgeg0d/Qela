@@ -4104,11 +4104,21 @@ fn codegen(u *Unit, img *Image) {
 	if (!opt_object) {
 		if (link_npaths > 0) {
 			// Linked objects may reference any Qela symbol by name, so
-			// nothing is dropped.
+			// nothing is dropped: keep every function, global and string.
 			var fk *Func = u.funcs;
 			while (fk as i64 != 0) {
 				fk.reachable = true;
 				fk = fk.next;
+			}
+			var gv *Var = u.globals;
+			while (gv as i64 != 0) {
+				gv.reachable = true;
+				gv = gv.next;
+			}
+			var sl *StrLit = u.strs;
+			while (sl as i64 != 0) {
+				sl.keep = true;
+				sl = sl.next;
 			}
 		} else {
 			mark_reachable(u);

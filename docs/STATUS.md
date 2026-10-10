@@ -9,23 +9,52 @@ history; the numbers in this section are the current snapshot.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 50 792 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **712 808 B** (68.0% of the 1 MiB budget) |
-| stage1 sources | 33 957 lines of Qela |
+| **S2 — the shipped compiler, Qela compiled by itself** | **714 344 B** (68.1% of the 1 MiB budget) |
+| stage1 sources | 34 034 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **192%** — the same figure with bounds checks off, since every check in the benchmark is elided (M4 gate wants ≤150%) |
-| ARM64 self-hosted compiler | **901 592 B** (86.0% of the 1 MiB budget), fixed point intact |
-| RISC-V64 self-hosted compiler | **916 432 B** (87.4% of the 1 MiB budget), fixed point intact |
+| ARM64 self-hosted compiler | **903 496 B** (86.2% of the 1 MiB budget), fixed point intact |
+| RISC-V64 self-hosted compiler | **918 424 B** (87.6% of the 1 MiB budget), fixed point intact |
 
-The last successful gate verifies S2 == S3 byte-for-byte, the 234-test corpus under S2, the embedded stdlib resolving outside the source tree,
+The last successful gate verifies S2 == S3 byte-for-byte, the 235-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
 backtrace, interpolation and the repl, the compiler flags (`-g`,
 `--backtrace`, `--no-bounds-checks`, `--dump-std`), and a scripted language
 server conversation.
 
-On the current workspace, `make build` reproduced the fixed point at 712 808 B,
-with the corpus at 234/234 compiled and 212/212 under `qela irun`, and the
+On the current workspace, `make build` reproduced the fixed point at 714 344 B,
+with the corpus at 235/235 compiled and 213/213 under `qela irun`, and the
 loopback tests (`http`, `netproc`) binding and passing here.
 
 ## Done
+
+**C interop: what linked objects get (2026-10-02).** Three bugs and two
+additions on the object-file path. Foreign-link reachability kept functions
+reachable but dropped every global and string, so a linked C object that
+referenced a Qela global or string found nothing; all three are kept now.
+BSS symbols were placed against the pre-link data start, overlapping them
+with a C object's `.data` once a foreign section was appended, and their
+offsets used the wrong base; both are now computed from the final
+initialized-data end. Appended sections skipped their alignment padding --
+the gap was never written -- and an alignment above 16 was silently clamped
+instead of rejected: padding is emitted, and a non-power-of-two or oversized
+alignment is an error. On x86-64 the linker resolves GOTPCREL relocations, so
+PIC C objects link into fixed-base images, and the ARM64 and RISC-V patchers
+gained the compressed branch and jump forms a C string loop produced. A
+relocation the linker cannot place is an explicit error rather than a silent
+mislink, which is why `-fno-pic` is the documented recipe for the ARM64 and
+RISC-V subsets. `std/str.qela` gains
+
+    cstr_into(s str, dst *u8, capacity i64) bool
+
+a copy into caller storage that checks capacity (including the NUL) and
+rejects embedded NULs without writing anything, for allocation-free C
+arguments; its ownership rule and the exact C widths are now spelled out in
+the GUIDE. S2 712 808 -> 714 344 B; ARM64 903 496 B and RISC-V64 918 424 B,
+both fixed points byte-identical under qemu, with the non-PIC objects
+acceptable on all three targets and PIC objects refused with a clear message
+on the two whose GOT forms are not implemented. Corpus 235/235 compiled and
+213/213 interpreted; `tests/cstr_into.qela` pins the copy's edges
+(insufficient capacity, embedded NUL, null destination, empty source).
 
 **x86 address/load fusion (2026-10-02).** A promoted pointer or a frame
 address, together with constant field and index offsets, now folds into the

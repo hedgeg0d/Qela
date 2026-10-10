@@ -22,7 +22,7 @@ library. The compiler writes the executable itself—and carries the language's
 standard library, interpreter, dynamic runtime, REPL, formatter, test runner,
 documentation browser, and LSP inside the same binary.
 
-The current local self-hosted x86-64 compiler is **712,808 bytes** (~696 KiB).
+The current local self-hosted x86-64 compiler is **714,344 bytes** (~698 KiB).
 That is the entire distribution, not a compressed installer. See the latest
 reproducible measurements in [Project status](docs/STATUS.md).
 
@@ -53,7 +53,7 @@ $ ldd hello
 | **Batteries included** | 39 embedded, documented standard modules: files, networking, HTTP, JSON, CSV, hashing, processes, signals, collections, allocators, GC, and more |
 | **Developer tools** | REPL, formatter, test runner, project builder, docs lookup, diagnostics, hover, and go-to-definition via the built-in LSP |
 | **Low-level control** | Raw syscalls, pointers, volatile access, atomics, inline bytes, naked/interrupt functions, custom entry points, and fixed-base images |
-| **C interop** | Import and export functions and globals through the native ABI; emit PIE-safe objects and link Qela and C in either direction |
+| **C interop** | Import and export functions and globals through the native ABI; emit PIE-safe objects and link Qela and C in either direction; the built-in static linker takes C objects and archives on all three targets |
 | **Self-hosting** | The production compiler is written in Qela, rebuilds itself, and must reach a byte-identical S2/S3 fixed point |
 
 Qela is intentionally small, but it is not a toy subset disguised as a systems
