@@ -1,0 +1,136 @@
+var vga_row i64 = 0;
+var vga_col i64 = 0;
+
+fn vga_init() {
+	var i i64 = 0;
+	while (i < 80 * 25) {
+		var fb *u8 = 0xb8000 as *u8;
+		fb[i * 2] = 0 as u8;
+		fb[i * 2 + 1] = 7 as u8;
+		i = i + 1;
+	}
+	vga_row = 0;
+	vga_col = 0;
+	vga_cursor();
+}
+
+fn com_init() {
+	outb(0x3f9, 0);
+	outb(0x3fb, 0x80);
+	outb(0x3f8, 3);
+	outb(0x3f9, 0);
+	outb(0x3fb, 3);
+	outb(0x3fa, 0xc7);
+	outb(0x3fc, 0x0b);
+}
+
+fn com_putc(c u8) {
+	while ((inb(0x3fd) & 0x20) == 0) {}
+	outb(0x3f8, c as i64);
+}
+
+fn vga_cursor() {
+	var pos i64 = vga_row * 80 + vga_col;
+	outb(0x3d4, 14);
+	outb(0x3d5, (pos >> 8) & 255);
+	outb(0x3d4, 15);
+	outb(0x3d5, pos & 255);
+}
+
+fn vga_scroll() {
+	var i i64 = 0;
+	while (i < 24) {
+		var j i64 = 0;
+		while (j < 80 * 2) {
+			var fb *u8 = 0xb8000 as *u8;
+			fb[i * 160 + j] = fb[(i + 1) * 160 + j];
+			j = j + 1;
+		}
+		i = i + 1;
+	}
+	var k i64 = 0;
+	while (k < 80) {
+		var fb *u8 = 0xb8000 as *u8;
+		fb[24 * 160 + k * 2] = 0 as u8;
+		fb[24 * 160 + k * 2 + 1] = 7 as u8;
+		k = k + 1;
+	}
+}
+
+fn kputc(c u8) {
+	var fb *u8 = 0xb8000 as *u8;
+	if (c == 10 as u8) {
+		vga_col = 0;
+		vga_row = vga_row + 1;
+		if (vga_row >= 25) {
+			vga_scroll();
+			vga_row = 24;
+		}
+	} else {
+		fb[(vga_row * 80 + vga_col) * 2] = c;
+		fb[(vga_row * 80 + vga_col) * 2 + 1] = 7 as u8;
+		vga_col = vga_col + 1;
+		if (vga_col >= 80) {
+			vga_col = 0;
+			vga_row = vga_row + 1;
+			if (vga_row >= 25) {
+				vga_scroll();
+				vga_row = 24;
+			}
+		}
+	}
+	com_putc(c);
+	vga_cursor();
+}
+
+fn kputs(s str) {
+	var i i64 = 0;
+	while (i < s.len) {
+		kputc(s[i]);
+		i = i + 1;
+	}
+}
+
+fn kputn(v i64) {
+	if (v < 0) {
+		kputc(45 as u8);
+		v = -v;
+	}
+	if (v == 0) {
+		kputc(48 as u8);
+		return;
+	}
+	var buf [20]u8;
+	var n i64 = 0;
+	while (v > 0) {
+		buf[n] = (48 + (v % 10)) as u8;
+		v = v / 10;
+		n = n + 1;
+	}
+	while (n > 0) {
+		n = n - 1;
+		kputc(buf[n]);
+	}
+}
+
+fn kputh(v u64) {
+	var hex str = "0123456789abcdef";
+	var i i64 = 0;
+	while (i < 16) {
+		var d i64 = 15 - i;
+		kputc(hex[((v >> (d * 4)) & 15 as u64) as i64]);
+		i = i + 1;
+	}
+}
+
+fn kpanic(msg str) {
+	cli();
+	kputs("panic: ");
+	kputs(msg);
+	kputs("\n");
+	while (true) { hlt(); }
+}
+
+fn halt() {
+	while (true) { hlt(); }
+}
