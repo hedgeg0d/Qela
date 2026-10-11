@@ -1210,7 +1210,89 @@ fn type_enumlit(n *Node) {
 }
 
 fn type_structlit(n *Node) {
+	// Spread entries (`...src`) evaluate once into temps before the
+	// struct value, then expand into explicit `field: _$sp.field`
+	// members for every field no explicit entry (anywhere in the list)
+	// and no earlier spread already covers. An explicit field always
+	// wins over every spread; a later spread wins over an earlier one.
+	var pre *Node = null;
 	var a *Node = n.args;
+	var ahead Node;
+	var atail *Node = &ahead;
+	while (a as i64 != 0) {
+		var nxt *Node = a.next;
+		if (str_eq(a.name, "...")) {
+			var st *Type = to_value(a.lhs).ty;
+			var src *Node = a.lhs;
+			if (st.kind == TY_PTR) {
+				if (st.base.kind != TY_STRUCT || !same_type(st.base, n.ty)) {
+					emsg("a struct spread must have type '"); emsg_ty(n.ty); emsg("' (or a pointer to it)"); efail(a.pos);
+				}
+			} else if (!same_type(st, n.ty)) {
+				emsg("a struct spread must have type '"); emsg_ty(n.ty); emsg("' (or a pointer to it)"); efail(a.pos);
+			}
+			var tv *Var = alloc_temp(st);
+			if (tv as i64 == 0) { error_at(a.pos, "a struct spread needs a function scope"); }
+			var lhsv *Node = node_alloc();
+			lhsv.kind = ND_VAR; lhsv.varp = tv; lhsv.ty = st; lhsv.typed = true; lhsv.pos = a.pos;
+			var asg *Node = node_alloc();
+			asg.kind = ND_ASSIGN; asg.lhs = lhsv; asg.rhs = src; asg.pos = a.pos;
+			add_type(asg);
+			if (pre as i64 == 0) { pre = asg; }
+			else {
+				var cm0 *Node = node_alloc();
+				cm0.kind = ND_COMMA; cm0.lhs = pre; cm0.rhs = asg; cm0.ty = asg.ty;
+				cm0.typed = true; cm0.pos = a.pos;
+				pre = cm0;
+			}
+
+			var k *Member = n.ty.members;
+			while (k as i64 != 0) {
+				var explicit bool = false;
+				var ex *Node = n.args;
+				while (ex as i64 != 0) {
+					if (!str_eq(ex.name, "...") && str_eq(ex.name, k.name)) { explicit = true; }
+					ex = ex.next;
+				}
+				if (!explicit) {
+					var mv *Node = node_alloc();
+					mv.kind = ND_VAR; mv.varp = tv; mv.ty = st; mv.typed = true; mv.pos = a.pos;
+					if (st.kind == TY_PTR) {
+						var dr *Node = node_alloc();
+						dr.kind = ND_DEREF; dr.lhs = mv; dr.pos = a.pos;
+						add_type(dr);
+						mv = dr;
+					}
+					var mem *Node = node_alloc();
+					mem.kind = ND_MEMBER; mem.lhs = mv; mem.name = k.name; mem.pos = a.pos;
+					add_type(mem);
+					// A later spread overrides an earlier one for the same
+					// field: replace the field's source in place.
+					var sc *Node = ahead.next;
+					while (sc as i64 != 0) {
+						if (str_eq(sc.name, k.name)) { sc.lhs = mem; break; }
+						sc = sc.next;
+					}
+					if (sc as i64 == 0) {
+						var fld *Node = node_alloc();
+						fld.kind = ND_FIELD; fld.name = k.name; fld.pos = a.pos;
+						fld.lhs = mem;
+						atail.next = fld;
+						atail = fld;
+					}
+				}
+				k = k.next;
+			}
+		} else {
+			atail.next = a;
+			atail = a;
+		}
+		a = nxt;
+	}
+	atail.next = null;
+	n.args = ahead.next;
+
+	a = n.args;
 	while (a as i64 != 0) {
 		var m *Member = null;
 		var k *Member = n.ty.members;
@@ -1246,6 +1328,21 @@ fn type_structlit(n *Node) {
 	}
 	n.tmp = alloc_temp(n.ty);
 	if (n.tmp as i64 == 0) { error_at(n.pos, "a struct value needs a function scope"); }
+
+	if (pre as i64 != 0) {
+		// The comma's right side must be a fresh copy of the literal:
+		// pointing it at n itself would make n a comma whose rhs is n --
+		// a self-loop gen_expr recurses into forever.
+		var lit *Node = node_alloc();
+		*lit = *n;
+		lit.next = null;
+		var cm *Node = node_alloc();
+		cm.kind = ND_COMMA; cm.lhs = pre; cm.rhs = lit; cm.ty = n.ty;
+		cm.typed = true; cm.pos = n.pos;
+		var nxt2 *Node = n.next;
+		*n = *cm;
+		n.next = nxt2;
+	}
 }
 
 fn type_ret(n *Node) {
@@ -2109,6 +2206,7 @@ fn add_type(n *Node) {
 	if (k == ND_INTERP) { type_interp(n); return; }
 	if (k == ND_ARRLIT) { type_arrlit(n); return; }
 	if (k == ND_MAPLIT) { type_maplit(n); return; }
+	if (k == ND_VECLIT) { type_veclit(n); return; }
 
 	if (n.ty as i64 == 0) { n.ty = ty_void; }
 }
@@ -2367,6 +2465,53 @@ fn type_maplit(n *Node) {
 	n.next = nxt2;
 }
 
+fn type_veclit(n *Node) {
+	if (n.nargs == 0) { error_at(n.pos, "a vec literal needs at least one element"); }
+	var tm *Tmpl = tmpl_find("Vec");
+	if (tm as i64 == 0) { error_at(n.pos, "a vec literal needs std/vec.qela imported"); }
+	var vty *Type = to_value(n.args).ty;
+	var mty *Type = generic_instance(tm, vty, null);
+	var tmp *Var = alloc_temp(mty);
+	if (tmp as i64 == 0) { error_at(n.pos, "a vec literal needs a function scope"); }
+
+	var mv *Node = node_alloc();
+	mv.kind = ND_VAR; mv.varp = tmp; mv.ty = mty; mv.typed = true; mv.pos = n.pos;
+	var ad *Node = node_alloc();
+	ad.kind = ND_ADDR; ad.lhs = mv; ad.pos = n.pos;
+	var init *Node = node_alloc();
+	init.kind = ND_CALL; init.name = "vec_init"; init.args = ad; init.nargs = 1; init.pos = n.pos;
+	add_type(init);
+	var chain *Node = init;
+
+	var a *Node = n.args;
+	while (a as i64 != 0) {
+		var nxt *Node = a.next;
+		var mv2 *Node = node_alloc();
+		mv2.kind = ND_VAR; mv2.varp = tmp; mv2.ty = mty; mv2.typed = true; mv2.pos = n.pos;
+		var ad2 *Node = node_alloc();
+		ad2.kind = ND_ADDR; ad2.lhs = mv2; ad2.pos = n.pos;
+		var put *Node = node_alloc();
+		put.kind = ND_CALL; put.name = "vec_push"; put.args = ad2; put.nargs = 2; put.pos = a.pos;
+		ad2.next = a;
+		a.next = null;
+		add_type(put);
+		var cm *Node = node_alloc();
+		cm.kind = ND_COMMA; cm.lhs = chain; cm.rhs = put; cm.ty = put.ty;
+		cm.typed = true; cm.pos = n.pos;
+		chain = cm;
+		a = nxt;
+	}
+
+	var fin *Node = node_alloc();
+	fin.kind = ND_VAR; fin.varp = tmp; fin.ty = mty; fin.typed = true; fin.pos = n.pos;
+	var last *Node = node_alloc();
+	last.kind = ND_COMMA; last.lhs = chain; last.rhs = fin; last.ty = mty;
+	last.typed = true; last.pos = n.pos;
+	var nxt2 *Node = n.next;
+	*n = *last;
+	n.next = nxt2;
+}
+
 fn type_arrlit(n *Node) {
 	if (n.nargs == 0) { error_at(n.pos, "an array literal needs at least one element"); }
 	var elem *Type = null;
@@ -2536,6 +2681,12 @@ fn interp_spec_fn(spec str, part **Node, pos i64) str {
 		pt.next = wn;
 		wn.next = un;
 		return "fmt_put_hex_w";
+	}
+	if (tc == 'b') {
+		if (w == 0) { return "fmt_put_bin"; }
+		var wn *Node = interp_arg(w, pos);
+		pt.next = wn;
+		return "fmt_put_bin_w";
 	}
 	var mb Buf;
 	fmt_str(&mb, "unsupported format specifier '");

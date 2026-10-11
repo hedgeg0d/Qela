@@ -168,6 +168,8 @@ let ND_IN        = 59;
 let ND_ARRCOMP   = 60;
 // `a if c else b`: a conditional expression with a value.
 let ND_IFEXPR    = 61;
+// `vec[1, 2, 3]`: a Vec literal, rewritten at type time like ND_MAPLIT.
+let ND_VECLIT    = 62;
 
 struct Var;
 struct Node;

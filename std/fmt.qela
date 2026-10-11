@@ -87,6 +87,34 @@ fn fmt_put_hex(b Buf, v i64) Buf {
 	return b;
 }
 
+// `${x:b}`: the value in base 2, no padding, negatives two's-complement
+// (64 bits). `${x:08b}`: the low w bits, zero-padded.
+/// Appends the value in binary in an interpolation chain.
+fn fmt_put_bin(b Buf, v i64) Buf {
+	var i i64 = 63;
+	var seen bool = false;
+	while (i >= 0) {
+		var bit i64 = (v >> i) & 1;
+		if (bit != 0 || seen || i == 0) { seen = true; buf_u8(&b, ('0' as i64 + bit) as u8); }
+		i = i - 1;
+	}
+	return b;
+}
+
+/// Appends the low w binary digits, zero-padded.
+fn fmt_put_bin_w(b Buf, v i64, w i64) Buf {
+	var n i64 = w;
+	if (n > 64) { n = 64; }
+	var i i64 = 0;
+	while (i < w - n) { buf_u8(&b, '0'); i = i + 1; }
+	i = n - 1;
+	while (i >= 0) {
+		buf_u8(&b, ('0' as i64 + ((v >> i) & 1)) as u8);
+		i = i - 1;
+	}
+	return b;
+}
+
 /// Appends true or false in an interpolation chain.
 fn fmt_put_bool(b Buf, v bool) Buf {
 	if (v) { fmt_str(&b, "true"); }
