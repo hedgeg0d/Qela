@@ -4,8 +4,11 @@ import "abiwire.qela";
 import "abiconn.qela";
 
 let ABI_REQ_RUN = 1;
-let ABI_REQ_PARSE = 7;
 let ABI_REQ_RUN_AST = 8;
+let ABI_REQ_AST_INFO = 9;
+let ABI_REQ_AST_CHILD = 10;
+let ABI_REQ_AST_NEXT = 11;
+let ABI_REQ_AST_SET = 12;
 
 fn eval(src str) i64 {
 	abi_spawn();
@@ -14,6 +17,7 @@ fn eval(src str) i64 {
 	var kind u8 = 0;
 	var n i64 = abi_wait_result(&kind, &buf[0], 8);
 	if (n < 0) {
+		if (!abi_respawned && abi_respawn()) { return eval(src); }
 		eprint("eval: the qela subprocess died\n");
 		sys_exit(1);
 	}
@@ -24,45 +28,162 @@ fn eval(src str) i64 {
 	return *(&buf[0] as *i64);
 }
 
-struct Ast;
-struct Ast {
-	id i64,
-}
-
 fn parse_ast(src str) *Ast {
 	abi_spawn();
-	abi_send_frame(abi_in, ABI_REQ_PARSE as u8, src.ptr, src.len);
-	var buf [8]u8;
-	var kind u8 = 0;
-	var n i64 = abi_wait_result(&kind, &buf[0], 8);
-	if (n < 0) {
-		eprint("parse_ast: the qela subprocess died\n");
-		sys_exit(1);
+	var attempt bool = false;
+	while (true) {
+		abi_send_frame(abi_in, ABI_REQ_PARSE as u8, src.ptr, src.len);
+		var buf [8]u8;
+		var kind u8 = 0;
+		var n i64 = abi_wait_result(&kind, &buf[0], 8);
+		if (n < 0) {
+			if (!attempt && abi_respawn()) { attempt = true; continue; }
+			eprint("parse_ast: the qela subprocess died\n");
+			sys_exit(1);
+		}
+		if (kind == (ABI_RESP_ERR as u8)) {
+			eprint("parse_ast: could not parse the source\n");
+			sys_exit(1);
+		}
+		var a *Ast = arena_alloc(sizeof(Ast), 8) as *Ast;
+		a.id = *(&buf[0] as *i64);
+		a.src = str_dup(src);
+		abi_ast_register(a);
+		return a;
 	}
-	if (kind == (ABI_RESP_ERR as u8)) {
-		eprint("parse_ast: could not parse the source (only a single expression is supported)\n");
-		sys_exit(1);
-	}
-	var a *Ast = arena_alloc(sizeof(Ast), 8) as *Ast;
-	a.id = *(&buf[0] as *i64);
-	return a;
 }
 
 fn run_ast(a *Ast) i64 {
 	abi_spawn();
+	var attempt bool = false;
+	while (true) {
+		var hb [8]u8;
+		*(&hb[0] as *i64) = a.id;
+		abi_send_frame(abi_in, ABI_REQ_RUN_AST as u8, &hb[0], 8);
+		var buf [8]u8;
+		var kind u8 = 0;
+		var n i64 = abi_wait_result(&kind, &buf[0], 8);
+		if (n < 0) {
+			if (!attempt && abi_respawn()) { attempt = true; continue; }
+			eprint("run_ast: the qela subprocess died\n");
+			sys_exit(1);
+		}
+		if (kind == (ABI_RESP_ERR as u8)) {
+			eprint("run_ast: runtime error, or an unknown ast handle\n");
+			sys_exit(1);
+		}
+		return *(&buf[0] as *i64);
+	}
+}
+
+// ── ast inspection and mutation ──
+
+struct AstInfo {
+	kind  str,
+	value i64,
+	count i64,
+}
+
+// The payload of ABI_REQ_AST_INFO: [u64 kind-name length][kind-name
+// bytes][u64 value][u64 count].
+fn ast_info(a *Ast) AstInfo {
+	if (a as i64 == 0) {
+		var empty AstInfo;
+		return empty;
+	}
+	abi_spawn();
+	var attempt bool = false;
+	while (true) {
+		var hb [8]u8;
+		*(&hb[0] as *i64) = a.id;
+		abi_send_frame(abi_in, ABI_REQ_AST_INFO as u8, &hb[0], 8);
+		var kind u8 = 0;
+		var r str = abi_wait_result_payload(&kind);
+		if (kind == 0) {
+			if (!attempt && abi_respawn()) { attempt = true; continue; }
+			eprint("ast_info: the qela subprocess died\n");
+			sys_exit(1);
+		}
+		if (kind == (ABI_RESP_ERR as u8)) {
+			eprint("ast_info: unknown handle\n");
+			sys_exit(1);
+		}
+		var knlen i64 = abi_decode_u64(r.ptr);
+		var info AstInfo;
+		info.kind.ptr = r.ptr + 8;
+		info.kind.len = knlen;
+		info.value = abi_decode_u64(r.ptr + 8 + knlen);
+		info.count = abi_decode_u64(r.ptr + 16 + knlen);
+		return info;
+	}
+}
+
+fn ast_kind(a *Ast) str { return ast_info(a).kind; }
+fn ast_value(a *Ast) i64 { return ast_info(a).value; }
+fn ast_count(a *Ast) i64 { return ast_info(a).count; }
+
+// One request that returns a child node handle (ABI_REQ_AST_CHILD and
+// ABI_REQ_AST_NEXT share the response shape: an id, 0 for none).
+fn ast_node_req(req u8, payload *u8, plen i64) *Ast {
+	abi_spawn();
+	var attempt bool = false;
+	while (true) {
+		abi_send_frame(abi_in, req, payload, plen);
+		var buf [8]u8;
+		var kind u8 = 0;
+		var n i64 = abi_wait_result(&kind, &buf[0], 8);
+		if (n < 0) {
+			if (!attempt && abi_respawn()) { attempt = true; continue; }
+			eprint("ast access: the qela subprocess died\n");
+			sys_exit(1);
+		}
+		if (kind == (ABI_RESP_ERR as u8)) {
+			eprint("ast access: unknown handle\n");
+			sys_exit(1);
+		}
+		var cid i64 = *(&buf[0] as *i64);
+		if (cid == 0) { return 0 as *Ast; }
+		var a *Ast = arena_alloc(sizeof(Ast), 8) as *Ast;
+		a.id = cid;
+		return a;
+	}
+}
+
+fn ast_child(a *Ast, i i64) *Ast {
+	var hb [16]u8;
+	*(&hb[0] as *i64) = a.id;
+	*(&hb[8] as *i64) = i;
+	return ast_node_req(ABI_REQ_AST_CHILD as u8, &hb[0], 16);
+}
+
+fn ast_next(a *Ast) *Ast {
 	var hb [8]u8;
 	*(&hb[0] as *i64) = a.id;
-	abi_send_frame(abi_in, ABI_REQ_RUN_AST as u8, &hb[0], 8);
-	var buf [8]u8;
-	var kind u8 = 0;
-	var n i64 = abi_wait_result(&kind, &buf[0], 8);
-	if (n < 0) {
-		eprint("run_ast: the qela subprocess died\n");
-		sys_exit(1);
+	return ast_node_req(ABI_REQ_AST_NEXT as u8, &hb[0], 8);
+}
+
+fn ast_set(a *Ast, i i64, c *Ast) bool {
+	if (a as i64 == 0 || c as i64 == 0) { return false; }
+	abi_spawn();
+	var attempt bool = false;
+	while (true) {
+		var hb [24]u8;
+		*(&hb[0] as *i64) = a.id;
+		*(&hb[8] as *i64) = i;
+		*(&hb[16] as *i64) = c.id;
+		abi_send_frame(abi_in, ABI_REQ_AST_SET as u8, &hb[0], 24);
+		var buf [8]u8;
+		var kind u8 = 0;
+		var n i64 = abi_wait_result(&kind, &buf[0], 8);
+		if (n < 0) {
+			if (!attempt && abi_respawn()) { attempt = true; continue; }
+			eprint("ast_set: the qela subprocess died\n");
+			sys_exit(1);
+		}
+		if (kind == (ABI_RESP_ERR as u8)) {
+			eprint("ast_set: unknown handle\n");
+			sys_exit(1);
+		}
+		return *(&buf[0] as *i64) != 0;
 	}
-	if (kind == (ABI_RESP_ERR as u8)) {
-		eprint("run_ast: runtime error, or an unknown ast handle\n");
-		sys_exit(1);
-	}
-	return *(&buf[0] as *i64);
 }
