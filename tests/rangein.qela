@@ -1,0 +1,28 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: true-false-true-true-false
+// `x in lo..hi` is range membership: lo <= x < hi, with the left side
+// evaluated exactly once.
+import "std/fmt.qela";
+
+var n i64 = 0;
+
+fn f() i64 {
+	n = n + 1;
+	return n;
+}
+
+fn main() int {
+	var m i64 = 5;
+	var a bool = m in 0..10;
+	var b bool = 20 in 0..10;
+	var c bool = f() in 0..3;
+	var d bool = f() in 0..3;
+	var e bool = 7 not in 0..10;
+	var o = fmt_begin();
+	o = fmt_put_str(o, "${a}-${b}-${c}-${d}-${e}");
+	var r = fmt_result(o);
+	sys_write(1, r.ptr, r.len);
+	return 0;
+}
+

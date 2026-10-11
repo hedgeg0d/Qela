@@ -24,6 +24,10 @@ fn is_digit(c u8) bool {
 	return c >= '0' && c <= '9';
 }
 
+fn is_hex_digit(c u8) bool {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+}
+
 fn is_letter(c u8) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
 }
@@ -139,6 +143,21 @@ fn interp_spec_split(src str, spec *str) i64 {
 			}
 		}
 		i = i + 1;
+	}
+	// `${x=}` debug form: a trailing '=' (possibly after spaces) at the
+	// interpolation's own depth marks the whole expression as a
+	// name-and-value print. A comparison or assignment operator in the
+	// same spot ("x == ", "x <= ") is not that marker.
+	var k i64 = src.len;
+	while (k > 0 && src.ptr[k - 1] == ' ') { k = k - 1; }
+	if (k > 0 && src.ptr[k - 1] == '=') {
+		var ok bool = k < 2 || (src.ptr[k - 2] != '=' && src.ptr[k - 2] != '<' &&
+		                        src.ptr[k - 2] != '>' && src.ptr[k - 2] != '!');
+		if (ok) {
+			spec.ptr = src.ptr + k - 1;
+			spec.len = src.len - (k - 1);
+			return k - 1;
+		}
 	}
 	spec.ptr = null;
 	spec.len = 0;
@@ -415,7 +434,9 @@ fn lex(src str, base i64) *Token {
 			continue;
 		}
 
-		// number (decimal or hex)
+		// number (decimal or hex). Underscores separate digit groups:
+		// 1_000_000, 0xFFFF_FF00 -- never leading or trailing, so a
+		// separator is only skipped between two digits.
 		if (is_digit(src.ptr[i])) {
 			var start i64 = i;
 			var val i64 = 0;
@@ -429,14 +450,24 @@ fn lex(src str, base i64) *Token {
 					if (c >= '0' && c <= '9') { d = c as i64 - '0'; }
 					else if (c >= 'a' && c <= 'f') { d = c as i64 - 'a' + 10; }
 					else if (c >= 'A' && c <= 'F') { d = c as i64 - 'A' + 10; }
+					else if (c == '_' && i + 1 < src.len && is_hex_digit(src.ptr[i+1])) {
+						i = i + 1;
+						continue;
+					}
 					else { break; }
 					val = val * 16 + d;
 					i = i + 1;
 				}
 			} else {
-				while (i < src.len && is_digit(src.ptr[i])) {
-					val = val * 10 + (src.ptr[i] as i64 - '0');
-					i = i + 1;
+				while (i < src.len) {
+					if (is_digit(src.ptr[i])) {
+						val = val * 10 + (src.ptr[i] as i64 - '0');
+						i = i + 1;
+					} else if (src.ptr[i] == '_' && i + 1 < src.len && is_digit(src.ptr[i+1])) {
+						i = i + 1;
+					} else {
+						break;
+					}
 				}
 			}
 			var intpart_end i64 = i;
@@ -450,7 +481,11 @@ fn lex(src str, base i64) *Token {
 				has_dot = true;
 				i = i + 1;
 				frac_start = i;
-				while (i < src.len && is_digit(src.ptr[i])) { i = i + 1; }
+				while (i < src.len) {
+					if (is_digit(src.ptr[i])) { i = i + 1; }
+					else if (src.ptr[i] == '_' && i + 1 < src.len && is_digit(src.ptr[i+1])) { i = i + 1; }
+					else { break; }
+				}
 				frac_len = i - frac_start;
 			}
 
@@ -573,6 +608,33 @@ fn lex(src str, base i64) *Token {
 		if (src.ptr[i] == '"') {
 			var start i64 = i;
 			i = i + 1;
+			// """...""": a raw multi-line string. Newlines are kept
+			// verbatim and no escapes are processed; there is no
+			// interpolation inside (a `$` is a literal dollar). The three
+			// quotes are the string itself, so `""` stays the empty
+			// string and only `"""` enters this form.
+			if (i + 1 < src.len && src.ptr[i] == '"' && src.ptr[i + 1] == '"') {
+				i = i + 2;
+				var mstart i64 = i;
+				while (true) {
+					if (i >= src.len) { error_at(lex_base + start, "unterminated multi-line string"); }
+					if (src.ptr[i] == '"' && i + 2 < src.len && src.ptr[i + 1] == '"' && src.ptr[i + 2] == '"') {
+						break;
+					}
+					i = i + 1;
+				}
+				var t *Token = push_token(TK_STR, start);
+				var sv str;
+				sv.ptr = src.ptr + mstart;
+				sv.len = i - mstart;
+				t.sval = sv;
+				var raw str;
+				raw.ptr = src.ptr + start;
+				raw.len = i - start + 3;
+				t.text = raw;
+				i = i + 3;
+				continue;
+			}
 			var part_start i64 = start;
 			var buf *u8 = arena_alloc(src.len - i + 2, 1);
 			var n i64 = 0;
