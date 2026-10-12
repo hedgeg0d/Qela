@@ -1343,6 +1343,31 @@ fn type_intrinsic(n *Node) bool {
 		n.ty = ty_void;
 		return true;
 	}
+	// Only reachable through std/coro.qela's `$if (INTERP == "1")` branch,
+	// which nothing but `qela irun` ever defines. Codegen has no lowering
+	// for either -- a compiled program never contains one.
+	if (str_eq(n.name, "interp_coro_sp") || str_eq(n.name, "interp_coro_top")) {
+		if (n.nargs != 1) { error_at(n.pos, "this intrinsic takes one coroutine slot"); }
+		n.args = intrinsic_i64_arg(n.args);
+		n.ty = ty_i64;
+		return true;
+	}
+	if (str_eq(n.name, "interp_coro_spawn") || str_eq(n.name, "interp_coro_switch")) {
+		var a *Node = n.args;
+		var head *Node = 0 as *Node;
+		var tail *Node = 0 as *Node;
+		while (a as i64 != 0) {
+			var nxt *Node = a.next;
+			var v *Node = intrinsic_i64_arg(a);
+			v.next = 0 as *Node;
+			if (head as i64 == 0) { head = v; } else { tail.next = v; }
+			tail = v;
+			a = nxt;
+		}
+		n.args = head;
+		n.ty = ty_void;
+		return true;
+	}
 	return false;
 }
 

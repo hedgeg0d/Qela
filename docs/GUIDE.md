@@ -192,8 +192,19 @@ Not everything survives the trip, and the ones that do not say so:
 |---|---|
 | `asm(...)`, top-level `asm { }`, `fn naked`, `entry` | ignored, one warning per site |
 | `extern` functions and globals | error: there is no linker here |
-| `coro_switch`, `thread_clone` | error: they switch machine stacks |
+| `thread_clone`, `go`, `thread_pool_init` | error: real OS threads are not supported yet |
+| `spawn`, `coro_yield`, channels, the collector | work |
 | atomics, `fence`, `tvar`, `tls_init` | work, as the single-threaded operations they reduce to |
+
+Coroutines are worth a note. An interpreted coroutine is a suspended
+interpreter -- the evaluator's state is the process's own call stack -- so
+each one gets a native stack of its own and `spawn`/`coro_yield` switch
+between them. The scheduler, the channels and the collector are the same
+interpreted `std/` code they always are.
+
+The compiler runs under this too: `qela irun srcql/main.qela prog.qela -o
+prog` compiles `prog.qela` with an interpreted compiler, and the bytes come
+out identical to the compiled one's. It is about 550x slower.
 
 Accepted flags are `--no-bounds-checks`, `--no-warn` and `-D NAME=VALUE`,
 all before the program's own arguments; everything from the file name on
