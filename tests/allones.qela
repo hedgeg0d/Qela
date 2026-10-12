@@ -1,0 +1,25 @@
+// expect-exit: 0
+fn sink(v i64) i64 { return v; }
+
+var g i64;
+
+fn main() int {
+	var m i64 = -1;
+	if (sink(m) != -1) { return 1; }
+	if (sink(-1) != -1) { return 2; }
+	g = -1;
+	if (g != -1) { return 3; }
+	var a i64 = 0;
+	a = a + -1;
+	if (a != -1) { return 4; }
+	var b i64 = 7;
+	b = b & -1;
+	if (b != 7) { return 5; }
+	var c u64 = 0xffffffffffffffff as u64;
+	if (sink(c as i64) != -1) { return 6; }
+	var d i64 = -65536;
+	if (sink(d) != -65536) { return 7; }
+	var e i64 = -4294967296;
+	if (sink(e) != -4294967296) { return 8; }
+	return 0;
+}
