@@ -16,6 +16,7 @@ var ty_u32 *Type;
 var ty_u64 *Type;
 var ty_f32 *Type;
 var ty_f64 *Type;
+var ty_poison *Type;
 var ty_str_cache *Type;
 var types_ready bool = false;
 var type_abi_mode bool = false;
@@ -46,6 +47,7 @@ fn type_init() {
 	ty_u64 = prim(TY_INT, 8, true, "u64");
 	ty_f32 = prim(TY_FLOAT, 4, false, "f32");
 	ty_f64 = prim(TY_FLOAT, 8, false, "f64");
+	ty_poison = prim(TY_POISON, 8, false, "poison");
 }
 
 fn type_ptr(base *Type) *Type {
@@ -53,6 +55,12 @@ fn type_ptr(base *Type) *Type {
 	var t *Type = type_alloc();
 	*t = Type{kind: TY_PTR, size: 8, align: 8, is_unsigned: true, base: base};
 	return t;
+}
+
+// The poison type: assigned to nodes whose error was already reported.
+fn type_poison() *Type {
+	type_init();
+	return ty_poison;
 }
 
 fn type_ptr_volatile(base *Type) *Type {
@@ -476,6 +484,8 @@ fn can_implicit(n *Node, ty *Type) bool {
 
 fn cast_to(n *Node, ty *Type) *Node {
 	if (n.ty as i64 == ty as i64) { return n; }
+	// Poison flows through silently: the real error is already reported.
+	if (n.ty.kind == TY_POISON || ty.kind == TY_POISON) { return n; }
 	if (!can_implicit(n, ty)) {
 		emsg("implicit conversion from '"); emsg_ty(n.ty); emsg("' to '"); emsg_ty(ty); emsg("' requires an explicit cast"); efail(n.pos);
 	}
@@ -732,6 +742,7 @@ fn clone_func(f *Func) *Func {
 	f2.name = str_dup(name);
 	f2.ret = tsubst(f.ret);
 	f2.pos = f.pos;
+	f2.instantiated = true;
 	nvar_map = 0;
 
 	// Clone locals, which include the parameters, skipping comptime ones.
@@ -1126,6 +1137,16 @@ fn type_assign(n *Node) {
 	if (bf as i64 != 0) {
 		type_bitfield_write(n, bf);
 		return;
+	}
+	if (n.lhs.kind == ND_VAR && n.rhs.kind == ND_VAR &&
+	    n.lhs.varp as i64 != 0 && n.lhs.varp as i64 == n.rhs.varp as i64) {
+		warn_at(n.pos, "self-assignment has no effect");
+	}
+	if (n.lhs.kind == ND_MEMBER && n.rhs.kind == ND_MEMBER &&
+	    n.lhs.member as i64 != 0 && n.lhs.member as i64 == n.rhs.member as i64 &&
+	    n.lhs.lhs.kind == ND_VAR && n.rhs.lhs.kind == ND_VAR &&
+	    n.lhs.lhs.varp as i64 != 0 && n.lhs.lhs.varp as i64 == n.rhs.lhs.varp as i64) {
+		warn_at(n.pos, "self-assignment has no effect");
 	}
 	if (n.lhs.kind == ND_CALL && n.lhs.idxget) {
 		if (index_put(n)) { return; }
@@ -1935,7 +1956,11 @@ fn add_type(n *Node) {
 			fmt_str(&b, "undefined function '");
 			fmt_str(&b, n.name);
 			fmt_str(&b, "'");
-			error_suggest(n.pos, buf_str(&b), suggest_name(n.name));
+			err_soft_suggest(n.pos, buf_str(&b), suggest_name(n.name));
+			n.kind = ND_NUM;
+			n.val = 0;
+			n.ty = ty_poison;
+			return;
 		}
 		if (f.nct != 0) {
 			emsg("a generic function cannot be used as a value: '");
@@ -1964,6 +1989,9 @@ fn add_type(n *Node) {
 		if (!is_integer(n.lhs.ty) || !is_integer(n.rhs.ty)) {
 			error_at(n.pos, "operands must be integers");
 		}
+		if (k == ND_DIV && n.rhs.kind == ND_NUM && n.rhs.val == 0 && n.lhs.kind != ND_NUM) {
+			warn_at(n.pos, "division by zero");
+		}
 		usual_conv(n);
 		n.ty = n.lhs.ty;
 		return;
@@ -1972,6 +2000,9 @@ fn add_type(n *Node) {
 	if (k == ND_MOD || k == ND_BITAND || k == ND_BITOR || k == ND_BITXOR) {
 		if (!is_integer(n.lhs.ty) || !is_integer(n.rhs.ty)) {
 			error_at(n.pos, "operands must be integers");
+		}
+		if (k == ND_MOD && n.rhs.kind == ND_NUM && n.rhs.val == 0 && n.lhs.kind != ND_NUM) {
+			warn_at(n.pos, "remainder by zero");
 		}
 		usual_conv(n);
 		n.ty = n.lhs.ty;
@@ -1983,6 +2014,24 @@ fn add_type(n *Node) {
 			error_at(n.pos, "shift operands must be integers");
 		}
 		if (n.lhs.ty.size < 8) { n.lhs = cast_to(n.lhs, ty_i64); }
+		var rv i64 = 0;
+		var rconst bool = false;
+		if (n.rhs.kind == ND_NUM) { rv = n.rhs.val; rconst = true; }
+		else if (n.rhs.kind == ND_NEG && n.rhs.lhs.kind == ND_NUM) { rv = -n.rhs.lhs.val; rconst = true; }
+		if (rconst) {
+			var wb Buf;
+			if (rv < 0) {
+				fmt_str(&wb, "shift by a negative amount (");
+				fmt_i64(&wb, rv);
+				fmt_str(&wb, ")");
+				warn_at(n.rhs.pos, buf_str(&wb));
+			} else if (rv >= 64) {
+				fmt_str(&wb, "shift by ");
+				fmt_i64(&wb, rv);
+				fmt_str(&wb, " overflows the 64-bit result");
+				warn_at(n.rhs.pos, buf_str(&wb));
+			}
+		}
 		n.ty = n.lhs.ty;
 		return;
 	}
@@ -2011,6 +2060,26 @@ fn add_type(n *Node) {
 		}
 		if (is_integer(n.lhs.ty) && is_integer(n.rhs.ty)) { usual_conv(n); }
 		if (is_float(n.lhs.ty) && is_float(n.rhs.ty)) { usual_conv(n); }
+		if ((k == ND_EQ || k == ND_NE) && is_float(n.lhs.ty)) {
+			warn_at(n.pos, "comparing floats with '==' or '!=' is fragile: NaN compares false either way and rounding hides near-equal values");
+		}
+		if (n.lhs.kind == ND_NUM && n.rhs.kind == ND_NUM) {
+			var a i64 = n.lhs.val;
+			var b i64 = n.rhs.val;
+			var res bool = false;
+			if (k == ND_EQ) { res = a == b; }
+			else if (k == ND_NE) { res = a != b; }
+			else if (k == ND_LT) { res = a < b; }
+			else { res = a <= b; }
+			if (n.lhs.ty.is_unsigned) {
+				if (k == ND_EQ) { res = (a as u64) == (b as u64); }
+				else if (k == ND_NE) { res = (a as u64) != (b as u64); }
+				else if (k == ND_LT) { res = (a as u64) < (b as u64); }
+				else { res = (a as u64) <= (b as u64); }
+			}
+			if (res) { warn_at(n.pos, "comparison is always true"); }
+			else { warn_at(n.pos, "comparison is always false"); }
+		}
 		n.ty = ty_bool;
 		return;
 	}
@@ -2117,7 +2186,10 @@ fn add_type(n *Node) {
 		fmt_str(&b, "this type has no field named '");
 		fmt_str(&b, n.name);
 		fmt_str(&b, "'");
-		error_suggest(n.pos, buf_str(&b), suggest_member(lt.members, n.name));
+		err_soft_suggest(n.pos, buf_str(&b), suggest_member(lt.members, n.name));
+		n.kind = ND_NUM;
+		n.val = 0;
+		n.ty = ty_poison;
 		return;
 	}
 

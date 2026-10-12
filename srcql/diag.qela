@@ -28,6 +28,10 @@ let DIAG_HINT  = 4;
 var opt_warn  bool = true;
 var opt_color int  = 0;   // 0=auto, 1=always, 2=never
 
+// Soft-error bookkeeping: how many were reported this compile.
+let DIAG_ERR_MAX = 10;
+var errcount int = 0;
+
 // Resolved at diag_setup() and never changes. The colour paths cost one
 // branch per emit; caching means the resolution (isatty, NO_COLOR, TERM)
 // happens once at boot.
@@ -184,6 +188,7 @@ fn diag_reset() {
 	diag_colored = false;
 	sec_set = false;
 	macro_top = null;
+	errcount = 0;
 }
 
 fn level_word(lvl int) str {
@@ -235,8 +240,10 @@ fn diag_emit(lvl int, pos i64, msg str) {
 	var col int = diag_col_for(id, off);
 	var src str = files[id].src;
 
-	// LSP mode: write a JSON record and return. The parent picks it up
-	// after the child dies. Severity is the level (1=error, 2=warning).
+	// LSP mode: write JSON records and return. The parent picks them up
+	// after the child dies. Severity is the level (1=error, 2=warning,
+	// 4=hint). An attached secondary span follows its primary as a
+	// record with "sec":1, which the parent turns into relatedInformation.
 	if (lsp_mode) {
 		var b Buf;
 		fmt_str(&b, "{\"file\":");
@@ -256,7 +263,27 @@ fn diag_emit(lvl int, pos i64, msg str) {
 			sys_write(fd, b.p, b.n);
 			sys_close(fd);
 		}
-		if (sec_set) { diag_clear_secondary(); }
+		if (sec_set) {
+			var sid int = diag_file_of(sec_pos);
+			var soff i64 = diag_offset_of(sec_pos);
+			var sb Buf;
+			fmt_str(&sb, "{\"sec\":1,\"file\":");
+			js_esc(&sb, files[sid].path);
+			fmt_str(&sb, ",\"line\":");
+			fmt_i64(&sb, diag_line_for(sid, soff) as i64);
+			fmt_str(&sb, ",\"col\":");
+			fmt_i64(&sb, diag_col_for(sid, soff) as i64);
+			fmt_str(&sb, ",\"msg\":");
+			js_esc(&sb, sec_msg);
+			buf_u8(&sb, '}');
+			buf_u8(&sb, '\n');
+			fd = sys_open_append(cstr(lsp_diag_path));
+			if (fd >= 0) {
+				sys_write(fd, sb.p, sb.n);
+				sys_close(fd);
+			}
+			diag_clear_secondary();
+		}
 		return;
 	}
 
@@ -367,6 +394,43 @@ fn error_at(pos i64, msg str) {
 fn error_hint_at(pos i64, msg str, hint str) {
 	diag_emit(DIAG_ERROR, pos, msg);
 	diag_emit(DIAG_HINT, pos, hint);
+	sys_exit(1);
+}
+
+// Soft errors: report and keep compiling, so one run surfaces several
+// independent mistakes. The offending node is poisoned to a literal, so
+// later phases see a well-formed tree; after DIAG_ERR_MAX the compile
+// gives up rather than spam.
+fn err_emit(pos i64, msg str) {
+	diag_emit(DIAG_ERROR, pos, msg);
+	errcount = errcount + 1;
+	if (errcount >= DIAG_ERR_MAX) {
+		eprint("error: too many errors, aborting\n");
+		sys_exit(1);
+	}
+}
+
+fn err_emit_hint(pos i64, msg str, hint str) {
+	diag_emit(DIAG_ERROR, pos, msg);
+	diag_emit(DIAG_HINT, pos, hint);
+	errcount = errcount + 1;
+	if (errcount >= DIAG_ERR_MAX) {
+		eprint("error: too many errors, aborting\n");
+		sys_exit(1);
+	}
+}
+
+fn diag_errcount() int { return errcount; }
+
+// Called at the end of a compile: a run with soft errors produced no
+// binary and must fail here.
+fn diag_fail_if_errors() {
+	if (errcount == 0) { return; }
+
+	eprint("error: compilation failed with ");
+	fmt_i64_to_fd(STDERR, errcount as i64);
+	if (errcount == 1) { eprint(" error\n"); }
+	else { eprint(" errors\n"); }
 	sys_exit(1);
 }
 
