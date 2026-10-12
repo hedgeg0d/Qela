@@ -124,6 +124,13 @@ fn naked start() {
 
 `$name` embeds an 8-byte absolute address (the `movabs`/`mov r64, imm64`
 operand); `$rel name` embeds a rel32 slot (the `jmp`/`call` operand). Both
-patch at link time, functions and globals alike. Multi-byte constants are
-byte strings in print order: a 32-bit little-endian value like the
-multiboot magic is written as its byte-reversed hex (`0x02b0ad1b`).
+patch at link time, functions and globals alike. `$abs name` is the same
+absolute address in a **4-byte** slot, for 32-bit code where the 8-byte
+form would spill into the following instructions (a far-jump target, for
+example). Multi-byte constants are byte strings in print order: a 32-bit
+little-endian value like the multiboot magic is written as its byte-reversed
+hex (`0x02b0ad1b`). When a little-endian value of a fixed width is wanted
+instead — a multiboot header field, an `imm32` operand — write
+`$le N v`, which emits exactly N bytes (2/4/8), least significant byte
+first, with no leading-zero truncation: `asm(0xb8, $le 4 0x00010000)`
+is `b8 00 00 01 00`.

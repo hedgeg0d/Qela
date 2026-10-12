@@ -192,6 +192,7 @@ static Var *find_var(Str name) {
 }
 
 static Var *globals;
+static Var *globals_tail;
 
 static Var *declare(Str name, Type *ty, isize pos) {
 	for (VarScope *v = scope->vars; v; v = v->next)
@@ -207,8 +208,13 @@ static Var *declare(Str name, Type *ty, isize pos) {
 		cur_fn->locals = var;
 	} else {
 		var->is_global = true;
-		var->next = globals;
-		globals = var;
+		/* Declaration order in the chain, mirroring srcql/parse.qela:
+		   layout_globals assigns data offsets by walking it, and a
+		   backwards chain made every global resolve to its neighbour's
+		   slot. */
+		if (globals_tail) globals_tail->next = var;
+		else globals = var;
+		globals_tail = var;
 	}
 
 	VarScope *vs = anew(VarScope);
