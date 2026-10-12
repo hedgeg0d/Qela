@@ -42,26 +42,39 @@ fn main() int {
     var i3 int = 0;
     var i4 int = 0;
     var i5 int = 0;
-    gv >>= a[((false as i32) & 3)];
-    v1 = ((((3 as i32) > a[(-471 & 3)]) + ("xyz").len) < (((fv / 0.5) + ('f' as double)) as i64));
-    e = E.B((!100));
-    gv = (!(((true == -14) as i32) + gv));
+    gv >>= a[((p.x if ((-(((0.5 + fv) as i64) in 0..(((!(786 + -1)) & 15) + 1))) == (sv1).len) else a[(v2 & 3)]) & 3)];
+    a[(str_eq(sv0, ((("hello")[2..5])[0..2] + "qwerty")) & 3)] = (!(((true == -14) as i32) + gv));
     i0 = 0;
     while ((i0 < 4)) {
         v1 = v1;
-        gv = ((((v0 % (('e' & 15) + 1)) != ('\n' + v1)) & (-11 >= tag_e(e))) % (((sub2((!1), (-276 * gv)) - (-(2 % ((954 & 15) + 1)))) & 15) + 1));
-        a[i0] = ((a[(diff4('0', 255, true, true) & 3)] == ((("abc")[0..2]).len as u16)) + str_eq(("abc")[0..2], sv0));
+        gv = ((((gv as double) / -0.5) as i64) % (('1' & 15) + 1));
+        a[i0] = ((str_eq(sv0, sv1) in a) as i8);
         i0 = (i0 + 1);
     }
-    sv1 = ("xyz")[0..2];
-    p.x = str_eq(sv0, (("hello")[2..4])[0..2]);
-    e = E.C(((-((false < v1) < (v2 + -971))) >> ((a[(0 & 3)] != p.y) != v0)), ((((42 * 117) as double) - fv) == 1.0));
-    a[(sub2((((100.0 as i64) & gv) | v1), diff4(((596 >= -986) % (((v2 as u8) & 15) + 1)), ((-919 ^ 100) | 'a'), a[((-100) & 3)], 232)) & 3)] = (-'3');
-    gv >>= (str_eq("abc", ("abc")[0..3]) as u32);
-    gv = gv;
-    var ob Buf;
-    fmt_i64(&ob, v0);
-    write_str(STDOUT, buf_str(&ob));
-    write_str(STDOUT, "\n");
-    return (((-p.x) as double) as i64);
+    sv1 += ("xyzzy")[0..2];
+    n.tag = (((((('b' << -592) >= (fv as i64)) && ((fv as i64) >= (v1 != gv))) in a) <= pair_sum(Pair{x: ((42 >> 'a') as u32), y: 146})) && (pair_sum(Pair{x: ((42 >> 'a') as u32), y: 146}) < (p.y as i32)));
+    sv0 = "xyzzy";
+    i0 = 0;
+    while ((i0 < 3)) {
+        i0 = (i0 + 1);
+        p = pair_swap(p);
+    }
+    a[(((-p.x) == (((gv as i16) if (((((!-872) in a) >= (((--93) >= ((gv < true) && (true > v2))) && (((gv < true) && (true > v2)) > (true in a)))) == ((v2 in a) in a)) != ((sub2((gv in a), (0x2b % ((true & 15) + 0x1))) << v1) if (((diff4((v1 % ((v0 & 15) + 0x1)), (-986 as u32), (-1.5 > 10.5), '3') in 0..((('3' & str_eq(sv1, (sv0 + ("abc" + ("""ab
+cd""")[2..4])))) & 15) + 1)) * v2) > ((("42" + "hi"))[0] + (("hello")[2..4]).len)) else a[(gv & 3)])) else false) != ((-333 if (0x1a5 != 'f') else 'c') | (false as i16)))) & 3)] = (pair_sum(Pair{x: sub2((2 == 'b'), diff4('f', true, 'e', false)), y: ((1.7 as i64) - (v1 == v2))}) <= (((true / ((gv & 15) + 1)) - (true == -243)) | ((sv1)[1] if ((("xyzzy")[1] ^ (-(v0 > (gv / ((v1 & 15) + 0x1))))) >= ((-(('c' if (('e' / ((false & 15) + 1)) > bag_sum(b)) else 42) & (1 in 0..((gv & 0xf) + 1)))) if (745 <= ((((100 / ((-967 & 15) + 1)) >= (2 > 0x148)) << ((true >= '\n') % ((pair_sum(Pair{x: 42, y: 42}) & 0xf) + 1))) >> p.y)) else ((p.x as double) <= ((false + 1) as double)))) else ('d' < false))));
+    if (((a[(v1 & 3)] as u16) <= ((((!('d' > false)) > sub2((925 == 38), ((2 >= '\n') && ('\n' < v0)))) && (sub2((925 == 38), ((2 >= '\n') && ('\n' < v0))) > str_eq(sv1, "42"))) != pair_sum(p)))) {
+        i1 = 0;
+        while ((i1 < 2)) {
+            i1 = (i1 + 1);
+            a[(v0 & 0x3)] = ((pair_sum(p) % ((('3' == (false > v1)) & 15) + 0x1)) << ((!223) == (((!gv) > (305 as u32)) && ((305 as u32) > (10 == -953)))));
+            sv0 += ("""ab
+cd""")[1..5];
+        }
+        sv0 = "abc";
+    } else {
+        e = E.B((!(((((0x354 != true) <= p.y) && (p.y > (127 - -966))) > (-(255 <= v2))) && ((-(255 <= v2)) <= 759))));
+    }
+    n.p.x = tag_e(e);
+    n.tag = ((p.x as u32) / ((((-(-gv)) if (((((-(-255)) in a) <= (("abc")[0..2]).len) && ((("abc")[0..2]).len > (((v0 ^ false) in a) + ((-458 / (('a' & 15) + 1)) if (p.y != ((((false < '0') | (-125)) * (-408 <= (0 if (((((0.25 / 3.75) / 0.1) > fv) if (((("hello")[0..5]).len != (-((gv in 0..((v0 & 15) + 1)) in 0..(((false != '2') & 15) + 1)))) >= ((((!(v1 >> 2)) in 0..(((p.x in a) & 15) + 1)) <= p.x) && (p.x > ((((gv > 255) >= (0.25 > 0.5)) && ((0.25 > 0.5) <= (1 >= true))) ^ (('f' != -22) <= ('1' > gv)))))) else 0x339) > (a[(gv & 3)] < ('d' >= (-('0' % ((0xffffffffffffffff & 0xf) + 1)))))) else 791))) >> ((('\n' & 41) / (((gv == gv) & 15) + 1)) / ((((false in a) in 0..(((true << '1') & 15) + 1)) & 15) + 1)))) else (v1 as u16))))) > (0xa | ((!(('1' >= gv) && (gv < '\n'))) << (v1 >= p.x)))) else (-('f' & 1))) & 15) + 1));
+    write_str(STDOUT, "${v0:08x}\n");
+    return gv;
 }

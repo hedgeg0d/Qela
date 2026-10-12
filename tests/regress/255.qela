@@ -1,0 +1,68 @@
+// expect-exit: 0
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = -27;
+fn sum3(a int, b int, c int) int { return a + b + c; }
+fn mix6(a int, b int, c int, d int, e int, f int) int { return a - b + c - d + e - f; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn nest_sum(n Nest) int { return n.tag + n.p.x + n.p.y; }
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn main() int {
+    var v0 int = 0x9;
+    var v1 int = 7;
+    var v2 int = 4;
+    var sv0 str = "xyzzy";
+    var sv1 str = """x
+yz""";
+    var fv double = 1.5;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    p.y = (((str_eq(("""x
+yz""")[0..3], sv1) in a) & ((2 >= '1') in a)) > (((922 <= 'd') > (v2 | 0xa)) as i32));
+    fv = ((((fv * fv) + (fv * fv)) / 1.7) / 2.0);
+    n.tag = (-(((fv / -0.5) / -2.0) >= ((10.5 + 1.5) / 1.5)));
+    v1 = 354;
+    e = E.B((((-(-3)) as double) as i64));
+    e = E.B('e');
+    e = E.B(((-p.x) & (p.x <= (!(fv < fv)))));
+    p = pair_swap(p);
+    i0 = 0;
+    while ((i0 < 4)) {
+        v2 = (!((((true if (((str_eq(("hello")[2..5], ("qwerty")[0..2]) == ((sv0).len >> a[('3' & 3)])) >> (-621 if (p.y != v2) else ((fv as i64) as i8))) == (-(((((v1 in a) > (194 in a)) && ((194 in a) > (v2 in a))) >= tag_e(e)) && (tag_e(e) <= ((!true) > (-324)))))) else -1) > (0.5 != fv)) && ((0.5 != fv) > 42)) in a));
+        sv1 += "42";
+        a[i0] = (-(-2.0 <= (fv / 0.125)));
+        i0 = (i0 + 0x1);
+    }
+    write_str(STDOUT, "${v0=}\n");
+    return (((('f' as u8) + (255 < 387)) in 0..((((744 >> false) % ((42 & 15) + 1)) & 15) + 0x1)) - (((false != true) in a) if ('\n' >= true) else ((-true) == (10.5 as i64))));
+}

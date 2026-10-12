@@ -4,21 +4,25 @@ import "str.qela";
 
 let IO_CHUNK = 65536;
 
+/// Prints msg to stderr and exits with status 1.
 fn die(msg str) {
 	eprint(msg);
 	eprint("\n");
 	sys_exit(1);
 }
 
+/// Writes s to standard output without a newline.
 fn print(s str) {
 	write_str(STDOUT, s);
 }
 
+/// Writes s followed by a newline to standard output.
 fn println(s str) {
 	write_str(STDOUT, s);
 	write_str(STDOUT, "\n");
 }
 
+/// Returns whether a file is openable at path.
 fn file_exists(path str) bool {
 	var fd i64 = sys_open_read(cstr(path));
 	if (fd < 0) { return false; }
@@ -26,6 +30,7 @@ fn file_exists(path str) bool {
 	return true;
 }
 
+/// Reads an entire file into a string, exiting on failure to open.
 fn read_file(path str) str {
 	var fd i64 = sys_open_read(cstr(path));
 	if (fd < 0) {
@@ -45,6 +50,7 @@ fn read_file(path str) str {
 	return buf_str(&b);
 }
 
+/// Reads all of standard input into a string.
 fn read_stdin() str {
 	var b Buf;
 	var got i64 = 1;
@@ -58,6 +64,7 @@ fn read_stdin() str {
 
 // One line, newline included; "" only at end of input. An empty line
 // returns "\n", so a caller can tell the two apart.
+/// Reads one line from standard input, newline included.
 fn read_line() str {
 	var b Buf;
 	var c u8 = 0;
@@ -70,6 +77,7 @@ fn read_line() str {
 	return buf_str(&b);
 }
 
+/// Writes n bytes to path, truncating it, exiting on failure.
 fn write_file(path str, data *u8, n i64) {
 	var fd i64 = sys_open_exec(cstr(path));
 	if (fd < 0) {
@@ -102,6 +110,7 @@ struct Stat {
 	d14 i64, d15 i64, d16 i64, d17 i64,
 }
 
+/// Returns whether path names a directory.
 fn is_dir(path str) bool {
 	var st Stat;
 	if (sys_stat(cstr(path), &st as *u8) != 0) { return false; }
@@ -119,6 +128,7 @@ fn is_dir(path str) bool {
 // Entries come in directory order, so the caller sorts before use. A
 // dot-directory (".git", ".foo") is skipped, same convention most tools use
 // for "not part of the project".
+/// Appends the .qela paths under path, relative to prefix, to out.
 fn read_dir_rec(path str, prefix str, out *Buf) {
 	var fd i64 = sys_open_read(cstr(path));
 	if (fd < 0) {
@@ -172,4 +182,5 @@ fn read_dir_rec(path str, prefix str, out *Buf) {
 	sys_close(fd);
 }
 
+/// Appends the .qela file paths under a directory to out.
 fn read_dir(path str, out *Buf) { read_dir_rec(path, "", out); }

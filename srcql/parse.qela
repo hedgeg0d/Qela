@@ -1649,7 +1649,7 @@ fn chain_hoist_mid(mid *Node, pos i64, rd **Node) *Node {
 		return mid;
 	}
 	add_type(mid);
-	var hv *Var = declare_var(hidden_name("m"), mid.ty, pos);
+	var hv *Var = declare_var(hidden_name("h"), mid.ty, pos);
 	var lhs *Node = new_node(ND_VAR, pos);
 	lhs.varp = hv;
 	var asn *Node = bin_node(ND_ASSIGN, lhs, mid, pos);

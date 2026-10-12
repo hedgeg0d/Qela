@@ -6,6 +6,7 @@ let ABI_FD_CHILD_TO_HOST = 4;
 
 let ABI_RESP_ERR = 2;
 
+/// Reads exactly n bytes from the descriptor.
 fn abi_read_exact(fd i64, buf *u8, n i64) bool {
 	var got i64 = 0;
 	while (got < n) {
@@ -16,6 +17,7 @@ fn abi_read_exact(fd i64, buf *u8, n i64) bool {
 	return true;
 }
 
+/// Writes exactly n bytes to the descriptor.
 fn abi_write_exact(fd i64, buf *u8, n i64) {
 	var off i64 = 0;
 	while (off < n) {
@@ -25,6 +27,7 @@ fn abi_write_exact(fd i64, buf *u8, n i64) {
 	}
 }
 
+/// Sends a length-prefixed frame with its kind byte.
 fn abi_send_frame(fd i64, kind u8, payload *u8, n i64) {
 	var hdr [4]u8;
 	var total i64 = n + 1;
@@ -39,11 +42,13 @@ fn abi_send_frame(fd i64, kind u8, payload *u8, n i64) {
 	if (n > 0) { abi_write_exact(fd, payload, n); }
 }
 
+/// Decodes a little-endian 64-bit integer from bytes.
 fn abi_decode_u64(p *u8) i64 {
 	return (p[0] as i64) | ((p[1] as i64) << 8) | ((p[2] as i64) << 16) | ((p[3] as i64) << 24) |
 	       ((p[4] as i64) << 32) | ((p[5] as i64) << 40) | ((p[6] as i64) << 48) | ((p[7] as i64) << 56);
 }
 
+/// Reads a frame header and returns its total length.
 fn abi_peek_len(fd i64) i64 {
 	var hdr [4]u8;
 	if (!abi_read_exact(fd, &hdr[0], 4)) { return -1; }
@@ -52,6 +57,7 @@ fn abi_peek_len(fd i64) i64 {
 	return total;
 }
 
+/// Reads a frame's kind byte and payload body.
 fn abi_recv_rest(fd i64, kind *u8, buf *u8, n i64) bool {
 	var kb [1]u8;
 	if (!abi_read_exact(fd, &kb[0], 1)) { return false; }
@@ -60,6 +66,7 @@ fn abi_recv_rest(fd i64, kind *u8, buf *u8, n i64) bool {
 	return true;
 }
 
+/// Receives a whole frame into the given buffer.
 fn abi_recv_frame(fd i64, kind *u8, buf *u8, cap i64) i64 {
 	var total i64 = abi_peek_len(fd);
 	if (total < 0 || total - 1 > cap) { return -1; }

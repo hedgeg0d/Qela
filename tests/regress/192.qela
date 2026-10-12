@@ -1,4 +1,4 @@
-// expect-exit: 1
+// expect-exit: 0
 // got: CRASH
 struct Pair { x int, y int, }
 struct Wide { a int, b int, c int, }
@@ -48,44 +48,29 @@ fn main() int {
     var i3 int = 0;
     var i4 int = 0;
     var i5 int = 0;
-    n.tag = ((!("abcd").len) >> (((fv as i64) & (v2 - -1)) / ((((false >> true) as u16) & 15) + 1)));
-    w = wide_swap(w);
-    i0 = 0;
-    while ((i0 < 3)) {
-        i0 = (i0 + 1);
-        v2 <<= ((((fv != fv) % (((!v0) & 15) + 1)) - ((19 == 249) << str_eq(("xyz")[0..3], "hi"))) & false);
-        a[(((-(a[('g' & 3)] == ('3' as u8))) as i32) & 3)] = ((true <= (('f' / (('f' & 15) + 1)) >= (100.0 <= fv))) > str_eq(((sv0)[0..2])[0..2], ("hello")[2..5]));
+    n.tag = ((((!v1) <= (1 >= 634)) in a) >> (((-1 & 'a') << (100 / ((42 & 15) + 1))) if (((((1.0 - 2.5) as i64) as i32) as i16) == (!(((v2 if ((p.x as i32) > (((-a[('g' & 3)]) as i32) * (((('\n' % (('3' & 15) + 1)) as i32) >= (sv0).len) && ((sv0).len > ((-false) as u32))))) else false) - (false << 127)) << ((0x64 as double) as i64)))) else (-('d' == 3))));
+    b = Bag{p: (((('c' > -593) >= (v1 as u32)) % (('2' & 15) + 1)) != true), q: (!(min2(false, p.x) as u32)), r: opt_d(D.Some((((v0 ^ '\n') in a) if (((((-722 / (('g' & 15) + 0x1)) != (fv > 100.0)) > (-a[(127 & 3)])) & 'b') == ((!(0.125 < (3.75 - fv))) in 0..((((v0 * p.y) if ((sub2(((!0x206) % ((1 & 0xf) + 1)), (((('0' >= 10) && (10 <= true)) > (!'g')) && ((!'g') >= 'a'))) & (-((sv0)[1] >= (-'\t')))) > (("abc")[0..3])[0]) else (((sv0)[0..2])[0..2]).len) & 15) + 1))) else twice(p.y)))), s: (((-p.x) if (sub2(((-('d' if ((((((-211 <= '3') && ('3' < v2)) in a) < (('c' as u16) + (false >> true))) << (((v2 == -388) > (1 * -41)) in 0..(((tag_e(e) as u8) & 15) + 1))) != opt_d(D.None)) else v1)) in 0..((min2(a[(10 & 3)], twice(v0)) & 0xf) + 1)), (tag_e(e) in a)) != (((((2 % ((v0 & 15) + 1)) + 42) < (v0 in a)) && ((v0 in a) >= ((-1.5 * 0.125) == fv))) == ((((("""ab
+cd""")[2..5])[0..2])[0..2]).len ^ ((0xffffffffffffffba <= false) if ((("foobar")[0..3])[0] <= ((42 >= (!a[(('\n' * -246) & 3)])) && ((!a[(('\n' * -246) & 3)]) > (a[(((v1 >= false) && (false > v2)) & 3)] as i16)))) else (-286 in a))))) else (0.25 != fv)) < (-(('a' ^ 0x2b3) <= false)))};
+    a[(str_eq(("abcd")[0..2], sv1) & 3)] = (((a[(true & 3)] in 0..(((v0 + 0x2a) & 15) + 1)) ^ v0) - (((-1 ^ false) in 0..(((v0 > 871) & 15) + 1)) < ((496 as i16) < v0)));
+    fv = (((('b' as double) + (v2 as double)) / 1.0) * (fv * ((v0 << 'a') as double)));
+    p = pair_swap(p);
+    if (((((-(0.1 as i64)) ^ ((fv as i64) as u16)) in a) == (!(((tag_e(e) in a) >= ((fv as i64) + (42 % ((100 & 15) + 1)))) && (((fv as i64) + (42 % ((100 & 15) + 1))) > p.y))))) {
+        n.p.x = (-(("""x
+yz""")[0..2])[0]);
+    } else {
+        v1 = (-(twice((v2 & '1')) in 0..((948 & 15) + 1)));
     }
-    v2, v1 = (v2 as u16), (-((fv as i64) < a[((1 >= -56) & 3)]));
-    p.x = opt_d(D.Some(str_eq((sv0)[0..2], ("xyzzy")[2..4])));
-    n.tag = ((((fv + fv) / 0.5) >= 0.125) * (((-722 / (('g' & 15) + 1)) != (fv > 100.0)) > (-a[(127 & 3)])));
-    p.y = tag_e(e);
-    n.tag = ((v0 as i16) < true);
-    match (e) {
-        A => {
-            return (((!str_eq("aa", "no")) % ((1 & 15) + 1)) & (-(('0' * 'c') >= (-'\t'))));
-        }
-        B(mb0) => {
-            return (-((0.5 >= (127 as double)) > ((!3) < a[('g' & 3)])));
-        }
-        C(mb0, mb1) => {
-            return -1;
-        }
+    sv1 += (((sv1)[0..2] + ("""ab
+cd""")[1..3]) + ("abcd")[1..3]);
+    i0 = 0x0;
+    while ((i0 < 4)) {
+        p = Pair{x: (((-(v2 & v0)) as double) as i64), y: (!((('e' * 0) as u16) >= v0))};
+        p = pair_swap(p);
+        a[i0] = (((('b' == 'b') as u32) >= ((100 in 0..((v2 & 15) + 1)) as i32)) & tag_e(e));
+        i0 = (i0 + 0x1);
     }
-    match (e) {
-        A => {
-            return ((((fv / 0.5) as i64) ^ opt_d(D.None)) == ((false < (-100)) >> twice(p.y)));
-        }
-        B(mb0) => {
-            return (p.x * mb0);
-        }
-        C(mb0, mb1) => {
-            return ((-((1 * -41) <= (false >> 127))) as i16);
-        }
-    }
-    var ob Buf;
-    fmt_i64(&ob, v2);
-    write_str(STDOUT, buf_str(&ob));
-    write_str(STDOUT, "\n");
-    return v2;
+    a[((("qwerty")[0] << (((v0 in a) >> (1.0 as i64)) < ((-false) | v1))) & 3)] = (((tag_e(e) as double) <= ((828 as double) / 0.25)) | (sv1)[0]);
+    sv1 += "xyz";
+    write_str(STDOUT, "${v1=}\n");
+    return ((((!true) as double) as i64) as u16);
 }

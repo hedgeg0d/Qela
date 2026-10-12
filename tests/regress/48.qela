@@ -1,0 +1,61 @@
+// expect-exit: 0
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = -23;
+fn sum3(a int, b int, c int) int { return a + b + c; }
+fn mul2(a int, b int) int { return a * b; }
+fn zero() int { return 3; }
+fn mix6(a int, b int, c int, d int, e int, f int) int { return a - b + c - d + e - f; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn wide_make(a int, b int, c int) Wide { return Wide{a: a, b: b, c: c}; }
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 8;
+    var v1 int = 8;
+    var v2 int = 0x8;
+    var sv0 str = "xyz";
+    var sv1 str = "no";
+    var fv double = 0.25;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0x0, p: Pair{x: 0, y: 0x0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    v0 = (false as i8);
+    i0 = 0;
+    while ((i0 < 2)) {
+        i0 = (i0 + 1);
+        p.x = ((((gv as double) >= (10.5 - fv)) | false) / ((((('e' < ('\t' << -1)) && (('\t' << -1) < (("hello")[1..5]).len)) + ((false if ((((('g' in 0..((gv & 15) + 1)) <= (!638)) % ((((0.125 < 0.125) in 0..(((-600) & 15) + 1)) & 15) + 1)) < (p.x in a)) <= ((3 + ((0x14e > false) < a[(418 & 3)])) << (-((v2 | 10) if ((((((!302) < -944) && (-944 >= ((("aa")[0..2])[0..2])[1])) in 0..((((fv / 1.5) as i64) & 15) + 1)) in 0..((('\t' as i8) & 15) + 1)) >= (sv0).len) else ('a' - '1'))))) else 3) in a)) & 15) + 1));
+        a[((p.y | (((sv1 + "abcd") + "xyz"))[1]) & 3)] = p.x;
+        v2, gv = gv, v2;
+    }
+    v0, v1 = v1, v0;
+    v1 = -538;
+    gv = 'g';
+    gv = ((2.0 as i64) as u32);
+    gv <<= ((!((127 != -1) in a)) <= (((0.125 as i64) in a) != -1));
+    e = E.B(((-(v1 & (false / ((-221 & 15) + 1)))) ^ ((-1.5 - (fv * -0.5)) as i64)));
+    write_str(STDOUT, "${v1:08x}\n");
+    return (((-(-108 ^ true)) <= ('e' as i16)) * v0);
+}

@@ -1,4 +1,4 @@
-// expect-exit: 1
+// expect-exit: 50
 // got: CRASH
 struct Pair { x int, y int, }
 struct Wide { a int, b int, c int, }
@@ -25,7 +25,7 @@ fn tag_e(e E) int {
 	}
 }
 fn main() int {
-    var v0 int = 8;
+    var v0 int = 0x8;
     var v1 int = 9;
     var v2 int = 0;
     var sv0 str = "xyz";
@@ -34,57 +34,37 @@ fn main() int {
     var p Pair = Pair{};
     var w Wide = Wide{};
     var b Bag = Bag{};
-    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0x0, y: 0}};
     var e E = E.A;
     var a [4]int;
     var i0 int = 0;
     var i1 int = 0;
-    var i2 int = 0;
+    var i2 int = 0x0;
     var i3 int = 0;
     var i4 int = 0;
-    var i5 int = 0;
-    v2, v1 = (((((("xyzzy")[0..2])[0..2])[0..2]).len / (((-662 >= (1 + v1)) & 15) + 1)) / ((((p.x as u16) * ((-502 as u32) & str_eq("xyz", ((("hi")[0..2])[0..2])[0..2]))) & 15) + 1)), ((-'g') > bag_sum(b));
-    w = Wide{a: 2, b: (("qwerty").len / ((((('1' ^ v1) % (((fv != fv) & 15) + 1)) as i16) & 15) + 1)), c: (("no")[1] < (-((2 ^ -567) * (false << gv))))};
+    var i5 int = 0x0;
+    v2, v1 = ((529 / ((p.x & 15) + 1)) if (gv < ((a[((0 & 0xfffffffffffffc2f) & 3)] == (p.x as i32)) + (((v1 in a) as u8) >= '3'))) else (((-'g') >= v1) in a)), true;
+    w = Wide{a: 2, b: (("qwerty").len / ((((('1' in a) % (((-1 in 0..((-1 & 15) + 1)) & 15) + 1)) as i16) & 15) + 1)), c: (("""ab
+cd""")[1] < (-((2 ^ -567) * (false << gv))))};
+    v0 ^= tag_e(e);
     match (e) {
         A => {
-            return ((fv / 2.0) != 0.25);
+            return '2';
         }
         B(mb0) => {
-            return ('e' + mb0);
+            return tag_e(e);
         }
         C(mb0, mb1) => {
-            return ((((fv / 3.75) as i64) ^ ((-(((((("xyzzy")[2..4])[0..2])[0..2])[0..2])[0..2]).len) == (("abc")[1] <= ('2' * '0')))) + mb1);
+            return ((((2 != -517) as i8) % (((!(42 in 0..((-278 & 15) + 1))) & 15) + 1)) == ((((fv > fv) >= (v1 if (((((255 != -852) != ((42 > 0) && (0 <= false))) > (fv as i64)) <= (((true ^ 541) in 0..(((100 in a) & 15) + 1)) if ((!(((0x64 * 'a') / ((("hello")[0] & 15) + 1)) * ((2 & '0') * (true >= 2)))) != (!(("xyzzy")[0] | 0))) else (((false as u8) > tag_e(e)) && (tag_e(e) < (-943 as i8))))) > (false ^ ((gcd2((-139 & 15), (-638 & 15)) <= (-0.5 != fv)) in 0..((("42").len & 15) + 1)))) else 'e')) && ((v1 if (((((255 != 0xfffffffffffffcac) != ((42 > 0) && (0 <= false))) > (fv as i64)) <= (((true ^ 541) in 0..(((100 in a) & 0xf) + 1)) if ((!(((100 * 'a') / ((("hello")[0] & 15) + 1)) * ((2 & '0') * (true >= 2)))) != (!(("xyzzy")[0] | 0))) else (((false as u8) > tag_e(e)) && (tag_e(e) < (0xfffffffffffffc51 as i8))))) > (false ^ ((gcd2((-139 & 15), (-638 & 15)) <= (-0.5 != fv)) in 0..((("42").len & 15) + 0x1)))) else 'e') < 'a')) * ((fv >= 0.5) ^ ('1' == 'g'))));
         }
     }
-    n.p.x = (a[(a[(str_eq(sv1, ("xyz")[0..2]) & 3)] & 3)] >> (((741 / ((1 & 15) + 1)) & ('c' as u8)) > ((true >= 2) >> (-183 as i8))));
-    gv = a[(((-747 as u32) & ((229 | -1) as i16)) & 3)];
-    v0 = 'f';
-    match (e) {
-        A => {
-            return true;
-        }
-        B(mb0) => {
-            return -399;
-        }
-        C(mb0, mb1) => {
-            return ((a[(true & 3)] / ((true & 15) + 1)) << (((false ^ v1) as u8) != 3));
-        }
-    }
-    fv = fv;
-    match (e) {
-        A => {
-            return (v0 > (v1 <= 'a'));
-        }
-        B(mb0) => {
-            return (((((!false) % (((true & 871) & 15) + 1)) as i32) - (((-251 ^ -219) & ('c' & gv)) >= (127 != 'c'))) + mb0);
-        }
-        C(mb0, mb1) => {
-            return ((-(((-141 + v0) - (-'0')) & (sv0)[1])) * mb1);
-        }
-    }
-    var ob Buf;
-    fmt_i64(&ob, v0);
-    write_str(STDOUT, buf_str(&ob));
-    write_str(STDOUT, "\n");
-    return (((((("hello")[0..3])[0..2])[0..2])[0..2]).len * gv);
+    a[(((v0 - (-('f' as u32))) & (((-0.5 - 1.5) == (-2.0 / 0.125)) if ((((("qwerty" + "42")).len as i8) & (((10.5 / 0.25) - (true as double)) as i64)) > false) else bag_sum(b))) & 0x3)] = a[((((-2) in a) >= ((v1 << 0x2) & (-651 in a))) & 3)];
+    gv = gv;
+    e = E.C(((((("""ab
+cd""")[0..5] + sv1)).len <= ('3' in 0..(((true ^ 3) & 15) + 1))) in a), (((((0xfffffffffffffee8 + 'a') as u16) as u32) < v1) && (v1 > ((!('a' as i16)) | ((42 in a) in 0..(((0.3 as i64) & 15) + 1))))));
+    sv1 = (("""x
+yz""")[1..4])[0..2];
+    fv = (fv / 0.25);
+    write_str(STDOUT, "${v2:08x}\n");
+    return tag_e(e);
 }

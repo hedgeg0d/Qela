@@ -34,38 +34,40 @@ fn main() int {
     var e E = E.A;
     var a [4]int;
     var i0 int = 0;
-    var i1 int = 0;
+    var i1 int = 0x0;
     var i2 int = 0;
     var i3 int = 0;
     var i4 int = 0;
     var i5 int = 0;
-    e = E.C((-(sv0)[1]), (a[(((3 != -950) as u32) & 3)] < 771));
-    v2 = (!('\n' as i16));
-    fv = (opt_d(D.None) as double);
-    v1 = v1;
-    n.tag = (twice((!v0)) < (((false >= v2) as u16) <= ((fv * fv) as i64)));
-    e = E.C(((p.x as double) as i64), ((((-604 >> v0) <= p.x) >> (1.0 > fv)) as u32));
-    i0 = 0;
-    while ((i0 < 4)) {
-        match (e) {
-            A => {
-                return v1;
-            }
-            B(mb0) => {
-                return ((((fv / 2.5) < (fv + fv)) >> ((false << v1) as u32)) >= ((zero() as u8) << ((108 << 42) ^ -188)));
-            }
-            C(mb0, mb1) => {
-                return (((fv + 3.75) == ((twice(v2) + (true * true)) as double)) + mb1);
-            }
+    e = E.C((-(sv0)[1]), ((-((false > '1') as i32)) < ((opt_d(D.Some((3 != -950))) > (((v2 in 0..((false & 15) + 1)) > '\n') && ('\n' >= ((false >= 'c') && ('c' <= false))))) && ((((v2 in 0..((false & 15) + 1)) > '\n') && ('\n' >= ((false >= 'c') && ('c' <= false)))) > (-('0' % ((v2 & 15) + 0x1)))))));
+    p = Pair{x: p.x, y: (((((-439 >= 'd') && ('d' > 3)) <= ((true <= 'd') && ('d' < 0xfffffffffffffda4))) >> (1.0 > fv)) as u8)};
+    match (e) {
+        A => {
+            return ((((('2' ^ 744) in 0..((((sv1)[0..2])[0] & 15) + 1)) % (((p.x if ((0x7f as u8) != v0) else (false as u32)) & 15) + 1)) > (true in a)) && ((true in a) < (("qwerty")[0..4]).len));
         }
-        a[i0] = ((((false - -761) % (((1 as u16) & 15) + 1)) | ((sv0)[0..2]).len) >= v2);
-        i0 = (i0 + 1);
+        B(mb0) => {
+            return (((((sv1 + ("""x
+yz""")[1..4]))[0..2])[0..2])[0] + mb0);
+        }
+        C(mb0, mb1) => {
+            return ((226 in a) * mb1);
+        }
     }
-    n.tag = ((((--692) << (-1 / ((v1 & 15) + 1))) as double) < fv);
-    e = E.C(((((-v2) / (((10 << v1) & 15) + 1)) as u8) as u16), ((a[((127 / ((v2 & 15) + 1)) & 3)] << opt_d(D.None)) - ((((("foobar")[1..3])[0..2])[1] ^ (true < 1)) > 145)));
-    var ob Buf;
-    fmt_i64(&ob, v1);
-    write_str(STDOUT, buf_str(&ob));
-    write_str(STDOUT, "\n");
-    return ((-(!(589 / (('f' & 15) + 1)))) * str_eq(sv1, sv1));
+    v2 /= ((twice(1) & 15) + 1);
+    if ((v0 > (zero() << (false | '2')))) {
+        fv = ((((0x3 as double) < fv) as double) - ((fv / 1.7) * ((fv as i64) as double)));
+        v0 = v1;
+        return ((opt_d(D.None) < (((sv0 + ("qwerty")[2..6]))[0..2])[0]) < 42);
+    } else {
+        fv = fv;
+        v1 /= ((((145 | (p.y > (("abcd")[1..4]).len)) as i16) & 15) + 1);
+        return ('b' / (((((426 != 904) as u8) if (twice((((!(589 / (('f' & 0xf) + 0x1))) <= (('c' in 0..((127 & 15) + 1)) & (100 != v2))) && ((('c' in 0..((127 & 15) + 1)) & (100 != v2)) > (('f' / ((false & 15) + 1)) > ((0 < 0xffffffffffffffa0) && (-96 >= '\t')))))) >= v1) else ((345 > 0) << (v1 in 0..((false & 15) + 1)))) & 15) + 1));
+    }
+    v2 = ((((('\n' != v2) <= (fv <= fv)) > p.x) && (p.x > ((-931 in 0..((false & 15) + 1)) >> (v2 in 0..(('f' & 15) + 1))))) as u8);
+    n.tag = -751;
+    v2 = a[((("xyz")[0..2]).len & 3)];
+    p.x = ((((222 % ((98 & 15) + 1)) in a) % ((str_eq(("zz")[0..2], (("qwerty")[2..5])[0..2]) & 15) + 1)) in a);
+    write_str(STDOUT, "${v2:08x}\n");
+    return ((str_eq(("aa" + ("""x
+yz""")[0..2]), (("xyz")[0..3])[0..2]) in 0..(((-('e' in 0..((0xa & 15) + 1))) & 15) + 1)) >> str_eq("no", (sv1)[0..2]));
 }
