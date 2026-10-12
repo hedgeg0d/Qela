@@ -424,20 +424,22 @@ fn riscv_sub_imm(rd int, rn int, imm i64) {
 var riscv_framesz i64;
 
 fn riscv_enter_frame(stack_size i64) {
+	// The frame saves sit at the BOTTOM: [s0] is the caller's s0 and
+	// [s0+8] the return address, so a backtrace walker can follow the s0
+	// chain like x86's rbp chain. Locals live above the saves, at
+	// s0 + 16 .. s0 + 16 + stack_size.
 	riscv_framesz = stack_size;
-	riscv_addi(STK, STK, -16);
+	riscv_add_imm(STK, STK, -(stack_size + 16));
+	c_ldstsp16(S0, 0, true);                // c.sdsp s0, 0(sp): the caller's s0
 	c_ldstsp16(RA, 8, true);                // c.sdsp ra, 8(sp)
-	c_ldstsp16(S0, 0, true);                // c.sdsp s0, 0(sp)
-	if (stack_size != 0) { riscv_add_imm(STK, STK, -stack_size); }
 	riscv_mov_reg(S0, STK);
 }
 
 fn riscv_leave_frame() {
 	riscv_mov_reg(STK, S0);
-	if (riscv_framesz != 0) { riscv_add_imm(STK, STK, riscv_framesz); }
 	c_ldstsp16(S0, 0, false);               // c.ldsp s0, 0(sp)
 	c_ldstsp16(RA, 8, false);               // c.ldsp ra, 8(sp)
-	riscv_addi(STK, STK, 16);
+	riscv_addi(STK, STK, riscv_framesz + 16);
 }
 
 fn riscv_ret() {
@@ -450,7 +452,11 @@ fn riscv_ret() {
 // 32760, always true for the compiler's own frames). A reg == T1 collision
 // switches the address scratch to T2.
 fn riscv_local_off(off i64) i64 {
-	return riscv_framesz - off;
+	// Locals sit above the 16-byte save pair ([s0] = caller's s0,
+	// [s0+8] = ra), stack arguments just above the frame at [entry-sp+8i].
+	// A negative offset is a stack-passed argument, resolved as before.
+	if (off < 0) { return riscv_framesz - off; }
+	return 16 + riscv_framesz - off;
 }
 
 fn riscv_st_local(off i64, reg int) {
@@ -1151,7 +1157,9 @@ fn riscv_gen_bounds_trampoline() {
 	var i i64 = 0;
 	while (i < fn_bounds.n) { riscv_patch_here(fn_bounds.p[i]); i = i + 1; }
 	ilist_push(&bounds_checks, code.n);
-	b4(0x6f | (ZERO << 7));   // placeholder jal x0, patched like a direct call
+	// jal ra: with backtraces on, the walker reads this return address as
+	// the panic site's frame; jal x0 would leave ra as the caller's junk.
+	b4(0x6f | (RA << 7));
 	fn_bounds.n = 0;
 }
 
@@ -1189,9 +1197,105 @@ fn riscv_gen_panic_stub(msg_id int, msg_len i64) {
 	riscv_li64(A2, msg_len);
 	riscv_li64(A7, SYS_RISCV_WRITE);
 	riscv_ecall();
+	if (opt_backtrace) {
+		// Jump to the walker instead of exiting: the frame chain is still
+		// intact, and the walker's first link is this stub's caller's ra.
+		// The jump is jal x0 (not ra): ra arrives here from the panic
+		// site's own jal and is the walker's first frame to print.
+		b4(0x6f);
+		ilist_push(&bt_jmps, code.n - 4);
+		return;
+	}
 	riscv_li64(A0, 134);
 	riscv_li64(A7, SYS_RISCV_EXIT_GROUP);
 	riscv_ecall();
+}
+
+// ── backtrace walker ──
+//
+// Jumped to from every panic stub after the message is written. Reads the
+// frame chain anchored at s0 (a frame's [s0] is the caller's s0, [s0+8]
+// its return address -- the mirror of x86's rbp chain), printing one
+// function name per frame. Scratch set: t0 (frame link), t1 (depth cap);
+// bt_print below clobbers only a1-a7 and t2, never t0/t1/s0.
+var bt_auipc_at i64 = -1;
+
+fn riscv_bt_walker() {
+	riscv_auipc(A0);
+	bt_auipc_at = code.n - 4;
+	riscv_addi(A0, A0, 0);
+	riscv_mov_reg(T0, RA);                    // t0 = panic site's ra
+	riscv_j(0, RA, 0x6f);                     // jal ra, bt_print
+	var c1 i64 = code.n - 4;
+	riscv_addi(T1, ZERO, 32);                 // t1 = depth cap
+	var loop_at i64 = code.n;
+	riscv_b(0, ZERO, S0, 0, 0x63);            // beq s0, zero, exit
+	var jz_exit i64 = code.n - 4;
+	riscv_i(8, S0, 3, T0, 0x03);              // ld t0, 8(s0)
+	riscv_j(0, RA, 0x6f);                     // jal ra, bt_print
+	var c2 i64 = code.n - 4;
+	riscv_i(0, S0, 3, S0, 0x03);              // ld s0, 0(s0)
+	riscv_addi(T1, T1, -1);
+	riscv_b(loop_at - code.n, ZERO, T1, 1, 0x63);  // bne t1, zero, loop
+	var exit_at i64 = code.n;
+	riscv_li64(A0, 134);
+	riscv_li64(A7, SYS_RISCV_EXIT_GROUP);
+	riscv_ecall();
+	var print_at i64 = code.n;
+	// bt_print: find the last table entry whose start is <= t0 (the table
+	// is sorted by start address, so the scan stops at the first greater
+	// one) and write its name to stderr.
+	riscv_i(0, A0, 3, A1, 0x03);              // ld a1, 0(a0): count
+	riscv_addi(A2, A0, 8);                    // a2 = first entry
+	riscv_mov_reg(A3, ZERO);                  // best entry pointer
+	riscv_mov_reg(A4, ZERO);                  // i
+	var scan_at i64 = code.n;
+	riscv_i(0, A2, 2, A5, 0x03);              // lw a5, 0(a2): delta
+	riscv_li64(T2, ELF_BASE);
+	riscv_r(0, T2, A5, 0, A5, 0x33);          // a5 = a5 + t2 (start addr)
+	riscv_b(0, A5, T0, 6, 0x63);              // bltu t0, a5, endscan
+	var endscan_at i64 = code.n - 4;
+	riscv_mov_reg(A3, A2);
+	riscv_addi(A2, A2, 8);
+	riscv_addi(A4, A4, 1);
+	riscv_b(scan_at - code.n, A1, A4, 1, 0x63);  // bne a4, a1, scan
+	var endscan_loop_at i64 = code.n;
+	riscv_b(0, ZERO, A3, 0, 0x63);            // beq a3, zero, notfound
+	var jz_nf i64 = code.n - 4;
+	riscv_i(4, A3, 2, A6, 0x03);              // lw a6, 4(a3): name offset
+	riscv_mov_reg(T2, A1);                    // t2 = count
+	riscv_slli(T2, T2, 3);                    // count * 8
+	riscv_r(0, T2, A6, 0, A6, 0x33);
+	riscv_r(0, A0, A6, 0, A6, 0x33);          // a6 = a6 + t2 + table base
+	riscv_addi(A6, A6, 8);                    // + the count word: a6 = name
+	riscv_mov_reg(A1, A6);                    // a1 = name (write buf)
+	riscv_mov_reg(A2, ZERO);                  // len
+	var len_at i64 = code.n;
+	riscv_i(0, A1, 4, A5, 0x03);              // lbu a5, 0(a1)
+	riscv_b(0, ZERO, A5, 0, 0x63);            // beq a5, zero, lend
+	var jz_lend i64 = code.n - 4;
+	riscv_addi(A1, A1, 1);
+	riscv_addi(A2, A2, 1);
+	riscv_b(len_at - code.n, ZERO, T2, 1, 0x63);  // bne t2, zero, len (always)
+	var lend_at i64 = code.n;
+	riscv_mov_reg(A1, A6);
+	riscv_mov_reg(T2, A0);                    // stash the table base: write clobbers a0
+	riscv_li64(A0, 2);
+	riscv_li64(A7, SYS_RISCV_WRITE);
+	riscv_ecall();
+	riscv_mov_reg(A0, T2);
+	riscv_b(0, ZERO, ZERO, 0, 0x63);          // beq x0, x0, done
+	var j_done i64 = code.n - 4;
+	var notfound_at i64 = code.n;
+	var done_at i64 = code.n;
+	c_jr16(RA);
+	riscv_patch_jal(&code, c1, print_at - c1);
+	riscv_patch_jal(&code, c2, print_at - c2);
+	riscv_patch_b(&code, jz_exit, exit_at - jz_exit);
+	riscv_patch_b(&code, endscan_at, endscan_loop_at - endscan_at);
+	riscv_patch_b(&code, jz_nf, notfound_at - jz_nf);
+	riscv_patch_b(&code, jz_lend, lend_at - jz_lend);
+	riscv_patch_b(&code, j_done, done_at - j_done);
 }
 
 // ── asm-block symbol references ──
