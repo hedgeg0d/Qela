@@ -1,0 +1,29 @@
+// expect-exit: 0
+// expect-out: math ok
+// stage1-only
+// std/math.qela: abs, min, max over i64.
+import "std/io.qela";
+import "std/math.qela";
+
+fn main() int {
+	var fails i64 = 0;
+	if (abs(5) != 5) { fails = fails + 1; }
+	if (abs(-5) != 5) { fails = fails + 1; }
+	if (abs(0) != 0) { fails = fails + 1; }
+	if (abs(-1) != 1) { fails = fails + 1; }
+	if (min(3, 7) != 3) { fails = fails + 1; }
+	if (min(7, 3) != 3) { fails = fails + 1; }
+	if (min(-3, -7) != -7) { fails = fails + 1; }
+	if (min(3, 3) != 3) { fails = fails + 1; }
+	if (max(3, 7) != 7) { fails = fails + 1; }
+	if (max(7, 3) != 7) { fails = fails + 1; }
+	if (max(-3, -7) != -3) { fails = fails + 1; }
+	if (max(3, 3) != 3) { fails = fails + 1; }
+	// min/max are pure comparisons: order never matters
+	var a i64 = min(max(9, 4), max(5, 8));
+	var b i64 = max(min(9, 4), min(5, 8));
+	if (a != 8 || b != 5) { fails = fails + 1; }
+	if (abs(min(-2, 5) * max(3, -9)) != 6) { fails = fails + 1; }
+	if (fails == 0) { write_str(STDOUT, "math ok\n"); }
+	return fails as int;
+}
