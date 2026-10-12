@@ -2118,8 +2118,7 @@ fn gen_expr(n *Node) {
 	if (!is_float(lt) && n.rhs.kind == ND_NUM && !ptr_diff && !(lt.kind == TY_PTR && k2 != ND_ADD && k2 != ND_SUB && n.rhs.val != 0)) {
 		var v i64 = n.rhs.val;
 		if (lt.kind == TY_PTR) {
-			if (k2 != ND_ADD && k2 != ND_SUB) { v = v; }
-			else { v = v * (lt.base.size as i64); }
+			if (k2 == ND_ADD || k2 == ND_SUB) { v = v * (lt.base.size as i64); }
 		}
 		if (fits_imm32(v) && gen_binop_imm(n, v)) { return; }
 	}

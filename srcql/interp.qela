@@ -444,6 +444,13 @@ fn ip_index_addr(n *Node) i64 {
 	return base + idx * (lt.base.size as i64);
 }
 
+// IEEE == without writing ==/!= on floats: NaN is unordered and must
+// compare false even against itself, -0 equals 0.
+fn ip_feq(a f64, b f64) bool {
+	if (a < b || a > b) { return false; }
+	return (a < 0.0 || a >= 0.0) && (b < 0.0 || b >= 0.0);
+}
+
 fn ip_binop(n *Node) i64 {
 	var k int = n.kind;
 	var lt *Type = n.lhs.ty;
@@ -455,8 +462,8 @@ fn ip_binop(n *Node) i64 {
 		if (k == ND_SUB) { return ip_fbits(a - b, n.ty); }
 		if (k == ND_MUL) { return ip_fbits(a * b, n.ty); }
 		if (k == ND_DIV) { return ip_fbits(a / b, n.ty); }
-		if (k == ND_EQ) { return (a == b) as i64; }
-		if (k == ND_NE) { return (a != b) as i64; }
+		if (k == ND_EQ) { return ip_feq(a, b) as i64; }
+		if (k == ND_NE) { return (1 - ip_feq(a, b)) as i64; }
 		if (k == ND_LT) { return (a < b) as i64; }
 		if (k == ND_LE) { return (a <= b) as i64; }
 		error_at(n.pos, "interpreter: operator not defined for floats");
