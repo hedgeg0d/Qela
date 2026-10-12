@@ -799,6 +799,21 @@ fn ip_ev_and(n *Node) i64 {
 	return (ip_eval(n.rhs) != 0) as i64;
 }
 
+// ND_IN and ND_ARRCOMP: the hidden chain (hoisted collection, scan or
+// collection loop) runs as statements, then `.lhs` is the value.
+fn ip_ev_chain(n *Node) i64 {
+	var mark i64 = ip_sp;
+	var s *Node = n.init;
+	while (s as i64 != 0) { ip_stmt(s); s = s.next; }
+	ip_sp = mark;
+	return ip_eval(n.lhs);
+}
+
+fn ip_ev_ifexpr(n *Node) i64 {
+	if (ip_eval(n.cond) != 0) { return ip_eval(n.then); }
+	return ip_eval(n.els);
+}
+
 fn ip_ev_or(n *Node) i64 {
 	if (ip_eval(n.lhs) != 0) { return 1; }
 	return (ip_eval(n.rhs) != 0) as i64;
@@ -833,9 +848,9 @@ fn ip_ev_unsupported(n *Node) i64 {
 	return 0;
 }
 
-let IP_NKIND = 60;
-var ip_eval_table [60]fn(*Node) i64;
-var ip_stmt_table [60]fn(*Node) i64;
+let IP_NKIND = 64;
+var ip_eval_table [64]fn(*Node) i64;
+var ip_stmt_table [64]fn(*Node) i64;
 var ip_dispatch_ready bool = false;
 
 fn ip_dispatch_init() {
@@ -889,6 +904,9 @@ fn ip_dispatch_init() {
 	ip_eval_table[ND_ASMREF] = ip_ev_asm;
 	ip_eval_table[ND_ASMLE] = ip_ev_asm;
 	ip_eval_table[ND_ZERO] = ip_ev_zero;
+	ip_eval_table[ND_IN] = ip_ev_chain;
+	ip_eval_table[ND_ARRCOMP] = ip_ev_chain;
+	ip_eval_table[ND_IFEXPR] = ip_ev_ifexpr;
 	ip_eval_table[ND_IF] = ip_ev_stmt;
 	ip_eval_table[ND_FOR] = ip_ev_stmt;
 	ip_eval_table[ND_BLOCK] = ip_ev_stmt;
