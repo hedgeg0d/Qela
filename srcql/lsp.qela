@@ -570,6 +570,240 @@ fn lsp_child() {
 	sys_exit(0);
 }
 
+// ── completion, also inside a forked child ──
+//
+// The parent can't walk the typed AST (its parse state was never built;
+// only the child compiles), so a completion request forks the same
+// child, types the file, and writes a JSON array of items to a temp
+// file the parent reads back. Cost is one full compile, exactly what a
+// didChange already paid.
+
+var lsp_compl_path str;
+var lsp_compl_line int;
+var lsp_compl_col int;
+
+fn lsp_ident(c u8) bool {
+	if (c >= 'a' && c <= 'z') { return true; }
+	if (c >= 'A' && c <= 'Z') { return true; }
+	if (c >= '0' && c <= '9') { return true; }
+	return c == '_';
+}
+
+fn lsp_cursor_off(line int, col int) i64 {
+	var i i64 = 0;
+	var l int = 0;
+	while (i < lsp_text.len && l < line) {
+		if (lsp_text.ptr[i] == '\n') { l = l + 1; }
+		i = i + 1;
+	}
+	var c int = 0;
+	while (i < lsp_text.len && c < col) {
+		if (lsp_text.ptr[i] == '\n') { break; }
+		c = c + 1;
+		i = i + 1;
+	}
+	return i;
+}
+
+fn compl_pref(name str, pref str) bool {
+	if (pref.len == 0) { return true; }
+	if (name.len < pref.len) { return false; }
+	var i i64 = 0;
+	while (i < pref.len) {
+		if (name.ptr[i] != pref.ptr[i]) { return false; }
+		i = i + 1;
+	}
+	return true;
+}
+
+var compl_first bool;
+var compl_n_out int = 0;
+var compl_seen [256]str;
+var compl_seen_n int = 0;
+
+fn compl_seen_has(name str) bool {
+	var i int = 0;
+	while (i < compl_seen_n) {
+		if (str_eq(compl_seen[i], name)) { return true; }
+		i = i + 1;
+	}
+	return false;
+}
+
+fn compl_item(b *Buf, label str, kind i64, detail str) {
+	if (compl_n_out >= 200 || label.len == 0 || compl_seen_has(label)) { return; }
+	if (compl_seen_n < 256) {
+		compl_seen[compl_seen_n] = label;
+		compl_seen_n = compl_seen_n + 1;
+	}
+	compl_n_out = compl_n_out + 1;
+	if (!compl_first) { buf_u8(b, ','); }
+	compl_first = false;
+	fmt_str(b, "{\"label\":");
+	js_esc(b, label);
+	fmt_str(b, ",\"kind\":");
+	fmt_i64(b, kind);
+	fmt_str(b, ",\"detail\":");
+	js_esc(b, detail);
+	buf_u8(b, '}');
+}
+
+// The innermost typed node at or before the cursor: for `x.` completion
+// it is the receiver expression, whose type names the fields.
+var compl_best *Node;
+var compl_limit i64;
+
+fn compl_track(n *Node) {
+	while (n as i64 != 0) {
+		if (n.ty as i64 != 0 && n.pos > 0 && n.pos <= compl_limit) {
+			if (compl_best as i64 == 0 || n.pos > compl_best.pos) {
+				compl_best = n;
+			}
+		}
+		compl_track(n.lhs);
+		compl_track(n.rhs);
+		compl_track(n.cond);
+		compl_track(n.then);
+		compl_track(n.els);
+		compl_track(n.init);
+		compl_track(n.step);
+		compl_track(n.body);
+		compl_track(n.args);
+		n = n.next;
+	}
+}
+
+fn compl_collect(b *Buf, unit *Unit, off i64) {
+	var ps i64 = off;
+	while (ps > 0 && lsp_ident(lsp_text.ptr[ps - 1])) { ps = ps - 1; }
+	var pref str = str_slice(lsp_text, ps, off);
+
+	// `x.` or `x.fie`: field completion off the receiver's type.
+	if (ps > 0 && lsp_text.ptr[ps - 1] == '.') {
+		compl_limit = ps - 2;
+		var f *Func = unit.funcs;
+		while (f as i64 != 0) {
+			compl_track(f.body);
+			f = f.next;
+		}
+		if (compl_best as i64 != 0 && compl_best.ty as i64 != 0) {
+			var ty *Type = compl_best.ty;
+			if (ty.kind == TY_PTR) { ty = ty.base; }
+			var m *Member = ty.members;
+			while (m as i64 != 0) {
+				if (compl_pref(m.name, pref)) {
+					var db Buf;
+					fmt_str(&db, "field ");
+					fmt_str(&db, type_name(m.ty));
+					compl_item(b, m.name, 5, buf_str(&db));
+				}
+				m = m.next;
+			}
+		}
+		return;
+	}
+
+	// Plain identifier: keywords, types, globals, functions, and the
+	// locals of the function the cursor sits in.
+	keywords_setup();
+	var k i64 = 0;
+	while (k < 22) {
+		if (compl_pref(keywords[k], pref)) {
+			compl_item(b, keywords[k], 14, "keyword");
+		}
+		k = k + 1;
+	}
+	type_names_setup();
+	var t i64 = 0;
+	while (t < 19) {
+		if (compl_pref(type_names[t], pref)) {
+			compl_item(b, type_names[t], 7, "type");
+		}
+		t = t + 1;
+	}
+	var n *Named = named_types;
+	while (n as i64 != 0) {
+		if (compl_pref(n.name, pref)) {
+			compl_item(b, n.name, 7, type_name(n.ty));
+		}
+		n = n.next;
+	}
+	var tm *Tmpl = tmpls;
+	while (tm as i64 != 0) {
+		if (compl_pref(tm.name, pref)) {
+			compl_item(b, tm.name, 7, "type");
+		}
+		tm = tm.next;
+	}
+	var g *Var = global_vars;
+	while (g as i64 != 0) {
+		if (g.name.len > 0 && g.name.ptr[0] != '_' && compl_pref(g.name, pref)) {
+			var db Buf;
+			fmt_str(&db, "var ");
+			fmt_str(&db, type_name(g.ty));
+			compl_item(b, g.name, 6, buf_str(&db));
+		}
+		g = g.next;
+	}
+	var ff *Func = all_funcs;
+	while (ff as i64 != 0) {
+		if (ff.name.len > 0 && ff.name.ptr[0] != '_' && compl_pref(ff.name, pref)) {
+			var db Buf;
+			lsp_sig(&db, ff);
+			compl_item(b, ff.name, 3, buf_str(&db));
+		}
+		ff = ff.next;
+	}
+	// Locals of the function the cursor sits in: the nearest function
+	// declared at or before the cursor. Later declarations in the same
+	// function leak in -- the scope chain is long gone by now -- but
+	// they still type-check, so the suggestion is never wrong, just
+	// occasionally early.
+	var ef *Func = null;
+	var f2 *Func = unit.funcs;
+	while (f2 as i64 != 0) {
+		if (f2.pos > 0 && f2.pos <= off) {
+			if (ef as i64 == 0 || f2.pos > ef.pos) { ef = f2; }
+		}
+		f2 = f2.next;
+	}
+	if (ef as i64 != 0) {
+		var v *Var = ef.locals;
+		while (v as i64 != 0) {
+			if (v.name.len > 0 && v.name.ptr[0] != '_' &&
+			    v.pos > 0 && v.pos <= off && compl_pref(v.name, pref)) {
+				var db Buf;
+				fmt_str(&db, "var ");
+				fmt_str(&db, type_name(v.ty));
+				compl_item(b, v.name, 6, buf_str(&db));
+			}
+			v = v.next;
+		}
+	}
+}
+
+fn lsp_compl_child() {
+	lsp_mode = true;
+	var db Buf;
+	fmt_str(&db, lsp_compl_path);
+	fmt_str(&db, ".d");
+	lsp_diag_path = buf_str(&db);
+	var src str = read_file(lsp_tmp_src);
+	var file int = diag_add_file(lsp_path, src);
+	var unit *Unit = parse(lex(src, (file as i64) << FILE_SHIFT));
+	var off i64 = lsp_cursor_off(lsp_compl_line, lsp_compl_col);
+	var b Buf;
+	buf_u8(&b, '[');
+	compl_first = true;
+	compl_n_out = 0;
+	compl_seen_n = 0;
+	compl_best = null;
+	compl_collect(&b, unit, off);
+	buf_u8(&b, ']');
+	write_file(lsp_compl_path, b.p, b.n);
+	sys_exit(0);
+}
+
 fn lsp_unlink(path str) {
 	var p *u8 = cstr(path);
 	sys_unlink(p);
@@ -722,6 +956,41 @@ fn lsp_def(params *JVal) *JVal {
 	return arr;
 }
 
+fn lsp_complete(params *JVal) *JVal {
+	var pos *JVal = j_get(params, "position");
+	var line *JVal = j_get(pos, "line");
+	var ch *JVal = j_get(pos, "character");
+	var items *JVal = j_new(J_ARR);
+	if (lsp_tmp_src.len > 0 && line as i64 != 0 && ch as i64 != 0) {
+		var cb Buf;
+		fmt_str(&cb, lsp_tmp_src);
+		fmt_str(&cb, ".compl");
+		lsp_compl_path = buf_str(&cb);
+		lsp_compl_line = line.n as int;
+		lsp_compl_col = ch.n as int;
+		write_file(lsp_tmp_src, lsp_text.ptr, lsp_text.len);
+		var pid i64 = sys_fork();
+		if (pid == 0) { lsp_compl_child(); }
+		var status [1]i64;
+		sys_wait4(pid, &status[0] as *u8);
+		if (file_exists(lsp_compl_path)) {
+			var txt str = read_file(lsp_compl_path);
+			js_src = txt;
+			js_i = 0;
+			if (js_peek() != 0) { items = js_value(); }
+		}
+		lsp_unlink(lsp_compl_path);
+		var db Buf;
+		fmt_str(&db, lsp_compl_path);
+		fmt_str(&db, ".d");
+		lsp_unlink(buf_str(&db));
+	}
+	var o *JVal = j_new(J_OBJ);
+	j_push(o, "isIncomplete", j_boolv(false));
+	j_push(o, "items", items);
+	return o;
+}
+
 fn lsp_handle(req *JVal) {
 	var id *JVal = j_get(req, "id");
 	var method *JVal = j_get(req, "method");
@@ -733,6 +1002,11 @@ fn lsp_handle(req *JVal) {
 		j_push(cap, "textDocumentSync", j_numv(1));
 		j_push(cap, "hoverProvider", j_boolv(true));
 		j_push(cap, "definitionProvider", j_boolv(true));
+		var cp *JVal = j_new(J_OBJ);
+		var tc *JVal = j_new(J_ARR);
+		j_push(tc, "", j_strv("."));
+		j_push(cp, "triggerCharacters", tc);
+		j_push(cap, "completionProvider", cp);
 		var info *JVal = j_new(J_OBJ);
 		j_push(info, "name", j_strv("qela"));
 		j_push(info, "version", j_strv("0.1"));
@@ -768,6 +1042,8 @@ fn lsp_handle(req *JVal) {
 		lsp_respond(id, lsp_hover(params));
 	} else if (str_eq(m, "textDocument/definition")) {
 		lsp_respond(id, lsp_def(params));
+	} else if (str_eq(m, "textDocument/completion")) {
+		lsp_respond(id, lsp_complete(params));
 	} else {
 		if (id as i64 != 0) { lsp_respond(id, null); }
 	}
