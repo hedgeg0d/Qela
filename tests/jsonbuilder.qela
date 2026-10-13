@@ -1,0 +1,28 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: {"name":"qela","ver":42,"list":[1,2]}-3
+// The json builder: json_obj_new/json_put/json_arr_new/json_arr_push
+// construct a tree, json_strify prints it, json_parse round-trips and
+// json_view iterates an array with for-in.
+import "std/fmt.qela";
+import "std/json.qela";
+
+fn main() int {
+	var o = json_obj_new();
+	json_put(o, "name", json_str_new("qela"));
+	json_put(o, "ver", json_int_new(42));
+	var arr = json_arr_new();
+	json_arr_push(arr, json_int_new(1));
+	json_arr_push(arr, json_int_new(2));
+	json_put(o, "list", arr);
+	var parsed = json_parse(json_strify(o));
+	var t i64 = 0;
+	for e in json_view(parsed.get("list")) {
+		t = t + e.i;
+	}
+	var o2 = fmt_begin();
+	o2 = fmt_put_str(o2, "${json_strify(o)}-${t}");
+	var r = fmt_result(o2);
+	sys_write(1, r.ptr, r.len);
+	return 0;
+}
