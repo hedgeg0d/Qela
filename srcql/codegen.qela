@@ -40,7 +40,7 @@ fn sys_reg(i int) int {
 // register; this is the rank->register map, the mirror of call_reg. x86 uses
 // rdi (rank 0); ARM64 uses x1 and RISC-V a1, so neither collides with the
 // accumulator (x0/a0).
-fn op2_reg(rank int) int {
+fn op2_reg(_rank int) int {
 	if (opt_target == TARGET_RISCV64) { return A1; }
 	if (opt_target == TARGET_ARM64) { return 1; }
 	return RDI;
@@ -1234,7 +1234,7 @@ fn ir_funcaddr(f *Func, pos i64) {
 
 
 fn ir_ret(pos i64) {
-	var op *IrOp = ir_emit(IR_RET, pos);
+	ir_emit(IR_RET, pos);
 }
 
 
@@ -1246,7 +1246,7 @@ fn ir_setcc_acc(cc i64, pos i64) {
 
 
 fn ir_syscall(pos i64) {
-	var op *IrOp = ir_emit(IR_SYSCALL, pos);
+	ir_emit(IR_SYSCALL, pos);
 }
 
 
@@ -2529,7 +2529,7 @@ fn gen_thread_clone_arm64(n *Node) {
 // gc_data_base()/gc_data_end(): the .data bounds the GC scans. Same
 // MOVZ+MOVK placeholder pair every absolute-address site uses, recorded in
 // the same gc_*_refs lists and patched at finalize to the real dbase.
-fn gen_gc_bound(n *Node, is_base bool) {
+fn gen_gc_bound(_n *Node, is_base bool) {
 	var at i64 = arm64_addr_slot(X0);
 	if (is_base) { ilist_push(&gc_base_refs, at); }
 	else { ilist_push(&gc_end_refs, at); }
@@ -3013,7 +3013,7 @@ fn layout_tls(globals *Var) {
 	var any bool = false;
 	var v0 *Var = globals;
 	while (v0 as i64 != 0) {
-		if (v0.is_tls) { any = true; }
+		if (v0.is_tls && (v0.reachable || opt_object)) { any = true; }
 		v0 = v0.next;
 	}
 	// A program with no tvar at all must cost nothing: no template bytes
@@ -3028,14 +3028,16 @@ fn layout_tls(globals *Var) {
 	var v *Var = globals;
 	while (v as i64 != 0) {
 		if (v.is_tls) {
-			var align i64 = v.ty.align as i64;
-			var off i64 = (tmpl.n + align - 1) & ~(align - 1);
-			while (tmpl.n < off) { buf_u8(&tmpl, 0); }
-			v.tls_off = tmpl.n;
-			var i int = 0;
-			while (i < v.ty.size) {
-				buf_u8(&tmpl, ((v.init >> (i * 8)) & 255) as u8);
-				i = i + 1;
+			if (v.reachable || opt_object) {
+				var align i64 = v.ty.align as i64;
+				var off i64 = (tmpl.n + align - 1) & ~(align - 1);
+				while (tmpl.n < off) { buf_u8(&tmpl, 0); }
+				v.tls_off = tmpl.n;
+				var i int = 0;
+				while (i < v.ty.size) {
+					buf_u8(&tmpl, ((v.init >> (i * 8)) & 255) as u8);
+					i = i + 1;
+				}
 			}
 		}
 		v = v.next;
@@ -3082,6 +3084,7 @@ fn embed_prepare() {
 	embed_lenv = find_global_var("__qela_embedded_len");
 	embed_ptrv = find_global_var("__qela_embedded");
 	if (embed_lenv as i64 == 0 || embed_ptrv as i64 == 0) { return; }
+	if (!embed_lenv.reachable && !opt_object) { return; }
 	if (opt_object) { return; }
 	var self_path [4096]u8;
 	var plen i64 = sys_readlink(cstr("/proc/self/exe"), &self_path[0], 4096);
@@ -3120,7 +3123,7 @@ fn layout_globals(globals *Var) {
 	layout_tls(globals);
 	var v *Var = globals;
 	while (v as i64 != 0) {
-		if (v.is_tls) { v = v.next; continue; }
+		if (v.is_tls || (!v.reachable && !opt_object)) { v = v.next; continue; }
 		if (v.init != 0) {
 			// A float literal stores f64 bits; an f32 slot is 4 bytes, so
 			// the bits must be narrowed here or the low half (zero for any
@@ -3143,7 +3146,7 @@ fn layout_globals(globals *Var) {
 	var bss i64 = gdata.n;
 	v = globals;
 	while (v as i64 != 0) {
-		if (!v.is_tls && v.init == 0 && !(v.extern && !v.has_init)) {
+		if (!v.is_tls && v.init == 0 && !(v.extern && !v.has_init) && (v.reachable || opt_object)) {
 			// An imported extern is allocated by the C side; it must not
 			// take a .bss slot here.
 			var align i64 = v.ty.align as i64;
@@ -3260,11 +3263,26 @@ fn reset_code() {
 // through direct calls (ND_CALL with a name), function addresses
 // (ND_FUNCADDR) and asm symbol references (ND_ASMREF). Everything else is
 // dead code and is skipped by codegen, DWARF and the backtrace table.
+// Globals get the same treatment: one referenced from a reachable body (or
+// a top-level asm operand) is kept, the rest are dropped from .data/.bss.
+// A string literal is kept when a reachable body evaluates it; the whole
+// u.strs pool is no longer emitted wholesale, so a dead function's error
+// messages no longer ride along.
 fn mark_reachable(u *Unit) {
 	var f *Func = u.funcs;
 	while (f as i64 != 0) {
 		f.reachable = false;
 		f = f.next;
+	}
+	var v *Var = u.globals;
+	while (v as i64 != 0) {
+		v.reachable = false;
+		v = v.next;
+	}
+	var s *StrLit = u.strs;
+	while (s as i64 != 0) {
+		s.keep = false;
+		s = s.next;
 	}
 	if (entry_name.len != 0) { reach_name(entry_name); }
 	else { reach_name("main"); }
@@ -3274,6 +3292,19 @@ fn mark_reachable(u *Unit) {
 		f = f.next;
 	}
 	reach_node(top_asm_head);
+}
+
+fn mark_str(id int) {
+	var s *StrLit = gen_unit.strs;
+	while (s as i64 != 0) {
+		if (s.id == id) { s.keep = true; return; }
+		s = s.next;
+	}
+}
+
+fn mark_global(v *Var) {
+	if (v as i64 == 0 || v.reachable) { return; }
+	v.reachable = true;
 }
 
 fn reach_name(name str) {
@@ -3299,7 +3330,12 @@ fn reach_node(n *Node) {
 			if (str_eq(n.name, "coro_switch")) { reach_name("coro_finish"); }
 		}
 		else if (n.kind == ND_FUNCADDR && n.name.len != 0) { reach_name(n.name); }
-		else if (n.kind == ND_ASMREF && n.name.len != 0) { reach_name(n.name); }
+		else if (n.kind == ND_ASMREF && n.name.len != 0) {
+			reach_name(n.name);
+			mark_global(find_global(n.name));
+		}
+		else if (n.kind == ND_VAR && n.varp as i64 != 0 && n.varp.is_global) { mark_global(n.varp); }
+		else if (n.kind == ND_STRLIT) { mark_str(n.val as int); }
 		reach_node(n.lhs);
 		reach_node(n.rhs);
 		reach_node(n.cond);
@@ -3526,11 +3562,16 @@ fn codegen(u *Unit, img *Image) {
 		u.strs = strlist_head;
 		u.nstrs = nstrs;
 	}
+	// Exe mode drops what nothing reachable touches; object mode ships
+	// everything (a linker decides what it needs). Marking runs before
+	// rodata and .data layout, since those skip unmarked entries.
+	if (!opt_object) { mark_reachable(u); }
 	var bytes_off *i64 = arena_alloc((u.nstrs as i64 + 1) * 8, 8) as *i64;
 	str_off = arena_alloc((u.nstrs as i64 + 1) * 8, 8) as *i64;
 
 	var s *StrLit = u.strs;
 	while (s as i64 != 0) {
+		if (!s.keep && !opt_object) { s = s.next; continue; }
 		bytes_off[s.id] = rodata.n;
 		buf_bytes(&rodata, s.s.ptr, s.s.len);
 		buf_u8(&rodata, 0);
@@ -3540,6 +3581,7 @@ fn codegen(u *Unit, img *Image) {
 
 	s = u.strs;
 	while (s as i64 != 0) {
+		if (!s.keep && !opt_object) { s = s.next; continue; }
 		str_off[s.id] = rodata.n;
 		buf_u64(&rodata, 0);
 		buf_u64(&rodata, s.s.len);
@@ -3628,7 +3670,7 @@ fn codegen(u *Unit, img *Image) {
 		// reset_code clears the relocation lists at every pass boundary.
 		var sr *StrLit = u.strs;
 		while (sr as i64 != 0) {
-			if (sr.nullhdr) { sr = sr.next; continue; }
+			if (sr.nullhdr || (!sr.keep && !opt_object)) { sr = sr.next; continue; }
 			var fr *Reloc = arena_alloc(sizeof(Reloc), 8) as *Reloc;
 			fr.at = str_off[sr.id];
 			fr.id = sr.id as i64;
@@ -3653,7 +3695,6 @@ fn codegen(u *Unit, img *Image) {
 	if (main_fn as i64 != 0 && main_fn.nparams != 0 && main_fn.nparams != 2) {
 		die("error: 'main' takes no parameters or (argc, argv)");
 	}
-	mark_reachable(u);
 	var pass int = 0;
 	while (true) {
 		reset_code();
@@ -3862,7 +3903,7 @@ fn codegen(u *Unit, img *Image) {
 	s = u.strs;
 	while (s as i64 != 0) {
 		var abs i64 = rodata_vaddr + bytes_off[s.id];
-		if (s.nullhdr) { s = s.next; continue; }
+		if (s.nullhdr || (!s.keep && !opt_object)) { s = s.next; continue; }
 		var k i64 = 0;
 		while (k < 8) {
 			rodata.p[str_off[s.id] + k] = ((abs >> (k * 8)) & 255) as u8;
