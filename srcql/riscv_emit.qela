@@ -1500,10 +1500,21 @@ fn gen_extern_params_riscv(f *Func) {
 		var v *Var = func_param(f, i);
 		if (v.arg_stack) { i = i + 1; continue; }
 		if (is_float(v.ty)) {
-			riscv_fmv_f_to_wx(A0, FA0 + fi, v.ty.size);
-			fi = fi + 1;
-			if (v.has_reg) { riscv_mov_reg(v.reg, A0); }
-			else { riscv_st_local(v.offset as i64, A0); }
+			if (fi >= abi_n_float_regs()) {
+				// LP64D fallback: the float arrived in the next integer
+				// register once fa was exhausted.
+				if (v.has_reg) { riscv_mov_reg(v.reg, call_reg(ri)); }
+				else { riscv_st_local(v.offset as i64, call_reg(ri)); }
+				ri = ri + 1;
+			} else {
+				// Stage through T0, never A0: a0 is the first integer
+				// argument register, and a later parameter (or an LP64D
+				// fallback after an HFA) may still need to read it.
+				riscv_fmv_f_to_wx(T0, FA0 + fi, v.ty.size);
+				fi = fi + 1;
+				if (v.has_reg) { riscv_mov_reg(v.reg, T0); }
+				else { riscv_st_local(v.offset as i64, T0); }
+			}
 		} else if (agg_fp_shape(v.ty) != 0) {
 			// LP64D's HFA: one element per fa-register, word 0 first.
 			var shape i64 = agg_fp_shape(v.ty);
@@ -1513,8 +1524,8 @@ fn gen_extern_params_riscv(f *Func) {
 			if (v.ty.size > 8) { base = base - 8; }
 			var r i64 = 0;
 			while (r < count && r < 4) {
-				riscv_fmv_f_to_wx(A0, FA0 + r, unit);
-				riscv_st_local(base + r * unit, A0);
+				riscv_fmv_f_to_wx(T0, FA0 + r, unit);
+				riscv_st_local(base + r * unit, T0);
 				r = r + 1;
 			}
 			fi = fi + count;

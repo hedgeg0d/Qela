@@ -603,6 +603,7 @@ fn declare_var(name str, ty *Type, pos i64) *Var {
 	v.name = name;
 	v.ty = ty;
 	v.pos = pos;
+	v.by_val = false;
 	if (cur_func as i64 != 0) {
 		v.next = cur_func.locals;
 		cur_func.locals = v;
@@ -4827,6 +4828,141 @@ fn dyn_param_clone(v *Var, body *Node, pos i64) {
 	body.body = st;
 }
 
+// FP-register chunks a struct consumes on the extern boundary, mirroring
+// codegen.qela's agg_fp_shape (parse.qela cannot import codegen.qela): 0
+// when the struct keeps the integer path, otherwise the register count --
+// one 8-byte chunk per SysV SSE eigh­tbyte on x86, one element per HFA
+// register on AAPCS64/LP64D. The spill rule needs the *count*, not the
+// unit, so this returns (unit << 32) | count exactly like agg_fp_shape.
+fn extern_fp_shape(ty *Type) i64 {
+	if (ty as i64 == 0 || ty.kind != TY_STRUCT || ty.size < 1 || ty.size > 16) { return 0; }
+	var es i64 = 0;
+	var n i64 = 0;
+	var m *Member = ty.members;
+	while (m as i64 != 0) {
+		if (!is_float(m.ty)) { return 0; }
+		if (es == 0) { es = m.ty.size as i64; }
+		else if (es != m.ty.size as i64) { return 0; }
+		n = n + 1;
+		m = m.next;
+	}
+	if (es == 0) { return 0; }
+	if (opt_target == TARGET_X86_64) { return (8 << 32) | ((ty.size as i64 + 7) >> 3); }
+	if (es == 8) { return (8 << 32) | n; }
+	return (4 << 32) | n;
+}
+
+// SysV register classification for an extern function's parameters, run
+// once the return type is known: an sret pointer reserves the first
+// integer register on x86-64 and RISC-V (AAPCS64 hides it in x8). Integer
+// words and float chunks count on separate budgets, and an aggregate
+// wider than 16 bytes (MEMORY class) always lands on the stack -- even
+// before later scalars that still fit the registers, which is why the
+// Qela-internal suffix rule cannot be reused here.
+//
+// SysV register classification for an extern function's parameters, run
+// once the return type is known: an sret pointer reserves the first
+// integer register on x86-64 and RISC-V (AAPCS64 hides it in x8). Integer
+// words and float chunks count on separate budgets, and an aggregate
+// wider than 16 bytes (MEMORY class) always lands on the stack -- even
+// before later scalars that still fit the registers, which is why the
+// Qela-internal suffix rule cannot be reused here.
+//
+// SysV's MEMORY class is not contiguous with Qela's: on AAPCS64/LP64D a
+// >16-byte HFA (equal float members, at most four / eight) still rides
+// the FP registers, where Qela has no way to stage it -- those
+// declarations are rejected rather than silently mismatched. x86-64
+// stacks every aggregate wider than 16 bytes (verified against gcc for
+// all-float 20/24/32-byte structs), so there is nothing to reject there.
+fn extern_fp_large(ty *Type) bool {
+	if (ty as i64 == 0 || ty.kind != TY_STRUCT || ty.size <= 16 || ty.size > 32) { return false; }
+	if (opt_target == TARGET_X86_64) { return false; }
+	var es i64 = 0;
+	var n i64 = 0;
+	var m *Member = ty.members;
+	while (m as i64 != 0) {
+		if (!is_float(m.ty)) { return false; }
+		if (es == 0) { es = m.ty.size as i64; }
+		else if (es != m.ty.size as i64) { return false; }
+		n = n + 1;
+		m = m.next;
+	}
+	if (opt_target == TARGET_ARM64) { return n >= 1 && n <= 4 && es <= 8; }
+	return n >= 1 && n <= 8 && es <= 8;
+}
+
+fn extern_classify(f *Func) {
+	var gcnt int = 0;
+	if (is_aggregate(f.ret) && abi_by_ref(f.ret.size) && opt_target != TARGET_ARM64) { gcnt = 1; }
+	if (extern_fp_large(f.ret)) {
+		error_at(f.pos, "an all-float struct wider than 16 bytes cannot cross the extern boundary yet (SysV would hand it over in FP registers)");
+	}
+	var fcnt int = 0;
+	var sslot int = 0;
+	var i int = 0;
+	while (i < f.nparams) {
+		var v *Var = func_param(f, i);
+		if (i < f.nct) { gcnt = gcnt + 1; i = i + 1; continue; }
+		var ty *Type = v.ty;
+		var spill bool = false;
+		var words int = 1;
+		var mem bool = is_aggregate(ty) && abi_by_ref(ty.size);
+		if (is_float(ty)) {
+			if (fcnt + 1 > abi_n_float_regs()) {
+				if (opt_target == TARGET_RISCV64) {
+					// LP64D falls back to the integer register file once fa
+					// is exhausted (verified against gcc), so the float
+					// consumes an a-slot on its own count -- only when those
+					// run out too does it reach the stack.
+					if (gcnt + 1 > abi_n_arg_regs()) { spill = true; }
+					else { gcnt = gcnt + 1; }
+				} else {
+					spill = true;
+				}
+			}
+			else { fcnt = fcnt + 1; }
+		} else if (!mem && extern_fp_shape(ty) != 0) {
+			var chunks i64 = extern_fp_shape(ty) & 0xffffffff;
+			if (fcnt + chunks > abi_n_float_regs()) {
+				error_at(v.pos, "an all-float struct parameter of an extern function cannot spill past the FP registers");
+			}
+			fcnt = fcnt + chunks;
+		} else if (mem) {
+			if (extern_fp_large(ty)) {
+				error_at(v.pos, "an all-float struct wider than 16 bytes cannot cross the extern boundary yet (SysV would hand it over in FP registers)");
+			}
+			if (opt_target == TARGET_X86_64) {
+				// x86-64's MEMORY class: the caller copies the struct into
+				// the outgoing stack area. AAPCS64 and LP64D pass the same
+				// struct by reference instead, which is exactly Qela's own
+				// by_ref convention -- the pointer rides one GPR word and
+				// no stack slot is taken.
+				spill = true;
+				words = ((ty.size as int + 7) / 8);
+			} else {
+				gcnt = gcnt + 1;
+			}
+		} else {
+			var gc int = 1;
+			if (ty.size > 8) { gc = 2; }
+			if (gc == 2 && gcnt + 2 > abi_n_arg_regs()) {
+				error_at(v.pos, "a str or struct parameter here would not fit in the argument registers (pass it earlier, or by pointer)");
+			}
+			if (gcnt + gc > abi_n_arg_regs()) { spill = true; }
+			else { gcnt = gcnt + gc; }
+		}
+		if (spill) {
+			v.arg_stack = true;
+			v.no_reg = true;
+			v.offset = (16 + 8 * sslot) as int;
+			sslot = sslot + words;
+			f.n_stack_args = f.n_stack_args + 1;
+			if (mem) { v.by_val = true; }
+		}
+		i = i + 1;
+	}
+}
+
 fn parse_function(t **Token, is_extern bool) *Func {
 	var fn_start i64 = (*t).pos;
 	tok_expect(t, "fn");
@@ -4928,12 +5064,13 @@ fn parse_function(t **Token, is_extern bool) *Func {
 		// six of them (f.nct == 6, allowed) leaves no register slot for
 		// any regular parameter that follows even if its own word cost is
 		// small -- treat that the same as a register-word overflow.
-		if (rwords > abi_n_arg_regs() || nparams >= abi_n_arg_regs()) {
+		// An extern function's register/stack split is SysV, decided by
+		// extern_classify below once the return type is known (an sret
+		// pointer may reserve the first integer register): the suffix rule
+		// here is for Qela-internal calls only.
+		if (!f.extern && (rwords > abi_n_arg_regs() || nparams >= abi_n_arg_regs())) {
 			if (is2word) {
 				error_at(pp, "a str or struct parameter here would not fit in the argument registers (pass it earlier, or by pointer)");
-			}
-			if (f.extern) {
-				error_at(pp, "an extern function takes at most six register words (SysV marshalling is register-only for now)");
 			}
 			v.arg_stack = true;
 			v.no_reg = true;
@@ -4968,6 +5105,11 @@ fn parse_function(t **Token, is_extern bool) *Func {
 	}
 
 	if (!tok_eq(*t, "{")) { f.ret = parse_type(t); }
+	// The extern ABI is SysV: integer words and float chunks count on
+	// separate budgets, and an aggregate wider than 16 bytes (MEMORY
+	// class) drops onto the stack even when later scalars still fit the
+	// registers. Decided here, after f.ret is known.
+	if (f.extern) { extern_classify(f); }
 	if (f.extern && ty_dynval_cache as i64 != 0 &&
 	    f.ret as i64 == ty_dynval_cache as i64) {
 		error_at(p, "an extern function cannot take or return a dynamic value");

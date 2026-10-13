@@ -102,7 +102,10 @@ fn gen_addr(n *Node) {
 			// A stack-passed parameter's offset is a positive rbp
 			// displacement already, unlike every other local: the wrappers
 			// negate it back to the frame convention the lowering expects.
-			if (n.varp.by_ref) { ir_load_arg_acc(n.varp.offset as i64, n.pos); }
+			// by_val is SysV's MEMORY class: the slot holds the aggregate
+			// itself, so its address is the slot address -- a plain by_ref
+			// spill instead loads the pointer the caller left there.
+			if (n.varp.by_ref && !n.varp.by_val) { ir_load_arg_acc(n.varp.offset as i64, n.pos); }
 			else { ir_lea_arg_acc(n.varp.offset as i64, n.pos); }
 		}
 		else if (n.varp.by_ref) { ir_load_var(n.varp, type_ptr(ty_i64), n.pos); }
@@ -361,6 +364,15 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) int
 		gen_expr(a);
 		if (by_ref_ty(a.ty)) {
 			ir_memcpy_dst(a.tmp.offset as i64, a.ty.size as i64, a.pos);
+			if (marshall && opt_target == TARGET_X86_64) {
+				// SysV MEMORY class: the bytes stay staged in a.tmp and
+				// the spill block copies them into the outgoing stack
+				// area, where the callee rereads them in place (by_val).
+				// No register word is consumed. In a Qela-internal call
+				// the same argument crosses as a pointer instead.
+				a = a.next;
+				continue;
+			}
 			if (a.stack_tmp as i64 != 0) {
 				ir_store_stackslot_acc(a.stack_tmp.offset as i64, type_ptr(ty_i64), a.pos);
 				a = a.next;
@@ -474,10 +486,19 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) int
 			}
 			ir_push_acc(a.pos);
 			if (marshall && is_float(a.ty)) {
-				fmm[nd] = xi;
-				fsz[nd] = a.ty.size;
-				xi = xi + 1;
-				dest[nd] = RAX;
+				if (opt_target == TARGET_RISCV64 && xi >= abi_n_float_regs()) {
+					// LP64D falls back to the integer registers once fa is
+					// full: the float's bits ride the next a-register, on
+					// the integer counter.
+					dest[nd] = call_reg(ri);
+					src[nd] = 0;
+					ri = ri + 1;
+				} else {
+					fmm[nd] = xi;
+					fsz[nd] = a.ty.size;
+					xi = xi + 1;
+					dest[nd] = RAX;
+				}
 			} else if (first_in_rax && nd == 0) {
 				if (opt_target == TARGET_ARM64) { dest[nd] = X8; }
 				else if (opt_target == TARGET_RISCV64) { dest[nd] = A7; }
@@ -494,10 +515,15 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) int
 	while (nd > 0) {
 		nd = nd - 1;
 		if (fmm[nd] >= 0) {
-			ir_pop_acc(n.pos);
-			if (opt_target == TARGET_ARM64) { arm64_fmov_from_gpr(fmm[nd], X0, fsz[nd]); }
-			else if (opt_target == TARGET_RISCV64) { riscv_fmv_wx_to_f(FA0 + fmm[nd], A0, fsz[nd]); }
-			else { gpr_to_xmm(fmm[nd], RAX, fsz[nd]); }
+			// The FP-marshalling pop must not land in the accumulator:
+			// on AArch64/LP64D the accumulator *is* the first integer
+			// argument register, and an earlier pop of that argument
+			// would be shredded by the move into the FP file. X9/T0 are
+			// scratch and safe until the call. (x86 keeps popping into
+			// RAX: its accumulator is never an argument register.)
+			if (opt_target == TARGET_ARM64) { ir_pop_reg(9, n.pos); arm64_fmov_from_gpr(fmm[nd], 9, fsz[nd]); }
+			else if (opt_target == TARGET_RISCV64) { ir_pop_reg(5, n.pos); riscv_fmv_wx_to_f(FA0 + fmm[nd], 5, fsz[nd]); }
+			else { ir_pop_acc(n.pos); gpr_to_xmm(fmm[nd], RAX, fsz[nd]); }
 		} else if (src[nd] == 0) {
 			ir_pop_reg(dest[nd], n.pos);
 		} else {
@@ -513,11 +539,16 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) int
 
 	// Stack-spilled arguments go on last, in reverse source order, so the
 	// first overflow argument ends up nearest rsp (rbp+16 in the callee)
-	// once the call's return address lands on top of them.
+	// once the call's return address lands on top of them. An extern
+	// MEMORY-class aggregate counts as many words as it is eightbytes
+	// long, and each of those words is pushed high-to-low so byte 0 of
+	// the struct ends at the lowest address the callee reads.
 	var m i64 = 0;
 	var ci int = 0;
 	while (ci < an) {
-		if ((av[ci] as *Node).stack_tmp as i64 != 0) { m = m + 1; }
+		var oa0 *Node = av[ci] as *Node;
+		if (oa0.stack_tmp as i64 != 0) { m = m + 1; }
+		else if (marshall && opt_target == TARGET_X86_64 && by_ref_ty(oa0.ty)) { m = m + ((oa0.ty.size as i64 + 7) / 8); }
 		ci = ci + 1;
 	}
 	// gen_call's own 16-byte alignment check runs after this, on whatever
@@ -548,6 +579,16 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) int
 					riscv_ld_local(T0, oa.stack_tmp.offset as i64);
 					riscv_str_off(T0, STK, 8 * si2);
 					si2 = si2 + 1;
+				} else if (marshall && opt_target == TARGET_X86_64 && by_ref_ty(oa.ty)) {
+					var nw i64 = (oa.ty.size as i64 + 7) / 8;
+					riscv_lea_local(T1, oa.tmp.offset as i64);
+					var w i64 = 0;
+					while (w < nw) {
+						riscv_ld_at(T0, T1, 8 * w);
+						riscv_str_off(T0, STK, 8 * (si2 + w));
+						w = w + 1;
+					}
+					si2 = si2 + nw;
 				}
 				oi = oi + 1;
 			}
@@ -573,6 +614,16 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) int
 					arm64_ld_local(X9, oa.stack_tmp.offset as i64);
 					arm64_str_off(X9, SP, 8 * si2);
 					si2 = si2 + 1;
+				} else if (marshall && opt_target == TARGET_X86_64 && by_ref_ty(oa.ty)) {
+					var nw i64 = (oa.ty.size as i64 + 7) / 8;
+					arm64_sub_imm(X9, X29, oa.tmp.offset as i64);
+					var w i64 = 0;
+					while (w < nw) {
+						arm64_ld_at(X10, X9, 8 * w);
+						arm64_str_off(X10, SP, 8 * (si2 + w));
+						w = w + 1;
+					}
+					si2 = si2 + nw;
 				}
 				oi = oi + 1;
 			}
@@ -589,6 +640,15 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) int
 				if (oa.stack_tmp as i64 != 0) {
 					ir_load_var(oa.stack_tmp, type_ptr(ty_i64), oa.pos);
 					ir_push_acc(oa.pos);
+				} else if (marshall && opt_target == TARGET_X86_64 && by_ref_ty(oa.ty)) {
+					// Words high-to-low so the struct's byte 0 sits nearest
+					// rsp once the callee's frame is up (rbp+16+8k).
+					ir_lea_slot_acc(oa.tmp.offset as i64, oa.pos);
+					var w i64 = (oa.ty.size as i64 + 7) / 8 - 1;
+					while (w >= 0) {
+						ir_push_at_acc(8 * w, oa.pos);
+						w = w - 1;
+					}
 				}
 			}
 		}
@@ -3042,10 +3102,14 @@ fn gen_extern_params_arm64(f *Func) {
 		var v *Var = func_param(f, i);
 		if (v.arg_stack) { i = i + 1; continue; }
 		if (is_float(v.ty)) {
-			arm64_fmov_to_gpr(X0, fi, v.ty.size);
+			// X9 is the staging scratch, never X0: x0 is the first integer
+			// argument register, and a parameter later in the list may
+			// still need to read it (a C caller passes the first int in
+			// x0 even when an earlier Float parameter consumed s0).
+			arm64_fmov_to_gpr(X9, fi, v.ty.size);
 			fi = fi + 1;
-			if (v.has_reg) { arm64_mov_reg(v.reg, X0); }
-			else { arm64_st_local(v.offset as i64, X0); }
+			if (v.has_reg) { arm64_mov_reg(v.reg, X9); }
+			else { arm64_st_local(v.offset as i64, X9); }
 		} else if (agg_fp_shape(v.ty) != 0) {
 			var shape i64 = agg_fp_shape(v.ty);
 			var unit i64 = agg_fp_unit(shape);
@@ -3054,8 +3118,8 @@ fn gen_extern_params_arm64(f *Func) {
 			if (v.ty.size > 8) { base = base - 8; }
 			var r i64 = 0;
 			while (r < count && r < 4) {
-				arm64_fmov_to_gpr(X0, r as int, unit);
-				arm64_st_local(base + r * unit, X0);
+				arm64_fmov_to_gpr(X9, r as int, unit);
+				arm64_st_local(base + r * unit, X9);
 				r = r + 1;
 			}
 			fi = fi + count;
@@ -3271,9 +3335,8 @@ fn gen_func(f *Func) {
 
 
 // f64 bit pattern -> f32 bit pattern, in pure integer math: the bootstrap
-// subset has no float, so this must never use one. Truncating, not
-// round-to-nearest. Subnormal doubles are below the f32 range anyway, so
-// they underflow to zero here.
+// subset has no float, so this must never use one. This includes gradual
+// underflow and round-to-nearest, ties-to-even.
 fn f64_to_f32_bits(b i64) i64 {
 	var sign i64 = (b >> 63) & 1;
 	var exp i64 = (b >> 52) & 0x7ff;
@@ -3284,9 +3347,22 @@ fn f64_to_f32_bits(b i64) i64 {
 	}
 	if (exp == 0) { return sign << 31; }
 	var e32 i64 = exp - 1023 + 127;
-	if (e32 <= 0) { return sign << 31; }
+	var sig i64 = man | 0x10000000000000;
+	if (e32 < -23) { return sign << 31; }
+	var shift i64 = 29;
+	if (e32 <= 0) { shift = 30 - e32; }
+	var out i64 = sig >> shift;
+	var rem i64 = sig & ((1 << shift) - 1);
+	var half i64 = 1 << (shift - 1);
+	if (rem > half || (rem == half && (out & 1) != 0)) { out = out + 1; }
+	if (e32 <= 0) {
+		// Rounding the largest subnormal can carry into the smallest normal.
+		if (out >= 0x800000) { return (sign << 31) | 0x00800000; }
+		return (sign << 31) | out;
+	}
+	if (out >= 0x1000000) { out = 0x800000; e32 = e32 + 1; }
 	if (e32 >= 255) { return (sign << 31) | 0x7f800000; }
-	return (sign << 31) | (e32 << 23) | ((man >> 29) & 0x7fffff);
+	return (sign << 31) | (e32 << 23) | (out & 0x7fffff);
 }
 
 
