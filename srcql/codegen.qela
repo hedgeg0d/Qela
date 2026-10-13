@@ -647,6 +647,7 @@ fn gen_structlit(n *Node) {
 fn gen_call(n *Node) {
 	if (n.varp as i64 != 0) { gen_indirect_call(n); return; }
 	var cf *Func = find_func(n.name);
+	if (n.ovfunc as i64 != 0) { cf = n.ovfunc; }
 	var marshall bool = false;
 	if (cf as i64 != 0) { marshall = cf.extern; }
 	var ret_mem bool = is_aggregate(n.ty) && abi_sret(n.ty.size);
@@ -3416,6 +3417,7 @@ fn reach_mark(f *Func) {
 fn reach_node(n *Node) {
 	while (n as i64 != 0) {
 		if (n.kind == ND_CALL && n.name.len != 0) {
+			if (n.ovfunc as i64 != 0) { reach_mark(n.ovfunc); }
 			reach_name(n.name);
 			// The coroutine trampoline (emitted machine code, no AST
 			// caller) returns into coro_finish whenever any coroutine
@@ -4065,7 +4067,9 @@ fn codegen(u *Unit, img *Image) {
 
 	var cf *CallFixup = calls_head;
 	while (cf as i64 != 0) {
-		var target *Func = find_func(cf.name);
+		var target *Func = null;
+		if (cf.fptr as i64 != 0) { target = cf.fptr; }
+		else { target = find_func(cf.name); }
 		if (target as i64 == 0 || target.body as i64 == 0) {
 			// An extern call (or an unknown name): a linked object may
 			// provide the symbol.

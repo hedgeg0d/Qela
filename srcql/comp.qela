@@ -265,6 +265,10 @@ struct Node {
 	idxget  bool,
 	ip_fn   *Func,
 	ip_off  i64,
+	// The overload a call resolved to (type.qela's overload_pick), when it
+	// is not the first function the name finds; codegen and the
+	// interpreter call this exact function instead of re-resolving by name.
+	ovfunc  *Func,
 	ip_cached bool,
 	foreign bool,
 }
