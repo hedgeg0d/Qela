@@ -125,7 +125,7 @@ fn obj_is_nil(o Obj) bool {
 
 fn obj_is_pair(o Obj) bool {
 	match (o) {
-		Cons(c) => { return true; }
+		Cons(_) => { return true; }
 		_ => { return false; }
 	}
 	return false;
