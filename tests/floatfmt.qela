@@ -1,6 +1,6 @@
 // stage1-only
 // expect-exit: 0
-// expect-out: a=3.75 b=-1.5 c=100000.25 e=0
+// expect-out: a=3.75 b=-1.5 c=100000.25 e=0 ties=2,4,1.2,1.8
 // Float printing: fmt_f64_bits (std/fmt.qela) is pure integer arithmetic --
 // it decodes the IEEE754 bits and does long division/multiplication on a
 // binary big-number array, since this module is part of the bootstrap
@@ -12,6 +12,10 @@ fn main() int {
 	var b f64 = -1.5;
 	var c f64 = 100000.25;
 	var e f64 = 0.0;
-	write_str(STDOUT, "a=${a} b=${b} c=${c} e=${e}\n");
+	var x f64 = 2.5;
+	var y f64 = 3.5;
+	var p f64 = 1.25;
+	var q f64 = 1.75;
+	write_str(STDOUT, "a=${a} b=${b} c=${c} e=${e} ties=${x:.0f},${y:.0f},${p:.1f},${q:.1f}\n");
 	return 0;
 }
