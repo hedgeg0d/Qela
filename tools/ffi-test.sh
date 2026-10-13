@@ -18,6 +18,8 @@ cd "$TMP" || exit 1
 cat > cbits.c <<'EOF'
 #include <stdint.h>
 typedef struct { int64_t a, b; } Pair;
+typedef struct { float x, y; } Vec2f;
+typedef struct { double x, y; } Vec2d;
 int64_t c_add(int64_t x, int64_t y) { return x + y; }
 int64_t c_pair_sum(Pair p) { return p.a + p.b; }
 Pair c_mk_pair(int64_t x, int64_t y) { Pair p = {x, y}; return p; }
@@ -28,6 +30,11 @@ int64_t c_call_qela(void) { return qela_ping() + c_global; }
 int64_t c_bss;
 void c_set_bss(int64_t v) { c_bss = v; }
 int64_t c_get_bss(void) { return c_bss; }
+float c_v2_dot(Vec2f v) { return v.x * 3.0f + v.y * 4.0f; }
+Vec2f c_v2_mk(float x, float y) { Vec2f v = {x, y}; return v; }
+Vec2d c_v2d_add(Vec2d a, Vec2d b) { Vec2d r = {a.x + b.x, a.y + b.y}; return r; }
+Vec2d qela_v2d_zero(void);
+Vec2d c_call_qela_v2d(void) { Vec2d r = qela_v2d_zero(); r.x = r.x + 1.0; r.y = r.y + 2.0; return r; }
 EOF
 
 cat > carch.c <<'EOF'
@@ -37,6 +44,8 @@ EOF
 
 cat > main.qela <<'EOF'
 struct Pair { a i64, b i64 }
+struct Vec2f { x f32, y f32 }
+struct Vec2d { x f64, y f64 }
 
 extern fn c_add(a i64, b i64) i64;
 extern fn c_pair_sum(p Pair) i64;
@@ -46,9 +55,20 @@ extern fn c_call_qela() i64;
 extern fn c_set_bss(v i64) void;
 extern fn c_get_bss() i64;
 extern fn c_arch_add(a i64, b i64) i64;
+extern fn c_v2_dot(v Vec2f) f32;
+extern fn c_v2_mk(x f32, y f32) Vec2f;
+extern fn c_v2d_add(a Vec2d, b Vec2d) Vec2d;
+extern fn c_call_qela_v2d() Vec2d;
 extern var c_global i64;
 
 fn qela_ping() i64 { return 7; }
+
+extern fn qela_v2d_zero() Vec2d {
+	var v Vec2d;
+	v.x = 0.0;
+	v.y = 0.0;
+	return v;
+}
 
 fn main() int {
 	var fails i64 = 0;
@@ -66,6 +86,16 @@ fn main() int {
 	c_global = 5;
 	if (c_call_qela() != 12) { fails = fails + 1; }
 	if (c_arch_add(40, 2) != 42) { fails = fails + 1; }
+	var v1 Vec2f = Vec2f{x: 1.0 as f32, y: 2.0 as f32};
+	if ((c_v2_dot(v1) as i64) != 11) { fails = fails + 1; }
+	var v2 Vec2f = c_v2_mk(3.0 as f32, 4.0 as f32);
+	if ((v2.x as i64) != 3 || (v2.y as i64) != 4) { fails = fails + 1; }
+	var vd1 Vec2d = Vec2d{x: 1.0, y: 2.0};
+	var vd2 Vec2d = Vec2d{x: 3.0, y: 4.0};
+	var vd3 Vec2d = c_v2d_add(vd1, vd2);
+	if (vd3.x != 4.0 || vd3.y != 6.0) { fails = fails + 1; }
+	var vd4 Vec2d = c_call_qela_v2d();
+	if (vd4.x != 1.0 || vd4.y != 2.0) { fails = fails + 1; }
 	return fails as int;
 }
 EOF
