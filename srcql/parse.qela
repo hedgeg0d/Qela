@@ -1791,6 +1791,21 @@ fn gen_elem_of(ty *Type) *Type {
 	return 0 as *Type;
 }
 
+// The element type of a `Chan(T)` or `*Chan(T)` -- the loop variable's type
+// for `for x in ch`. Unlike a Gen, a Chan(T) *value* iterates fine: the
+// channel is a plain struct, the loop just takes its address.
+fn chan_elem_of(ty *Type) *Type {
+	if (ty as i64 == 0) { return 0 as *Type; }
+	var tm *Tmpl = tmpl_find("Chan");
+	if (tm as i64 == 0) { return 0 as *Type; }
+	if (ty.kind == TY_PTR && ty.base as i64 != 0) {
+		if (ty.base.tmpl as i64 == tm as i64) { return ty.base.ga0; }
+		return 0 as *Type;
+	}
+	if (ty.tmpl as i64 == tm as i64) { return ty.ga0; }
+	return 0 as *Type;
+}
+
 // Rebinds the body's references to the visible function's parameters onto
 // the hidden function's clones and rewrites `return;` to gen_finish(_$g)
 // (a generator body must never return to the coroutine trampoline -- its
@@ -2187,6 +2202,92 @@ fn parse_stmt_inner(t **Token) *Node {
 					gn.nargs = 2;
 					n.cond = gn;
 					n.body = stmt_as_body(parse_stmt(t));
+					leave_scope();
+					return n;
+				}
+				// `for x in ch` over a channel: receive until the channel
+				// is closed and drained -- Go's `for v := range ch`. The
+				// channel expression is hoisted like any other collection
+				// and the loop is
+				//   while (true) {
+				//       var _$sok = false;
+				//       x = chan_recv_range(g, &_$sok);
+				//       if (!_$sok) { break; }
+				//       <body>
+				//   }
+				// chan_recv_range blocks while the channel is open and
+				// empty, so the body runs exactly once per delivered
+				// value, never on the trailing zero of a drained channel.
+				// break/continue inside the body behave as in Go: break
+				// stops the range, continue receives the next value.
+				var celem *Type = chan_elem_of(gc.ty);
+				if (celem as i64 != 0) {
+					var gty *Type = gc.ty;
+					if (gc.kind != ND_VAR) {
+						var cv *Var = declare_var("_$c", gc.ty, np);
+						var clhs *Node = new_node(ND_VAR, np);
+						clhs.varp = cv;
+						var cin *Node = new_node(ND_EXPRSTMT, np);
+						cin.lhs = bin_node(ND_ASSIGN, clhs, gc, np);
+						var cr *Node = new_node(ND_VAR, np);
+						cr.varp = cv;
+						n.init = cin;
+						gc = cr;
+					}
+					var g1 *Node = gc;
+					if (gty.kind != TY_PTR) {
+						var ad *Node = new_node(ND_ADDR, np);
+						ad.lhs = gc;
+						g1 = ad;
+					}
+					var v *Var = declare_var(name, celem, np);
+					var vz *Node = new_node(ND_ZERO, np);
+					vz.varp = v;
+					var zstmt *Node = new_node(ND_EXPRSTMT, np);
+					zstmt.lhs = vz;
+					if (n.init as i64 == 0) { n.init = zstmt; }
+					else {
+						var it *Node = n.init;
+						while (it.next as i64 != 0) { it = it.next; }
+						it.next = zstmt;
+					}
+					n.cond = num_node(1, np);
+					var bhead Node;
+					var btail *Node = &bhead;
+					var okv *Var = declare_var(select_name("ok"), type_lookup("bool"), np);
+					btail.next = select_ok_decl(okv, np);
+					btail = btail.next;
+					var call *Node = new_node(ND_CALL, np);
+					call.name = "chan_recv_range";
+					var g2 *Node = g1;
+					var on *Node = new_node(ND_ADDR, np);
+					on.lhs = new_node(ND_VAR, np);
+					on.lhs.varp = okv;
+					call.args = g2;
+					g2.next = on;
+					call.nargs = 2;
+					var xl *Node = new_node(ND_VAR, np);
+					xl.varp = v;
+					var xas *Node = new_node(ND_EXPRSTMT, np);
+					xas.lhs = bin_node(ND_ASSIGN, xl, call, np);
+					btail.next = xas;
+					btail = btail.next;
+					var cv2 *Node = new_node(ND_VAR, np);
+					cv2.varp = okv;
+					var notn *Node = new_node(ND_NOT, np);
+					notn.lhs = cv2;
+					var ifn *Node = new_node(ND_IF, np);
+					ifn.cond = notn;
+					var brkblk *Node = new_node(ND_BLOCK, np);
+					var brk *Node = new_node(ND_BREAK, np);
+					brkblk.body = brk;
+					ifn.then = brkblk;
+					btail.next = ifn;
+					btail = btail.next;
+					btail.next = stmt_as_body(parse_stmt(t));
+					var blk *Node = new_node(ND_BLOCK, np);
+					blk.body = bhead.next;
+					n.body = blk;
 					leave_scope();
 					return n;
 				}
