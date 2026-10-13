@@ -150,6 +150,7 @@ let ND_ASSERT    = 52;
 let ND_INTERP    = 53;
 let ND_STRPART   = 54;
 let ND_ASMREF    = 55;
+let ND_ARRLIT    = 56;
 
 struct Var;
 struct Node;
