@@ -6,6 +6,7 @@ import "type.qela";
 import "codegen.qela";
 import "elf.qela";
 import "fmt.qela";
+import "fmtgen.qela";
 import "lsp.qela";
 import "../std/io.qela";
 
@@ -87,6 +88,7 @@ fn reset_compile() {
 	ntype_vars = 0;
 	all_funcs = 0 as *Func;
 	funcs_tail = 0 as *Func;
+	fmtgen_reset();
 	macro_list = 0 as *Macro;
 	macro_tail = 0 as *Macro;
 	top_asm_head = 0 as *Node;
