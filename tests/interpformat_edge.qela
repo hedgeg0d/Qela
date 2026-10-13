@@ -1,0 +1,21 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: [-0001] [   -1] [000000FF] [ff] [3] [4] [000000000000000000ff]
+// Format-spec edges: the sign sits inside zero padding, space padding
+// counts it, uppercase hex, fixed-point rounding up at .0f, and a width
+// past 16 is all leading zeros.
+import "std/fmt.qela";
+
+fn main() int {
+	var o = fmt_begin();
+	o = fmt_put_str(o, "[${-1:05d}]");
+	o = fmt_put_str(o, " [${-1:5d}]");
+	o = fmt_put_str(o, " [${255:08X}]");
+	o = fmt_put_str(o, " [${255:02x}]");
+	o = fmt_put_str(o, " [${3.14:.0f}]");
+	o = fmt_put_str(o, " [${3.94:.0f}]");
+	o = fmt_put_str(o, " [${255:020x}]");
+	var r = fmt_result(o);
+	sys_write(1, r.ptr, r.len);
+	return 0;
+}

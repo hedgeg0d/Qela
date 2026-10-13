@@ -1,0 +1,88 @@
+// expect-exit: 7
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = 26;
+fn min2(a int, b int) int { if (a < b) { return a; } else { return b; } }
+fn add2(a int, b int) int { return a + b; }
+fn mix5(a int, b int, c int, d int, e int) int { return a + b - c + d - e; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn wide_swap(w Wide) Wide { return Wide{a: w.b, b: w.a, c: w.c}; }
+fn nest_sum(n Nest) int { return n.tag + n.p.x + n.p.y; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 10;
+    var v1 int = 0;
+    var v2 int = 6;
+    var sv0 str = """ab
+cd""";
+    var sv1 str = "xyzzy";
+    var fv double = -0.5;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0x0;
+    var i4 int = 0;
+    var i5 int = 0;
+    i0 = 0;
+    while ((i0 < 4)) {
+        gv >>= ((1.0 > 0.25) >> (((true >= '\t') * (false if (((gv if ((a[(a[((255 < '\n') & 3)] & 3)] & true) == ((tag_e(e) < (((237 as double) as i64) as i16)) && ((((237 as double) as i64) as i16) <= true))) else (str_eq(sv1, (("""ab
+cd""")[1..5] + "abcd")) / ((str_eq("xyzzy", (("abcd")[0..4])[0..2]) & 15) + 1))) * false) < ((((-'c') & ('c' as i16)) + (sv1).len) as u32)) else gv)) >> (-(-418 in 0..((-1 & 15) + 1)))));
+        n = Nest{tag: (((('\t' in a) >= -451) > ((!(-gv)) == ((("qwerty").len >= (!100)) && ((!0x64) < -409)))) && (((!(-gv)) == ((("qwerty").len >= (!100)) && ((!100) < -409))) < (((gv if ((!(((258 as i16) == (255 * true)) as i16)) >= p.x) else '\n') in 0..((('\t' > false) & 15) + 1)) <= (-((v2 < 559) && (559 >= -348)))))), p: Pair{x: ((((true as i16) as double) as i64) >> pair_sum(Pair{x: (((0.3 as i64) <= (v0 == false)) && ((v0 == false) >= (gv & '3'))), y: 'b'})), y: a[(v0 & 3)]}};
+        a[i0] = (pair_sum(Pair{x: ((2 as double) >= (-2.0 + fv)), y: (mix5(167, gv, false, false, 0x0) ^ (false in a))}) == gv);
+        i0 = (i0 + 1);
+    }
+    sv0 = (("""x
+yz""")[0..3] + sv0);
+    gv = (("xyzzy")[2..4]).len;
+    p.x = 212;
+    v0 = -1;
+    match (e) {
+        A => {
+            return tag_e(e);
+        }
+        B(mb0) => {
+            return (-(("qwerty")[2..4])[0]);
+        }
+        C(mb0, mb1) => {
+            return (((opt_d(D.Some(v0)) in 0..(((-597 | (!gv)) & 15) + 1)) if ((((("qwerty")[1..4])[0] >= ((('e' in a) / (((0x82 != true) & 15) + 1)) % (((255 in 0..((('b' < 1) & 0xf) + 1)) & 0xf) + 1))) && (((('e' in a) / (((130 != true) & 15) + 1)) % (((255 in 0..((('b' < 1) & 15) + 1)) & 15) + 1)) >= (("abc")[0..2]).len)) >= gv) else (("no")[0] - (-(false != v2)))) ^ mb1);
+        }
+    }
+    i0 = 0x0;
+    while ((i0 < 4)) {
+        v0 = (min2((-(!-727)), ((-true) as u8)) if ((!((-3) in a)) >= ((tag_e(e) if ((!(183 == (('1' == true) / ((((false >= '3') && ('3' < true)) & 15) + 1)))) <= ((false in a) >> (-2.0 as i64))) else (-(0xa * gv))) in 0..(((((true in a) in 0..(((0xfffffffffffffca4 == 100) & 15) + 1)) in a) & 15) + 1))) else ((('3' - gv) as u16) in 0..(((tag_e(e) in 0..(((false >= 255) & 15) + 1)) & 0xf) + 1)));
+        a[i0] = true;
+        i0 = (i0 + 1);
+    }
+    gv = ((("aa")[0..2] + (("qwerty")[0..6])[0..2]))[1];
+    p = pair_swap(p);
+    n.tag = ((((-1.5 - 0.3) == (-2.0 / 1.0)) < 10) in a);
+    write_str(STDOUT, "${v1=}\n");
+    return (299 << (((fv - fv) < (0.5 / 100.0)) == opt_d(D.None)));
+}
