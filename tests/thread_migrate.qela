@@ -1,0 +1,87 @@
+// stage1-only
+// interp-skip
+// expect-exit: 42
+// Keep worker 1 inside a non-yielding task while worker 0 starts ordinary
+// yielding coroutines. Once released, worker 1 has no queued work and must
+// import one parked context from worker 0. A local survives the move and sees
+// pool_worker_id change, proving the resumed continuation changed workers.
+import "std/thread.qela";
+
+let N = 2;
+
+var blocker_ready i64 = 0;
+var blocker_worker i64 = -1;
+var release_blocker i64 = 0;
+var finish_workers i64 = 0;
+var started i64 = 0;
+var finished i64 = 0;
+var migrated i64 = 0;
+var bad_local i64 = 0;
+
+fn push_to(id i64, fn_ptr i64, arg i64) {
+	while (!atomic_cas(&pool_lock[id], 0, 1)) { sys_sched_yield(); }
+	while (pool_tail[id] - pool_head[id] >= POOL_QUEUE) {
+		atomic_store(&pool_lock[id], 0);
+		sys_sched_yield();
+		while (!atomic_cas(&pool_lock[id], 0, 1)) { sys_sched_yield(); }
+	}
+	var slot i64 = pool_tail[id] % POOL_QUEUE;
+	pool_queue[id][slot].fn_ptr = fn_ptr;
+	pool_queue[id][slot].a0 = arg;
+	pool_queue[id][slot].a1 = 0;
+	pool_queue[id][slot].a2 = 0;
+	pool_queue[id][slot].a3 = 0;
+	pool_queue[id][slot].a4 = 0;
+	pool_tail[id] = pool_tail[id] + 1;
+	atomic_store(&pool_lock[id], 0);
+}
+
+fn blocker(n i64) i64 {
+	if (n != 0) { return n; }
+	blocker_worker = pool_worker_id;
+	atomic_store(&blocker_ready, 1);
+	while (atomic_load(&release_blocker) == 0) { }
+	return 0;
+}
+
+fn worker(n i64) i64 {
+	var first i64 = pool_worker_id;
+	var local i64 = n * 17 + 9;
+	atomic_add(&started, 1);
+	while (atomic_load(&finish_workers) == 0) {
+		if (local != n * 17 + 9) { atomic_store(&bad_local, 1); }
+		if (pool_worker_id != first) { atomic_add(&migrated, 1); }
+		coro_yield();
+	}
+	if (local != n * 17 + 9) { atomic_store(&bad_local, 1); }
+	if (pool_worker_id != first) { atomic_add(&migrated, 1); }
+	atomic_add(&finished, 1);
+	return 0;
+}
+
+fn main() int {
+	thread_pool_init(2);
+	push_to(1, blocker, 0);
+	while (atomic_load(&blocker_ready) == 0) { sys_sched_yield(); }
+	var source i64 = 1 - atomic_load(&blocker_worker);
+
+	// With one context, coro_offer_handoff has no other parked slot to give.
+	// This guarantees its `first` local was established on worker 0 before
+	// a second context makes it eligible for transfer.
+	push_to(source, worker, 0);
+	while (atomic_load(&started) < 1) { sys_sched_yield(); }
+	push_to(source, worker, 1);
+	while (atomic_load(&started) < N) { sys_sched_yield(); }
+	atomic_store(&release_blocker, 1);
+
+	var spins i64 = 0;
+	while (atomic_load(&migrated) == 0) {
+		spins = spins + 1;
+		if (spins > 2000000000) { return 1; }
+		sys_sched_yield();
+	}
+	atomic_store(&finish_workers, 1);
+	while (atomic_load(&finished) < N) { sys_sched_yield(); }
+	if (atomic_load(&bad_local) != 0) { return 2; }
+	return 42;
+}
