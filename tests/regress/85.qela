@@ -1,0 +1,85 @@
+// expect-exit: 0
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = 18;
+fn fact(n int) int { if (n <= 1) { return 1; } return n * fact(n - 1); }
+fn mix5(a int, b int, c int, d int, e int) int { return a + b - c + d - e; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn wide_make(a int, b int, c int) Wide { return Wide{a: a, b: b, c: c}; }
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn main() int {
+    var v0 int = 8;
+    var v1 int = 3;
+    var v2 int = 10;
+    var sv0 str = "42";
+    var sv1 str = "42";
+    var fv double = 100.0;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    gv = 100;
+    a[((!(a[(v2 & 3)] >> a[(p.x & 3)])) & 3)] = 'a';
+    match (e) {
+        A => {
+            return (!-464);
+        }
+        B(mb0) => {
+            return (a[(tag_e(e) & 3)] - mb0);
+        }
+        C(mb0, mb1) => {
+            return (((fv == fv) ^ p.y) != (fv > ((1.0 / -0.5) / 0.125)));
+        }
+    }
+    v2 = (((mix5('d', 3, 'f', 42, 780) % (((false as u16) & 15) + 1)) >> (!(v1 >> 100))) != (((255 as double) == (v2 as double)) ^ gv));
+    v1, gv = gv, v1;
+    v0 = ((1.0 / 0.5) == fv);
+    b = Bag{p: fact(((fv < ((fv as i64) as double)) & 15)), q: -958, r: (gv < true), s: (true * (255 >> 42))};
+    v2 = ((a[((10 == 42) & 3)] >> (!(v2 as u8))) & ((!(v1 + gv)) / (((1 as u16) & 15) + 1)));
+    v2, v1 = v1, v2;
+    v2 |= (-(1 | ((127 as i8) == 'a')));
+    match (e) {
+        A => {
+            return (sv0).len;
+        }
+        B(mb0) => {
+            return ((-462 | v0) * mb0);
+        }
+        C(mb0, mb1) => {
+            return (gv ^ mb1);
+        }
+    }
+    var ob Buf;
+    fmt_i64(&ob, v2);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return p.y;
+}

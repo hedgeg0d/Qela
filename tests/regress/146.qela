@@ -1,0 +1,64 @@
+// expect-exit: 0
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+fn mul2(a int, b int) int { return a * b; }
+fn mix5(a int, b int, c int, d int, e int) int { return a + b - c + d - e; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn wide_sum(w Wide) int { return w.a + w.b + w.c; }
+fn wide_swap(w Wide) Wide { return Wide{a: w.b, b: w.a, c: w.c}; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn main() int {
+    var v0 int = 6;
+    var v1 int = 4;
+    var v2 int = 8;
+    var sv0 str = "zz";
+    var sv1 str = "xyzzy";
+    var fv double = 2.5;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    p.x = 869;
+    a[(a[(str_eq(("foobar")[1..6], sv1) & 3)] & 3)] = ('c' == (!((false >= v0) as i32)));
+    v0 = ((10 as i8) > (((false > v2) <= ('3' * -733)) >= (("xyz")[0..2]).len));
+    n.p.x = ((!pair_sum(Pair{x: ('a' as i16), y: (true | 'b')})) as u32);
+    e = E.B(((false > (('g' as u8) >> (!-584))) as i8));
+    i0 = 0;
+    while ((i0 < 4)) {
+        v2 = (((-v0) as i8) as u8);
+        a[i0] = ('0' ^ (-977 - true));
+        i0 = (i0 + 1);
+    }
+    w = wide_swap(w);
+    e = E.C((((-v0) as i32) as u16), a[(((-(v2 | '0')) as i32) & 3)]);
+    e = E.C((((255 + (844 as i8)) - ((v2 % ((v1 & 15) + 1)) << (120 as i8))) > ((-(v2 < v1)) ^ (false | pair_sum(Pair{x: -883, y: 'e'})))), ((((v1 == 0) - (!255)) < ((v1 as double) > (fv + fv))) > (!(v0 >= ('c' + 2)))));
+    v1, v0 = v0, v1;
+    var ob Buf;
+    fmt_i64(&ob, v2);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return (((mix5(0, 78, '2', 33, false) == 'c') & ((-860 / ((true & 15) + 1)) ^ (v0 as u16))) > ("hi").len);
+}
