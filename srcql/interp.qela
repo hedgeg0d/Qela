@@ -984,16 +984,20 @@ fn ip_syscall(n *Node) i64 {
 fn abi_unmarshal_value(p *u8, addr i64, ty *Type) *u8 {
 	if (ty.kind == TY_SLICE) {
 		var slen i64 = abi_decode_u64(p);
-		var sp *u8 = null;
+		var sp i64 = 0;
 		if (slen > 0) {
-			var tmp str;
-			tmp.ptr = p + 8;
-			tmp.len = slen;
-			sp = str_dup(tmp).ptr;
+			// The elements live in the caller's wire buffer; a copy into
+			// the arena keeps them valid past the buffer's reuse (strs
+			// used to be the only slice kind and got the same treatment
+			// through str_dup).
+			var nb i64 = slen * (ty.base.size as i64);
+			var dst i64 = arena_alloc(nb, 8) as i64;
+			ip_memcpy(dst, (p as i64) + 8, nb);
+			sp = dst;
 		}
-		ip_st64(addr, sp as i64);
+		ip_st64(addr, sp);
 		ip_st64(addr + 8, slen);
-		return p + 8 + slen;
+		return p + 8 + slen * (ty.base.size as i64);
 	}
 	if (ty.kind == TY_STRUCT && !interp_struct_pod(ty)) {
 		var m *Member = ty.members;
@@ -1017,7 +1021,7 @@ fn abi_marshal_value(b *Buf, addr i64, ty *Type) {
 		var sp i64 = ip_ld64(addr);
 		var slen i64 = ip_ld64(addr + 8);
 		buf_u64(b, slen);
-		if (slen > 0) { buf_bytes(b, sp as *u8, slen); }
+		if (slen > 0) { buf_bytes(b, sp as *u8, slen * (ty.base.size as i64)); }
 		return;
 	}
 	if (ty.kind == TY_STRUCT && !interp_struct_pod(ty)) {

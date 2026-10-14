@@ -7,7 +7,7 @@ Updated 2026-08-14. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **648 784 B** (61.9% of the 1 MiB budget) |
+| **S2 — the shipped compiler, Qela compiled by itself** | **650 272 B** (62.0% of the 1 MiB budget) |
 | stage1 sources | ~21 900 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
 
@@ -18,6 +18,20 @@ backtrace, interpolation and the repl, the compiler flags (`-g`,
 server conversation.
 
 ## Done
+
+**Slices and payload enums over the ABI (2026-08-14).** The last two
+"clean rejection" edges of the marshalling work: `interpreted`/`dynamic`
+functions and `eval fn` host calls now carry slices of POD elements
+(`[]i64` and friends, `u64 count` + `count * elem_size` raw bytes) and
+enums whose payload fields are all POD (raw image: tag plus the widest
+payload union), both directions, wire and jit. `[]str`, pointer fields
+and pointer-bearing enum payloads stay a clean rejection. `eval var`
+globals stay str-only for slices (their decode would otherwise point
+into the host's reusable wire buffer); arrays and POD enums are fine.
+S2 648 784 -> 650 272 B (+1 488). Corpus 184 -> 190
+(`tests/interp_marshal.qela` extended, `tests/evalfn_marshal.qela`
+extended, the two reject tests re-scoped to the new boundaries). Full
+writeup in this file.
 
 **The stdlib docs batch (2026-08-14).** Every `fn` in the bundled std now
 carries a one-line `///` doc comment read by `qela doc std <name>`: exact

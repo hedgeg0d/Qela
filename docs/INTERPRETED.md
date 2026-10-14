@@ -645,9 +645,12 @@ same parsed types so it cannot drift: a scalar is one 8-byte slot (the
 reader takes its own width); a `str` is `u64 len` + bytes; a POD struct
 or array (every field a scalar, float or array of those) is its raw
 size-byte image; any other struct is its fields in member order, scalars
-as 8-byte slots and nested structs recursively. Pointer fields, fn-ptr
-types, non-str slices and payload enums are still rejected at parse time
-with a real error (a host address means nothing in the child process).
+as 8-byte slots and nested structs recursively. Slices of POD elements
+(u64 count plus count * elem_size raw bytes) and POD-payload enums (their
+raw image) cross the same way (2026-08-14). Pointer fields, fn-ptr types,
+`[]str` and enums whose payloads could hold a pointer are still rejected
+at parse time with a real error (a host address means nothing in the
+child process).
 
 The interpreted path (`interp_synthesize_trampoline` in `srcql/parse.qela`)
 emits a real top-level `__tramp<N>` function whose tokens are injected
