@@ -277,6 +277,11 @@ struct Node {
 	ovfunc  *Func,
 	ip_cached bool,
 	foreign bool,
+	// A by-value aggregate argument that type_call staged for an extern
+	// spill: its bytes live in tmp and the spill block pushes them into the
+	// outgoing stack area. Distinguishes it from a struct literal that
+	// merely carries its own staging temp while crossing in registers.
+	byval_spill bool,
 }
 
 // Parameters are six separate slots: stage0 has no arrays inside structs.
