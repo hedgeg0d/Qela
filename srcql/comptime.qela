@@ -56,6 +56,286 @@ fn ct_int(v i64) ComptimeVal {
 	return cv;
 }
 
+// Float values remain IEEE bit patterns. This file is in bootstrap subset,
+// so every operation below uses integer arithmetic only.
+fn ct_float(v i64, ty *Type) ComptimeVal {
+	var cv ComptimeVal;
+	cv.kind = CV_FLOAT;
+	cv.num = v;
+	cv.ty = ty;
+	return cv;
+}
+
+fn ct_fp_p(ty *Type) i64 {
+	if (ty.size == 4) { return 24; }
+	return 53;
+}
+
+fn ct_fp_bias(ty *Type) i64 {
+	if (ty.size == 4) { return 127; }
+	return 1023;
+}
+
+fn ct_fp_min(ty *Type) i64 {
+	if (ty.size == 4) { return -126; }
+	return -1022;
+}
+
+fn ct_fp_expmax(ty *Type) i64 {
+	if (ty.size == 4) { return 255; }
+	return 2047;
+}
+
+fn ct_fp_fracmask(ty *Type) i64 {
+	if (ty.size == 4) { return 0x7fffff; }
+	return 0xfffffffffffff;
+}
+
+fn ct_fp_sign(v i64, ty *Type) i64 {
+	if (ty.size == 4) { return (v >> 31) & 1; }
+	return (v >> 63) & 1;
+}
+
+fn ct_fp_exp(v i64, ty *Type) i64 {
+	if (ty.size == 4) { return (v >> 23) & 255; }
+	return (v >> 52) & 2047;
+}
+
+fn ct_fp_frac(v i64, ty *Type) i64 { return v & ct_fp_fracmask(ty); }
+
+fn ct_fp_signbit(ty *Type) i64 {
+	if (ty.size == 4) { return 1 << 31; }
+	return 1 << 63;
+}
+
+fn ct_fp_inf(sign i64, ty *Type) i64 {
+	var v i64 = ct_fp_expmax(ty) << (ct_fp_p(ty) - 1);
+	if (sign != 0) { v = v | ct_fp_signbit(ty); }
+	return v;
+}
+
+fn ct_fp_nan(ty *Type) i64 {
+	return (ct_fp_expmax(ty) << (ct_fp_p(ty) - 1)) | (1 << (ct_fp_p(ty) - 2));
+}
+
+fn ct_fp_is_nan(v i64, ty *Type) bool {
+	return ct_fp_exp(v, ty) == ct_fp_expmax(ty) && ct_fp_frac(v, ty) != 0;
+}
+
+fn ct_fp_is_inf(v i64, ty *Type) bool {
+	return ct_fp_exp(v, ty) == ct_fp_expmax(ty) && ct_fp_frac(v, ty) == 0;
+}
+
+fn ct_fp_is_zero(v i64, ty *Type) bool { return (v & ~ct_fp_signbit(ty)) == 0; }
+
+fn ct_truth(v ComptimeVal) bool {
+	if (v.kind == CV_FLOAT) { return !ct_fp_is_zero(v.num, v.ty); }
+	return v.num != 0;
+}
+
+fn ct_shr_jam(v i64, sh i64) i64 {
+	if (sh <= 0) { return v; }
+	if (sh >= 63) { if (v != 0) { return 1; } return 0; }
+	var r i64 = v >> sh;
+	if ((v & ((1 << sh) - 1)) != 0) { r = r | 1; }
+	return r;
+}
+
+// Packs a normalized significand with three guard/round/sticky bits.
+fn ct_fp_pack(sign i64, exp i64, ext i64, p i64, ty *Type) i64 {
+	if (ext == 0) {
+		if (sign != 0) { return ct_fp_signbit(ty); }
+		return 0;
+	}
+	while (ext >= (1 << (p + 3))) { ext = ct_shr_jam(ext, 1); exp = exp + 1; }
+	while (ext < (1 << (p + 2))) { ext = ext << 1; exp = exp - 1; }
+	var min i64 = ct_fp_min(ty);
+	var sub bool = false;
+	if (exp < min) { ext = ct_shr_jam(ext, min - exp); exp = min; sub = true; }
+	var sig i64 = ext >> 3;
+	var tail i64 = ext & 7;
+	if (tail > 4 || (tail == 4 && (sig & 1) != 0)) { sig = sig + 1; }
+	if (sig >= (1 << p)) { sig = sig >> 1; exp = exp + 1; }
+	var raw i64 = exp + ct_fp_bias(ty);
+	if (sub) { raw = 0; }
+	if (raw >= ct_fp_expmax(ty)) { return ct_fp_inf(sign, ty); }
+	var out i64 = sig & ((1 << (p - 1)) - 1);
+	if (sub) {
+		// A rounded subnormal can carry into the smallest normal.
+		if (sig >= (1 << (p - 1))) { out = 1 << (p - 1); }
+	} else {
+		out = out | (raw << (p - 1));
+	}
+	if (sign != 0) { out = out | ct_fp_signbit(ty); }
+	return out;
+}
+
+// Returns normalized significand. exp receives its unbiased exponent.
+fn ct_fp_unpack(v i64, ty *Type, exp *i64) i64 {
+	var p i64 = ct_fp_p(ty);
+	var raw i64 = ct_fp_exp(v, ty);
+	var sig i64 = ct_fp_frac(v, ty);
+	if (raw == 0) {
+		*exp = ct_fp_min(ty);
+		if (sig == 0) { return 0; }
+		while (sig < (1 << (p - 1))) { sig = sig << 1; *exp = *exp - 1; }
+		return sig;
+	}
+	*exp = raw - ct_fp_bias(ty);
+	return sig | (1 << (p - 1));
+}
+
+fn ct_fp_cast(v i64, from *Type, to *Type) i64 {
+	if (from.size == to.size) { return v; }
+	if (ct_fp_is_nan(v, from)) { return ct_fp_nan(to); }
+	if (ct_fp_is_inf(v, from)) { return ct_fp_inf(ct_fp_sign(v, from), to); }
+	if (ct_fp_is_zero(v, from)) {
+		if (ct_fp_sign(v, from) != 0) { return ct_fp_signbit(to); }
+		return 0;
+	}
+	var e i64 = 0;
+	var sig i64 = ct_fp_unpack(v, from, &e);
+	var d i64 = ct_fp_p(from) - ct_fp_p(to);
+	var ext i64 = sig << 3;
+	if (d > 0) { ext = ct_shr_jam(ext, d); }
+	else if (d < 0) { ext = ext << -d; }
+	return ct_fp_pack(ct_fp_sign(v, from), e, ext, ct_fp_p(to), to);
+}
+
+fn ct_fp_add(a i64, b i64, ty *Type, sub bool) i64 {
+	var sa i64 = ct_fp_sign(a, ty);
+	var sb i64 = ct_fp_sign(b, ty);
+	if (sub) { sb = sb ^ 1; }
+	if (ct_fp_is_nan(a, ty) || ct_fp_is_nan(b, ty)) { return ct_fp_nan(ty); }
+	if (ct_fp_is_inf(a, ty)) {
+		if (ct_fp_is_inf(b, ty) && sa != sb) { return ct_fp_nan(ty); }
+		return ct_fp_inf(sa, ty);
+	}
+	if (ct_fp_is_inf(b, ty)) { return ct_fp_inf(sb, ty); }
+	if (ct_fp_is_zero(a, ty) && ct_fp_is_zero(b, ty)) {
+		if (sa != sb) { return 0; }
+		if (sa != 0) { return ct_fp_signbit(ty); }
+		return 0;
+	}
+	if (ct_fp_is_zero(a, ty)) {
+		b = b & ~ct_fp_signbit(ty);
+		if (sb != 0) { b = b | ct_fp_signbit(ty); }
+		return b;
+	}
+	if (ct_fp_is_zero(b, ty)) { return a; }
+	var ea i64 = 0; var eb i64 = 0;
+	var xa i64 = ct_fp_unpack(a, ty, &ea) << 3;
+	var xb i64 = ct_fp_unpack(b, ty, &eb) << 3;
+	if (ea < eb) { var te i64 = ea; ea = eb; eb = te; var tx i64 = xa; xa = xb; xb = tx; var ts i64 = sa; sa = sb; sb = ts; }
+	xb = ct_shr_jam(xb, ea - eb);
+	if (sa == sb) { return ct_fp_pack(sa, ea, xa + xb, ct_fp_p(ty), ty); }
+	if (xa < xb) { var tx i64 = xa; xa = xb; xb = tx; var ts i64 = sa; sa = sb; sb = ts; }
+	return ct_fp_pack(sa, ea, xa - xb, ct_fp_p(ty), ty);
+}
+
+fn ct_fp_mul(a i64, b i64, ty *Type) i64 {
+	var sign i64 = ct_fp_sign(a, ty) ^ ct_fp_sign(b, ty);
+	if (ct_fp_is_nan(a, ty) || ct_fp_is_nan(b, ty)) { return ct_fp_nan(ty); }
+	if (ct_fp_is_inf(a, ty) || ct_fp_is_inf(b, ty)) {
+		if (ct_fp_is_zero(a, ty) || ct_fp_is_zero(b, ty)) { return ct_fp_nan(ty); }
+		return ct_fp_inf(sign, ty);
+	}
+	if (ct_fp_is_zero(a, ty) || ct_fp_is_zero(b, ty)) { return ct_fp_pack(sign, 0, 0, ct_fp_p(ty), ty); }
+	var ea i64 = 0; var eb i64 = 0;
+	var x i64 = ct_fp_unpack(a, ty, &ea);
+	var y i64 = ct_fp_unpack(b, ty, &eb);
+	// 53x53 bits fit in four base-2^27 limbs. Keeping limbs below 2^55
+	// avoids signed overflow while preserving every sticky bit.
+	var mask i64 = 0x7ffffff;
+	var x0 i64 = x & mask; var x1 i64 = x >> 27;
+	var y0 i64 = y & mask; var y1 i64 = y >> 27;
+	var z0 i64 = x0 * y0;
+	var z1 i64 = x0 * y1 + x1 * y0;
+	var z2 i64 = x1 * y1;
+	var l0 i64 = z0 & mask;
+	z1 = z1 + (z0 >> 27);
+	var l1 i64 = z1 & mask;
+	z2 = z2 + (z1 >> 27);
+	var l2 i64 = z2 & mask;
+	var l3 i64 = z2 >> 27;
+	var sh i64 = ct_fp_p(ty) - 4;
+	var ext i64 = 0;
+	var sticky bool = false;
+	if (sh < 27) {
+		ext = (l0 >> sh) | (l1 << (27 - sh)) | (l2 << (54 - sh));
+		if ((l0 & ((1 << sh) - 1)) != 0) { sticky = true; }
+	} else {
+		var s i64 = sh - 27;
+		ext = (l1 >> s) | (l2 << (27 - s)) | (l3 << (54 - s));
+		if (l0 != 0 || (l1 & ((1 << s) - 1)) != 0) { sticky = true; }
+	}
+	if (sticky) { ext = ext | 1; }
+	return ct_fp_pack(sign, ea + eb, ext, ct_fp_p(ty), ty);
+}
+
+fn ct_fp_div(a i64, b i64, ty *Type) i64 {
+	var sign i64 = ct_fp_sign(a, ty) ^ ct_fp_sign(b, ty);
+	if (ct_fp_is_nan(a, ty) || ct_fp_is_nan(b, ty)) { return ct_fp_nan(ty); }
+	if (ct_fp_is_inf(a, ty) && ct_fp_is_inf(b, ty)) { return ct_fp_nan(ty); }
+	if (ct_fp_is_inf(a, ty)) { return ct_fp_inf(sign, ty); }
+	if (ct_fp_is_inf(b, ty)) { return ct_fp_pack(sign, 0, 0, ct_fp_p(ty), ty); }
+	if (ct_fp_is_zero(b, ty)) {
+		if (ct_fp_is_zero(a, ty)) { return ct_fp_nan(ty); }
+		return ct_fp_inf(sign, ty);
+	}
+	if (ct_fp_is_zero(a, ty)) { return ct_fp_pack(sign, 0, 0, ct_fp_p(ty), ty); }
+	var ea i64 = 0; var eb i64 = 0;
+	var num i64 = ct_fp_unpack(a, ty, &ea);
+	var den i64 = ct_fp_unpack(b, ty, &eb);
+	if (num < den) { num = num << 1; ea = ea - 1; }
+	// Remove normalized leading one before long division. q then carries it
+	// explicitly, followed by p+2 fraction bits: p bits plus G/R/S.
+	num = num - den;
+	var q i64 = 1;
+	var i i64 = 0;
+	while (i < ct_fp_p(ty) + 2) {
+		num = num << 1;
+		q = q << 1;
+		if (num >= den) { num = num - den; q = q | 1; }
+		i = i + 1;
+	}
+	if (num != 0) { q = q | 1; }
+	return ct_fp_pack(sign, ea - eb, q, ct_fp_p(ty), ty);
+}
+
+fn ct_fp_cmp(a i64, b i64, ty *Type) i64 {
+	if (ct_fp_is_nan(a, ty) || ct_fp_is_nan(b, ty)) { return 2; }
+	if (ct_fp_is_zero(a, ty) && ct_fp_is_zero(b, ty)) { return 0; }
+	var sa i64 = ct_fp_sign(a, ty); var sb i64 = ct_fp_sign(b, ty);
+	if (sa != sb) { if (sa != 0) { return -1; } return 1; }
+	var ma i64 = a & ~ct_fp_signbit(ty);
+	var mb i64 = b & ~ct_fp_signbit(ty);
+	if (ma == mb) { return 0; }
+	if (ma < mb) { if (sa != 0) { return 1; } return -1; }
+	if (sa != 0) { return -1; }
+	return 1;
+}
+
+fn ct_float_common(a ComptimeVal, b ComptimeVal) *Type {
+	if (a.ty.size >= b.ty.size) { return a.ty; }
+	return b.ty;
+}
+
+fn ct_float_bin(n *Node, a ComptimeVal, b ComptimeVal) ComptimeVal {
+	var ty *Type = ct_float_common(a, b);
+	var x i64 = ct_fp_cast(a.num, a.ty, ty);
+	var y i64 = ct_fp_cast(b.num, b.ty, ty);
+	if (n.kind == ND_ADD) { return ct_float(ct_fp_add(x, y, ty, false), ty); }
+	if (n.kind == ND_SUB) { return ct_float(ct_fp_add(x, y, ty, true), ty); }
+	if (n.kind == ND_MUL) { return ct_float(ct_fp_mul(x, y, ty), ty); }
+	if (n.kind == ND_DIV) { return ct_float(ct_fp_div(x, y, ty), ty); }
+	var c i64 = ct_fp_cmp(x, y, ty);
+	if (n.kind == ND_EQ) { return ct_int(c == 0 as i64); }
+	if (n.kind == ND_NE) { return ct_int(c != 0 as i64); }
+	if (n.kind == ND_LT) { return ct_int(c == -1 as i64); }
+	return ct_int(c == -1 || c == 0 as i64);
+}
+
 fn ct_void() ComptimeVal {
 	var cv ComptimeVal;
 	cv.kind = CV_VOID;
@@ -116,7 +396,7 @@ fn ct_run_stmt(s *Node) {
 	if (s.kind == ND_IF) {
 		var c ComptimeVal = ct_eval_expr(s.cond);
 		var br *Node = null;
-		if (c.num != 0) { br = s.then; }
+		if (ct_truth(c)) { br = s.then; }
 		else { br = s.els; }
 		ct_run_stmt(br);
 		return;
@@ -133,7 +413,7 @@ fn ct_eval_for(n *Node) {
 	while (!ct_returning) {
 		if (n.cond as i64 != 0) {
 			var c ComptimeVal = ct_eval_expr(n.cond);
-			if (c.num == 0) { break; }
+			if (!ct_truth(c)) { break; }
 		}
 		ct_broke = false;
 		ct_continued = false;
@@ -166,7 +446,7 @@ fn ct_eval_expr(n *Node) ComptimeVal {
 	if (n as i64 == 0) { return ct_void(); }
 	if (n.kind == ND_NUM) {
 		if (n.ty as i64 != 0 && n.ty.kind == TY_FLOAT) {
-			error_at(n.pos, "comptime does not support floats");
+			return ct_float(n.val, n.ty);
 		}
 		return ct_int(n.val);
 	}
@@ -178,7 +458,10 @@ fn ct_eval_expr(n *Node) ComptimeVal {
 	if (n.kind == ND_VAR) {
 		var v *CTVar = ct_find(n.varp.name);
 		if (v as i64 != 0) { return v.val; }
-		if (n.varp.is_global) { return ct_int(n.varp.init); }
+		if (n.varp.is_global) {
+			if (n.varp.ty.kind == TY_FLOAT) { return ct_float(n.varp.init, n.varp.ty); }
+			return ct_int(n.varp.init);
+		}
 		error_at(n.pos, "undefined comptime variable");
 	}
 	if (n.kind == ND_SIZEOF) { return ct_int(n.typeval.size as i64); }
@@ -186,7 +469,11 @@ fn ct_eval_expr(n *Node) ComptimeVal {
 
 	if (n.kind == ND_CAST) {
 		var v ComptimeVal = ct_eval_expr(n.lhs);
-		if (n.ty.kind == TY_BOOL) { return ct_int(v.num != 0 as i64); }
+		if (n.ty.kind == TY_BOOL) { return ct_int(ct_truth(v) as i64); }
+		if (v.kind == CV_FLOAT) {
+			if (n.ty.kind != TY_FLOAT) { error_at(n.pos, "comptime float casts require a float target"); }
+			return ct_float(ct_fp_cast(v.num, v.ty, n.ty), n.ty);
+		}
 		if (n.ty.size == 1) {
 			if (n.ty.is_unsigned) { return ct_int(v.num & 255); }
 			return ct_int(((v.num as u64) as u8) as i64);
@@ -202,13 +489,24 @@ fn ct_eval_expr(n *Node) ComptimeVal {
 		return v;
 	}
 
-	if (n.kind == ND_ADD) { return ct_int(ct_eval_expr(n.lhs).num + ct_eval_expr(n.rhs).num); }
-	if (n.kind == ND_SUB) { return ct_int(ct_eval_expr(n.lhs).num - ct_eval_expr(n.rhs).num); }
-	if (n.kind == ND_MUL) { return ct_int(ct_eval_expr(n.lhs).num * ct_eval_expr(n.rhs).num); }
-	if (n.kind == ND_DIV) {
-		var d i64 = ct_eval_expr(n.rhs).num;
+	if (n.kind == ND_ADD || n.kind == ND_SUB || n.kind == ND_MUL || n.kind == ND_DIV ||
+	    n.kind == ND_EQ || n.kind == ND_NE || n.kind == ND_LT || n.kind == ND_LE) {
+		var a ComptimeVal = ct_eval_expr(n.lhs);
+		var b ComptimeVal = ct_eval_expr(n.rhs);
+		if (a.kind == CV_FLOAT || b.kind == CV_FLOAT) {
+			if (a.kind != CV_FLOAT || b.kind != CV_FLOAT) { error_at(n.pos, "cannot mix float and integer operands in comptime"); }
+			return ct_float_bin(n, a, b);
+		}
+		if (n.kind == ND_ADD) { return ct_int(a.num + b.num); }
+		if (n.kind == ND_SUB) { return ct_int(a.num - b.num); }
+		if (n.kind == ND_MUL) { return ct_int(a.num * b.num); }
+		if (n.kind == ND_EQ) { return ct_int(a.num == b.num as i64); }
+		if (n.kind == ND_NE) { return ct_int(a.num != b.num as i64); }
+		if (n.kind == ND_LT) { return ct_int(a.num < b.num as i64); }
+		if (n.kind == ND_LE) { return ct_int(a.num <= b.num as i64); }
+		var d i64 = b.num;
 		if (d == 0) { error_at(n.pos, "division by zero in comptime"); }
-		return ct_int(ct_eval_expr(n.lhs).num / d);
+		return ct_int(a.num / d);
 	}
 	if (n.kind == ND_MOD) {
 		var d i64 = ct_eval_expr(n.rhs).num;
@@ -221,22 +519,21 @@ fn ct_eval_expr(n *Node) ComptimeVal {
 	if (n.kind == ND_SHL)  { return ct_int(ct_eval_expr(n.lhs).num << ct_eval_expr(n.rhs).num); }
 	if (n.kind == ND_SHR)  { return ct_int(ct_eval_expr(n.lhs).num >> ct_eval_expr(n.rhs).num); }
 
-	if (n.kind == ND_EQ) { return ct_int(ct_eval_expr(n.lhs).num == ct_eval_expr(n.rhs).num as i64); }
-	if (n.kind == ND_NE) { return ct_int(ct_eval_expr(n.lhs).num != ct_eval_expr(n.rhs).num as i64); }
-	if (n.kind == ND_LT) { return ct_int(ct_eval_expr(n.lhs).num < ct_eval_expr(n.rhs).num as i64); }
-	if (n.kind == ND_LE) { return ct_int(ct_eval_expr(n.lhs).num <= ct_eval_expr(n.rhs).num as i64); }
-
-	if (n.kind == ND_NOT)  { return ct_int(ct_eval_expr(n.lhs).num == 0 as i64); }
+	if (n.kind == ND_NOT)  { return ct_int(!ct_truth(ct_eval_expr(n.lhs)) as i64); }
 	if (n.kind == ND_AND)  {
-		if (ct_eval_expr(n.lhs).num == 0) { return ct_int(0); }
-		return ct_int(ct_eval_expr(n.rhs).num != 0 as i64);
+		if (!ct_truth(ct_eval_expr(n.lhs))) { return ct_int(0); }
+		return ct_int(ct_truth(ct_eval_expr(n.rhs)) as i64);
 	}
 	if (n.kind == ND_OR)   {
-		if (ct_eval_expr(n.lhs).num != 0) { return ct_int(1); }
-		return ct_int(ct_eval_expr(n.rhs).num != 0 as i64);
+		if (ct_truth(ct_eval_expr(n.lhs))) { return ct_int(1); }
+		return ct_int(ct_truth(ct_eval_expr(n.rhs)) as i64);
 	}
 
-	if (n.kind == ND_NEG)    { return ct_int(-ct_eval_expr(n.lhs).num); }
+	if (n.kind == ND_NEG) {
+		var v ComptimeVal = ct_eval_expr(n.lhs);
+		if (v.kind == CV_FLOAT) { return ct_float(v.num ^ ct_fp_signbit(v.ty), v.ty); }
+		return ct_int(-v.num);
+	}
 	if (n.kind == ND_BITNOT) { return ct_int(~ct_eval_expr(n.lhs).num); }
 
 	if (n.kind == ND_COMMA) { ct_eval_expr(n.lhs); return ct_eval_expr(n.rhs); }
@@ -257,6 +554,13 @@ fn ct_eval_expr(n *Node) ComptimeVal {
 			var v *CTVar = ct_find(n.lhs.varp.name);
 			if (v as i64 == 0) { error_at(n.pos, "undefined comptime variable"); }
 			var rhs ComptimeVal = ct_eval_expr(n.rhs);
+			if (v.val.kind == CV_FLOAT || rhs.kind == CV_FLOAT) {
+				if (v.val.kind != CV_FLOAT || rhs.kind != CV_FLOAT) { error_at(n.pos, "cannot mix float and integer operands in comptime"); }
+				var op Node;
+				op.kind = n.val as int;
+				v.val = ct_float_bin(&op, v.val, rhs);
+				return v.val;
+			}
 			var a i64 = v.val.num; var b i64 = rhs.num; var r i64 = 0;
 			if (n.val == ND_ADD)     { r = a + b; }
 			else if (n.val == ND_SUB)    { r = a - b; }
@@ -279,11 +583,15 @@ fn ct_eval_expr(n *Node) ComptimeVal {
 		if (f as i64 == 0) { error_at(n.pos, "undefined function"); }
 		return ct_call(f, n.args);
 	}
+	if (n.kind == ND_IFEXPR) {
+		if (ct_truth(ct_eval_expr(n.cond))) { return ct_eval_expr(n.then); }
+		return ct_eval_expr(n.els);
+	}
 
 	if (n.kind == ND_IF) {
 		var c ComptimeVal = ct_eval_expr(n.cond);
 		var branch *Node = null;
-		if (c.num != 0) { branch = n.then; }
+		if (ct_truth(c)) { branch = n.then; }
 		else { branch = n.els; }
 		if (branch as i64 == 0) { return ct_void(); }
 		var cv ComptimeVal = ct_void();
