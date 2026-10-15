@@ -1,5 +1,6 @@
 import "comp.qela";
 import "diag.qela";
+import "absorb.qela";
 import "lex.qela";
 import "parse.qela";
 import "type.qela";
@@ -2458,6 +2459,7 @@ fn cmd_help() int {
 	write_str(STDOUT, "qela ");
 	write_str(STDOUT, qela_version());
 	write_str(STDOUT, " -- a self-hosting compiled language\n\n");
+	write_str(STDOUT, "packages: qela absorb <file|dir> [-o qela]\n          qela absorbed [drop [package]]\n\n");
 	write_str(STDOUT, "usage: qela <file.qela> [-o output] [options]\n       qela . [dir]   build a project from a directory\n       qela run <file.qela> [args]\n       qela irun <file.qela|dir> [args]\n       qela test <file.qela|dir> [files...] [-- args]\n       qela fmt <file.qela>\n       qela doc std [name]\n       qela doc <file.qela> [name]\n       qela repl\n       qela --lsp\n       qela --dump-std <module>\n\ncompile a Qela program to a static binary; '-' reads the source\nfrom stdin. A directory merges every .qela file under it,\nrecursively, into one program (entry: main.qela, or the sole file) --\nno imports needed between project files. 'run' compiles to a temp file and executes\nit, and panics print a backtrace there. 'irun' interprets the\nprogram in this process instead of compiling it -- no binary is\nwritten, and asm, naked functions and 'entry' are ignored with a\nwarning. 'test' runs the program and\nchecks its leading comments: // expect-exit: N, // expect-out: text\n(one line each, compared in order) and // expect-compile-error;\nseveral files can be tested in one run -- '--' separates the\nprogram arguments, e.g. qela test a.qela b.qela -- 5 6. 'repl'\ncompiles each line as an expression and prints its value. 'doc'\nlooks up functions by /// doc comment: 'doc std name' searches the\nembedded standard library (a module name lists its functions),\n'doc file.qela name' any source file.\n\nstrings interpolate, so n = ${40 + 2} prints 42 and pointers\nrender as hex; the expression is evaluated at runtime.\n\noptions:\n  -o <file>        output path (default: input name without .qela)\n  -c               emit a relocatable object (.o) for an external linker\n  --target, -t <t> x86_64 (default: the host architecture), arm64 or riscv64\n  -g               DWARF line info and symbols for gdb\n  --backtrace         print function frames on panic\n  --no-bounds-checks  disable index checks\n  --no-warn           suppress warnings\n  --interpreted       treat every function of your own as 'interpreted'\n  --jit               treat every function of your own as 'dynamic'\n  --color=auto|always|never  control coloured diagnostics (auto: tty + NO_COLOR)\n  --version         print the compiler version\n  -h, --help          this text\n");
 	return 0;
 }
@@ -2494,6 +2496,12 @@ fn main(argc int, argv **u8) int {
 	}
 	if (argc >= 2 && str_eq(str_from_cstr(argv[1]), "run")) {
 		return cmd_run(argc, argv);
+	}
+	if (argc >= 2 && str_eq(str_from_cstr(argv[1]), "absorb")) {
+		return cmd_absorb(argc, argv);
+	}
+	if (argc >= 2 && str_eq(str_from_cstr(argv[1]), "absorbed")) {
+		return cmd_absorbed(argc, argv);
 	}
 	if (argc >= 2 && str_eq(str_from_cstr(argv[1]), "test")) {
 		return cmd_test(argc, argv);
