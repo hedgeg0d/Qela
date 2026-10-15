@@ -63,9 +63,9 @@ let SYS_GETPID_N = 172;
 let SYS_GETDENTS_N = 61;
 let SYS_DUP3_N = 24;
 let SYS_IOCTL_N = 29;
-let SYS_MKDIR_N = 34;
-let SYS_RMDIR_N = 21;
-let SYS_RENAME_N = 82;
+let SYS_MKDIR_N = 34;      // mkdirat
+let SYS_RMDIR_N = 35;      // unlinkat with AT_REMOVEDIR (no rmdir in the generic table)
+let SYS_RENAME_N = 276;    // renameat2 (some vendor kernels drop renameat)
 let SYS_GETCWD_N = 17;
 let SYS_RT_SIGACTION_N = 134;
 let SYS_KILL_N = 129;
@@ -190,7 +190,9 @@ fn sys_mmap(addr i64, len i64, prot i64, flags i64, fd i64, off i64) i64 {
 /// Creates a directory; returns 0 or an errno.
 fn sys_mkdir(path *u8) i64 {
 	$if (TARGET != "x86_64") {
-		return syscall(SYS_MKDIR_N, path as i64, 0, 0);
+		// mkdirat: the generic number takes dirfd first; the old x86
+		// number is plain mkdir(path, mode). AT_FDCWD = -100.
+		return syscall(SYS_MKDIR_N, -100, path as i64, 0);
 	}
 	return syscall(SYS_MKDIR, path as i64, 0, 0);
 }
@@ -198,7 +200,9 @@ fn sys_mkdir(path *u8) i64 {
 /// Removes an empty directory; returns 0 or an errno.
 fn sys_rmdir(path *u8) i64 {
 	$if (TARGET != "x86_64") {
-		return syscall(SYS_RMDIR_N, path as i64, 0, 0);
+		// unlinkat(AT_FDCWD, path, AT_REMOVEDIR=0x200): the generic
+		// table has no rmdir.
+		return syscall(SYS_RMDIR_N, -100, path as i64, 0x200);
 	}
 	return syscall(SYS_RMDIR, path as i64, 0, 0);
 }
@@ -206,7 +210,9 @@ fn sys_rmdir(path *u8) i64 {
 /// Renames a file, old to new; returns 0 or an errno.
 fn sys_rename(old *u8, new *u8) i64 {
 	$if (TARGET != "x86_64") {
-		return syscall(SYS_RENAME_N, old as i64, new as i64, 0);
+		// renameat2(AT_FDCWD, old, AT_FDCWD, new, 0): the generic
+		// number takes two dirfds first.
+		return syscall(SYS_RENAME_N, -100, old as i64, -100, new as i64, 0);
 	}
 	return syscall(SYS_RENAME, old as i64, new as i64, 0);
 }
