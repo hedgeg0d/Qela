@@ -1,0 +1,19 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: 42 7 2
+// expect-out: bob=42
+// expect-out: ann=7
+// expect-out: cid=1
+// expect-out: localhost root
+import "std/io.qela";
+import "std/map.qela";
+
+fn main() int {
+	var ages = ["bob": 42, "ann": 7];
+	println("${ages["bob"]} ${ages["ann"]} ${map_len(&ages)}");
+	ages["cid"] = 1;
+	for k in ages { println("${k}=${ages[k]}"); }
+	var cfg = ["host": "localhost", "user": "root"];
+	println("${cfg["host"]} ${cfg["user"]}");
+	return 0;
+}
