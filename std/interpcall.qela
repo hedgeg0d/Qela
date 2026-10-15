@@ -37,7 +37,7 @@ fn interp_register(def_src str, name str) {
 	abi_send_frame(abi_in, ABI_REQ_RUN as u8, def_src.ptr, def_src.len);
 	var buf [8]u8;
 	var kind u8 = 0;
-	var n i64 = abi_recv_frame(abi_out, &kind, &buf[0], 8);
+	var n i64 = abi_wait_result(&kind, &buf[0], 8);
 	if (n < 0) {
 		eprint("interpreted: the qela subprocess died while registering '");
 		eprint(name);
@@ -70,7 +70,7 @@ fn __interp_call_dispatch(def_src str, name str, args *i64) i64 {
 
 	var rbuf [8]u8;
 	var kind u8 = 0;
-	var n i64 = abi_recv_frame(abi_out, &kind, &rbuf[0], 8);
+	var n i64 = abi_wait_result(&kind, &rbuf[0], 8);
 	if (n < 0) {
 		eprint("interpreted: the qela subprocess died while calling '");
 		eprint(name);
