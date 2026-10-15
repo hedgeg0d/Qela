@@ -1,0 +1,132 @@
+import "arena.qela";
+import "buf.qela";
+
+// Minimal CSV: RFC 4180-ish field splitting and escaping, without the
+// multi-line quoted fields (a quoted field must stay on one line).
+// Records are handled line by line, so a big file never needs to be
+// resident as a whole.
+
+/// Splits one CSV record into its fields. Quoted fields may contain
+/// commas and doubled quotes; an unterminated quote consumes the rest of
+/// the line. Returns null when the line is empty.
+fn csv_parse_line(line str) []str {
+	if (line.len == 0) {
+		var empty []str;
+		empty.ptr = null;
+		empty.len = 0;
+		return empty;
+	}
+	var cap i64 = 1;
+	var i i64 = 0;
+	while (i < line.len) {
+		if (line.ptr[i] == ',') { cap = cap + 1; }
+		i = i + 1;
+	}
+	var fields *str = arena_alloc(cap * 16, 8) as *str;
+	var n i64 = 0;
+	var pos i64 = 0;
+	while (true) {
+		var field str;
+		if (pos < line.len && line.ptr[pos] == '"') {
+			// Quoted: commas are literal, `""` is one quote.
+			var start i64 = pos + 1;
+			var end i64 = start;
+			var b Buf;
+			while (true) {
+				if (end >= line.len) {
+					// Unterminated: the rest of the line is the field.
+					if (b.n == 0) { field = str_slice(line, start, line.len); }
+					else {
+						buf_bytes(&b, line.ptr + start, line.len - start);
+						field = buf_str(&b);
+					}
+					pos = line.len;
+					break;
+				}
+				if (line.ptr[end] == '"') {
+					if (end + 1 < line.len && line.ptr[end + 1] == '"') {
+						// Doubled quote inside a quoted field.
+						buf_bytes(&b, line.ptr + start, end - start);
+						buf_u8(&b, '"');
+						end = end + 2;
+						start = end;
+						continue;
+					}
+					buf_bytes(&b, line.ptr + start, end - start);
+					field = buf_str(&b);
+					pos = end + 1;
+					break;
+				}
+				end = end + 1;
+			}
+		} else {
+			var start i64 = pos;
+			while (pos < line.len && line.ptr[pos] != ',') { pos = pos + 1; }
+			field = str_slice(line, start, pos);
+		}
+		fields[n] = field;
+		n = n + 1;
+		if (pos >= line.len) { break; }
+		pos = pos + 1;
+	}
+	var out *str = arena_alloc(n * 16, 8) as *str;
+	var k i64 = 0;
+	while (k < n) { out[k] = fields[k]; k = k + 1; }
+	var res []str;
+	res.ptr = out;
+	res.len = n;
+	return res;
+}
+
+/// Escapes one field for writing: quotes it when it contains a comma, a
+/// quote, a newline or a carriage return; quotes are doubled.
+fn csv_escape(s str) str {
+	var need bool = false;
+	var i i64 = 0;
+	while (i < s.len) {
+		var c u8 = s.ptr[i];
+		if (c == ',' || c == '"' || c == '\n' || c == '\r') { need = true; }
+		i = i + 1;
+	}
+	if (!need) { return s; }
+	var b Buf;
+	buf_u8(&b, '"');
+	i = 0;
+	while (i < s.len) {
+		if (s.ptr[i] == '"') { buf_u8(&b, '"'); }
+		buf_u8(&b, s.ptr[i]);
+		i = i + 1;
+	}
+	buf_u8(&b, '"');
+	return buf_str(&b);
+}
+
+/// The next record from a buffer, advancing *start past it (and past one
+/// trailing newline). Returns null when nothing is left. Feed it a
+/// file's contents read in chunks: a record is returned whole as soon as
+/// its newline is in the buffer, so chunk boundaries never split a
+/// field.
+fn csv_next_line(s str, start *i64) str {
+	var i i64 = start[0];
+	while (i < s.len && s.ptr[i] != '\n') { i = i + 1; }
+	var line str = str_slice(s, start[0], i);
+	if (i >= s.len) { start[0] = s.len; }
+	else {
+		start[0] = i + 1;
+		if (line.len > 0 && line.ptr[line.len - 1] == '\r') { line.len = line.len - 1; }
+	}
+	return line;
+}
+
+/// Joins fields into one CSV record, escaping each one.
+fn csv_join(fields []str, n i64) str {
+	var b Buf;
+	var i i64 = 0;
+	while (i < n) {
+		if (i > 0) { buf_u8(&b, ','); }
+		var esc str = csv_escape(fields[i]);
+		buf_bytes(&b, esc.ptr, esc.len);
+		i = i + 1;
+	}
+	return buf_str(&b);
+}
