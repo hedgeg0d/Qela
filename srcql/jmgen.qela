@@ -1,0 +1,500 @@
+import "comp.qela";
+import "diag.qela";
+import "funcs.qela";
+import "../std/fmt.qela";
+
+// Per-type JSON marshal/unmarshal, generated the way fmtgen.qela generates
+// printers. type.qela rewrites a call to json_marshal(v) or
+// json_unmarshal(s, &v) into a call of a function emitted here, so a type
+// pays for its code only when a program actually serializes it.
+//
+// json_marshal supports bools, ints, floats, strings, pointers (null ->
+// "null"), arrays, slices and named structs, nested to any depth.
+// json_unmarshal supports named structs whose fields are bools, ints,
+// floats, strings, arrays, slices, pointers to structs or nested structs;
+// a field missing from the JSON, of the wrong kind, or beyond the length
+// of a fixed array keeps its current value, and it returns false only when
+// the JSON itself is not an object (or cannot be parsed at all). Field
+// names are the JSON keys; there are no tags yet.
+//
+// The generated code compares node kinds against plain numbers (0..6)
+// because it is parsed in a fresh scope that cannot see std/json.qela's
+// `let` constants; the values mirror J_NULL..J_OBJ there.
+
+struct JmGen {
+	next *JmGen,
+	ty   *Type,
+	marshal str,
+	unmarshal str,
+}
+
+var jmgen_list *JmGen;
+var jmgen_seq int = 0;
+var jmgen_tmp int = 0;
+var jmgen_errpos i64 = 0;
+
+fn jmgen_reset() {
+	jmgen_list = null;
+	jmgen_seq = 0;
+	jmgen_tmp = 0;
+}
+
+fn jmgen_entry(ty *Type) *JmGen {
+	var e *JmGen = jmgen_list;
+	while (e as i64 != 0) {
+		if (e.ty as i64 == ty as i64) { return e; }
+		e = e.next;
+	}
+	e = arena_alloc(sizeof(JmGen), 8) as *JmGen;
+	e.ty = ty;
+	e.next = jmgen_list;
+	jmgen_list = e;
+	return e;
+}
+
+fn jmgen_tmp_name() str {
+	var b Buf;
+	fmt_str(&b, "__j");
+	fmt_i64(&b, jmgen_tmp as i64);
+	jmgen_tmp = jmgen_tmp + 1;
+	return buf_str(&b);
+}
+
+fn jmgen_err(what str, ty *Type) {
+	var b Buf;
+	fmt_str(&b, what);
+	fmt_str(&b, " a value of type '");
+	fmt_str(&b, type_name(ty));
+	fmt_str(&b, "'");
+	error_at(jmgen_errpos, buf_str(&b));
+}
+
+fn jmgen_marshal_can(ty *Type) bool {
+	var k int = ty.kind;
+	if (k == TY_BOOL || k == TY_INT || k == TY_FLOAT) { return true; }
+	if (k == TY_PTR) { return jmgen_marshal_can(ty.base); }
+	if (k == TY_ARRAY || k == TY_SLICE) { return jmgen_marshal_can(ty.base); }
+	if (k == TY_STRUCT) { return ty.name.len != 0; }
+	return false;
+}
+
+fn jmgen_marshal_value(sb *Buf, expr str, ty *Type) {
+	if (ty.kind == TY_BOOL) {
+		fmt_str(sb, "if (");
+		fmt_str(sb, expr);
+		fmt_str(sb, ") { fmt_str(&b, \"true\"); } else { fmt_str(&b, \"false\"); }\n");
+		return;
+	}
+	if (ty.kind == TY_INT) {
+		fmt_str(sb, "fmt_i64(&b, (");
+		fmt_str(sb, expr);
+		fmt_str(sb, ") as i64);\n");
+		return;
+	}
+	if (ty.kind == TY_FLOAT) {
+		var fv str = jmgen_tmp_name();
+		var fp str = jmgen_tmp_name();
+		fmt_str(sb, "{ var ");
+		fmt_str(sb, fv);
+		fmt_str(sb, " f64 = ");
+		fmt_str(sb, expr);
+		fmt_str(sb, "; var ");
+		fmt_str(sb, fp);
+		fmt_str(sb, " *i64 = &");
+		fmt_str(sb, fv);
+		fmt_str(sb, " as *i64; fmt_f64_bits(&b, *");
+		fmt_str(sb, fp);
+		fmt_str(sb, "); }\n");
+		return;
+	}
+	if (ty.kind == TY_SLICE && ty.base as i64 == ty_u8 as i64) {
+		fmt_str(sb, "json_emit_str(&b, ");
+		fmt_str(sb, expr);
+		fmt_str(sb, ");\n");
+		return;
+	}
+	if (ty.kind == TY_PTR) {
+		fmt_str(sb, "if ((");
+		fmt_str(sb, expr);
+		fmt_str(sb, ") as i64 == 0) { fmt_str(&b, \"null\"); } else {\n");
+		var eb Buf;
+		buf_u8(&eb, '*');
+		buf_u8(&eb, '(');
+		fmt_str(&eb, expr);
+		buf_u8(&eb, ')');
+		jmgen_marshal_value(sb, buf_str(&eb), ty.base);
+		fmt_str(sb, "}\n");
+		return;
+	}
+	if (ty.kind == TY_ARRAY || ty.kind == TY_SLICE) {
+		var iv str = jmgen_tmp_name();
+		fmt_str(sb, "fmt_str(&b, \"[\");\nvar ");
+		fmt_str(sb, iv);
+		fmt_str(sb, " i64 = 0;\nwhile (");
+		fmt_str(sb, iv);
+		fmt_str(sb, " < ");
+		if (ty.kind == TY_ARRAY) { fmt_i64(sb, ty.len); }
+		else {
+			fmt_str(sb, "(");
+			fmt_str(sb, expr);
+			fmt_str(sb, ").len");
+		}
+		fmt_str(sb, ") {\nif (");
+		fmt_str(sb, iv);
+		fmt_str(sb, " > 0) { fmt_str(&b, \",\"); }\n");
+		var eb Buf;
+		buf_u8(&eb, '(');
+		fmt_str(&eb, expr);
+		fmt_str(&eb, ")[");
+		fmt_str(&eb, iv);
+		buf_u8(&eb, ']');
+		jmgen_marshal_value(sb, buf_str(&eb), ty.base);
+		fmt_str(sb, iv);
+		fmt_str(sb, " = ");
+		fmt_str(sb, iv);
+		fmt_str(sb, " + 1;\n}\nfmt_str(&b, \"]\");\n");
+		return;
+	}
+	if (ty.kind == TY_STRUCT) {
+		var callee str = jmgen_marshal_for(ty);
+		if (callee.len == 0) { jmgen_err("cannot json_marshal", ty); }
+		fmt_str(sb, "fmt_str(&b, ");
+		fmt_str(sb, callee);
+		fmt_str(sb, "(");
+		fmt_str(sb, expr);
+		fmt_str(sb, "));\n");
+		return;
+	}
+	jmgen_err("cannot json_marshal", ty);
+}
+
+fn jmgen_marshal_for(ty *Type) str {
+	var e *JmGen = jmgen_entry(ty);
+	if (e.marshal.len != 0) { return e.marshal; }
+	if (!jmgen_marshal_can(ty)) { return ""; }
+
+	var nb Buf;
+	fmt_str(&nb, "__jmarshal");
+	fmt_i64(&nb, jmgen_seq as i64);
+	jmgen_seq = jmgen_seq + 1;
+	var name str = buf_str(&nb);
+	// Entered before the body is built so a self-referencing struct
+	// (through a pointer or a slice) resolves to this function.
+	e.marshal = name;
+
+	var sb Buf;
+	fmt_str(&sb, "fn ");
+	fmt_str(&sb, name);
+	fmt_str(&sb, "(v ");
+	fmt_str(&sb, type_name(ty));
+	fmt_str(&sb, ") str {\nvar b Buf;\n");
+	if (ty.kind == TY_STRUCT) {
+		fmt_str(&sb, "buf_u8(&b, '{');\n");
+		var m *Member = ty.members;
+		var first bool = true;
+		while (m as i64 != 0) {
+			if (!first) { fmt_str(&sb, "buf_u8(&b, ',');\n"); }
+			first = false;
+			fmt_str(&sb, "json_emit_str(&b, \"");
+			fmt_str(&sb, m.name);
+			fmt_str(&sb, "\");\nbuf_u8(&b, ':');\n");
+			var fb Buf;
+			fmt_str(&fb, "v.");
+			fmt_str(&fb, m.name);
+			jmgen_marshal_value(&sb, buf_str(&fb), m.ty);
+			m = m.next;
+		}
+		fmt_str(&sb, "buf_u8(&b, '}');\n");
+	} else {
+		jmgen_marshal_value(&sb, "v", ty);
+	}
+	fmt_str(&sb, "return buf_str(&b);\n}\n");
+
+	var src str = buf_str(&sb);
+	var fid int = diag_add_file("<json-gen>", src);
+	var toks *Token = lex(src, (fid as i64) << FILE_SHIFT);
+
+	var saved_parse *Func = cur_func;
+	var saved_typing *Func = cur_fn_typing;
+	var f *Func = parse_function(&toks, false);
+	add_func(f);
+	cur_func = saved_parse;
+	cur_fn_typing = saved_typing;
+	return name;
+}
+
+fn jmgen_unmarshal_into(sb *Buf, slot str, jv str, ty *Type) {
+	if (ty.kind == TY_BOOL) {
+		fmt_str(sb, "if (");
+		fmt_str(sb, jv);
+		fmt_str(sb, ".kind == 1) { ");
+		fmt_str(sb, slot);
+		fmt_str(sb, " = json_bool(");
+		fmt_str(sb, jv);
+		fmt_str(sb, "); }\n");
+		return;
+	}
+	if (ty.kind == TY_INT) {
+		fmt_str(sb, "if (");
+		fmt_str(sb, jv);
+		fmt_str(sb, ".kind == 2) { ");
+		fmt_str(sb, slot);
+		fmt_str(sb, " = (json_int(");
+		fmt_str(sb, jv);
+		fmt_str(sb, ")) as ");
+		fmt_str(sb, type_name(ty));
+		fmt_str(sb, "; }\n");
+		return;
+	}
+	if (ty.kind == TY_FLOAT) {
+		fmt_str(sb, "if (");
+		fmt_str(sb, jv);
+		fmt_str(sb, ".kind == 3) { ");
+		fmt_str(sb, slot);
+		fmt_str(sb, " = (json_float(");
+		fmt_str(sb, jv);
+		fmt_str(sb, ")) as ");
+		fmt_str(sb, type_name(ty));
+		fmt_str(sb, "; } else if (");
+		fmt_str(sb, jv);
+		fmt_str(sb, ".kind == 2) { ");
+		fmt_str(sb, slot);
+		fmt_str(sb, " = (json_int(");
+		fmt_str(sb, jv);
+		fmt_str(sb, ")) as ");
+		fmt_str(sb, type_name(ty));
+		fmt_str(sb, "; }\n");
+		return;
+	}
+	if (ty.kind == TY_SLICE && ty.base as i64 == ty_u8 as i64) {
+		fmt_str(sb, "if (");
+		fmt_str(sb, jv);
+		fmt_str(sb, ".kind == 4) { ");
+		fmt_str(sb, slot);
+		fmt_str(sb, " = json_str(");
+		fmt_str(sb, jv);
+		fmt_str(sb, "); }\n");
+		return;
+	}
+	if (ty.kind == TY_STRUCT) {
+		var callee str = jmgen_unmarshal_for(ty);
+		if (callee.len == 0) { jmgen_err("cannot json_unmarshal into", ty); }
+		fmt_str(sb, "if (");
+		fmt_str(sb, jv);
+		fmt_str(sb, " as i64 != 0) { ");
+		fmt_str(sb, callee);
+		fmt_str(sb, "(");
+		fmt_str(sb, jv);
+		fmt_str(sb, ", &(");
+		fmt_str(sb, slot);
+		fmt_str(sb, ")); }\n");
+		return;
+	}
+	if (ty.kind == TY_PTR) {
+		if (ty.base.kind != TY_STRUCT || ty.base.name.len == 0) {
+			jmgen_err("cannot json_unmarshal into", ty);
+		}
+		fmt_str(sb, "if (");
+		fmt_str(sb, jv);
+		fmt_str(sb, " as i64 == 0 || ");
+		fmt_str(sb, jv);
+		fmt_str(sb, ".kind == 0) { ");
+		fmt_str(sb, slot);
+		fmt_str(sb, " = null; } else if (");
+		fmt_str(sb, jv);
+		fmt_str(sb, ".kind == 6) { ");
+		fmt_str(sb, slot);
+		fmt_str(sb, " = arena_alloc(");
+		fmt_i64(sb, ty.base.size);
+		fmt_str(sb, ", 8) as *");
+		fmt_str(sb, type_name(ty.base));
+		fmt_str(sb, ";\n");
+		var db Buf;
+		buf_u8(&db, '*');
+		buf_u8(&db, '(');
+		fmt_str(&db, slot);
+		buf_u8(&db, ')');
+		jmgen_unmarshal_into(sb, buf_str(&db), jv, ty.base);
+		fmt_str(sb, "}\n");
+		return;
+	}
+	if (ty.kind == TY_ARRAY || ty.kind == TY_SLICE) {
+		var nv str = jmgen_tmp_name();
+		var iv str = jmgen_tmp_name();
+		var xv str = jmgen_tmp_name();
+		var sv str = "";
+		if (ty.kind == TY_SLICE) { sv = jmgen_tmp_name(); }
+		fmt_str(sb, "if (");
+		fmt_str(sb, jv);
+		fmt_str(sb, ".kind == 5) {\nvar ");
+		fmt_str(sb, nv);
+		fmt_str(sb, " i64 = json_arr_len(");
+		fmt_str(sb, jv);
+		fmt_str(sb, ");\n");
+		if (ty.kind == TY_ARRAY) {
+			fmt_str(sb, "if (");
+			fmt_str(sb, nv);
+			fmt_str(sb, " > ");
+			fmt_i64(sb, ty.len);
+			fmt_str(sb, ") { ");
+			fmt_str(sb, nv);
+			fmt_str(sb, " = ");
+			fmt_i64(sb, ty.len);
+			fmt_str(sb, "; }\n");
+		} else {
+			fmt_str(sb, "{ var ");
+			fmt_str(sb, sv);
+			fmt_str(sb, " []");
+			fmt_str(sb, type_name(ty.base));
+			fmt_str(sb, ";\n");
+			fmt_str(sb, sv);
+			fmt_str(sb, ".ptr = arena_alloc(");
+			fmt_str(sb, nv);
+			fmt_str(sb, " * ");
+			fmt_i64(sb, ty.base.size);
+			fmt_str(sb, ", 8) as *");
+			fmt_str(sb, type_name(ty.base));
+			fmt_str(sb, ";\n");
+			fmt_str(sb, sv);
+			fmt_str(sb, ".len = ");
+			fmt_str(sb, nv);
+			fmt_str(sb, ";\n");
+		}
+		fmt_str(sb, "var ");
+		fmt_str(sb, iv);
+		fmt_str(sb, " i64 = 0;\nwhile (");
+		fmt_str(sb, iv);
+		fmt_str(sb, " < ");
+		fmt_str(sb, nv);
+		fmt_str(sb, ") {\n{ var ");
+		fmt_str(sb, xv);
+		fmt_str(sb, " *Json = json_arr_at(");
+		fmt_str(sb, jv);
+		fmt_str(sb, ", ");
+		fmt_str(sb, iv);
+		fmt_str(sb, ");\n");
+		var eb Buf;
+		if (ty.kind == TY_SLICE) {
+			fmt_str(&eb, sv);
+			fmt_str(&eb, ".ptr[");
+			fmt_str(&eb, iv);
+			buf_u8(&eb, ']');
+		} else {
+			buf_u8(&eb, '(');
+			fmt_str(&eb, slot);
+			fmt_str(&eb, ")[");
+			fmt_str(&eb, iv);
+			buf_u8(&eb, ']');
+		}
+		jmgen_unmarshal_into(sb, buf_str(&eb), xv, ty.base);
+		fmt_str(sb, "}\n");
+		fmt_str(sb, iv);
+		fmt_str(sb, " = ");
+		fmt_str(sb, iv);
+		fmt_str(sb, " + 1;\n}\n");
+		if (ty.kind == TY_SLICE) {
+			fmt_str(sb, slot);
+			fmt_str(sb, " = ");
+			fmt_str(sb, sv);
+			fmt_str(sb, ";\n}\n");
+		}
+		fmt_str(sb, "}\n");
+		return;
+	}
+	jmgen_err("cannot json_unmarshal into", ty);
+}
+
+fn jmgen_unmarshal_for(ty *Type) str {
+	var e *JmGen = jmgen_entry(ty);
+	if (e.unmarshal.len != 0) { return e.unmarshal; }
+	if (ty.kind != TY_STRUCT || ty.name.len == 0) { return ""; }
+
+	var nb Buf;
+	fmt_str(&nb, "__junmarshal");
+	fmt_i64(&nb, jmgen_seq as i64);
+	jmgen_seq = jmgen_seq + 1;
+	var name str = buf_str(&nb);
+	e.unmarshal = name;
+
+	var sb Buf;
+	fmt_str(&sb, "fn ");
+	fmt_str(&sb, name);
+	fmt_str(&sb, "(j *Json, v *");
+	fmt_str(&sb, type_name(ty));
+	fmt_str(&sb, ") bool {\nif (j as i64 == 0) { return false; }\nif (j.kind != 6) { return false; }\n");
+	var m *Member = ty.members;
+	while (m as i64 != 0) {
+		var ev str = jmgen_tmp_name();
+		fmt_str(&sb, "{ var ");
+		fmt_str(&sb, ev);
+		fmt_str(&sb, " *Json = json_get(j, \"");
+		fmt_str(&sb, m.name);
+		fmt_str(&sb, "\");\nif (");
+		fmt_str(&sb, ev);
+		fmt_str(&sb, " as i64 != 0) {\n");
+		var fb Buf;
+		fmt_str(&fb, "v.");
+		fmt_str(&fb, m.name);
+		jmgen_unmarshal_into(&sb, buf_str(&fb), ev, m.ty);
+		fmt_str(&sb, "}\n}\n");
+		m = m.next;
+	}
+	fmt_str(&sb, "return true;\n}\n");
+
+	var src str = buf_str(&sb);
+	var fid int = diag_add_file("<json-gen>", src);
+	var toks *Token = lex(src, (fid as i64) << FILE_SHIFT);
+
+	var saved_parse *Func = cur_func;
+	var saved_typing *Func = cur_fn_typing;
+	var f *Func = parse_function(&toks, false);
+	add_func(f);
+	cur_func = saved_parse;
+	cur_fn_typing = saved_typing;
+	return name;
+}
+
+// The call-site hook in type.qela: rewrites json_marshal/json_unmarshal
+// calls into calls of the generated functions. A user-defined function of
+// either name wins (it is in the table before the type pass runs).
+fn jmgen_call(n *Node) {
+	if (find_func(n.name) as i64 != 0) { return; }
+	if (find_func("json_parse") as i64 == 0) {
+		error_at(n.pos, "json_marshal/json_unmarshal need 'import \"std/json.qela\"'");
+	}
+	if (str_eq(n.name, "json_marshal")) {
+		if (n.nargs != 1) {
+			error_at(n.pos, "json_marshal takes one argument");
+		}
+		jmgen_errpos = n.pos;
+		var g str = jmgen_marshal_for(n.args.ty);
+		if (g.len == 0) {
+			jmgen_err("cannot json_marshal", n.args.ty);
+		}
+		n.name = g;
+		return;
+	}
+	if (n.nargs != 2) {
+		error_at(n.pos, "json_unmarshal takes a string and a pointer to a struct");
+	}
+	var a0 *Node = n.args;
+	var a1 *Node = a0.next;
+	if (!same_type(a0.ty, type_str())) {
+		error_at(a0.pos, "json_unmarshal's first argument must be a str");
+	}
+	if (a1.ty as i64 == 0 || a1.ty.kind != TY_PTR || a1.ty.base.kind != TY_STRUCT) {
+		error_at(n.pos, "json_unmarshal takes a pointer to a struct");
+	}
+	jmgen_errpos = n.pos;
+	var g str = jmgen_unmarshal_for(a1.ty.base);
+	if (g.len == 0) {
+		jmgen_err("cannot json_unmarshal into", a1.ty.base);
+	}
+	a0.next = null;
+	var pc *Node = mk_call1("json_parse", a0);
+	add_type(pc);
+	pc.next = a1;
+	n.args = pc;
+	n.nargs = 2;
+	n.name = g;
+}
