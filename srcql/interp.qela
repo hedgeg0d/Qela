@@ -28,37 +28,57 @@ let IP_MAX_DEFERS = 1024;
 // The globals region: every global and every string literal, laid out the
 // way layout_globals/codegen's string table lay them out into .data, so
 // Var.data_off keeps its compiled meaning and gc_data_base/gc_data_end are
-// just this block's bounds.
+// just this block's bounds. Shared by every OS thread, exactly like a
+// compiled program's .data.
 var ip_data i64 = 0;
 var ip_data_end i64 = 0;
 
-// The frame stack: one region, growing down, so the collector's
-// conservative scan of the interpreted program's own stack still works.
-var ip_stack_lo i64 = 0;
-var ip_sp i64 = 0;
-var ip_fp i64 = 0;
+// The interpreted program's thread-local variables live in a per-thread
+// block copied from a shared template, the same scheme codegen's
+// tls_init stub uses for the compiled runtime. The template is laid out
+// alongside .data by the same walk (is_tls globals get tls_off instead of
+// data_off); ip_tls_base is the current thread's block, a tvar because
+// every interpreter thread has its own.
+tvar ip_tls_base i64 = 0;
+var ip_tls_tmpl i64 = 0;
+var ip_tls_lay i64 = 0;
+var ip_tls_size i64 = 0;
+
+let REPL_TLS_MAX = 65536;
+
+// The frame stack: one region per thread, growing down, so the
+// collector's conservative scan of the interpreted program's own stack
+// still works. Everything from here to the coroutine table is per-thread
+// interpreter state, so it is tvar: an OS thread spawned through the
+// interpreted program's thread_clone runs its own tree-walker.
+tvar ip_stack_lo i64 = 0;
+tvar ip_sp i64 = 0;
+tvar ip_fp i64 = 0;
 
 var ip_unit *Unit;
-var ip_fn *Func;
-var ip_retdst i64 = 0;
-var ip_ret i64 = 0;
-var ip_returning bool = false;
-var ip_broke bool = false;
-var ip_continued bool = false;
+tvar ip_fn *Func = null;
+tvar ip_retdst i64 = 0;
+tvar ip_ret i64 = 0;
+tvar ip_returning bool = false;
+tvar ip_broke bool = false;
+tvar ip_continued bool = false;
 
 // The defer stack is per execution context, so it is a pointer rather than
 // an array: a coroutine parks its own alongside its frame region.
-var ip_defers **Node;
-var ip_ndefer int = 0;
+tvar ip_defers **Node = null;
+tvar ip_ndefer int = 0;
 
 // ip_intrinsic reports through these: a call it handled leaves
-// ip_was_intrinsic set and its result in ip_intrinsic_val.
-var ip_was_intrinsic bool = false;
+// ip_was_intrinsic set and its result in ip_intrinsic_val. Per-thread:
+// two interpreter threads handle intrinsics concurrently, and a shared
+// flag would let one thread's ip_call_node read another's result (or
+// miss its own).
+tvar ip_was_intrinsic bool = false;
 var ip_abi_validating bool = false;
-var ip_intrinsic_val i64 = 0;
+tvar ip_intrinsic_val i64 = 0;
 
-var ip_asm_warned [256]i64;
-var ip_asm_nwarned int = 0;
+tvar ip_asm_warned [256]i64;
+tvar ip_asm_nwarned int = 0;
 
 // ── execution contexts ──
 //
@@ -97,13 +117,13 @@ struct IpCoro {
 	fhi       i64,
 }
 
-var ip_coro [256]IpCoro;
-var ip_cur int = 0;
+tvar ip_coro [256]IpCoro;
+tvar ip_cur int = 0;
 
 // ── raw memory ──
 
-var ip_env_arg i64 = 0;
-var ip_env_set bool = false;
+tvar ip_env_arg i64 = 0;
+tvar ip_env_set bool = false;
 
 fn ip_ld64(a i64) i64 { var p *i64 = a as *i64; return *p; }
 fn ip_st64(a i64, v i64) { var p *i64 = a as *i64; *p = v; }
@@ -216,9 +236,11 @@ fn ip_enter(f *Func) i64 {
 }
 
 fn ip_var_addr(v *Var) i64 {
-	// One interpreter, one thread, so a tvar is an ordinary global with a
-	// slot of its own. When threads arrive this becomes a per-context block.
-	if (v.is_global || v.is_tls) { return ip_data + v.data_off; }
+	// A tvar lives in the current thread's block; the caller guarantees
+	// tls_init ran on this thread, exactly as the compiled runtime does.
+	// is_tls first: a tvar is also a global, but it has no data_off.
+	if (v.is_tls) { return ip_tls_base + v.tls_off; }
+	if (v.is_global) { return ip_data + v.data_off; }
 	if (v.arg_stack) {
 		var a i64 = ip_fp + (v.offset as i64);
 		if (v.by_ref) { return ip_ld64(a); }
@@ -240,8 +262,11 @@ fn ip_lay_align(a i64) {
 
 // Two passes with the same walk: the first measures, the second writes.
 // Sizes come out identical because nothing here depends on an address.
+// Thread-local globals divert into their own template (ip_tls_tmpl, the
+// per-thread blocks' source image) instead of .data.
 fn ip_layout(u *Unit, write bool) {
 	ip_lay = 0;
+	ip_tls_lay = 0;
 	var v *Var = u.globals;
 	while (v as i64 != 0) {
 		// Under the abi server an extern var is an `eval var`: the host
@@ -249,6 +274,23 @@ fn ip_layout(u *Unit, write bool) {
 		// below, never touched) is dead weight, not an error.
 		if (v.extern && !v.has_init && !type_abi_mode) {
 			error_at(v.pos, "interpreter: an extern global has no definition to run against");
+		}
+		if (v.is_tls) {
+			ip_tls_lay = (ip_tls_lay + (v.ty.align as i64) - 1) & ~((v.ty.align as i64) - 1);
+			if (write) {
+				v.tls_off = ip_tls_lay;
+				ip_memzero(ip_tls_tmpl + ip_tls_lay, v.ty.size as i64);
+				if (v.init != 0) {
+					var init i64 = v.init;
+					if (v.ty.kind == TY_FLOAT && v.ty.size == 4) {
+						init = ip_bits32(ip_f64(init) as f32);
+					}
+					ip_store(ip_tls_tmpl + ip_tls_lay, v.ty, init);
+				}
+			}
+			ip_tls_lay = ip_tls_lay + (v.ty.size as i64);
+			v = v.next;
+			continue;
 		}
 		ip_lay_align(v.ty.align as i64);
 		if (write) {
@@ -292,6 +334,31 @@ fn ip_layout(u *Unit, write bool) {
 fn ip_repl_layout_var(v *Var) {
 	if (v.extern && !v.has_init && !type_abi_mode) {
 		error_at(v.pos, "interpreter: an extern global has no definition to run against");
+	}
+	if (v.is_tls) {
+		// Lazily map the template on the first tvar a repl/abi session
+		// declares; this process is single-threaded, so the main thread's
+		// block can be the template itself.
+		if (ip_tls_tmpl == 0) {
+			ip_tls_tmpl = sys_mmap_anon(REPL_TLS_MAX);
+			if (ip_tls_tmpl < 0 && ip_tls_tmpl > -4096) {
+				die("error: interpreter cannot map the thread-local template");
+			}
+			ip_tls_base = ip_tls_tmpl;
+		}
+		ip_tls_lay = (ip_tls_lay + (v.ty.align as i64) - 1) & ~((v.ty.align as i64) - 1);
+		v.tls_off = ip_tls_lay;
+		ip_memzero(ip_tls_tmpl + ip_tls_lay, v.ty.size as i64);
+		if (v.init != 0) {
+			var init i64 = v.init;
+			if (v.ty.kind == TY_FLOAT && v.ty.size == 4) {
+				init = ip_bits32(ip_f64(init) as f32);
+			}
+			ip_store(ip_tls_tmpl + ip_tls_lay, v.ty, init);
+		}
+		ip_tls_lay = ip_tls_lay + (v.ty.size as i64);
+		ip_tls_size = ip_tls_lay;
+		return;
 	}
 	ip_lay_align(v.ty.align as i64);
 	v.data_off = ip_lay;
@@ -1293,32 +1360,33 @@ fn ip_intrinsic(n *Node) *Func {
 		ip_was_intrinsic = true;
 		return null;
 	}
-	if (str_eq(nm, "fence")) { ip_was_intrinsic = true; return null; }
+	// Atomics and fence forward to the compiled intrinsics: interp.qela
+	// itself is compiled, so these are real lock-prefixed operations, not
+	// the plain loads/stores a single-threaded interpreter could get away
+	// with. That is what makes shared channels and the GC registry sound
+	// across the OS threads thread_clone spawns.
+	if (str_eq(nm, "fence")) { fence(); ip_was_intrinsic = true; return null; }
 	if (str_eq(nm, "atomic_load")) {
 		ip_was_intrinsic = true;
-		ip_intrinsic_val = ip_ld64(ip_eval(n.args));
+		ip_intrinsic_val = atomic_load(ip_eval(n.args) as *i64);
 		return null;
 	}
 	if (str_eq(nm, "atomic_store")) {
 		var a i64 = ip_eval(n.args);
-		ip_st64(a, ip_eval(n.args.next));
+		atomic_store(a as *i64, ip_eval(n.args.next));
 		ip_was_intrinsic = true;
 		return null;
 	}
 	if (str_eq(nm, "atomic_add")) {
 		var a i64 = ip_eval(n.args);
-		var old i64 = ip_ld64(a);
-		ip_st64(a, old + ip_eval(n.args.next));
 		ip_was_intrinsic = true;
-		ip_intrinsic_val = old;
+		ip_intrinsic_val = atomic_add(a as *i64, ip_eval(n.args.next));
 		return null;
 	}
 	if (str_eq(nm, "atomic_cas")) {
 		var a i64 = ip_eval(n.args);
-		var want i64 = ip_eval(n.args.next);
-		var new i64 = ip_eval(n.args.next.next);
 		ip_was_intrinsic = true;
-		if (ip_ld64(a) == want) { ip_st64(a, new); ip_intrinsic_val = 1; }
+		ip_intrinsic_val = atomic_cas(a as *i64, ip_eval(n.args.next), ip_eval(n.args.next.next)) as i64;
 		return null;
 	}
 	if (str_eq(nm, "interp_coro_spawn")) {
@@ -1348,14 +1416,76 @@ fn ip_intrinsic(n *Node) *Func {
 		error_at(n.pos, "interpreter: a program cannot switch machine stacks under the interpreter");
 	}
 	if (str_eq(nm, "thread_clone")) {
-		error_at(n.pos, "interpreter: thread_clone is not supported yet");
+		// The compiled clone stub hands its target exactly one argument;
+		// the interpreted child needs both the *Func and the program's
+		// argument, so they travel in a two-word record. A private
+		// mapping, not the arena: the parent keeps running while the
+		// child reads it, and arena_alloc is a shared bump pointer with
+		// no lock of its own here.
+		var rec i64 = sys_mmap_anon(16);
+		if (rec < 0 && rec > -4096) { error_at(n.pos, "interpreter: cannot map a thread argument record"); }
+		ip_st64(rec, ip_eval(n.args));
+		ip_st64(rec + 8, ip_eval(n.args.next));
+		ip_was_intrinsic = true;
+		ip_intrinsic_val = thread_clone(ip_thread_trampoline, rec,
+		                                ip_eval(n.args.next.next), ip_eval(n.args.next.next.next));
+		return null;
 	}
 	if (str_eq(nm, "tls_init")) {
-		// The single TLS block is part of the data segment already.
+		ip_tls_init();
 		ip_was_intrinsic = true;
 		return null;
 	}
 	return null;
+}
+
+// ── OS threads ──
+
+// The current thread's copy of the program's tls block, mirroring the
+// compiled tls_init stub: a fresh block per thread, template copied in.
+fn ip_tls_init() {
+	if (ip_tls_size <= 0) { return; }
+	var b i64 = sys_mmap_anon(ip_tls_size);
+	if (b < 0 && b > -4096) { die("error: interpreter cannot map a thread-local block"); }
+	ip_memcpy(b, ip_tls_tmpl, ip_tls_size);
+	ip_tls_base = b;
+}
+
+// The child half of an interpreted thread_clone: the compiled clone stub
+// calls this on the thread's fresh native stack (the one the program
+// passed), so the first thing it does is give this OS thread its own tls
+// block for the interpreter's own state -- the same tls_init a compiled
+// pool_worker calls. Then a fresh frame region and a fresh coroutine
+// context, and the interpreted target runs. Ends the thread with plain
+// exit (60), never exit_group: the stub's ud2 is unreachable.
+fn ip_thread_trampoline(rec i64, _u1 i64, _u2 i64, _u3 i64, _u4 i64) i64 {
+	tls_init();
+	var p *i64 = rec as *i64;
+	var target *Func = p[0] as *Func;
+	var arg i64 = p[1];
+
+	var s i64 = sys_mmap_anon(IP_STACK);
+	if (s < 0 && s > -4096) { die("error: interpreter cannot map a thread frame region"); }
+	ip_stack_lo = s;
+	ip_sp = s + IP_STACK;
+	ip_defers = arena_alloc(IP_MAX_DEFERS * 8, 8) as **Node;
+
+	// Slot 0 is this thread's own context; the rest of the table is the
+	// zeroed tls template it started from.
+	ip_cur = 0;
+	ip_coro[0].live = true;
+	ip_coro[0].flo = s;
+	ip_coro[0].fhi = s + IP_STACK;
+
+	// The interpreted program's own tls block: a compiled thread would
+	// inherit the parent's %fs by accident until it calls tls_init
+	// itself; the interpreter gives every thread a fresh template copy up
+	// front, so a tvar read never lands in another thread's block.
+	ip_tls_init();
+
+	var r i64 = ip_call_vals(target, arg, 0, 0, 0, 0);
+	sys_exit_thread(r);
+	return 0;
 }
 
 // ── coroutines ──
@@ -1642,6 +1772,17 @@ fn ip_run(u *Unit, argc int, argv **u8) int {
 	if (d < 0 && d > -4096) { die("error: interpreter cannot map the data segment"); }
 	ip_data = d;
 	ip_data_end = d + dsize;
+	ip_tls_size = ip_tls_lay;
+	if (ip_tls_size > 0) {
+		ip_tls_tmpl = sys_mmap_anon(ip_tls_size);
+		if (ip_tls_tmpl < 0 && ip_tls_tmpl > -4096) {
+			die("error: interpreter cannot map the thread-local template");
+		}
+		// The main thread's block is the template itself: there is no
+		// arch_prctl dance here, a fresh thread gets its own copy in
+		// ip_tls_init.
+		ip_tls_base = ip_tls_tmpl;
+	}
 	ip_layout(u, true);
 
 	var s i64 = sys_mmap_anon(IP_STACK);
@@ -1686,6 +1827,10 @@ fn ip_argv_nodes(argc int, argv **u8) *Node {
 fn ip_reset() {
 	ip_data = 0;
 	ip_data_end = 0;
+	ip_tls_base = 0;
+	ip_tls_tmpl = 0;
+	ip_tls_lay = 0;
+	ip_tls_size = 0;
 	ip_stack_lo = 0;
 	ip_sp = 0;
 	ip_fp = 0;
