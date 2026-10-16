@@ -809,7 +809,13 @@ todo list anymore.
    indirect call, no ABI. Not self-contained → clean rejection, automatic
    fallback to the `interpreted` call path (not a hard failure — without
    this, `--jit` on any real program would fail outright the moment
-   `main` called anything, which it almost always does).
+   `main` called anything, which it almost always does). A reparse that
+   reports **soft errors** is a rejection of the same kind: those calls
+   are poisoned to literals, so codegen would emit a body that silently
+   drops them (a foreign `write_str` losing its side effect while the
+   arithmetic still computes), so the child refuses the unit instead.
+   Both rejections cross as one ABI ERR frame, which
+   `interp_jit_compile` turns into −1 and caches.
 5. **The `*Ast` API surface.** `*Ast` is a tiny opaque handle
    (`struct Ast { id i64 }`, `std/eval.qela`) over an incrementing ID the
    child maps to a cached, already-parsed-and-typed `Node`
