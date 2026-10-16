@@ -1,0 +1,108 @@
+// expect-exit: 0
+// stage1-only
+struct LoadFields {
+	a i8,
+	b u8,
+	c i16,
+	d u16,
+	e i32,
+	f u32,
+	g i64,
+	h u64,
+	x f32,
+	y f64,
+	pad [192]u8,
+	tail i64,
+}
+
+struct LoadOuter { pad [32]u8, inner LoadFields, }
+
+var calls int;
+
+fn load_ptr(p *LoadFields) *LoadFields {
+	calls += 1;
+	return p;
+}
+
+fn load_check(p *LoadFields) {
+	assert((p.a as i64) + 1 == -127, "i8 load");
+	assert((p.b as i64) + 1 == 256, "u8 load");
+	assert((p.c as i64) + 1 == -32767, "i16 load");
+	assert((p.d as i64) + 1 == 65536, "u16 load");
+	assert((p.e as i64) + 1 == -2147483647, "i32 load");
+	assert((p.f as i64) + 1 == 4294967296, "u32 load");
+	assert(p.g + 1 == -9223372036854775806, "i64 load");
+	assert(p.h - (1 as u64) == (0xfffffffffffffffe as u64), "u64 load");
+	assert(p.x == 1.5, "f32 load");
+	assert(p.y == -2.25, "f64 load");
+	assert(p.tail + 1 == 123456790, "large displacement");
+	assert(load_ptr(p).tail + 1 == 123456790, "call base");
+}
+
+fn load_sum(a *LoadFields, b *LoadFields, c *LoadFields,
+            d *LoadFields, e *LoadFields, f *LoadFields) int {
+	load_check(a);
+	assert(a.a == -128 && b.a == -128 && c.a == -128 &&
+	       d.a == -128 && e.a == -128 && f.a == -128, "zero displacement bases");
+	return a.tail + b.tail + c.tail + d.tail + e.tail + f.tail;
+}
+
+fn compare_fields(p *LoadFields) {
+	p.g = -129;
+	assert(p.g == -129 && p.g != -128 && p.g < -128, "negative imm32");
+	p.g = -128;
+	assert(p.g == -128 && p.g > -129 && p.g <= -128, "negative imm8");
+	p.g = 127;
+	assert(p.g == 127 && p.g < 128 && p.g >= 127, "positive imm8");
+	p.g = 128;
+	assert(p.g == 128 && p.g != 127 && p.g > 127, "positive imm32");
+	p.c = -128 as i16;
+	p.d = 65535 as u16;
+	p.e = -129 as i32;
+	p.f = 128 as u32;
+	assert(p.c == -128 && p.c != 128, "halfword imm8");
+	assert(p.d == 65535 && p.d != 127, "unsigned halfword imm16");
+	assert(p.e == -129 && p.e != -128, "word imm32");
+	assert(p.f == 128 && p.f != 127, "unsigned word immediate");
+	p.tail = 0;
+	assert(p.tail == 0, "compare large displacement");
+}
+
+fn load_offsets(p *i64, nested *LoadOuter) {
+	assert(p[-1] + p[0] + p[1] == 60, "negative and positive offsets");
+	assert(p[-1] == 10 && p[1] == 30, "offset comparisons");
+	assert(nested.inner.tail + 1 == 43, "nested offsets");
+	assert(nested.inner.tail == 42, "nested comparison");
+}
+
+fn main() int {
+	var p LoadFields;
+	p.a = -128 as i8;
+	p.b = 255 as u8;
+	p.c = -32768 as i16;
+	p.d = 65535 as u16;
+	p.e = -2147483648 as i32;
+	p.f = 4294967295 as u32;
+	p.g = -9223372036854775807;
+	p.h = 0xffffffffffffffff as u64;
+	p.x = 1.5 as f32;
+	p.y = -2.25;
+	p.tail = 123456789;
+	load_check(&p);
+	assert(load_sum(&p, &p, &p, &p, &p, &p) == 740740734, "register bases");
+	assert(calls == 2, "evaluate once");
+	var copy LoadFields = p;
+	assert(copy.tail == p.tail, "frame load");
+	assert((copy.a as i64) + (copy.b as i64) == 127, "frame bytes");
+	assert((copy.c as i64) + (copy.d as i64) == 32767, "frame halfwords");
+	assert((copy.e as i64) + (copy.f as i64) == 2147483647, "frame words");
+	compare_fields(&copy);
+	var values [3]i64;
+	values[0] = 10;
+	values[1] = 20;
+	values[2] = 30;
+	var nested LoadOuter;
+	nested.inner.tail = 42;
+	load_offsets(&values[1], &nested);
+	return 0;
+}
