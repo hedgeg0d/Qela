@@ -2377,9 +2377,6 @@ fn cmd_repl(argc int, argv **u8) int {
 
 fn base_check() {
 	if (!base_is_wide()) { return; }
-	if (opt_target == TARGET_ARM64) {
-		die("error: a --base above 4 GiB needs a 64-bit movz sequence arm64 does not emit yet");
-	}
 	if (opt_backtrace) {
 		die("error: --backtrace and a --base above 4 GiB do not work together");
 	}
