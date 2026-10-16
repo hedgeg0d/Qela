@@ -92,6 +92,16 @@ fn abi_wait_result(kind *u8, buf *u8, cap i64) i64 {
 	while (true) {
 		var n i64 = abi_recv_frame(abi_out, kind, &scratch[0], 512);
 		if (n < 0) { return n; }
+		if (*kind == 4) {
+			var gname str;
+			gname.ptr = &scratch[0];
+			gname.len = n;
+			var gr i64 = __eval_get_dispatch(gname);
+			var grb [8]u8;
+			*(&grb[0] as *i64) = gr;
+			abi_send_frame(abi_in, 1 as u8, &grb[0], 8);
+			continue;
+		}
 		if (*kind != 3) {
 			if (n > cap) { return -1; }
 			var ci i64 = 0;
