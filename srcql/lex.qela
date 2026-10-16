@@ -1,5 +1,6 @@
 import "comp.qela";
 import "diag.qela";
+import "../std/fmt.qela";
 
 var lex_base i64 = 0;
 
@@ -764,7 +765,16 @@ fn lex(src str, base i64) *Token {
 		// punctuation
 		var plen i64 = punct_len(src, i);
 		if (plen == 1 && !is_punct_single(src.ptr[i])) {
-			error_at(lex_base + i, "unexpected character");
+			var b Buf;
+			fmt_str(&b, "unexpected character '");
+			if (src.ptr[i] >= 0x20 && src.ptr[i] < 0x7f) {
+				buf_u8(&b, src.ptr[i]);
+			} else {
+				fmt_str(&b, "\\x");
+				fmt_hex(&b, src.ptr[i] as i64);
+			}
+			fmt_str(&b, "'");
+			error_at(lex_base + i, buf_str(&b));
 		}
 		var t *Token = push_token(TK_PUNCT, i);
 		var s str;
