@@ -362,6 +362,14 @@ fn error_at(pos i64, msg str) {
 	sys_exit(1);
 }
 
+// An error followed by a hint; the hint is a real diagnostic, so LSP mode
+// sees it too. error_at would exit before the hint could print.
+fn error_hint_at(pos i64, msg str, hint str) {
+	diag_emit(DIAG_ERROR, pos, msg);
+	diag_emit(DIAG_HINT, pos, hint);
+	sys_exit(1);
+}
+
 fn warn_at(pos i64, msg str) {
 	diag_emit(DIAG_WARN, pos, msg);
 }

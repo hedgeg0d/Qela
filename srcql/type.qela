@@ -1167,10 +1167,14 @@ fn type_assign(n *Node) {
 	n.ty = n.lhs.ty;
 }
 
-fn type_enumlit(n *Node) {
+	fn type_enumlit(n *Node) {
 	var v *Variant = null;
 	if (enum_tag_of(n.ty, n.name, &v) < 0) {
-		emsg("this enum has no variant named '"); emsg(n.name); emsg("'"); efail(n.pos);
+		var b Buf;
+		fmt_str(&b, "this enum has no variant named '");
+		fmt_str(&b, n.name);
+		fmt_str(&b, "'");
+		error_suggest(n.pos, buf_str(&b), suggest_variant(n.ty.variants, n.name));
 	}
 	var count int = 0;
 	var head Node;
@@ -1301,7 +1305,11 @@ fn type_structlit(n *Node) {
 			k = k.next;
 		}
 		if (m as i64 == 0) {
-			emsg("this struct has no field named '"); emsg(a.name); emsg("'"); efail(a.pos);
+			var b Buf;
+			fmt_str(&b, "this struct has no field named '");
+			fmt_str(&b, a.name);
+			fmt_str(&b, "'");
+			error_suggest(a.pos, buf_str(&b), suggest_member(n.ty.members, a.name));
 		}
 		var b *Node = n.args;
 		while (b as i64 != a as i64) {
@@ -1673,7 +1681,11 @@ fn type_call(n *Node) {
 		return;
 	}
 	if (f as i64 == 0) {
-		emsg("undefined function '"); emsg(n.name); emsg("'"); efail(n.pos);
+		var b Buf;
+		fmt_str(&b, "undefined function '");
+		fmt_str(&b, n.name);
+		fmt_str(&b, "'");
+		error_suggest(n.pos, buf_str(&b), suggest_name(n.name));
 	}
 	if (f.nct != 0) {
 		// A dotcall receiver is address-wrapped before inference: the
@@ -1919,13 +1931,11 @@ fn add_type(n *Node) {
 			return;
 		}
 		if (f as i64 == 0) {
-			var sug str = did_you_mean(n.name);
-			if (sug.len > 0) {
-				eprint("hint: did you mean '");
-				eprint(sug);
-				eprint("'?\n");
-			}
-			emsg("undefined function '"); emsg(n.name); emsg("'"); efail(n.pos);
+			var b Buf;
+			fmt_str(&b, "undefined function '");
+			fmt_str(&b, n.name);
+			fmt_str(&b, "'");
+			error_suggest(n.pos, buf_str(&b), suggest_name(n.name));
 		}
 		if (f.nct != 0) {
 			emsg("a generic function cannot be used as a value: '");
@@ -2103,7 +2113,11 @@ fn add_type(n *Node) {
 			}
 			m = m.next;
 		}
-		emsg("this type has no field named '"); emsg(n.name); emsg("'"); efail(n.pos);
+		var b Buf;
+		fmt_str(&b, "this type has no field named '");
+		fmt_str(&b, n.name);
+		fmt_str(&b, "'");
+		error_suggest(n.pos, buf_str(&b), suggest_member(lt.members, n.name));
 		return;
 	}
 
