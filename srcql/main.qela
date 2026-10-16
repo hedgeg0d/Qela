@@ -2423,7 +2423,9 @@ fn cmd_help() int {
 fn host_arch() int {
 	var ut [390]u8;
 	if (sys_uname(&ut[0]) != 0) { return 0; }
-	var m *u8 = &ut[0] + 195;
+	// utsname: sysname, nodename, release, version, machine, domainname,
+	// 65 bytes each -- the machine field starts at 4 * 65.
+	var m *u8 = &ut[0] + 260;
 	var n i64 = 0;
 	while (n < 64 && m[n] != 0) { n = n + 1; }
 	var ms str;
