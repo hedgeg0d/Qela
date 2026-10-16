@@ -860,7 +860,12 @@ fn ip_ev_memberidx(n *Node) i64 {
 fn ip_ev_slice(n *Node) i64 { return ip_slice_expr(n); }
 fn ip_ev_structlit(n *Node) i64 { return ip_structlit(n); }
 fn ip_ev_enumlit(n *Node) i64 { return ip_enumlit(n); }
-fn ip_ev_cast(n *Node) i64 { return ip_cast(n); }
+fn ip_ev_cast(n *Node) i64 {
+	if (n.val == 2) {
+		error_at(n.pos, "`as _` must be the value itself: it takes the type of what this value is stored into or passed to");
+	}
+	return ip_cast(n);
+}
 fn ip_ev_assign(n *Node) i64 { return ip_assign(n); }
 fn ip_ev_opassign(n *Node) i64 { return ip_opassign(n); }
 fn ip_ev_comma(n *Node) i64 { ip_eval(n.lhs); return ip_eval(n.rhs); }

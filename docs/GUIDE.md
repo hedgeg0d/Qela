@@ -550,6 +550,20 @@ var u u64 = some_i64;    // error: i64 -> u64 needs `as u64`
 some_u64 + some_i64;     // error: mixing u64 and i64 needs a cast
 ```
 
+A cast whose target is written `_` takes the type from the place the value
+goes into -- a declaration with a type, an assignment, a `return`, an argument:
+
+```qela
+var x i32 = 0;
+x = (x + 1) as _;         // i32, from the assignment target
+var small i32 = big as _; // i32, from the declaration
+```
+
+It is still a cast you wrote, so the truncation stays your decision; it just
+saves repeating a type the context already states. Where no destination asks
+for a type (`x as _;` on a line of its own) the compiler reports it rather than
+quietly doing nothing.
+
 Why: a narrowing cast can truncate, and a signed → unsigned cast reinterprets
 a negative value as a huge positive one. Both are classic silent-corruption
 bugs, so the compiler refuses them unless you write the cast — or the value is
