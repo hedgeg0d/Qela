@@ -1,0 +1,49 @@
+import "sys.qela";
+
+let ABI_MAX_MSG = 1048576;
+
+fn abi_read_exact(fd i64, buf *u8, n i64) bool {
+	var got i64 = 0;
+	while (got < n) {
+		var r i64 = sys_read(fd, buf + got, n - got);
+		if (r <= 0) { return false; }
+		got = got + r;
+	}
+	return true;
+}
+
+fn abi_write_exact(fd i64, buf *u8, n i64) {
+	var off i64 = 0;
+	while (off < n) {
+		var w i64 = sys_write(fd, buf + off, n - off);
+		if (w <= 0) { sys_exit(1); }
+		off = off + w;
+	}
+}
+
+fn abi_send_frame(fd i64, kind u8, payload *u8, n i64) {
+	var hdr [4]u8;
+	var total i64 = n + 1;
+	hdr[0] = (total & 255) as u8;
+	hdr[1] = ((total >> 8) & 255) as u8;
+	hdr[2] = ((total >> 16) & 255) as u8;
+	hdr[3] = ((total >> 24) & 255) as u8;
+	abi_write_exact(fd, &hdr[0], 4);
+	var kb [1]u8;
+	kb[0] = kind;
+	abi_write_exact(fd, &kb[0], 1);
+	if (n > 0) { abi_write_exact(fd, payload, n); }
+}
+
+fn abi_recv_frame(fd i64, kind *u8, buf *u8, cap i64) i64 {
+	var hdr [4]u8;
+	if (!abi_read_exact(fd, &hdr[0], 4)) { return -1; }
+	var total i64 = (hdr[0] as i64) | ((hdr[1] as i64) << 8) | ((hdr[2] as i64) << 16) | ((hdr[3] as i64) << 24);
+	if (total < 1 || total - 1 > cap) { return -1; }
+	var kb [1]u8;
+	if (!abi_read_exact(fd, &kb[0], 1)) { return -1; }
+	*kind = kb[0];
+	var n i64 = total - 1;
+	if (n > 0) { if (!abi_read_exact(fd, buf, n)) { return -1; } }
+	return n;
+}

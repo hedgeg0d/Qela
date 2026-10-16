@@ -1,0 +1,100 @@
+import "sys.qela";
+import "str.qela";
+import "buf.qela";
+import "fmt.qela";
+import "abiwire.qela";
+
+let ABI_REQ_RUN = 1;
+let ABI_RESP_ERR = 2;
+
+var abi_pid i64 = -1;
+var abi_in i64 = -1;
+var abi_out i64 = -1;
+
+fn abi_path_exists(p str) bool {
+	var st [144]u8;
+	return sys_stat(cstr(p), &st[0]) == 0;
+}
+
+fn abi_find_on_path(name str) str {
+	var path str = sys_getenv("PATH");
+	var i i64 = 0;
+	while (i <= path.len) {
+		var start i64 = i;
+		while (i < path.len && path.ptr[i] != ':') { i = i + 1; }
+		var dir str = str_slice(path, start, i);
+		if (dir.len > 0) {
+			var b Buf;
+			fmt_str(&b, dir);
+			buf_u8(&b, '/');
+			fmt_str(&b, name);
+			var cand str = buf_str(&b);
+			if (abi_path_exists(cand)) { return cand; }
+		}
+		i = i + 1;
+	}
+	var e str;
+	return e;
+}
+
+fn abi_self_path() str {
+	var qp str = sys_getenv("QELAPATH");
+	if (qp.len > 0) { return qp; }
+	var found str = abi_find_on_path("qela");
+	if (found.len > 0) { return found; }
+	eprint("eval/interpreted/dynamic needs the qela compiler at runtime; set QELAPATH=$(which qela) or put qela on PATH\n");
+	sys_exit(1);
+	var e str;
+	return e;
+}
+
+fn abi_spawn() {
+	if (abi_pid >= 0) { return; }
+	var path str = abi_self_path();
+
+	var in_pipe [2]i32;
+	var out_pipe [2]i32;
+	if (sys_pipe2(&in_pipe[0], 0) != 0) { eprint("eval: pipe failed\n"); sys_exit(1); }
+	if (sys_pipe2(&out_pipe[0], 0) != 0) { eprint("eval: pipe failed\n"); sys_exit(1); }
+
+	var pid i64 = sys_fork();
+	if (pid == 0) {
+		sys_dup2(in_pipe[0] as i64, 0);
+		sys_dup2(out_pipe[1] as i64, 1);
+		sys_close(in_pipe[0] as i64);
+		sys_close(in_pipe[1] as i64);
+		sys_close(out_pipe[0] as i64);
+		sys_close(out_pipe[1] as i64);
+		var cpath *u8 = cstr(path);
+		var cargv [3]i64;
+		cargv[0] = cpath as i64;
+		cargv[1] = cstr("--abi-server") as i64;
+		cargv[2] = 0;
+		var envp [1]i64;
+		envp[0] = 0;
+		sys_execve(cpath, &cargv[0] as *u8, &envp[0] as *u8);
+		sys_exit(127);
+	}
+	sys_close(in_pipe[0] as i64);
+	sys_close(out_pipe[1] as i64);
+	abi_pid = pid;
+	abi_in = in_pipe[1] as i64;
+	abi_out = out_pipe[0] as i64;
+}
+
+fn eval(src str) i64 {
+	abi_spawn();
+	abi_send_frame(abi_in, ABI_REQ_RUN as u8, src.ptr, src.len);
+	var buf [8]u8;
+	var kind u8 = 0;
+	var n i64 = abi_recv_frame(abi_out, &kind, &buf[0], 8);
+	if (n < 0) {
+		eprint("eval: the qela subprocess died\n");
+		sys_exit(1);
+	}
+	if (kind == (ABI_RESP_ERR as u8)) {
+		eprint("eval: compile or runtime error in the evaluated source\n");
+		sys_exit(1);
+	}
+	return *(&buf[0] as *i64);
+}
