@@ -2687,9 +2687,6 @@ fn gen_func(f *Func) {
 	// An extern declaration has no body; the symbol comes from the linker
 	// (only valid under -c, which skips this whole path).
 	if (f.body as i64 == 0) { return; }
-	if (f.interpreted || f.dynamic) {
-		error_at(f.pos, "'interpreted'/'dynamic' functions are not yet supported by native compilation; run this program under 'qela irun' instead (see docs/INTERPRETED.md)");
-	}
 	if (f.ret.kind != TY_VOID && f.ret.kind != TY_TYPE && !f.naked && !always_returns(f.body)) {
 		error_at(f.pos, "control reaches the end of a non-void function");
 	}
