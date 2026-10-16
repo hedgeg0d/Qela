@@ -252,11 +252,98 @@ compiled bytes cross the boundary, not the calls). A build today embeds
 *today's* `qela`; upgrading the installed compiler later doesn't change
 already-shipped binaries — a feature (reproducibility), not a bug.
 
+**Implemented so far is the pre-embedding half of this, not the embedding
+itself** — worth being precise about, since it's a real, load-bearing
+correction to this section. `/proc/self/exe` only resolves to *the process
+reading it* — at the *host program's own runtime*, that's the host, never
+`qela`. The self-copy therefore has two halves that were conflated above:
+(a) at **compile time**, `qela` reads its own bytes via `/proc/self/exe`
+(reliably itself, since it's the process doing the compiling) and would
+embed them into the output ELF; (b) at the **host's runtime**, the host
+materializes that embedded copy via `memfd_create()`+`fexecve()` and never
+needs to resolve a path at all — the "reproducibility" property above only
+holds once (a) exists, since only then are the bytes frozen at build time
+rather than whatever `qela` happens to be installed when the host runs.
+Half (a) is not built — it needs a general "embed an arbitrary byte blob
+into the output ELF" primitive that does not exist yet (`elf.qela` embeds
+*qela's own* std/ as string literals via `genblob.py`, at qela's own build
+time, which is a different thing). Until it exists, `std/eval.qela`'s
+`abi_spawn()` does the honest fallback instead: `$QELAPATH`, then a `$PATH`
+search for `qela`, then an actionable error — the host needs a real `qela`
+install reachable at its own runtime. This is a real, working, tested
+mechanism (see "What's implemented" below); it is just not yet the
+zero-install, frozen-at-build-time version this section originally
+described. `sys_memfd_create`/`sys_fexecve` (in `std/sys.qela`, done) are
+exactly what half (b) will need once half (a) exists.
+
+## What's implemented (2026-08-08)
+
+A first vertical slice, real and tested end to end, not a stub:
+
+- **The grammar** (`fn interpreted`/`fn dynamic`/`fn frozen`, `eval var`/
+  `eval fn`) — see item 3 below. AOT compilation of an actual
+  `interpreted`/`dynamic` function body still refuses with an actionable
+  error; `qela irun` already runs such functions correctly (every function
+  is interpreted there).
+- **The wire protocol** (`std/abiwire.qela`, shared by both ends since it
+  has no reason not to be): `[u32 total_len][u8 kind][payload]` frames.
+  `total_len` includes the kind byte. One request kind so far (`run this
+  source`), two response kinds (`ok, here's an i64` / `error`).
+- **The server** (`qela --abi-server`, `srcql/main.qela`, hidden — not in
+  `--help`): reads frames on fd 0, writes frames on fd 1, reuses the
+  *entire* `qela repl` machinery (`repl_init`/`repl_run_source`/
+  `repl_sync`/the fork-validate-then-commit crash isolation) unchanged —
+  an eval server *is* a REPL driven by a wire protocol instead of a TTY,
+  down to sharing the exact same persistent-session semantics: each `eval`
+  call is classified exactly like one REPL input line (bare expression →
+  its value; one or more statements → they execute for effect and the
+  call returns whatever the previous expression call returned, 0 if
+  there hasn't been one yet — this is inherited from REPL's own model, not
+  a new design). State (`var`/`let`/`fn`/`struct`/...) persists across
+  calls within one spawned child, exactly like a REPL session. A crashing
+  `eval` (division by zero, a compile error) is caught by the same
+  fork-validate step the REPL already used — the persistent session is
+  provably unaffected, verified by running further calls after a crash in
+  the same test.
+- **The client** (`std/eval.qela`, stage1-only, opt-in via `import
+  "std/eval.qela";` — deliberately **not** auto-triggered by scanning for
+  calls named `eval`, unlike the `need_fmt`/`need_dyn` splice pattern this
+  might otherwise have copied: `tests/match.qela` already has its own
+  unrelated `fn eval(op Op) int`, and auto-splicing a global `eval` by
+  name would have broken it and any other program with its own `eval`
+  the moment it compiled, with no relation to this feature. Explicit
+  import avoids the collision entirely, at the cost of point 3's "no
+  source change needed" framing not quite holding for `eval` specifically
+  — a one-line `import` is the price): `abi_spawn()` (lazy, kept alive for
+  the process's lifetime, resolves the subprocess as described above) and
+  `fn eval(src str) i64`.
+- **A permanent regression test**: `tools/bootstrap.sh`'s "eval() over the
+  abi subprocess" step — compiles a program that calls `eval()` twice with
+  state carried between calls, runs it with `QELAPATH` pointing at the
+  just-built `s2`, checks the output. Part of `make build`.
+
+What a compiled program can do today: `import "std/eval.qela"; ... var v
+i64 = eval("some qela expression");` — real, arbitrary, JIT-free
+tree-walked execution of Qela source at runtime, in a process that never
+linked a compiler frontend into itself.
+
+What it cannot do yet, precisely: an `eval`'d call cannot read or write
+the *host's* own globals or call the host's own functions (no
+`eval_get`/`eval_set`/foreign-call bridging over the ABI yet — `eval var`/
+`eval fn` parse and record the allowlist but nothing consults it at
+runtime); `fn interpreted`/`fn dynamic` functions cannot yet be called
+with ordinary call syntax from AOT code (no codegen trampoline — item 4);
+`parse_ast`/`run_ast` and AST inspection do not exist (item 5); and the
+self-copy is not yet embedded at compile time (the correction above).
+
 ## Size measurements (real numbers, not estimates)
 
-Baseline: `qela` (S2) = 503,312 bytes, 48.0% of the 1 MiB budget (up from
-501,488 before the sys.qela wrappers and the grammar work above — six new
-syscall wrappers and four new modifiers/fields, ~1.8 KB total).
+Baseline: `qela` (S2) = 511,144 bytes, 48.7% of the 1 MiB budget (up from
+501,488 before this round of work: six new syscall wrappers, four new
+grammar modifiers/fields, and — the largest single piece — the wire
+protocol plus `--abi-server`, ~9.7 KB total. `std/eval.qela` and
+`std/abiwire.qela` do not count against this budget: they ship in the
+*output* of programs that import them, never inside `qela` itself.)
 
 Self-copy (whole binary embedded in the *output*, cost does not touch
 `qela` itself):
@@ -290,20 +377,31 @@ that, don't assume gzip-level ratios from a from-scratch LZSS.
 
 ## Open questions / next steps for implementation
 
-1. **The ABI's wire format.** Every message shape needs to be nailed down
-   before any trampoline code is written: "run this AST with these args,
-   give me a result," "compile this AST, give me code bytes," "get/set
-   this global," "call this host function with these args." Simplest
-   starting point: a small length-prefixed binary protocol over a pipe
-   (`sys_pipe` + the child's stdin/stdout, or a dedicated socketpair);
-   values that aren't plain scalars (structs, strings) need a marshalling
-   convention decided up front, not improvised per message kind.
-2. **Child process lifecycle.** Spawned lazily on first need, then kept
-   alive for the host process's lifetime (not re-forked per call — see
-   "Call-site mechanics"). Decide: one child total, or one per distinct
-   `interpreted`/`dynamic` function (isolation vs. simplicity)? What
-   happens if the child dies mid-run (crashed, killed) — does the next
-   call respawn it, or is that a hard error for the host too?
+1. **The ABI's wire format — started, not finished.** Done: a
+   length-prefixed binary protocol (`std/abiwire.qela`,
+   `[u32 total_len][u8 kind][payload]`) over a plain pipe pair (`sys_pipe2`),
+   one request kind (`run this source, give me an i64`), two response
+   kinds (`ok` / `error`) — enough for `eval`, see "What's implemented"
+   above. Not done: "compile this AST, give me code bytes" (needed for
+   `dynamic`, item 4), "get/set this global" and "call this host function"
+   (needed for `eval var`/`eval fn`, described under "The foreign-globals/
+   foreign-calls ABI" above but not wired to anything yet), and a
+   marshalling convention for values that aren't a bare `i64` (structs,
+   strings, more than one argument) — the current protocol only ever
+   carries "a source string" one way and "an i64" the other.
+2. **Child process lifecycle — decided and implemented for `eval`.** One
+   child per host process, spawned lazily on first `eval()` call
+   (`abi_spawn()` in `std/eval.qela`), kept alive for the host's lifetime
+   — not re-forked per call. If the child dies mid-run, `eval()` reports
+   the error and calls `sys_exit(1)` rather than silently respawning: a
+   dead interpreter subprocess means the session state (every `var`/`fn`
+   defined so far) is gone, and silently starting a fresh, empty session
+   under the same variable names would be a correctness trap, not a
+   convenience. This still needs re-deciding once `interpreted`/`dynamic`
+   call-site trampolines (item 4) share the same child — a `dynamic`
+   function that already JIT'd locally doesn't need the child to still be
+   alive to keep working, so the "hard error" policy above may turn out to
+   be `eval`/`interpreted`-specific rather than global.
 3. **Grammar — done.** `fn interpreted name(...)`/`fn dynamic name(...)`/
    `fn frozen name(...)` are contextual modifiers, mutually exclusive with
    each other and with `naked`, parsed in `parse_function`
@@ -341,10 +439,9 @@ that, don't assume gzip-level ratios from a from-scratch LZSS.
    can be restricted under some hardening policies (SELinux, some
    container runtimes) — needs a real error message, not a silent
    failure, when it's unavailable.
-8. **Test plan.** At minimum: one program using `interpreted`, one using
-   `dynamic`, one using bare `eval`, one using `eval var`/`eval fn` shared
-   state, one using `--interpreted`, one using `--jit`/whatever it's
-   named, each with a small correctness check — wired into
-   `tools/bootstrap.sh` the way the repl's interpolation test was
-   (`tools/bootstrap.sh`'s "interpolation and repl" step), as a permanent
-   regression gate, not a one-off manual check.
+8. **Test plan — one of six done.** `tools/bootstrap.sh`'s "eval() over
+   the abi subprocess" step covers bare `eval`, including cross-call
+   session state. Still needed: one program using `interpreted`, one using
+   `dynamic`, one using `eval var`/`eval fn` shared state, one using
+   `--interpreted`, one using `--jit`/whatever it's named — each blocked
+   on the item above it that doesn't exist yet.
