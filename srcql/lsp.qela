@@ -563,6 +563,9 @@ fn lsp_child() {
 	var unit *Unit = parse(lex(src, (file as i64) << FILE_SHIFT));
 	var img Image;
 	codegen(unit, &img);
+	// With soft errors the child reports them all but must not pretend
+	// the compile succeeded (or write an index over broken nodes).
+	if (diag_errcount() > 0) { sys_exit(1); }
 	lsp_write_index(unit, lsp_tmp_idx);
 	sys_exit(0);
 }
@@ -593,9 +596,40 @@ fn lsp_publish(diag_path str) {
 		var txt str = read_file(diag_path);
 		js_src = txt;
 		js_i = 0;
-		// The child may write more than one record (an error plus hints).
+		// The child may write more than one record: an error, its hints,
+		// and the secondary spans attached to it.
+		var last *JVal = null;
 		while (js_peek() != 0) {
 			var d *JVal = js_value();
+			var sec *JVal = j_get(d, "sec");
+			if (sec as i64 != 0) {
+				if (last as i64 != 0) {
+					var rel *JVal = j_get(last, "relatedInformation");
+					if (rel as i64 == 0) {
+						rel = j_new(J_ARR);
+						j_push(last, "relatedInformation", rel);
+					}
+					var f *JVal = j_get(d, "file");
+					var line *JVal = j_get(d, "line");
+					var col *JVal = j_get(d, "col");
+					var msg *JVal = j_get(d, "msg");
+					var furl str = lsp_uri;
+					if (f as i64 != 0 && !str_eq(f.s, lsp_path)) {
+						var ub Buf;
+						fmt_str(&ub, "file://");
+						fmt_str(&ub, f.s);
+						furl = buf_str(&ub);
+					}
+					var loc *JVal = j_new(J_OBJ);
+					j_push(loc, "uri", j_strv(furl));
+					j_push(loc, "range", j_pos_obj((line.n - 1) as int, (col.n - 1) as int));
+					var rone *JVal = j_new(J_OBJ);
+					j_push(rone, "location", loc);
+					j_push(rone, "message", j_strv(msg.s));
+					j_push(rel, "", rone);
+				}
+				continue;
+			}
 			var line *JVal = j_get(d, "line");
 			var col *JVal = j_get(d, "col");
 			var msg *JVal = j_get(d, "msg");
@@ -608,6 +642,7 @@ fn lsp_publish(diag_path str) {
 				j_push(one, "severity", j_numv(sev_n));
 				j_push(one, "message", j_strv(msg.s));
 				j_push(ds, "", one);
+				last = one;
 			}
 		}
 	}
