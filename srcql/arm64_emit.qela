@@ -43,6 +43,37 @@ let X25 = 25;
 let X26 = 26;
 let X27 = 27;
 let X28 = 28;   // top of the AAPCS64 callee-saved block (x19-x28), GC-scan range end
+
+var arm64_image_hdr i64 = 0;   // EHDR+PHDR bytes before the code, set by codegen
+
+// A PIE's entry stub: find the runtime base (the stub sits at code offset
+// 0, so the ADR's own position is known at emission), load the fixup table
+// PC-relative, and add the base to every slot it lists.
+fn arm64_gen_pie_prologue(hdr i64) {
+	var site i64 = code.n;
+	var d i64 = -(hdr + site);
+	b4(0x10000000 | (((d >> 2) & 0x7ffff) << 5) | ((d & 3) << 29) | X19);  // adr x19, base
+	arm64_adrp(X20);
+	pie_table_site = code.n - 4;            // the adrp word (patched)
+	arm64_add_lo12(X20);
+	arm64_ld_at(X21, X20, 0);               // x21 = entry count
+	arm64_add_imm(X20, X20, 8);             // x20 = first entry
+	var loop_at i64 = code.n;
+	var cbz_at i64 = code.n;
+	b4(0x34000000 | X21);                   // cbz x21, done (patched)
+	arm64_ld_at(X22, X20, 0);               // x22 = slot
+	arm64_ld_at(X23, X20, 8);               // x23 = target
+	b4(0x8b000000 | (X22 << 16) | (X19 << 5) | X22);  // add x22, x22, x19
+	b4(0x8b000000 | (X23 << 16) | (X19 << 5) | X23);  // add x23, x23, x19
+	b4(0xf9000000 | (X22 << 5) | X23);      // str x23, [x22]
+	arm64_add_imm(X20, X20, 16);
+	arm64_sub_imm(X21, X21, 1);
+	var b_at i64 = code.n;
+	b4(0x14000000);                         // b loop (patched)
+	var done_at i64 = code.n;
+	buf_patch32(&code, cbz_at, 0x34000000 | X21 | ((((done_at - cbz_at) >> 2) & 0x7ffff) << 5));
+	buf_patch32(&code, b_at, 0x14000000 | (((loop_at - b_at) >> 2) & 0x3ffffff));
+}
 let X29 = 29;
 let X30 = 30;
 let SP  = 31;   // register field value 31 means SP or XZR depending on the instruction; only SP forms are used here.
@@ -749,6 +780,24 @@ fn arm64_gen_bounds_trampoline() {
 // of one imm26. Addresses here are always well under 4GB (ELF_BASE plus a
 // small offset), so two halves are enough; no MOVK #32/#48 needed.
 fn arm64_patch_movz_movk_addr(at i64, addr i64) {
+	if (opt_pie) {
+		// The slot is an ADRP+ADD_LO12 pair (arm64_addr_slot emits it
+		// under --pie): the immediate is the page delta between the
+		// ADRP's page and the target's page, so no load address is ever
+		// baked in. addr is an image offset and the ADRP's own position
+		// is eff_base() + arm64_image_hdr + at; ADRP aligns the PC down
+		// to a page before adding, so the delta is computed against the
+		// aligned PC, and the lo12 half is always non-negative.
+		var pc i64 = eff_base() + arm64_image_hdr + at;
+		var d2 i64 = addr - (pc & ~4095);
+		var hi i64 = d2 >> 12;
+		var lo i64 = d2 & 0xfff;
+		var w0 i64 = buf_read32(&code, at);
+		var w1 i64 = buf_read32(&code, at + 4);
+		buf_patch32(&code, at, w0 | (((hi >> 2) & 0x7ffff) << 5) | ((hi & 3) << 29));
+		buf_patch32(&code, at + 4, w1 | ((lo & 0xfff) << 10));
+		return;
+	}
 	var w0 i64 = buf_read32(&code, at);
 	var w1 i64 = buf_read32(&code, at + 4);
 	buf_patch32(&code, at, w0 | ((addr & 0xffff) << 5));
@@ -761,6 +810,17 @@ fn arm64_patch_movz_movk_addr(at i64, addr i64) {
 }
 
 fn arm64_addr_slot(reg int) i64 {
+	if (opt_pie) {
+		// ADRP+ADD_LO12 instead of the MOVZ+MOVK pair: same two words,
+		// PC-relative, so a PIE needs no baked-in load address. The
+		// position is captured after the ADRP lands: b4() flushes any
+		// pending IR before appending, so a pre-emission code.n would
+		// record the pair one flush ahead of where it really sits.
+		arm64_adrp(reg);
+		var at i64 = code.n - 4;
+		arm64_add_lo12(reg);
+		return at;
+	}
 	arm64_movz(reg, 0, 0);
 	var at i64 = code.n - 4;
 	arm64_movk(reg, 0, 1);
