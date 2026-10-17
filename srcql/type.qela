@@ -18,6 +18,7 @@ var ty_f32 *Type;
 var ty_f64 *Type;
 var ty_str_cache *Type;
 var types_ready bool = false;
+var type_abi_mode bool = false;
 
 fn type_alloc() *Type {
 	return arena_alloc(sizeof(Type), 8) as *Type;
@@ -1428,6 +1429,21 @@ fn type_call(n *Node) {
 	if (type_intrinsic(n)) { return; }
 	if (n.varp as i64 != 0) { type_indirect_call(n); return; }
 	var f *Func = find_func(n.name);
+	if (f as i64 == 0 && type_abi_mode) {
+		if (n.nargs > 6) {
+			emsg("'"); emsg(n.name); emsg("' is not a local function, and a host call over the eval ABI takes at most six arguments"); efail(n.pos);
+		}
+		var a *Node = n.args;
+		while (a as i64 != 0) {
+			if (is_aggregate(a.ty) || is_float(a.ty) || a.ty.size > 8) {
+				emsg("'"); emsg(n.name); emsg("' is not a local function, and a host call over the eval ABI takes only scalar integer arguments"); efail(a.pos);
+			}
+			a = a.next;
+		}
+		n.foreign = true;
+		n.ty = ty_i64;
+		return;
+	}
 	if (f as i64 == 0) {
 		emsg("undefined function '"); emsg(n.name); emsg("'"); efail(n.pos);
 	}

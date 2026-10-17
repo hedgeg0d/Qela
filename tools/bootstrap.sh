@@ -291,6 +291,26 @@ EOF
 printf '    ok\n'
 
 
+step "eval fn: host functions callable from eval'd source"
+cat > "$tmp2/evalfn.qela" <<'EOF'
+import "std/eval.qela";
+import "std/io.qela";
+eval fn apply_discount(price i64) i64 {
+	return price - 10;
+}
+fn main() int {
+	var r i64 = eval("apply_discount(100)");
+	write_str(STDOUT, "r=${r}\n");
+	return 0;
+}
+EOF
+( cd "$tmp2" &&
+  "$root/$OUT/s2" evalfn.qela -o evalfn &&
+  [ "$(QELAPATH="$root/$OUT/s2" ./evalfn)" = "r=90" ] ) ||
+	fail "eval fn does not bridge a host function to eval'd source"
+printf '    ok\n'
+
+
 step "stdin compile and shebang"
 cat > "$tmp2/btcrash.qela" <<'EOF'
 fn deep(n i64) i64 {
