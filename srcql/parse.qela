@@ -1908,7 +1908,7 @@ fn interp_escape_src(raw str, pos i64) str {
 
 var interp_trampoline_seq int = 0;
 
-fn interp_synthesize_trampoline(f *Func, fn_start i64, end_pos i64) {
+fn interp_synthesize_trampoline(f *Func, fn_start i64, body_start i64, end_pos i64) {
 	interp_check_scalar(f.ret, f.pos, "return types");
 	var i int = 0;
 	while (i < f.nparams) {
@@ -1922,6 +1922,7 @@ fn interp_synthesize_trampoline(f *Func, fn_start i64, end_pos i64) {
 	interp_escape_src(def_src, f.pos);
 	f.src_start = fn_start;
 	f.src_end = end_pos;
+	f.body_start = body_start;
 
 	var b Buf;
 	fmt_str(&b, "{ var __ia [6]i64;");
@@ -1935,7 +1936,8 @@ fn interp_synthesize_trampoline(f *Func, fn_start i64, end_pos i64) {
 		fmt_str(&b, ";");
 		i = i + 1;
 	}
-	fmt_str(&b, " return __interp_call_dispatch(\"");
+	if (f.dynamic) { fmt_str(&b, " return __dyn_jit_call(\""); }
+	else { fmt_str(&b, " return __interp_call_dispatch(\""); }
 	fmt_str(&b, f.name);
 	fmt_str(&b, "\", &__ia[0]); }");
 
@@ -2083,9 +2085,10 @@ fn parse_function(t **Token, is_extern bool) *Func {
 		f.body = 0 as *Node;
 		*t = (*t).next;
 	} else {
+		var body_start i64 = (*t).pos;
 		f.body = parse_block(t);
 		if (f.interpreted || f.dynamic) {
-			interp_synthesize_trampoline(f, fn_start, (*t).pos);
+			interp_synthesize_trampoline(f, fn_start, body_start, (*t).pos);
 		}
 	}
 	leave_scope();
@@ -2750,7 +2753,26 @@ fn parse(tok *Token) *Unit {
 			if ((cf.interpreted || cf.dynamic) && cf.nct == 0) {
 				var cfid int = diag_file_of(cf.pos);
 				var csrc str = diag_src_of(cfid);
-				fmt_str(&cb, str_slice(csrc, diag_offset_of(cf.src_start), diag_offset_of(cf.src_end)));
+				var cbody str = str_slice(csrc, diag_offset_of(cf.body_start), diag_offset_of(cf.src_end));
+				fmt_str(&cb, "fn ");
+				if (cf.dynamic) { fmt_str(&cb, "dynamic "); } else { fmt_str(&cb, "interpreted "); }
+				fmt_str(&cb, cf.name);
+				fmt_str(&cb, "(");
+				var cpi int = 0;
+				while (cpi < cf.nparams) {
+					if (cpi > 0) { fmt_str(&cb, ", "); }
+					var cpv *Var = func_param(cf, cpi);
+					fmt_str(&cb, cpv.name);
+					fmt_str(&cb, " ");
+					fmt_str(&cb, type_name(cpv.ty));
+					cpi = cpi + 1;
+				}
+				fmt_str(&cb, ") ");
+				if (cf.ret.kind != TY_VOID) {
+					fmt_str(&cb, type_name(cf.ret));
+					fmt_str(&cb, " ");
+				}
+				fmt_str(&cb, cbody);
 				buf_u8(&cb, '\n');
 			}
 			cf = cf.next;
