@@ -95,7 +95,7 @@ fn tight_after(t *Token) bool {
 
 fn fmt_run(src str, tok *Token) {
 	fmt_src = src;
-	var prev *Token = 0 as *Token;
+	var prev *Token = null;
 
 	while (tok.kind != TK_EOF) {
 		var blank int = 0;

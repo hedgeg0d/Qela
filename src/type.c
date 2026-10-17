@@ -836,7 +836,8 @@ void add_type(Node *n) {
 			} else {
 				a = to_value(a);
 				reject_aggregate(a, want, a->pos);
-				if ((want->kind == TY_PTR) != (a->ty->kind == TY_PTR))
+				if ((want->kind == TY_PTR) != (a->ty->kind == TY_PTR) &&
+				    !(a->kind == ND_NUM && a->val == 0))
 					error_at(a->pos, "argument must have type '%s'", type_name(want));
 				tail->next = cast_to(a, want);
 			}
