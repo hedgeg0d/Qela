@@ -1,5 +1,45 @@
 import "comp.qela";
 import "type.qela";
+import "diag.qela";
+import "../std/fmt.qela";
+
+// Monomorphized clones fold the same constants again; their warnings were
+// already reported for the original body.
+var opt_inst bool = false;
+
+let OV_MAX = 9223372036854775807;
+
+fn ovf_add(a i64, b i64) bool {
+	if (b > 0 && a > OV_MAX - b) { return true; }
+	if (b < 0 && a < -OV_MAX - 1 - b) { return true; }
+	return false;
+}
+
+fn ovf_sub(a i64, b i64) bool {
+	if (b < 0 && a > OV_MAX + b) { return true; }
+	if (b > 0 && a < -OV_MAX - 1 + b) { return true; }
+	return false;
+}
+
+fn ovf_mul(a i64, b i64) bool {
+	if (a == 0 || b == 0) { return false; }
+	if ((a == -1 && b == -OV_MAX - 1) || (b == -1 && a == -OV_MAX - 1)) { return true; }
+	if (a > 0) {
+		if (b > 0) { return a > OV_MAX / b; }
+		return b < (-OV_MAX - 1) / a;
+	}
+	if (b > 0) { return a < (-OV_MAX - 1) / b; }
+	return b < OV_MAX / a;
+}
+
+fn warn_ovf(pos i64) {
+	if (opt_inst) { return; }
+	warn_at(pos, "signed integer overflow in a constant expression");
+}
+
+fn ovf_unsigned(n *Node) bool {
+	return n.lhs.ty as i64 != 0 && n.lhs.ty.is_unsigned;
+}
 
 fn trunc_val(v i64, t *Type) i64 {
 	if (t.size == 1) {
@@ -46,6 +86,7 @@ fn const_fold(n *Node) {
 				if (n.lhs.ty.size == 4) { mask = 0x80000000; }
 				n.val = n.lhs.val ^ mask;
 			} else {
+				if (!ovf_unsigned(n) && n.lhs.val == -OV_MAX - 1) { warn_ovf(n.pos); }
 				n.val = -n.lhs.val;
 			}
 			n.kind = ND_NUM;
@@ -84,9 +125,9 @@ fn const_fold(n *Node) {
 		const_fold(n.rhs);
 		if (n.lhs.kind == ND_NUM && n.rhs.kind == ND_NUM) {
 			var a i64 = n.lhs.val; var b i64 = n.rhs.val;
-			if (n.kind == ND_ADD)    { n.val = a + b; }
-			else if (n.kind == ND_SUB)    { n.val = a - b; }
-			else if (n.kind == ND_MUL)    { n.val = a * b; }
+			if (n.kind == ND_ADD)    { if (!ovf_unsigned(n) && ovf_add(a, b)) { warn_ovf(n.pos); } n.val = a + b; }
+			else if (n.kind == ND_SUB)    { if (!ovf_unsigned(n) && ovf_sub(a, b)) { warn_ovf(n.pos); } n.val = a - b; }
+			else if (n.kind == ND_MUL)    { if (!ovf_unsigned(n) && ovf_mul(a, b)) { warn_ovf(n.pos); } n.val = a * b; }
 			else if (n.kind == ND_DIV)    { if (b == 0) { error_at(n.pos, "division by zero in a constant expression"); } n.val = a / b; }
 			else if (n.kind == ND_MOD)    { if (b == 0) { error_at(n.pos, "division by zero in a constant expression"); } n.val = a % b; }
 			else if (n.kind == ND_BITAND) { n.val = a & b; }
@@ -129,6 +170,7 @@ fn fold_body(n *Node) {
 
 fn opt_func(f *Func) {
 	if (f.body as i64 == 0) { return; }
+	opt_inst = f.instantiated;
 	const_fold(f.body);
 	fold_body(f.body);
 }
