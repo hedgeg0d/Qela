@@ -683,6 +683,12 @@ EOF
 # --dump-std prints the embedded module source.
 "$root/$OUT/s2" --dump-std fmt | grep -q 'fmt_str' ||
 	fail "--dump-std did not print the embedded fmt module"
+# --version prints the version from its single source (comp.qela), and the
+# help header carries it too.
+"$root/$OUT/s2" --version | grep -q 'qela alpha-0.1.0' ||
+	fail "--version did not print qela alpha-0.1.0"
+"$root/$OUT/s2" -h | grep -q 'qela alpha-0.1.0' ||
+	fail "-h does not show the compiler version"
 # qela doc std resolves /// doc comments: exact name shows its signature
 # and doc, and the fuzzy fallback still finds a misspelled sibling.
 "$root/$OUT/s2" doc std str_dup | grep -q 'fn str_dup' ||
