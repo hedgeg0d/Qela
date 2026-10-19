@@ -311,7 +311,7 @@ EOF
 printf '    ok\n'
 
 
-step "eval var: host globals readable from eval'd source"
+step "eval var: host globals readable and writable from eval'd source"
 cat > "$tmp2/evalvar.qela" <<'EOF'
 import "std/eval.qela";
 import "std/io.qela";
@@ -320,14 +320,15 @@ var secret i64 = 12345;
 fn main() int {
 	var a i64 = eval("price * 2");
 	var b i64 = eval("secret");
-	write_str(STDOUT, "a=${a} b=${b}\n");
+	eval("price = price + 50;");
+	write_str(STDOUT, "a=${a} b=${b} price=${price}\n");
 	return 0;
 }
 EOF
 ( cd "$tmp2" &&
   "$root/$OUT/s2" evalvar.qela -o evalvar &&
-  [ "$(QELAPATH="$root/$OUT/s2" ./evalvar)" = "a=200 b=0" ] ) ||
-	fail "eval var does not expose an exported global, or leaks an unexported one"
+  [ "$(QELAPATH="$root/$OUT/s2" ./evalvar)" = "a=200 b=0 price=150" ] ) ||
+	fail "eval var does not expose an exported global, leaks an unexported one, or double-applies a write"
 printf '    ok\n'
 
 
