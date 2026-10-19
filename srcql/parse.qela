@@ -5665,6 +5665,27 @@ fn splice_import(tok *Token, path str, pos i64) *Token {
 	return ihead;
 }
 
+// The earlier function with the exact same signature as f, if any: same
+// name, same arity, same parameter types. A different signature is an
+// overload (type.qela picks by argument match); an identical one is a
+// plain redefinition and stays an error.
+fn funcs_clash(f *Func) *Func {
+	var p *Func = all_funcs;
+	while (p as i64 != 0 && p as i64 != f as i64) {
+		if (str_eq(p.name, f.name) && p.nparams == f.nparams) {
+			var i int = 0;
+			var same bool = true;
+			while (i < f.nparams) {
+				if (func_param(p, i).ty as i64 != func_param(f, i).ty as i64) { same = false; }
+				i = i + 1;
+			}
+			if (same) { return p; }
+		}
+		p = p.next;
+	}
+	return null;
+}
+
 fn parse(tok *Token) *Unit {
 	enter_scope();
 	var head Func;
@@ -5948,7 +5969,7 @@ fn parse(tok *Token) *Unit {
 
 	var f *Func = head.next;
 	while (f as i64 != 0) {
-		if (find_func(f.name) as i64 != f as i64) {
+		if (funcs_clash(f) as i64 != 0) {
 			emsg("redefinition of function '"); emsg(f.name); emsg("'"); efail(f.pos);
 		}
 		if (f.nct == 0) {
