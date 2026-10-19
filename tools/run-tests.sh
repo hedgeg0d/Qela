@@ -15,6 +15,7 @@ set -u
 QELA="${QELA:-./qela}"
 TARGET="${TARGET:-x86_64}"
 QEMU="${QEMU:-}"
+TEST_TIMEOUT="${QELA_TEST_TIMEOUT:-10}"
 # A program that uses the runtime ABI (eval/interpreted/dynamic) spawns the
 # compiler itself as its child; when the runner points at S2, the tests find
 # it through QELAPATH rather than whatever `qela` happens to be installed.
@@ -99,7 +100,7 @@ for src in tests/*.qela; do
 			fi
 			continue
 		fi
-		got_out=$($QELA irun --no-warn "$src" 2>&1)
+		got_out=$(timeout "$TEST_TIMEOUT" $QELA irun --no-warn "$src" 2>&1)
 		got_exit=$?
 		if [ "$got_exit" != "$want_exit" ]; then
 			printf 'FAIL %s: exit %s, want %s\n' "$name" "$got_exit" "$want_exit"
@@ -133,9 +134,9 @@ for src in tests/*.qela; do
 	fi
 
 	if [ -n "$QEMU" ]; then
-		got_out=$("$QEMU" "$bin" 2>&1)
+		got_out=$(timeout "$TEST_TIMEOUT" "$QEMU" "$bin" 2>&1)
 	else
-		got_out=$("$bin" 2>&1)
+		got_out=$(timeout "$TEST_TIMEOUT" "$bin" 2>&1)
 	fi
 	got_exit=$?
 
