@@ -639,8 +639,11 @@ fn tsubst(t *Type) *Type {
 	if (t.kind == TY_GENERIC) {
 		var b0 *Type = tsubst(t.ga0);
 		var b1 *Type = tsubst(t.ga1);
-		if (b0 as i64 != t.ga0 as i64 || b1 as i64 != t.ga1 as i64) {
-			return generic_instance(t.tmpl, b0, b1);
+		var b2 *Type = tsubst(t.ga2);
+		var b3 *Type = tsubst(t.ga3);
+		if (b0 as i64 != t.ga0 as i64 || b1 as i64 != t.ga1 as i64 ||
+		    b2 as i64 != t.ga2 as i64 || b3 as i64 != t.ga3 as i64) {
+			return generic_instance(t.tmpl, b0, b1, b2, b3);
 		}
 		return t;
 	}
@@ -807,6 +810,8 @@ fn unify(decl *Type, act *Type) {
 		if (act.tmpl as i64 != decl.tmpl as i64) { return; }
 		unify(decl.ga0, act.ga0);
 		unify(decl.ga1, act.ga1);
+		unify(decl.ga2, act.ga2);
+		unify(decl.ga3, act.ga3);
 	}
 }
 
@@ -2508,7 +2513,7 @@ fn type_maplit(n *Node) {
 	var tm *Tmpl = tmpl_find("Map");
 	if (tm as i64 == 0) { error_at(n.pos, "a map literal needs std/map.qela imported"); }
 	var vty *Type = to_value(n.args.rhs).ty;
-	var mty *Type = generic_instance(tm, vty, null);
+	var mty *Type = generic_instance(tm, vty, null, null, null);
 	var tmp *Var = alloc_temp(mty);
 	if (tmp as i64 == 0) { error_at(n.pos, "a map literal needs a function scope"); }
 
@@ -2556,7 +2561,7 @@ fn type_veclit(n *Node) {
 	var tm *Tmpl = tmpl_find("Vec");
 	if (tm as i64 == 0) { error_at(n.pos, "a vec literal needs std/vec.qela imported"); }
 	var vty *Type = to_value(n.args).ty;
-	var mty *Type = generic_instance(tm, vty, null);
+	var mty *Type = generic_instance(tm, vty, null, null, null);
 	var tmp *Var = alloc_temp(mty);
 	if (tmp as i64 == 0) { error_at(n.pos, "a vec literal needs a function scope"); }
 
