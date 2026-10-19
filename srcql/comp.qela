@@ -75,6 +75,10 @@ struct Tmpl {
 struct Member {
 	next   *Member,
 	name   str,
+	// A field tag: `x i64 "json-name"` sets the JSON key, "-" omits the
+	// field (srcql/jmgen.qela). Empty means "use the name". Stage1-only
+	// syntax; stage0 never sets it and compiles no tagged struct.
+	tag    str,
 	ty     *Type,
 	offset int,
 	bitoff int,
