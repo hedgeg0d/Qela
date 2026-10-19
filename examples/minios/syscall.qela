@@ -1,0 +1,115 @@
+fn naked syscall_entry() {
+	asm(0x49, 0x89, 0xc1);
+	asm(0x48, 0xb8, $saved_rsp);
+	asm(0x48, 0x89, 0x20);
+	asm(0x48, 0xb8, $saved_rip);
+	asm(0x48, 0x89, 0x08);
+	asm(0x48, 0xb8, $saved_fl);
+	asm(0x4c, 0x89, 0x18);
+	asm(0x48, 0xbc, $kstack);
+	asm(0x48, 0x81, 0xc4, 0x00, 0x40, 0x00, 0x00);
+	asm(0x4c, 0x89, 0xd1);
+	asm(0xe8, $rel sys_dispatch);
+	asm(0x48, 0x89, 0xc3);
+	asm(0x48, 0xb8, $saved_rsp);
+	asm(0x48, 0x8b, 0x20);
+	asm(0x48, 0xb8, $saved_rip);
+	asm(0x48, 0x8b, 0x08);
+	asm(0x48, 0xb8, $saved_fl);
+	asm(0x4c, 0x8b, 0x18);
+	asm(0x48, 0x89, 0xd8);
+	asm(0x48, 0x0f, 0x07);
+}
+
+fn sys_read(fd i64, buf u64, len i64) i64 {
+	if (fd != 0) {
+		return -9;
+	}
+	kb_poll();
+	if (kb_head_get() == kb_t2_get()) {
+		return -11;
+	}
+	var n i64 = 0;
+	while (true) {
+		if (n >= len) {
+			break;
+		}
+		kb_poll();
+		if (kb_head_get() == kb_t2_get()) {
+			break;
+		}
+		var t i64 = kb_t2_get();
+		var c i64 = kb_q_get(t % 128);
+		kb_t2_set(t + 1);
+		(buf as *u8)[n] = c as u8;
+		n = n + 1;
+	}
+	return n;
+}
+
+fn sys_write(fd i64, buf u64, len i64) i64 {
+	if (fd != 1 && fd != 2) {
+		return -9;
+	}
+	var i i64 = 0;
+	while (i < len) {
+		kputc((buf as *u8)[i]);
+		i = i + 1;
+	}
+	return len;
+}
+
+fn sys_fstat(fd i64, buf u64) i64 {
+	if (fd != 0 && fd != 1 && fd != 2) {
+		return -9;
+	}
+	var i i64 = 0;
+	while (i < 144) {
+		(buf as *u8)[i] = 0 as u8;
+		i = i + 1;
+	}
+	return 0;
+}
+
+fn sys_brk(addr i64) i64 {
+	if (addr == 0) {
+		return heap_top;
+	}
+	if (addr < heap_top) {
+		return heap_top;
+	}
+	heap_top = addr;
+	return heap_top;
+}
+
+fn sys_exit(code i64) {
+	kputs("user exited with code ");
+	kputn(code);
+	kputs("\n");
+	halt();
+}
+
+fn sys_dispatch(a0 i64, a1 i64, a2 i64, a3 i64, a4 i64, nr i64) i64 {
+	if (nr == 0) {
+		return sys_read(a0, a1 as u64, a2);
+	}
+	if (nr == 1) {
+		return sys_write(a0, a1 as u64, a2);
+	}
+	if (nr == 5) {
+		return sys_fstat(a0, a1 as u64);
+	}
+	if (nr == 12) {
+		return sys_brk(a0);
+	}
+	if (nr == 39) {
+		return 1;
+	}
+	if (nr == 60) {
+		sys_exit(a0);
+	}
+	if (nr == 231) {
+		sys_exit(a0);
+	}
+	return -38;
+}
