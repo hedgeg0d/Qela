@@ -14,10 +14,7 @@ fn main() int {
 	var msg str = "hello from userland\n";
 	syscall6(1, 1, msg.ptr as i64, msg.len, 0, 0);
 	var line [64]u8;
-	var n i64 = 0;
-	while (n <= 0) {
-		n = syscall6(0, 0, &line[0] as i64, 64, 0, 0);
-	}
+	var n i64 = syscall6(0, 0, &line[0] as i64, 64, 0, 0);
 	syscall6(1, 1, &line[0] as i64, n, 0, 0);
 	syscall6(60, 0, 0, 0, 0, 0);
 	return 0;
