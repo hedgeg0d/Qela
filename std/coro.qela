@@ -9,12 +9,19 @@ import "arena.qela";
 
 let CORO_STACK = 65536;
 let CORO_SLOTS = 256;
+let CORO_HANDOFF_MAX = 32;
 
 struct Coro {
 	sp    i64,
 	top   i64,
 	done  bool,
 	alive bool,
+	// A parked context may move only after an ordinary coro_yield. Directed
+	// generator switches and channel waits retain thread-local references.
+	parked bool,
+	blocked bool,
+	pinned bool,
+	moved bool,
 }
 
 // Per-thread: two OS threads must never see or touch each other's
@@ -25,6 +32,23 @@ struct Coro {
 tvar coros [256]Coro;
 tvar ncoros int = 0;
 tvar cur_coro int = 0;
+
+let HANDOFF_EMPTY = 0;
+let HANDOFF_REQUEST = 1;
+let HANDOFF_BUSY = 2;
+let HANDOFF_READY = 3;
+
+struct CoroHandoff {
+	state i64,
+	sp    i64,
+	top   i64,
+}
+
+// Thread.qela enables this for pool workers. The mailbox is process-global;
+// the scheduler table remains private to each worker.
+var coro_pool_n i64 = 0;
+tvar coro_pool_id i64 = -1;
+var coro_handoff [32]CoroHandoff;
 
 // arena_alloc is bump-pointer state shared by every thread (it stays out
 // of the bootstrap subset's reach, so it cannot use atomics itself -- see
@@ -53,9 +77,17 @@ fn coro_alloc_stack() *u8 {
 // its Gen.coro from this, and gen_resume treats 0 as "never spawned").
 /// Spawns a new coroutine and returns its identifier.
 fn coro_spawn(target i64, a0 i64, a1 i64, a2 i64, a3 i64, a4 i64) int {
-	if (ncoros + 1 >= CORO_SLOTS) { return 0; }
-	ncoros = ncoros + 1;
-	var id int = ncoros;
+	var id int = 0;
+	var scan int = 1;
+	while (scan <= ncoros) {
+		if (coros[scan].done || coros[scan].moved) { id = scan; break; }
+		scan = scan + 1;
+	}
+	if (id == 0) {
+		if (ncoros + 1 >= CORO_SLOTS) { return 0; }
+		ncoros = ncoros + 1;
+		id = ncoros;
+	}
 
 	$if (INTERP == "1") {
 		interp_coro_spawn(id, target, a0, a1, a2, a3, a4);
@@ -63,6 +95,10 @@ fn coro_spawn(target i64, a0 i64, a1 i64, a2 i64, a3 i64, a4 i64) int {
 		coros[id].top = 0;
 		coros[id].done = false;
 		coros[id].alive = true;
+		coros[id].parked = false;
+		coros[id].blocked = false;
+		coros[id].pinned = false;
+		coros[id].moved = false;
 		return id;
 	}
 
@@ -120,7 +156,109 @@ fn coro_spawn(target i64, a0 i64, a1 i64, a2 i64, a3 i64, a4 i64) int {
 	coros[id].top = top;
 	coros[id].done = false;
 	coros[id].alive = true;
+	coros[id].parked = false;
+	coros[id].blocked = false;
+	coros[id].pinned = false;
+	coros[id].moved = false;
 	return id;
+}
+
+// Imports a parked context handed off by another pool worker. The stack image
+// holds all continuation state; the destination gets a fresh local slot.
+/// Imports a parked coroutine context.
+fn coro_import(sp i64, top i64) bool {
+	var id int = 0;
+	var scan int = 1;
+	while (scan <= ncoros) {
+		if (coros[scan].done || coros[scan].moved) { id = scan; break; }
+		scan = scan + 1;
+	}
+	if (id == 0) {
+		if (ncoros + 1 >= CORO_SLOTS) { return false; }
+		ncoros = ncoros + 1;
+		id = ncoros;
+	}
+	coros[id].sp = sp;
+	coros[id].top = top;
+	coros[id].done = false;
+	coros[id].alive = true;
+	coros[id].parked = true;
+	coros[id].blocked = false;
+	coros[id].pinned = false;
+	coros[id].moved = false;
+	return true;
+}
+
+// Prevents directed coroutine protocols such as generators from moving.
+/// Pins current coroutine to its worker.
+fn coro_pin() {
+	if (cur_coro != 0) { coros[cur_coro].pinned = true; }
+}
+
+// Channel waits are addressed through this worker's scheduler state, so they
+// are never migration candidates while parked.
+/// Marks current coroutine blocked or runnable.
+fn coro_set_blocked(v bool) {
+	if (cur_coro != 0) { coros[cur_coro].blocked = v; }
+}
+
+/// Marks current OS thread as a pool worker.
+fn coro_pool_enter(id i64) { coro_pool_id = id; }
+
+/// Sets the number of pool workers.
+fn coro_pool_set_n(n i64) { atomic_store(&coro_pool_n, n); }
+
+// A yielding coroutine may safely donate another already parked context. Its
+// own stack is still executing until the switch stub saves it, so it is never
+// selected here.
+fn coro_offer_handoff() {
+	if (coro_pool_id < 0) { return; }
+	var pool_n i64 = atomic_load(&coro_pool_n);
+	var dst i64 = 0;
+	while (dst < pool_n) {
+		if (dst != coro_pool_id && atomic_cas(&coro_handoff[dst].state, HANDOFF_REQUEST, HANDOFF_BUSY)) {
+			var ci int = 1;
+			while (ci <= coro_slots()) {
+				if (ci != cur_coro && coros[ci].alive && !coros[ci].done && coros[ci].parked && !coros[ci].blocked && !coros[ci].pinned && !coros[ci].moved) {
+					coros[ci].moved = true;
+					coro_handoff[dst].sp = coros[ci].sp;
+					coro_handoff[dst].top = coros[ci].top;
+					fence();
+					atomic_store(&coro_handoff[dst].state, HANDOFF_READY);
+					return;
+				}
+				ci = ci + 1;
+			}
+			atomic_store(&coro_handoff[dst].state, HANDOFF_EMPTY);
+		}
+		dst = dst + 1;
+	}
+}
+
+// An idle worker leaves a request, then imports a ready context on a later
+// scheduler turn. No other worker writes its coro table.
+/// Imports one donated coroutine when available.
+fn coro_take_handoff() bool {
+	var id i64 = coro_pool_id;
+	if (id < 0) { return false; }
+	if (atomic_load(&coro_handoff[id].state) == HANDOFF_READY) {
+		fence();
+		var sp i64 = coro_handoff[id].sp;
+		var top i64 = coro_handoff[id].top;
+		atomic_store(&coro_handoff[id].state, HANDOFF_EMPTY);
+		return coro_import(sp, top);
+	}
+	atomic_cas(&coro_handoff[id].state, HANDOFF_EMPTY, HANDOFF_REQUEST);
+	return false;
+}
+
+// Local queue work means this worker is no longer idle. READY is retained:
+// its context already belongs to this worker and will be imported later.
+/// Cancels this worker's unserved idle request.
+fn coro_cancel_handoff_request() {
+	if (coro_pool_id >= 0) {
+		atomic_cas(&coro_handoff[coro_pool_id].state, HANDOFF_REQUEST, HANDOFF_EMPTY);
+	}
 }
 
 /// Returns the next runnable coroutine after the given one.
@@ -129,7 +267,7 @@ fn coro_next(from int) int {
 	var seen int = 0;
 	while (seen <= ncoros) {
 		if (i > ncoros) { i = 0; }
-		if (i == 0 || (coros[i].alive && !coros[i].done)) { return i; }
+		if (i == 0 || (coros[i].alive && !coros[i].done && !coros[i].moved)) { return i; }
 		i = i + 1;
 		seen = seen + 1;
 	}
@@ -140,7 +278,7 @@ fn coro_next(from int) int {
 fn coro_pending() bool {
 	var i int = 1;
 	while (i <= ncoros) {
-		if (coros[i].alive && !coros[i].done) { return true; }
+		if (coros[i].alive && !coros[i].done && !coros[i].moved) { return true; }
 		i = i + 1;
 	}
 	return false;
@@ -156,7 +294,7 @@ fn coro_live() int {
 	var n int = 0;
 	var i int = 1;
 	while (i <= ncoros) {
-		if (coros[i].alive && !coros[i].done) { n = n + 1; }
+		if (coros[i].alive && !coros[i].done && !coros[i].moved) { n = n + 1; }
 		i = i + 1;
 	}
 	return n;
@@ -167,6 +305,7 @@ fn coro_live() int {
 /// Yields to another coroutine, reporting if one ran.
 fn coro_yield() bool {
 	var from int = cur_coro;
+	coro_offer_handoff();
 	var to int = coro_next(from);
 	if (to == from) { return false; }
 	cur_coro = to;
@@ -174,7 +313,11 @@ fn coro_yield() bool {
 		interp_coro_switch(from, to);
 		return true;
 	}
+	if (from != 0) { coros[from].parked = true; }
 	coro_switch(&coros[from].sp as *u8, &coros[to].sp as *u8);
+	// `from` lives in this continuation and names its old worker's slot after
+	// migration. Leave parked set: a running context is excluded by cur_coro;
+	// every other parked context has its complete state in its own stack.
 	return true;
 }
 
