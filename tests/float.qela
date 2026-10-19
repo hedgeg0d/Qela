@@ -44,5 +44,10 @@ fn main() int {
 	var neg f64 = -0.5;
 	if (neg >= 0.0) { return 0; }
 
+	// Smallest positive f64 subnormal.  It must not be flushed while lexing.
+	var tiny f64 = 5e-324;
+	if (tiny <= 0.0) { return 0; }
+	if (tiny + tiny <= tiny) { return 0; }
+
 	return 1;
 }
