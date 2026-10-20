@@ -1,0 +1,32 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: 0-0-40-0-0
+// The filesystem module: mkdir, rename, rmdir, listdir and size all
+// round-trip; the two directory entries are "." and ".." excluded.
+import "std/fmt.qela";
+import "std/fs.qela";
+
+fn main() int {
+	var dir str = "/tmp/qela_fs_t";
+	var m1 i64 = fs_mkdir(dir);
+	var r1 i64 = fs_rename(dir, dir + "2");
+	var s1 i64 = fs_file_size(dir + "2");
+	var rm i64 = fs_rmdir(dir + "2");
+	var m2 i64 = fs_mkdir(dir);
+	var names = fs_listdir(dir);
+	var n i64 = names.len;
+	var rm2 i64 = fs_rmdir(dir);
+	var o = fmt_begin();
+	o = fmt_put_i64(o, m1);
+	o = fmt_put_str(o, "-");
+	o = fmt_put_i64(o, r1);
+	o = fmt_put_str(o, "-");
+	o = fmt_put_i64(o, s1);
+	o = fmt_put_str(o, "-");
+	o = fmt_put_i64(o, rm);
+	o = fmt_put_str(o, "-");
+	o = fmt_put_i64(o, n);
+	var r = fmt_result(o);
+	sys_write(1, r.ptr, r.len);
+	return 0;
+}
