@@ -1,0 +1,29 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: [2, 4, 6] [4, 9] [5, 6, 7] [1, 1]
+// `[expr for x in coll if cond]`: the collection loop and the hidden Vec
+// live on the node's init chain, so the comprehension is a value
+// expression usable anywhere; the element and the filter see the loop
+// variable, and the result is a fresh slice.
+import "std/fmt.qela";
+import "std/vec.qela";
+import "std/map.qela";
+
+fn main() int {
+	var arr [3]i64 = [1, 2, 3];
+	var v Vec(i64);
+	vec_push(&v, 1);
+	vec_push(&v, 2);
+	vec_push(&v, 3);
+	var m Map(i64);
+	map_put(&m, "a", 1);
+	map_put(&m, "b", 2);
+	var o = fmt_begin();
+	o = fmt_put_str(o, "${[x * 2 for x in arr]}");
+	o = fmt_put_str(o, " ${[x * x for x in arr if x > 1]}");
+	o = fmt_put_str(o, " ${[x + 4 for x in v]}");
+	o = fmt_put_str(o, " ${[k.len for k in m]}");
+	var r = fmt_result(o);
+	sys_write(1, r.ptr, r.len);
+	return 0;
+}

@@ -1,0 +1,18 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: [000000ff,   255, 00255, 3.14, 3.1, "hi\n", FF, ffffffff]
+// `${x:08x}` and friends: a format spec after the colon in an
+// interpolation picks a padded or fixed fmt function, `!r` quotes and
+// escapes a string.
+import "std/fmt.qela";
+
+fn main() int {
+	var x i64 = 255;
+	var f f64 = 3.14159;
+	var s str = "hi\n";
+	var o = fmt_begin();
+	o = fmt_put_str(o, "[${x:08x}, ${x:5d}, ${x:05d}, ${f:.2f}, ${f:.1f}, ${s!r}, ${x:02X}, ${-1:08x}]");
+	var r = fmt_result(o);
+	sys_write(1, r.ptr, r.len);
+	return 0;
+}
