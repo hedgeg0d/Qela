@@ -197,6 +197,14 @@ fn arm64_mov_imm64(rd int, v i64) {
 		if (h != 0xffff) { nf = nf + 1; }
 		i = i + 1;
 	}
+	if (nz > 1 && nf > 1) {
+		var immr i64 = 0;
+		var imms i64 = 0;
+		if (arm64_logical_imm(v, &immr, &imms)) {
+			b4(0xb24003e0 | (immr << 16) | (imms << 10) | rd);
+			return;
+		}
+	}
 	if (nz == 0) { arm64_movz(rd, 0, 0); return; }
 	if (nf == 0) { arm64_movn(rd, 0, 0); return; }
 	if (nf < nz) {
@@ -421,6 +429,10 @@ fn arm64_cmp_reg(rn int, rm int) {
 
 fn arm64_cmp_imm(rn int, imm i64) {
 	if (imm >= 0 && imm <= 4095) { b4(0xf1000000 | (imm << 10) | (rn << 5) | 0x1f); return; }
+	if (imm > 0 && (imm & 0xfff) == 0 && (imm >> 12) <= 4095) {
+		b4(0xf1400000 | ((imm >> 12) << 10) | (rn << 5) | 0x1f);
+		return;
+	}
 	// A big immediate goes through a scratch -- but never the operand's own
 	// register: the STACKSLOT/MEM compare paths load the operand into X9
 	// first, and materialising the immediate into X9 too would compare the
@@ -665,6 +677,13 @@ fn arm64_alu_imm(aop int, rd int, rn int, v i64, uns bool) bool {
 	}
 	if (aop == ALU_MUL || aop == ALU_SCALE) {
 		if (v <= 0) { return false; }
+		var p i64 = v - 1;
+		if (p > 1 && (p & (p - 1)) == 0) {
+			var ps i64 = 0;
+			while (p > 1) { p = p >> 1; ps = ps + 1; }
+			b4(0x8b000000 | (ps << 10) | (rn << 16) | (rn << 5) | rd);
+			return true;
+		}
 		var s i64 = 0;
 		var t i64 = v;
 		while ((t & 1) == 0) { t = t >> 1; s = s + 1; }
@@ -1336,6 +1355,8 @@ fn arm64_alu_imm_ok(aop int, v i64) bool {
 	if (aop == ALU_SHL || aop == ALU_SHR) { return v >= 0 && v <= 63; }
 	if (aop == ALU_MUL || aop == ALU_SCALE) {
 		if (v <= 0) { return false; }
+		var p i64 = v - 1;
+		if (p > 1 && (p & (p - 1)) == 0) { return true; }
 		var t i64 = v;
 		while ((t & 1) == 0) { t = t >> 1; }
 		return t == 1;
