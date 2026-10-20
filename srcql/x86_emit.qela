@@ -539,12 +539,12 @@ fn add_strref(reg int, id int) {
 	}
 	if (reg >= 8) { b1(0x41); }
 	b1(0xb8 + ((reg as i64) & 7));
+	b4(0);
 	var f *StrFixup = arena_alloc(sizeof(StrFixup), 8) as *StrFixup;
-	f.at = code.n;
+	f.at = code.n - 4;
 	f.id = id;
 	if (strrefs_tail as i64 == 0) { strrefs_head = f; } else { strrefs_tail.next = f; }
 	strrefs_tail = f;
-	b4(0);
 }
 
 
@@ -581,12 +581,12 @@ fn add_dataref(v *Var) {
 		return;
 	}
 	b1(0xb8);
+	b4(0);
 	var f *DataFixup = arena_alloc(sizeof(DataFixup), 8) as *DataFixup;
-	f.at = code.n;
+	f.at = code.n - 4;
 	f.varp = v;
 	if (datarefs_tail as i64 == 0) { datarefs_head = f; } else { datarefs_tail.next = f; }
 	datarefs_tail = f;
-	b4(0);
 }
 
 
