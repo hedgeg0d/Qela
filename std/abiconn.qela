@@ -2,6 +2,7 @@ import "sys.qela";
 import "str.qela";
 import "buf.qela";
 import "fmt.qela";
+import "arena.qela";
 import "abiwire.qela";
 
 var abi_pid i64 = -1;
@@ -99,57 +100,94 @@ fn abi_spawn() {
 	}
 }
 
+// Answers a child→host request (3 = call a host fn, 4 = read a host
+// global, 5 = write one) that arrived while the host was waiting for its
+// own response. Shared by both waiters so the marshalled path answers
+// interleaved requests exactly like the scalar one.
+fn abi_serve_host_req(kind u8, buf *u8, n i64) {
+	if (kind == 4) {
+		var gname str;
+		gname.ptr = buf;
+		gname.len = n;
+		var gr i64 = __eval_get_dispatch(gname);
+		var grb [8]u8;
+		*(&grb[0] as *i64) = gr;
+		abi_send_frame(abi_in, 1 as u8, &grb[0], 8);
+		return;
+	}
+	if (kind == 5) {
+		if (n < 9) { return; }
+		var snlen i64 = buf[0] as i64;
+		if (n < 1 + snlen + 8) { return; }
+		var sname str;
+		sname.ptr = buf + 1;
+		sname.len = snlen;
+		var sv i64 = abi_decode_u64(buf + 1 + snlen);
+		__eval_set_dispatch(sname, sv);
+		var srb [8]u8;
+		*(&srb[0] as *i64) = 0;
+		abi_send_frame(abi_in, 1 as u8, &srb[0], 8);
+		return;
+	}
+	if (kind != 3) { return; }
+	if (n < 1) { return; }
+	var nlen i64 = buf[0] as i64;
+	if (n < 1 + nlen + 48) { return; }
+	var name str;
+	name.ptr = buf + 1;
+	name.len = nlen;
+	var args [6]i64;
+	var vp *u8 = buf + 1 + nlen;
+	var i i64 = 0;
+	while (i < 6) {
+		args[i] = abi_decode_u64(vp + i * 8);
+		i = i + 1;
+	}
+	var r i64 = __eval_call_dispatch(name, &args[0]);
+	var rb [8]u8;
+	*(&rb[0] as *i64) = r;
+	abi_send_frame(abi_in, 1 as u8, &rb[0], 8);
+}
+
 fn abi_wait_result(kind *u8, buf *u8, cap i64) i64 {
 	var scratch [512]u8;
 	while (true) {
 		var n i64 = abi_recv_frame(abi_out, kind, &scratch[0], 512);
 		if (n < 0) { return n; }
-		if (*kind == 4) {
-			var gname str;
-			gname.ptr = &scratch[0];
-			gname.len = n;
-			var gr i64 = __eval_get_dispatch(gname);
-			var grb [8]u8;
-			*(&grb[0] as *i64) = gr;
-			abi_send_frame(abi_in, 1 as u8, &grb[0], 8);
+		if (*kind == 4 || *kind == 5 || *kind == 3) {
+			abi_serve_host_req(*kind, &scratch[0], n);
 			continue;
 		}
-		if (*kind == 5) {
-			if (n < 9) { return -1; }
-			var snlen i64 = scratch[0] as i64;
-			if (n < 1 + snlen + 8) { return -1; }
-			var sname str;
-			sname.ptr = &scratch[0] + 1;
-			sname.len = snlen;
-			var sv i64 = abi_decode_u64(&scratch[0] + 1 + snlen);
-			__eval_set_dispatch(sname, sv);
-			var srb [8]u8;
-			*(&srb[0] as *i64) = 0;
-			abi_send_frame(abi_in, 1 as u8, &srb[0], 8);
+		if (n > cap) { return -1; }
+		var ci i64 = 0;
+		while (ci < n) { buf[ci] = scratch[ci]; ci = ci + 1; }
+		return n;
+	}
+}
+
+// The marshalled-call variant: the response payload can be arbitrarily
+// large, so it is received into the arena instead of a caller buffer.
+// kind 0 means the child died; 1 = ok, 2 = error, and the payload is the
+// marshalled value or the error message.
+fn abi_wait_result_payload(kind *u8) str {
+	while (true) {
+		var total i64 = abi_peek_len(abi_out);
+		if (total < 0) { *kind = 0; var e str; return e; }
+		var pb *u8 = arena_alloc(total, 8);
+		var k u8 = 0;
+		if (!abi_recv_rest(abi_out, &k, pb, total - 1)) {
+			*kind = 0;
+			var e str;
+			return e;
+		}
+		*kind = k;
+		if (k == 4 || k == 5 || k == 3) {
+			abi_serve_host_req(k, pb, total - 1);
 			continue;
 		}
-		if (*kind != 3) {
-			if (n > cap) { return -1; }
-			var ci i64 = 0;
-			while (ci < n) { buf[ci] = scratch[ci]; ci = ci + 1; }
-			return n;
-		}
-		if (n < 1) { return -1; }
-		var nlen i64 = scratch[0] as i64;
-		if (n < 1 + nlen + 48) { return -1; }
-		var name str;
-		name.ptr = &scratch[0] + 1;
-		name.len = nlen;
-		var args [6]i64;
-		var vp *u8 = &scratch[0] + 1 + nlen;
-		var i i64 = 0;
-		while (i < 6) {
-			args[i] = abi_decode_u64(vp + i * 8);
-			i = i + 1;
-		}
-		var r i64 = __eval_call_dispatch(name, &args[0]);
-		var rb [8]u8;
-		*(&rb[0] as *i64) = r;
-		abi_send_frame(abi_in, 1 as u8, &rb[0], 8);
+		var s str;
+		s.ptr = pb;
+		s.len = total - 1;
+		return s;
 	}
 }

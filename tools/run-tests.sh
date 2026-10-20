@@ -15,6 +15,12 @@ set -u
 QELA="${QELA:-./qela}"
 TARGET="${TARGET:-x86_64}"
 QEMU="${QEMU:-}"
+# A program that uses the runtime ABI (eval/interpreted/dynamic) spawns the
+# compiler itself as its child; when the runner points at S2, the tests find
+# it through QELAPATH rather than whatever `qela` happens to be installed.
+if [ "$QELA" != "./qela" ]; then
+	export QELAPATH="$QELA"
+fi
 if [ "$TARGET" = "arm64" ]; then
 	QELA="$QELA --target arm64"
 elif [ "$TARGET" = "riscv64" ]; then
