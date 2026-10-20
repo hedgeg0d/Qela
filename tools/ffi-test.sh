@@ -41,6 +41,7 @@ Big c_big_inc(Big b) { b.a = b.a + 100; return b; }
 Big c_six_ret(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, int64_t f, int64_t g) { Big r = {a, b, c, 0}; r.d = d + e + f + g; return r; }
 int64_t c_spill7(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, int64_t f, int64_t g, int64_t h, int64_t i) { return a + b + c + d + e + f + g + h + i; }
 int64_t c_big_early(Big b, int64_t x, int64_t y, int64_t z, int64_t w) { return b.a + b.b + b.c + b.d + x + y + z + w; }
+int64_t c_pair_after5(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, Pair p) { return a + b + c + d + e + p.a + p.b; }
 int64_t c_six_one(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, int64_t f, double x, int64_t g) { return a + b + c + d + e + f + g + (int64_t)x; }
 double c_fsum9(float a, float b, float c, float d, float e, float f, float g, float h, float i) { return a + b + c + d + e + f + g + h + i; }
 Big qela_big_sum(Big b);
@@ -80,6 +81,7 @@ extern fn c_big_inc(b Big) Big;
 extern fn c_six_ret(a i64, b i64, c i64, d i64, e i64, f i64, g i64) Big;
 extern fn c_spill7(a i64, b i64, c i64, d i64, e i64, f i64, g i64, h i64, i i64) i64;
 extern fn c_big_early(b Big, x i64, y i64, z i64, w i64) i64;
+extern fn c_pair_after5(a i64, b i64, c i64, d i64, e i64, p Pair) i64;
 extern fn c_six_one(a i64, b i64, c i64, d i64, e i64, f i64, x f64, g i64) i64;
 extern fn c_fsum9(a f32, b f32, c f32, d f32, e f32, f f32, g f32, h f32, i f32) f64;
 extern fn c_call_qela_big() i64;
@@ -139,6 +141,7 @@ fn main() int {
 	if (bc.a != 101 || bc.d != 4) { fails = fails + 1; }
 	if (c_spill7(1, 2, 3, 4, 5, 6, 7, 8, 9) != 45) { fails = fails + 1; }
 	if (c_big_early(big, 10, 20, 30, 40) != 110) { fails = fails + 1; }
+	if (c_pair_after5(1, 2, 3, 4, 5, p) != 138) { fails = fails + 1; }
 	if (c_six_one(1, 2, 3, 4, 5, 6, 2.0, 9) != 32) { fails = fails + 1; }
 	var sr Big = c_six_ret(1, 2, 3, 4, 5, 6, 7);
 	if (sr.a != 1 || sr.d != 22) { fails = fails + 1; }
