@@ -7,7 +7,6 @@ import "abiconn.qela";
 
 let ABI_REQ_CALL = 2;
 let ABI_REQ_JIT = 6;
-let ABI_RESP_ERR = 2;
 
 struct DynEntry;
 struct DynEntry {
