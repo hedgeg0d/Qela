@@ -2619,30 +2619,10 @@ fn add_absref_arm64(name str, pos i64) {
 
 
 fn gen_isr_save() {
-	// An interrupt taken at ring 0 pushes only RIP/CS/RFLAGS (no stack
-	// switch happened), while a ring-3 entry pushes RSP/SS too. iretq
-	// reads the frame by its CS:CPL and pops the extra pair when it
-	// returns to a less privileged ring, so a ring-0 entry must first
-	// be padded up to the same five-word frame -- otherwise iretq pops
-	// whatever the interrupted stack held below RFLAGS as RSP/SS and
-	// #GPs on the wrong segment. The CS word sits at [rsp+8] because
-	// the CPU pushes RIP last (deepest word on top).
-	rsp_mem(0x8b, RAX, 8);            // mov rax, [rsp+8]   ; CS
-	b1(0xa8); b1(3);                  // test al, 3          ; CPL bits
-	var skip i64 = jump(0x85);        // jnz (near-form opcode): ring 3, frame already complete
-	b1(0x48); b1(0x83); b1(0xec); b1(16);   // sub rsp, 16
-	// Shift the three-word frame up to [rsp..rsp+16], leaving two
-	// words below it for the RSP/SS pair a five-word frame carries.
-	rsp_mem(0x8b, RAX, 16); rsp_mem(0x89, RAX, 0);    // RIP
-	rsp_mem(0x8b, RAX, 24); rsp_mem(0x89, RAX, 8);    // CS
-	rsp_mem(0x8b, RAX, 32); rsp_mem(0x89, RAX, 16);   // RFLAGS
-	// RSP slot: the frame's original stack pointer, which is 16 bytes
-	// above the current one. SS is stored as-is (mov r/m16, ss: 8C /r
-	// with the SS encoding 2 in the reg field).
-	b1(0x48); b1(0x8d); b1(0x44); b1(0x24); b1(16);   // lea rax, [rsp+16]
-	rsp_mem(0x89, RAX, 24);
-	b1(0x8c); modrm(1, 2, RSP); b1(0x24); b1(32);     // mov [rsp+32], ss
-	patch_here(skip);
+	// The CPU pushed RIP/CS/RFLAGS for a ring-0 entry and
+	// RIP/CS/RFLAGS/RSP/SS for a ring-3 one; iretq pops exactly as many
+	// words as the target CS:CPL asks for, so the handler only has to
+	// save the registers below the frame -- no padding, no stack drift.
 	push_reg(RAX); push_reg(RCX); push_reg(RDX); push_reg(RBX);
 	push_reg(RSI); push_reg(RDI);
 	var r int = 8;
