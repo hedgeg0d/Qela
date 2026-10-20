@@ -16,10 +16,16 @@ struct SigAction {
 
 // The kernel pops the signal frame through this: rt_sigreturn restores
 // the interrupted context. It must be naked -- a prologue would push
-// above the frame the kernel reads from rsp.
+// above the frame the kernel reads from the stack pointer. The syscall
+// number differs per target (SYS_RT_SIGRETURN is x86's 15; the generic
+// table has no rt_sigreturn, so arm64/riscv use SYS_RT_SIGRETURN_N 139).
 /// Restores the interrupted context after a signal.
 fn naked sig_restore() {
-	syscall(SYS_RT_SIGRETURN);
+	$if (TARGET != "x86_64") {
+		syscall(SYS_RT_SIGRETURN_N, 0, 0, 0);
+	} $else {
+		syscall(SYS_RT_SIGRETURN, 0, 0, 0);
+	}
 }
 
 // Installs handler for sig; 0 on success, a negated errno otherwise.
