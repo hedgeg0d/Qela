@@ -155,6 +155,11 @@ struct Var;
 struct Node;
 struct Func;
 
+// The function currently being parsed. Lives here rather than in
+// parse.qela because type.qela needs it too: a self-call inside a saved
+// `interp_body` is typed mid-parse, before the function reaches the table.
+var cur_func *Func;
+
 struct Var {
 	name      str,
 	ty        *Type,
