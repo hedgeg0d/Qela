@@ -908,9 +908,23 @@ fn parse_comprehension(t **Token, p i64, first *Token, ft *Token) *Node {
 	if (elem_expr.ty.kind == TY_VOID) { error_at(np, "a comprehension element cannot be void"); }
 	// The for-clause was consumed before the element; re-walk the token
 	// stream past it and take the close bracket here: the caller is
-	// bypassed entirely.
+	// bypassed entirely. The walk tracks nesting, so a collection that is
+	// itself a literal (`[x * 2 for x in [1, 2, 3]]`) stops at the outer
+	// bracket, not the inner one.
 	*t = ft;
-	while (!tok_eq(*t, "]")) { *t = (*t).next; }
+	var wd i64 = 1;
+	while (true) {
+		var wt *Token = *t;
+		if (wt.kind == TK_PUNCT) {
+			if (str_eq(wt.text, "]")) {
+				wd = wd - 1;
+				if (wd == 0) { break; }
+			} else if (str_eq(wt.text, "[") || str_eq(wt.text, "(") || str_eq(wt.text, "{")) {
+				wd = wd + 1;
+			}
+		}
+		*t = wt.next;
+	}
 	tok_expect(t, "]");
 
 	// The hidden Vec (or Map) carries the element type.
