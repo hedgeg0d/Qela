@@ -1,0 +1,68 @@
+// expect-exit: 1
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = -19;
+fn min2(a int, b int) int { if (a < b) { return a; } else { return b; } }
+fn fact(n int) int { if (n <= 1) { return 1; } return n * fact(n - 1); }
+fn sum3(a int, b int, c int) int { return a + b + c; }
+fn zero() int { return 3; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn wide_sum(w Wide) int { return w.a + w.b + w.c; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn main() int {
+    var v0 int = 6;
+    var v1 int = 8;
+    var v2 int = 1;
+    var sv0 str = "42";
+    var sv1 str = "abcd";
+    var fv double = 0.5;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    b = Bag{p: ((fv / 1.5) as i64), q: (("""ab
+cd""")[0..3]).len, r: tag_e(e), s: ((p.y == ((-10) << str_eq(sv1, ("hi")[0..2]))) << tag_e(e))};
+    sv0 += ("xyzzy")[0..4];
+    p.y = ((((-1 + 'a') < v1) ^ ((0 as i16) as i8)) as u8);
+    v1 = ((p.y in a) != (('f' > ((("xyzzy")[0..2])[0..2]).len) as i32));
+    match (e) {
+        A => {
+            return (((((('f' <= 2) && (2 <= 'b')) != (876 > 'c')) == (str_eq("hello", ("""x
+yz""")[1..3]) ^ (sv1)[1])) >= (!730)) && ((!730) >= (((1 ^ 'f') >= (1 % (('g' & 0xf) + 1))) | (-('0' as u32)))));
+        }
+        B(mb0) => {
+            return ((((false as u32) | (3 as i16)) ^ (((v1 as u32) > (true > false)) && ((true > false) > (!127)))) != ((555 as double) > ((false as double) - (fv * fv))));
+        }
+        C(mb0, mb1) => {
+            return (-(((v0 in 0..((0 & 15) + 0x1)) / (('c' & 15) + 1)) in 0..((((1 ^ 826) as i16) & 15) + 1)));
+        }
+    }
+    a[(((-(v0 in a)) - (!(('e' >> true) < ("42").len))) & 3)] = ((((false >= true) >= (gv < -1)) >= ((0x7f < 'g') | ((false < 0xffffffffffffff26) && (-218 <= false)))) == (((--1) | (!v1)) in a));
+    v1 *= (-1 as u16);
+    v2, v0 = ((((-50 as i16) % (((gv in a) & 15) + 1)) % ((((v2 in 0..((0xfffffffffffffc39 & 15) + 1)) as u8) & 15) + 0x1)) + ((('e' >= -497) in a) as u8)), (((0.25 as i64) in 0..((a[((!'0') & 0x3)] & 15) + 0x1)) | -484);
+    w = Wide{a: (-(((v0 | '2') in 0..(((359 / ((621 & 15) + 1)) & 15) + 1)) + (!(true in 0..(('\n' & 15) + 1))))), b: p.y, c: a[((1 as u8) & 3)]};
+    write_str(STDOUT, "${v0:08x}\n");
+    return v1;
+}

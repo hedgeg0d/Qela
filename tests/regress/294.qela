@@ -1,0 +1,90 @@
+// expect-exit: 0
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = -21;
+fn add2(a int, b int) int { return a + b; }
+fn twice(n int) int { return n + n; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn nest_sum(n Nest) int { return n.tag + n.p.x + n.p.y; }
+fn bag_sum(b Bag) int { return b.p + b.q + b.r + b.s; }
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn main() int {
+    var v0 int = 5;
+    var v1 int = 0x4;
+    var v2 int = 7;
+    var sv0 str = "hi";
+    var sv1 str = "foobar";
+    var fv double = -0.5;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    v1 *= '1';
+    sv0 += ((sv1)[0..2] + (sv1)[0..2]);
+    gv ^= (((((3 if (((((tag_e(e) <= '0') in a) >= (('1' <= a[(100 & 3)]) as u32)) && ((('1' <= a[(100 & 3)]) as u32) >= ((p.y in a) if ((!((('d' & true) != (!0x1c5)) * (!(gv if ((!(-((!gv) in 0..((((-628 < -1) && (-1 >= false)) & 15) + 1)))) == (((-(v2 > 0x1)) % (((-(-607 as i32)) & 15) + 0x1)) != ((((false > -552) && (-552 >= '\n')) as i8) * ((0xfffffffffffffc5a != 0xfffffffffffffd27) + p.y)))) else '0')))) <= ((v0 in 0..(((('\n' if ((((twice(0) as u16) as i8) in 0..(((-(((true > '3') && ('3' < 10)) != 'f')) & 15) + 1)) < ((((3 >> gv) >= (v0 | 255)) ^ 100) * p.x)) else 'f') > (v0 in 0..(('1' & 15) + 1))) & 15) + 1)) != (('b' as i32) == (p.y if (((!(nest_sum(n) | (gv as u32))) < ('e' as u32)) == ((((0.25 == fv) in a) & ((-546 << v1) + false)) as u16)) else (gv in a))))) else (v1 as u16)))) < p.y) else '1') <= (true as u32)) && ((true as u32) <= ('g' >= v2))) + (str_eq(((((sv0 + sv1))[0..2])[0..2])[0..2], ("xyz")[0..2]) * add2(false, true))) == (-((v1 >= (!2)) && ((!2) <= (-8 & false)))));
+    match (e) {
+        A => {
+            return (255 in a);
+        }
+        B(mb0) => {
+            return (tag_e(e) as u16);
+        }
+        C(mb0, mb1) => {
+            return ((((gv as double) * (-1 as double)) - (("foobar").len as double)) as i64);
+        }
+    }
+    i0 = 0x0;
+    while ((i0 < 4)) {
+        match (e) {
+            A => {
+                return 1;
+            }
+            B(mb0) => {
+                return (((str_eq(sv0, (("xyz")[0..2] + "hi")) * 883) > ((-(100 | 958)) <= (true < 3))) + mb0);
+            }
+            C(mb0, mb1) => {
+                return (((sv1).len as u8) - mb1);
+            }
+        }
+        a[((fv < (((-'b') as double) / 0.5)) & 3)] = '2';
+        a[i0] = (!(((!false) != gv) if ((false >= gv) > 'e') else (('d' ^ gv) - (42 | gv))));
+        i0 = (i0 + 1);
+    }
+    n.p.x = p.y;
+    gv = (((('a' if ((!(((0.1 as i64) * (!false)) in 0..((((!v0) in a) & 15) + 1))) < 'b') else false) * true) << (str_eq((sv0)[0..2], ((sv1 + ("abc")[0..3]))[0..2]) if ((!'2') >= (471 ^ gv)) else ('0' / ((42 & 15) + 1)))) as u32);
+    v0 -= (p.x in a);
+    a[(((((v2 ^ v1) in 0..(((v0 > gv) & 15) + 1)) as i8) <= (((a[(false & 3)] < a[(gv & 3)]) && (a[(gv & 3)] <= (127 in 0..((-409 & 15) + 0x1)))) as i16)) & 3)] = (((('a' if ((3 as u8) != (!(((-525) ^ (false | 'd')) <= (false | nest_sum(n))))) else -917) % (((127 as u8) & 15) + 1)) ^ (('e' - 0x3) in 0..((('2' <= 100) & 0xf) + 1))) as i32);
+    p.y = ((a[(((gv - gv) <= (fv as i64)) & 3)] < (!(("""ab
+cd""")[1..5]).len)) && ((!(("""ab
+cd""")[1..5]).len) > 'd'));
+    write_str(STDOUT, "${v2=}\n");
+    return ((((gv ^ 998) % ((("abcd").len & 15) + 1)) in 0..((((0x1 in 0..((false & 15) + 1)) % (((1 | 'd') & 15) + 1)) & 15) + 1)) % ((v0 & 15) + 1));
+}

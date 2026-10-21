@@ -1,0 +1,72 @@
+// expect-exit: 1
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = -19;
+fn zero() int { return 3; }
+fn min2(a int, b int) int { if (a < b) { return a; } else { return b; } }
+fn diff4(a int, b int, c int, d int) int { return a - b - c - d; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn bag_sum(b Bag) int { return b.p + b.q + b.r + b.s; }
+fn wide_make(a int, b int, c int) Wide { return Wide{a: a, b: b, c: c}; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 0xa;
+    var v1 int = 9;
+    var v2 int = 4;
+    var sv0 str = "hello";
+    var sv1 str = "hi";
+    var fv double = 1.0;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0x0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    p = pair_swap(p);
+    n.p.x = (((fv / 100.0) as i64) / (((-((617 >= 'a') > (sv0).len)) & 15) + 1));
+    match (e) {
+        A => {
+            return ((p.x as i16) in 0..(((-((false ^ v0) if ((pair_sum(p) in a) != ((gv <= 127) && (0x7f > ((min2(min2('e', 0), (false % ((true & 15) + 1))) < (!(858 as i8))) && ((!(858 as i8)) < (("xyzzy")[1..4])[1]))))) else v1)) & 0xf) + 1));
+        }
+        B(mb0) => {
+            return ((((!p.x) as double) <= 2.0) & mb0);
+        }
+        C(mb0, mb1) => {
+            return false;
+        }
+    }
+    e = E.B((0x64 & (("foobar")[1..5])[1]));
+    sv0 += ("qwerty")[2..6];
+    v0 = (((('1' >> v1) >= (!374)) in a) as u8);
+    v2 = gv;
+    n.tag = (0xff * (("abcd")[1..4]).len);
+    write_str(STDOUT, "${v1=}\n");
+    return ((('d' in 0..((('d' ^ true) & 15) + 1)) & ((0 as u16) << (127 / ((-476 & 15) + 1)))) / ((str_eq("hello", (("xyzzy")[2..5] + (("no" + "hello") + ("xyzzy")[1..4]))) & 15) + 1));
+}

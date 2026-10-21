@@ -1,0 +1,26 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: 1000000-4294967040-1000-255-3
+// Digit separators: decimal and hex groups, a leading separator after
+// the prefix, a fractional part, and a separator-free fallback.
+import "std/fmt.qela";
+
+fn main() int {
+	var a i64 = 1_000_000;
+	var b i64 = 0xFFFF_FF00;
+	var c f64 = 1_000.5;
+	var d i64 = 0x_FF;
+	var o = fmt_begin();
+	o = fmt_put_i64(o, a);
+	o = fmt_put_str(o, "-");
+	o = fmt_put_i64(o, b);
+	o = fmt_put_str(o, "-");
+	o = fmt_put_i64(o, c as i64);
+	o = fmt_put_str(o, "-");
+	o = fmt_put_i64(o, d);
+	o = fmt_put_str(o, "-");
+	o = fmt_put_i64(o, 3);
+	var r = fmt_result(o);
+	sys_write(1, r.ptr, r.len);
+	return 0;
+}

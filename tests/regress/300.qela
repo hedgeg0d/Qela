@@ -1,0 +1,67 @@
+// expect-exit: 255
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = 30;
+fn sum3(a int, b int, c int) int { return a + b + c; }
+fn gcd2(a int, b int) int { while (b != 0) { var t int = a % b; a = b; b = t; } return a; }
+fn add2(a int, b int) int { return a + b; }
+fn twice(n int) int { return n + n; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn wide_sum(w Wide) int { return w.a + w.b + w.c; }
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn main() int {
+    var v0 int = 3;
+    var v1 int = 1;
+    var v2 int = 9;
+    var sv0 str = "foobar";
+    var sv1 str = """ab
+cd""";
+    var fv double = 1.0;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0x0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    gv <<= gv;
+    p.x = (((((sv1)[0..2]).len < ('0' - v0)) as double) < fv);
+    n.tag = (((127 ^ (v1 in a)) - (false != v1)) | ((((sv0 + "qwerty"))[1] > (-false)) as u32));
+    a[(((((!false) in 0..(((false in 0..((3 & 15) + 1)) & 15) + 1)) + (twice(false) << sum3(gv, 0, 825))) as u16) & 3)] = ((((250 << 3) in a) << ((true in a) >> (true in a))) == ((fv > (fv * fv)) | ((0x3ab % ((v2 & 15) + 1)) as u8)));
+    gv = 100;
+    gv = gv;
+    sv1 += (("hi" + """ab
+cd"""))[0..2];
+    sv0 += ((((("zz")[0..2] + ("abcd" + ("abcd")[0..2])))[0..2])[0..2] + sv0);
+    var ob Buf;
+    fmt_i64(&ob, v1);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return (-((-gv) <= (638 as i16)));
+}

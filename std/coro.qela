@@ -33,6 +33,7 @@ tvar cur_coro int = 0;
 // of the same bump pointer.
 var coro_stack_lock i64 = 0;
 
+/// Allocates a fresh stack for a new coroutine.
 fn coro_alloc_stack() *u8 {
 	while (!atomic_cas(&coro_stack_lock, 0, 1)) { sys_sched_yield(); }
 	var p *u8 = arena_alloc(CORO_STACK, 16);
@@ -50,6 +51,7 @@ fn coro_alloc_stack() *u8 {
 // Returns the new coroutine's id, or 0 when the slot table is full (the
 // same silent rejection a void coro_spawn used to give -- a generator sets
 // its Gen.coro from this, and gen_resume treats 0 as "never spawned").
+/// Spawns a new coroutine and returns its identifier.
 fn coro_spawn(target i64, a0 i64, a1 i64, a2 i64, a3 i64, a4 i64) int {
 	if (ncoros + 1 >= CORO_SLOTS) { return 0; }
 	ncoros = ncoros + 1;
@@ -121,6 +123,7 @@ fn coro_spawn(target i64, a0 i64, a1 i64, a2 i64, a3 i64, a4 i64) int {
 	return id;
 }
 
+/// Returns the next runnable coroutine after the given one.
 fn coro_next(from int) int {
 	var i int = from + 1;
 	var seen int = 0;
@@ -133,6 +136,7 @@ fn coro_next(from int) int {
 	return 0;
 }
 
+/// Reports whether any coroutine is still runnable.
 fn coro_pending() bool {
 	var i int = 1;
 	while (i <= ncoros) {
@@ -142,10 +146,12 @@ fn coro_pending() bool {
 	return false;
 }
 
+/// Returns the total number of spawned coroutines.
 fn coro_slots() int { return ncoros; }
 
 // How many coroutines could still run. A channel wait compares this against
 // the number of coroutines parked inside one.
+/// Counts coroutines that could still run.
 fn coro_live() int {
 	var n int = 0;
 	var i int = 1;
@@ -158,6 +164,7 @@ fn coro_live() int {
 
 // Returns false when nothing else could run, which lets a blocked channel
 // operation tell waiting apart from deadlock.
+/// Yields to another coroutine, reporting if one ran.
 fn coro_yield() bool {
 	var from int = cur_coro;
 	var to int = coro_next(from);
@@ -173,6 +180,7 @@ fn coro_yield() bool {
 
 // Runs on the finishing coroutine's stack and never returns: the switch
 // away from a done slot is one-way.
+/// Marks the current coroutine finished and switches away.
 fn coro_finish() {
 	var from int = cur_coro;
 	coros[from].done = true;
@@ -185,6 +193,7 @@ fn coro_finish() {
 	coro_switch(&coros[from].sp as *u8, &coros[to].sp as *u8);
 }
 
+/// Runs all coroutines until none remain runnable.
 fn coro_run_all() {
 	while (coro_pending()) { coro_yield(); }
 }

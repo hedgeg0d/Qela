@@ -1,0 +1,75 @@
+// expect-exit: 2
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+fn diff4(a int, b int, c int, d int) int { return a - b - c - d; }
+fn add2(a int, b int) int { return a + b; }
+fn mix6(a int, b int, c int, d int, e int, f int) int { return a - b + c - d + e - f; }
+fn max2(a int, b int) int { if (a > b) { return a; } else { return b; } }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn wide_swap(w Wide) Wide { return Wide{a: w.b, b: w.a, c: w.c}; }
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 3;
+    var v1 int = 0x1;
+    var v2 int = 8;
+    var sv0 str = "foobar";
+    var sv1 str = "xyzzy";
+    var fv double = 2.5;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0x0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    v2, v0 = v0, v2;
+    match (e) {
+        A => {
+            return ((2.5 as i64) as u32);
+        }
+        B(mb0) => {
+            return ((p.x if (((((('d' as u8) >> (-1 in 0..((v2 & 0xf) + 0x1))) > (((663 < -1) && (-1 < 0x28a)) - (((sv1 + """ab
+cd"""))[0..2])[1])) && ((((663 < -1) && (0xffffffffffffffff < 650)) - (((sv1 + """ab
+cd"""))[0..2])[1]) <= (334 != (v0 < '\t')))) in a) >= ((a[(str_eq(((sv1)[0..2] + ((("abcd")[0..4])[0..2])[0..2]), (((((sv0)[0..2])[0..2])[0..2] + (sv0)[0..2]))[0..2]) & 3)] if ((((fv - (0.5 - 1.7)) / -2.0) <= (((true / ((-610 & 0xf) + 1)) in a) as double)) >= (((-(v1 - true)) | false) as i8)) else ((100 <= v2) - (!'b'))) as u16)) else v0) * mb0);
+        }
+        C(mb0, mb1) => {
+            return ((-(((false - 42) in 0..((add2(true, 'd') & 15) + 1)) == ((303 | 'd') | (true in a)))) + mb1);
+        }
+    }
+    v2 *= ((p.y > ((true in 0..(('f' & 15) + 1)) in 0..((a[('2' & 3)] & 15) + 1))) if ((("abc")[0..2]).len <= ((((((1 > v2) && (v2 < v2)) <= (960 > 255)) && ((960 > 255) >= 10)) as u32) >= ((fv - (-1.5 - 1.5)) >= ((1 as i32) as double)))) else (true % ((v2 & 15) + 1)));
+    sv1 += sv0;
+    v1 = ((p.y as u16) in a);
+    v0 = p.x;
+    match (e) {
+        A => {
+            return (((((100.0 >= 100.0) as i32) as u32) >= (((v1 in 0..((true & 0xf) + 1)) in a) % (((add2(0x2a, v1) if (((sv0 + sv1)).len >= ((((0.5 - -0.5) / -1.5) as i64) < ((fv as i64) as u16))) else 'd') & 0xf) + 1))) && ((((v1 in 0..((true & 15) + 1)) in a) % (((add2(42, v1) if (((sv0 + sv1)).len >= ((((0.5 - -0.5) / -1.5) as i64) < ((fv as i64) as u16))) else 'd') & 15) + 1)) >= ((a[(236 & 3)] as i8) >= (p.x > (0xff in a)))));
+        }
+        B(mb0) => {
+            return ((0 + (-(('f' > '\n') in 0..(((v1 | true) & 15) + 1)))) - mb0);
+        }
+        C(mb0, mb1) => {
+            return (fv as i64);
+        }
+    }
+    v1, v0 = v0, v1;
+    write_str(STDOUT, "${v1=}\n");
+    return ((("hello")[1..4] + ("abc")[0..2]))[1];
+}

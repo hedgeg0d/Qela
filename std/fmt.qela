@@ -3,6 +3,7 @@ import "buf.qela";
 import "str.qela";
 import "sys.qela";
 
+/// Appends v as a decimal integer.
 fn fmt_i64(b *Buf, v i64) {
 	var neg bool = v < 0;
 	if (neg) { v = -v; }
@@ -20,6 +21,7 @@ fn fmt_i64(b *Buf, v i64) {
 
 // Same as fmt_i64 but writes directly to a file descriptor: no Buf
 // allocation, no copy. Used by diagnostics on stderr.
+/// Writes v as decimal straight to a file descriptor.
 fn fmt_i64_to_fd(fd i64, v i64) {
 	var neg bool = v < 0;
 	if (neg) { v = -v; }
@@ -35,6 +37,7 @@ fn fmt_i64_to_fd(fd i64, v i64) {
 	while (n > 0) { n = n - 1; sys_write(fd, &rev[n], 1); }
 }
 
+/// Appends v as 16 lowercase hex digits.
 fn fmt_hex(b *Buf, v i64) {
 	var hex [16]u8;
 	hex[0] = '0'; hex[1] = '1'; hex[2] = '2'; hex[3] = '3';
@@ -49,6 +52,7 @@ fn fmt_hex(b *Buf, v i64) {
 	}
 }
 
+/// Appends a string's bytes.
 fn fmt_str(b *Buf, s str) {
 	buf_bytes(b, s.ptr, s.len);
 }
@@ -59,26 +63,31 @@ fn fmt_str(b *Buf, s str) {
 // strings alive at once never alias. Note for maintainers: this module's
 // text is embedded in the compiler as a string literal, so the two
 // characters that start an interpolation must never appear here.
+/// Starts an interpolation chain with an empty buffer.
 fn fmt_begin() Buf {
 	var b Buf;
 	return b;
 }
 
+/// Appends a string in an interpolation chain.
 fn fmt_put_str(b Buf, s str) Buf {
 	buf_bytes(&b, s.ptr, s.len);
 	return b;
 }
 
+/// Appends an integer in an interpolation chain.
 fn fmt_put_i64(b Buf, v i64) Buf {
 	fmt_i64(&b, v);
 	return b;
 }
 
+/// Appends a hex integer in an interpolation chain.
 fn fmt_put_hex(b Buf, v i64) Buf {
 	fmt_hex(&b, v);
 	return b;
 }
 
+/// Appends true or false in an interpolation chain.
 fn fmt_put_bool(b Buf, v bool) Buf {
 	if (v) { fmt_str(&b, "true"); }
 	else { fmt_str(&b, "false"); }
@@ -86,6 +95,7 @@ fn fmt_put_bool(b Buf, v bool) Buf {
 }
 
 // `${s!r}`: a quoted, escaped repr of a string.
+/// Appends a quoted, escaped string repr in an interpolation chain.
 fn fmt_put_repr(b Buf, s str) Buf {
 	buf_u8(&b, '"');
 	var i i64 = 0;
@@ -105,6 +115,7 @@ fn fmt_put_repr(b Buf, s str) Buf {
 
 // `${x:5d}` / `${x:05d}`: decimal padded to a width, spaces or zeros.
 // The sign sits inside the padding: -5 with :05d prints "-0005".
+/// Appends an integer padded to width w, space or zero filled.
 fn fmt_put_i64_w(b Buf, v i64, w i64, zp bool) Buf {
 	var neg bool = v < 0;
 	if (neg) { v = -v; }
@@ -134,6 +145,7 @@ fn fmt_put_i64_w(b Buf, v i64, w i64, zp bool) Buf {
 
 // `${x:08x}` / `${x:08X}`: the low `w` hex digits, zero-padded. A width
 // past 16 is all leading zeros: the value's bits never go that high.
+/// Appends the low w hex digits, zero-padded, optionally uppercase.
 fn fmt_put_hex_w(b Buf, v i64, w i64, upper bool) Buf {
 	var hex [16]u8;
 	hex[0] = '0'; hex[1] = '1'; hex[2] = '2'; hex[3] = '3';
@@ -155,6 +167,7 @@ fn fmt_put_hex_w(b Buf, v i64, w i64, upper bool) Buf {
 	return b;
 }
 
+/// Views an interpolation chain's buffer as the final string.
 fn fmt_result(b Buf) str {
 	var s str;
 	s.ptr = b.p;
@@ -170,6 +183,7 @@ let FDIG_CAP = 1200;
 
 // Divides the MSB-first bit array by 10 in place; returns the remainder,
 // the next decimal digit from the low end (used to print an exact integer).
+/// Divides a big-number bit array by 10; returns the remainder digit.
 fn fdig_div10(a *u8, start i64, end i64) i64 {
 	var rem i64 = 0;
 	var i i64 = start;
@@ -184,6 +198,7 @@ fn fdig_div10(a *u8, start i64, end i64) i64 {
 
 // Multiplies the MSB-first bit array by 10 in place; the overflow past the
 // array's own width is the next decimal digit (used to print a fraction).
+/// Multiplies a big-number bit array by 10; returns the carried digit.
 fn fdig_mul10(a *u8, start i64, end i64) i64 {
 	var carry i64 = 0;
 	var i i64 = end - 1;
@@ -196,6 +211,7 @@ fn fdig_mul10(a *u8, start i64, end i64) i64 {
 	return carry;
 }
 
+/// Returns whether a big-number bit array is entirely zero.
 fn fdig_allzero(a *u8, start i64, end i64) bool {
 	var i i64 = start;
 	while (i < end) {
@@ -208,6 +224,7 @@ fn fdig_allzero(a *u8, start i64, end i64) bool {
 // bits: the raw IEEE754 double bit pattern. Ties round half-up rather than
 // half-to-even and denormals print as 0 -- acceptable for a hobby compiler,
 // not for a libc (dec_to_f64_bits carries the same limitations).
+/// Appends a double given as its raw IEEE754 bit pattern.
 fn fmt_f64_bits(b *Buf, bits i64) {
 	var sign i64 = (bits >> 63) & 1;
 	var expf i64 = (bits >> 52) & 0x7ff;
@@ -284,6 +301,7 @@ fn fmt_f64_bits(b *Buf, bits i64) {
 	if (!any) { buf_u8(b, '0'); }
 }
 
+/// Appends a double in an interpolation chain.
 fn fmt_put_f64_bits(b Buf, bits i64) Buf {
 	fmt_f64_bits(&b, bits);
 	return b;
@@ -291,6 +309,7 @@ fn fmt_put_f64_bits(b Buf, bits i64) Buf {
 
 // Prints an MSB-first bit array's decimal value. Used by fmt_f64_bits and
 // fmt_f64_fixed for the integer part.
+/// Prints the decimal value of a big-number bit array.
 fn fdig_print_int(b *Buf, arr *u8, n i64) {
 	var digs *u8 = arena_alloc(n, 1);
 	var nd i64 = 0;
@@ -308,6 +327,7 @@ fn fdig_print_int(b *Buf, arr *u8, n i64) {
 // `${x:.2f}`: fixed-point with exactly `prec` digits after the point,
 // rounding half-up on the prec+1-th digit. The carry can ripple into the
 // integer part, so the fraction is fully rounded before it is printed.
+/// Appends a double fixed to prec digits after the point.
 fn fmt_f64_fixed(b *Buf, bits i64, prec i64) {
 	var sign i64 = (bits >> 63) & 1;
 	var expf i64 = (bits >> 52) & 0x7ff;
@@ -390,25 +410,31 @@ fn fmt_f64_fixed(b *Buf, bits i64, prec i64) {
 	if (carry) { intv = intv + 1; }
 
 	fmt_i64(b, intv);
-	buf_u8(b, '.');
-	k = 0;
-	while (k < prec) {
-		buf_u8(b, ('0' as i64 + (digs[k] as i64)) as u8);
-		k = k + 1;
+	// `.0f` prints the rounded integer with no dot.
+	if (prec > 0) {
+		buf_u8(b, '.');
+		k = 0;
+		while (k < prec) {
+			buf_u8(b, ('0' as i64 + (digs[k] as i64)) as u8);
+			k = k + 1;
+		}
 	}
 }
 
+/// Appends a fixed-point double in an interpolation chain.
 fn fmt_put_f64_fixed(b Buf, bits i64, prec i64) Buf {
 	fmt_f64_fixed(&b, bits, prec);
 	return b;
 }
 
+/// Writes an integer as decimal to standard error.
 fn eprint_i64(v i64) {
 	var b Buf;
 	fmt_i64(&b, v);
 	sys_write(STDERR, b.p, b.n);
 }
 
+/// Writes a string to standard error.
 fn eprint_str(s str) {
 	sys_write(STDERR, s.ptr, s.len);
 }

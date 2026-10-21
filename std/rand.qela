@@ -5,6 +5,7 @@
 
 var rand_state i64 = 0x9E3779B97F4A7C15;
 
+/// Seeds the random generator with a value.
 fn rand_init(seed i64) {
 	rand_state = seed;
 	if (rand_state == 0) { rand_state = 0x9E3779B97F4A7C15; }
@@ -12,6 +13,7 @@ fn rand_init(seed i64) {
 
 // A full 64-bit value. The top bit is masked off so the result is never
 // negative, which keeps `%` well-behaved in rand_range.
+/// Returns a random unsigned 64-bit value.
 fn rand_u64() i64 {
 	var x i64 = rand_state;
 	x = x ^ (x >> 12);
@@ -21,7 +23,7 @@ fn rand_u64() i64 {
 	return (x * 0x2545F4914F6CDD1D) & 0x7FFFFFFFFFFFFFFF;
 }
 
-// Uniform in [lo, hi); a degenerate range returns lo.
+/// Returns a random integer in a half-open range.
 fn rand_range(lo i64, hi i64) i64 {
 	if (hi <= lo) { return lo; }
 	return lo + rand_u64() % (hi - lo);

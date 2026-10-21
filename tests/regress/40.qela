@@ -1,4 +1,4 @@
-// expect-exit: 0
+// expect-exit: 1
 // got: CRASH
 struct Pair { x int, y int, }
 struct Wide { a int, b int, c int, }
@@ -6,8 +6,6 @@ struct Bag { p int, q int, r int, s int, }
 struct Nest { tag int, p Pair, }
 enum E { A, B(int), C(int, int), }
 enum D { None, Some(int), }
-import "std/fmt.qela";
-import "std/io.qela";
 import "std/str.qela";
 fn mix5(a int, b int, c int, d int, e int) int { return a + b - c + d - e; }
 fn zero() int { return 3; }
@@ -40,53 +38,29 @@ fn main() int {
     var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
     var e E = E.A;
     var a [4]int;
-    var i0 int = 0;
+    var i0 int = 0x0;
     var i1 int = 0;
     var i2 int = 0;
     var i3 int = 0;
     var i4 int = 0;
     var i5 int = 0;
-    v2 = ((-((v1 + -44) >= (--1))) & (((false as i16) >> v0) == ((-166 as double) == 0.125)));
-    v0 = (((('d' ^ 'b') as double) <= (a[('1' & 3)] as double)) > (-((v0 > false) as i8)));
+    v2 = ((-(('1' as i8) if ((((add2(('0' & 3), add2(false, 'e')) < (650 if ((((1.7 / 0.25) != (a[('1' & 3)] as double)) in 0..(((((1.7 == fv) * (-1.5 > 3.75)) >> (-true)) & 15) + 1)) <= (((('f' + true) if (v2 != ((205 >= ((false in a) + (-1 as i8))) as i32)) else ((true <= -663) && (-663 < v2))) % ((((0x2b2 - '\t') as u8) & 15) + 0x1)) as i8)) else ('0' << false))) && ((650 if ((((1.7 / 0.25) != (a[('1' & 3)] as double)) in 0..(((((1.7 == fv) * (-1.5 > 3.75)) >> (-true)) & 15) + 0x1)) <= (((('f' + true) if (v2 != ((205 >= ((false in a) + (0xffffffffffffffff as i8))) as i32)) else ((true <= -663) && (-663 < v2))) % ((((690 - '\t') as u8) & 0xf) + 1)) as i8)) else ('0' << false)) < str_eq(sv1, "no"))) if ((!((290 | (-1 <= 107)) >= ((-591 as u16) > (false in 0..(('\n' & 15) + 1))))) <= (((((2 < v1) && (v1 >= -546)) & (true == '2')) as double) as i64)) else (932 as i8)) <= (((!(v0 as i16)) | (-(('c' < 221) && (221 <= v1)))) % (('0' & 15) + 1))) else (v1 in 0..((127 & 15) + 1)))) & (((false as i16) >> v0) == ((0xffffffffffffff5a as double) == 0.125)));
+    v2 = ((((false + 508) == (1 in 0..(('b' & 15) + 1))) >> (str_eq((sv1 + (("zz")[0..2] + "xyz")), "xyzzy") in 0..(((v0 >= '3') & 15) + 0x1))) >= (!(-((-855 < v0) && (v0 >= -587)))));
+    v2 = (((('0' in a) as i16) as u32) <= v2);
+    v1, v0 = (((v2 > (-1 as i8)) > 778) if (((((false > -1) in a) * 966) % (((false in 0..((((("xyzzy")[0..2]).len + (100 - 2)) & 15) + 1)) & 15) + 1)) != 42) else ((add2('0', v1) >> (-v0)) > opt_d(D.Some(true)))), str_eq(sv1, sv1);
     match (e) {
         A => {
-            return (('c' * (fv > fv)) >> (-true));
+            return v0;
         }
         B(mb0) => {
-            return ((fv == fv) & mb0);
+            return ('f' in 0..(((!((v0 % (('\n' & 15) + 1)) << -593)) & 15) + 1));
         }
         C(mb0, mb1) => {
-            return (((!(v2 as i32)) % ((((v1 - (false - 2)) as u16) & 15) + 1)) * mb1);
+            return (((!true) + (((!(-181)) < (((v1 > 'd') && ('d' > '1')) as i32)) && ((((v1 > 'd') && ('d' > '1')) as i32) >= ((fv <= 2.0) as i16)))) ^ mb1);
         }
     }
-    n.p.x = 80;
-    match (e) {
-        A => {
-            return ((v0 + (('a' == v1) & (fv <= 0.1))) - (((fv as i64) as i8) % ((205 & 15) + 1)));
-        }
-        B(mb0) => {
-            return (('0' as u16) - mb0);
-        }
-        C(mb0, mb1) => {
-            return ((!(((0.25 / 0.5) as i64) > ('g' as i16))) ^ mb1);
-        }
-    }
-    match (e) {
-        A => {
-            return str_eq(("abcd")[0..2], (("qwerty")[2..4])[0..2]);
-        }
-        B(mb0) => {
-            return (str_eq("abcd", ("abcd")[0..2]) & false);
-        }
-        C(mb0, mb1) => {
-            return (((("qwerty")[1..6]).len | (-a[(1 & 3)])) % (('0' & 15) + 1));
-        }
-    }
-    e = E.B(('\n' >= (((v0 - -855) >= ((("abcd")[1..4])[0..2]).len) as i8)));
-    n.p.x = (((-(false + 508)) >= (-(1 == v1))) >> (100 ^ ((true >= '\t') as i8)));
-    var ob Buf;
-    fmt_i64(&ob, v1);
-    write_str(STDOUT, buf_str(&ob));
-    write_str(STDOUT, "\n");
-    return (((p.y as u16) as i16) <= v2);
+    p = pair_swap(p);
+    n.tag = (((!(--358)) in 0..((((!1) as i8) & 0xf) + 0x1)) in 0..(((((fv > 0.1) as u16) in 0..((((false << 139) <= ('e' <= 127)) & 15) + 1)) & 15) + 1));
+    sv0 = ("xyz")[0..2];
+    return ((sv1).len < str_eq(("abcd")[0..4], (sv1)[0..2]));
 }

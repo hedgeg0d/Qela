@@ -1,0 +1,65 @@
+// expect-exit: 1
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/str.qela";
+var gv int = 1;
+fn diff4(a int, b int, c int, d int) int { return a - b - c - d; }
+fn fact(n int) int { if (n <= 1) { return 1; } return n * fact(n - 1); }
+fn mix6(a int, b int, c int, d int, e int, f int) int { return a - b + c - d + e - f; }
+fn max2(a int, b int) int { if (a > b) { return a; } else { return b; } }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn bag_sum(b Bag) int { return b.p + b.q + b.r + b.s; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 4;
+    var v1 int = 0xa;
+    var v2 int = 0x2;
+    var sv0 str = "42";
+    var sv1 str = "hi";
+    var fv double = 2.0;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    v0 = true;
+    v1 = v1;
+    v2 = ((0x7f | p.y) in 0..(((-(-(("""ab
+cd""")[2..4])[1])) & 15) + 1));
+    n.p.x = ((((v0 in a) in 0..((-1 & 0xf) + 1)) << ((true in a) + ('\n' - 'b'))) as u16);
+    n.p.x = (((1.5 == 100.0) < ('a' < (3 in 0..(('\n' & 15) + 1)))) > (false - ((!'2') * (gv as u32))));
+    i0 = 0;
+    while ((i0 < 3)) {
+        i0 = (i0 + 1);
+        sv0 = ("xyz")[0..2];
+    }
+    n.tag = (((mix6('f', true, true, 1, 255, gv) == (!'d')) != (-(fv as i64))) + (-(('3' >= 255) << false)));
+    gv %= ((((((!-1) != (false as u32)) in 0..(((((true + gv) <= (381 << v2)) && ((381 << v2) <= (false as i8))) & 15) + 0x1)) << ((("aa")[0..2] + ("abcd")[0..4])).len) & 15) + 0x1);
+    e = E.B(mix6((((10.5 + fv) as i64) | (('a' - 74) - (-15 > 'd'))), (((true <= (127 as i32)) && ((127 as i32) < (-gv))) as u16), bag_sum(b), fact(((-(0xffffffffffffff39 <= 'c')) & 0xf)), (((false as double) * 3.75) as i64), ((str_eq(sv0, (("xyz" + sv0))[0..2]) + (false as i16)) << (!((((("foobar")[1..6] + "abc"))[0..2])[0..2])[1]))));
+    return fact(((((-846 >= -906) in 0..(((v2 as i16) & 15) + 1)) & true) & 15));
+}
