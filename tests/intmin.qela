@@ -1,0 +1,26 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: -9223372036854775808
+// expect-out: -9223372036854775808
+// expect-out: -9223372036854775808
+// expect-out: -9223372036854775808
+// expect-out: 9223372036854775807
+// expect-out: true
+// i64 min used to print as a bare '-': the magnitude was negated in i64,
+// where it wraps to itself, so the digit loop never ran and only the sign
+// came out. Every decimal printer now takes the magnitude in u64.
+import "std/io.qela";
+import "std/str.qela";
+
+fn main() int {
+	var m i64 = -9223372036854775807 - 1;
+	println("${m}");
+	println("${m:5d}");
+	println("${m:05d}");
+	var buf Buf;
+	buf = fmt_put_i64(buf, m);
+	println(buf_str(&buf));
+	println("${0 - m - 1}");
+	println("${str_int("-9223372036854775808") == m}");
+	return 0;
+}
