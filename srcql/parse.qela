@@ -2012,10 +2012,11 @@ fn interp_gen_marshal(b *Buf, expr str, ty *Type) {
 		interp_gen_marshal_fields(b, expr, ty);
 		return;
 	}
-	if (ty.kind == TY_STRUCT || ty.kind == TY_ARRAY) {
-		// A POD struct or array is its raw image; `&f` of an aggregate is
-		// its memory (never a promoted register), and for a by-ref value
-		// `&f` already is the data pointer.
+	if (ty.kind == TY_STRUCT || ty.kind == TY_ARRAY || ty.kind == TY_ENUM) {
+		// A POD struct, array or enum is its raw image; `&f` of an
+		// aggregate is its memory (never a promoted register), and for a
+		// by-ref value `&f` already is the data pointer. An enum is an
+		// aggregate here, so `f as i64` would hand over its address.
 		fmt_str(b, " buf_bytes(&__b, &");
 		fmt_str(b, expr);
 		fmt_str(b, " as *u8, ");
@@ -2182,7 +2183,7 @@ fn interp_gen_global_decode(b *Buf, name str, ty *Type) {
 		fmt_str(b, "); __cur = __cur + 8; }");
 		return;
 	}
-	if (ty.kind == TY_STRUCT || ty.kind == TY_ARRAY) {
+	if (ty.kind == TY_STRUCT || ty.kind == TY_ARRAY || ty.kind == TY_ENUM) {
 		fmt_str(b, " { var __t ");
 		fmt_str(b, type_name(ty));
 		fmt_str(b, " = *(__cur as *");
