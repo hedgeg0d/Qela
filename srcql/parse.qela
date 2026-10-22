@@ -4906,6 +4906,7 @@ fn extern_classify(f *Func) {
 		var ty *Type = v.ty;
 		var spill bool = false;
 		var words int = 1;
+		var is2word bool = is_aggregate(ty) && ty.size > 8 && ty.size <= 16;
 		var mem bool = is_aggregate(ty) && abi_by_ref(ty.size);
 		if (is_float(ty)) {
 			if (fcnt + 1 > abi_n_float_regs()) {
@@ -4945,9 +4946,6 @@ fn extern_classify(f *Func) {
 		} else {
 			var gc int = 1;
 			if (ty.size > 8) { gc = 2; }
-			if (gc == 2 && gcnt + 2 > abi_n_arg_regs()) {
-				error_at(v.pos, "a str or struct parameter here would not fit in the argument registers (pass it earlier, or by pointer)");
-			}
 			if (gcnt + gc > abi_n_arg_regs()) { spill = true; }
 			else { gcnt = gcnt + gc; }
 		}
@@ -4955,6 +4953,7 @@ fn extern_classify(f *Func) {
 			v.arg_stack = true;
 			v.no_reg = true;
 			v.offset = (16 + 8 * sslot) as int;
+			if (is2word) { words = 2; }
 			sslot = sslot + words;
 			f.n_stack_args = f.n_stack_args + 1;
 			if (mem) { v.by_val = true; }
