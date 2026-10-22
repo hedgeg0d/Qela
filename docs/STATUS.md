@@ -9,17 +9,17 @@ history; the numbers in this section are the current snapshot.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **769 744 B** (73.4% of the 1 MiB budget) |
-| stage1 sources | 32 077 lines of Qela |
+| **S2 — the shipped compiler, Qela compiled by itself** | **778 544 B** (74.2% of the 1 MiB budget) |
+| stage1 sources | 32 689 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
 
-The last successful gate verifies S2 == S3 byte-for-byte, the 215-test corpus under S2, the embedded stdlib resolving outside the source tree,
+The last successful gate verifies S2 == S3 byte-for-byte, the 216-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
 backtrace, interpolation and the repl, the compiler flags (`-g`,
 `--backtrace`, `--no-bounds-checks`, `--dump-std`), and a scripted language
 server conversation.
 
-On the current workspace, `make build` reproduced the fixed point at 769 744 B.
+On the current workspace, `make build` reproduced the fixed point at 778 544 B.
 The local sandbox cannot bind loopback sockets, so `tests/http.qela` and
 `tests/netproc.qela` exit at `net_listen`; this is an environment failure, not
 a changed compiler result. The last unrestricted gate remains 212/212.
@@ -1052,9 +1052,12 @@ integer" met float bits: `spine_ok` folded float comparisons as integers
 miscopied or mistyped float moves (`srcql/codegen.qela`). All fixed.
 
 Decimal literals, including subnormals, and fixed-point formatting use
-round-to-nearest, ties-to-even. `comptime` folding stays integer-only: a
-float literal or arithmetic inside `comptime`/`$c` is an error, because the
-evaluator lives in the bootstrap subset where stage0 has no float.
+round-to-nearest, ties-to-even. `comptime` blocks and `$c` now fold `f32`/`f64`
+arithmetic too: `srcql/comptime.qela` carries raw IEEE bits and implements
+add/subtract/multiply/divide, comparisons, width casts and special values with
+integer-only guard/round/sticky arithmetic, keeping the bootstrap subset
+float-free. `tests/comptimefloat.qela` covers ties, cancellation, signed zero,
+subnormals, overflow, infinities and NaN ordering.
 
 **Hardening pass (2026-08-04).** Every fix below is mirrored in stage0 where
 the feature exists there, and pinned by a corpus test; the gate stayed green
