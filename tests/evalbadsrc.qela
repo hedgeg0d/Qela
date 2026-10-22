@@ -1,0 +1,20 @@
+// expect-exit: 0
+// expect-out: a=3
+// expect-out: <eval:3>:1:17: error: expected ';', found 'end of file'
+// expect-out:   1 | var x = 5; x * 2
+// expect-out:    | var x = 5; x * 2^
+// expect-out: b=0
+// expect-out: c=3
+// stage1-only
+// One bad eval source used to kill the abi subprocess (and print twice):
+// the compile error is reported once, eval returns 0, and later evals
+// still run.
+import "std/eval.qela";
+import "std/io.qela";
+
+fn main() int {
+	println("a=${eval("1 + 2")}");
+	println("b=${eval("var x = 5; x * 2")}");
+	println("c=${eval("1 + 2")}");
+	return 0;
+}
