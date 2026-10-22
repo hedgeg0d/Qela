@@ -12,7 +12,7 @@ fn std_blob_data() str { return ""; }
 
 fn std_blob_count() int { return 39; }
 
-fn std_blob_total() i64 { return 176390; }
+fn std_blob_total() i64 { return 176504; }
 
 fn std_blob_name(i int) str {
 	if (i == 0) { return "std/abiconn.qela"; }
@@ -70,33 +70,33 @@ fn std_blob_off(i int) i64 {
 	if (i == 9) { return 48582; }
 	if (i == 10) { return 54091; }
 	if (i == 11) { return 55323; }
-	if (i == 12) { return 67759; }
-	if (i == 13) { return 71124; }
-	if (i == 14) { return 81863; }
-	if (i == 15) { return 85290; }
-	if (i == 16) { return 86156; }
-	if (i == 17) { return 88859; }
-	if (i == 18) { return 92945; }
-	if (i == 19) { return 98340; }
-	if (i == 20) { return 103639; }
-	if (i == 21) { return 117896; }
-	if (i == 22) { return 118997; }
-	if (i == 23) { return 122031; }
-	if (i == 24) { return 122765; }
-	if (i == 25) { return 125693; }
-	if (i == 26) { return 126470; }
-	if (i == 27) { return 127981; }
-	if (i == 28) { return 129614; }
-	if (i == 29) { return 130591; }
-	if (i == 30) { return 131415; }
-	if (i == 31) { return 139026; }
-	if (i == 32) { return 140870; }
-	if (i == 33) { return 141348; }
-	if (i == 34) { return 142118; }
-	if (i == 35) { return 150475; }
-	if (i == 36) { return 167004; }
-	if (i == 37) { return 172959; }
-	if (i == 38) { return 173995; }
+	if (i == 12) { return 67873; }
+	if (i == 13) { return 71238; }
+	if (i == 14) { return 81977; }
+	if (i == 15) { return 85404; }
+	if (i == 16) { return 86270; }
+	if (i == 17) { return 88973; }
+	if (i == 18) { return 93059; }
+	if (i == 19) { return 98454; }
+	if (i == 20) { return 103753; }
+	if (i == 21) { return 118010; }
+	if (i == 22) { return 119111; }
+	if (i == 23) { return 122145; }
+	if (i == 24) { return 122879; }
+	if (i == 25) { return 125807; }
+	if (i == 26) { return 126584; }
+	if (i == 27) { return 128095; }
+	if (i == 28) { return 129728; }
+	if (i == 29) { return 130705; }
+	if (i == 30) { return 131529; }
+	if (i == 31) { return 139140; }
+	if (i == 32) { return 140984; }
+	if (i == 33) { return 141462; }
+	if (i == 34) { return 142232; }
+	if (i == 35) { return 150589; }
+	if (i == 36) { return 167118; }
+	if (i == 37) { return 173073; }
+	if (i == 38) { return 174109; }
 	return -1;
 }
 
@@ -112,7 +112,7 @@ fn std_blob_len(i int) i64 {
 	if (i == 8) { return 3154; }
 	if (i == 9) { return 5509; }
 	if (i == 10) { return 1232; }
-	if (i == 11) { return 12436; }
+	if (i == 11) { return 12550; }
 	if (i == 12) { return 3365; }
 	if (i == 13) { return 10739; }
 	if (i == 14) { return 3427; }
