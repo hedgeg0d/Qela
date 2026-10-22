@@ -492,19 +492,33 @@ cat > "$tmp2/asttest.qela" <<'EOF'
 import "std/eval.qela";
 import "std/io.qela";
 eval var price i64 = 10;
+eval fn bump() i64 {
+	price = price + 1;
+	return 1;
+}
 fn main() int {
 	var a *Ast = parse_ast("price * 2");
 	var r1 i64 = run_ast(a);
 	eval("price = 100;");
 	var r2 i64 = run_ast(a);
-	write_str(STDOUT, "r1=${r1} r2=${r2}\n");
+	var b *Ast = parse_ast("var x = 5; x * 3;");
+	var r3 i64 = run_ast(b);
+	var r4 i64 = run_ast(b);
+	var c *Ast = parse_ast("{ var acc = 0; var i = 1; while (i <= 4) { acc = acc + i; i = i + 1; } acc; }");
+	var r5 i64 = run_ast(c);
+	var d *Ast = parse_ast("bump(); 7;");
+	var r6 i64 = run_ast(d);
+	var r7 i64 = run_ast(d);
+	var e *Ast = parse_ast("return 99;");
+	var r8 i64 = run_ast(e);
+	write_str(STDOUT, "r1=${r1} r2=${r2} r3=${r3} r4=${r4} r5=${r5} r6=${r6} r7=${r7} r8=${r8} price=${price}\n");
 	return 0;
 }
 EOF
 ( cd "$tmp2" &&
   "$root/$OUT/s2" asttest.qela -o asttest &&
-  [ "$(QELAPATH="$root/$OUT/s2" ./asttest)" = "r1=20 r2=200" ] ) ||
-	fail "parse_ast/run_ast does not cache and re-run against live state"
+  [ "$(QELAPATH="$root/$OUT/s2" ./asttest)" = "r1=20 r2=200 r3=15 r4=15 r5=10 r6=7 r7=7 r8=99 price=102" ] ) ||
+	fail "parse_ast/run_ast does not cache and re-run against live state, or mis-handles statements, blocks, returns or side effects"
 printf '    ok\n'
 
 
