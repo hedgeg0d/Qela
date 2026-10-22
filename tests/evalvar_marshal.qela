@@ -1,0 +1,45 @@
+// expect-exit: 0
+// expect-out: eval var marshalling ok
+// stage1-only
+// eval var host globals with str, float and struct values, read and
+// written from eval'd code over the marshalled ABI.
+import "std/eval.qela";
+import "std/io.qela";
+
+struct P { x i64, y i64 }
+struct Bag { tag i64, s str, n i64 }
+
+eval var tag str;
+eval var ratio f64;
+eval var p P;
+eval var bag Bag;
+var secret i64 = 12345;
+
+fn main() int {
+	tag = "hi";
+	ratio = 1.5;
+	p = P{x: 3, y: 4};
+	bag = Bag{tag: 10, s: "abc", n: 5};
+	var fails i64 = 0;
+	if (eval("tag.len") != 2) { fails = fails + 1; }
+	if (eval("tag.len * 3") != 6) { fails = fails + 1; }
+	if (eval("ratio * 2.0") != 3) { fails = fails + 1; }
+	if (eval("ratio * 4.0") != 6) { fails = fails + 1; }
+	if (eval("p.x + p.y") != 7) { fails = fails + 1; }
+	if (eval("bag.tag + bag.s.len + bag.n") != 18) { fails = fails + 1; }
+	if (eval("secret") != 0) { fails = fails + 1; }
+	eval("tag = \"yo!\";");
+	if (tag.len != 3) { fails = fails + 1; }
+	eval("ratio = ratio + 0.5;");
+	if (ratio != 2.0) { fails = fails + 1; }
+	eval("p.x = 10;");
+	if (p.x != 10 || p.y != 4) { fails = fails + 1; }
+	eval("bag.s = \"xyz\";");
+	eval("bag.n = 7;");
+	if (bag.s.len != 3 || bag.n != 7 || bag.tag != 10) { fails = fails + 1; }
+	eval("p = P{x: 1, y: 2};");
+	if (p.x != 1 || p.y != 2) { fails = fails + 1; }
+	if (eval("p.x") != 1) { fails = fails + 1; }
+	if (fails == 0) { write_str(STDOUT, "eval var marshalling ok\n"); }
+	return fails as int;
+}
