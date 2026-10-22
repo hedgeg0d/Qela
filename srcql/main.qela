@@ -1015,7 +1015,7 @@ fn repl_init() {
 	type_set_fn(repl_fn);
 }
 
-fn cmd_repl(argc int, argv **u8) int {
+fn cmd_repl(_argc int, _argv **u8) int {
 	repl_init();
 	var tty bool = sys_isatty() == 0;
 	if (tty) {
@@ -2037,7 +2037,7 @@ fn abi_handle_jit(f *Func) {
 	}
 }
 
-fn cmd_abi_server(argc int, argv **u8) int {
+fn cmd_abi_server(_argc int, _argv **u8) int {
 	repl_init();
 	type_abi_mode = true;
 	abi_chain_collect("std/interpcall.qela", 0);
@@ -2333,7 +2333,7 @@ fn cmd_abi_server(argc int, argv **u8) int {
 
 } $else {
 
-fn cmd_repl(argc int, argv **u8) int {
+fn cmd_repl(_argc int, _argv **u8) int {
 	var tty bool = sys_isatty() == 0;
 	if (tty) { write_str(STDOUT, "qela repl: expressions in, values out; Ctrl-D to quit\n"); }
 	while (true) {

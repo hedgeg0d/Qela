@@ -141,8 +141,8 @@ fn write_elf(path str, img *Image) {
 
 		while ((f.n & 7) != 0) { buf_u8(&f, 0); }
 		var shoff i64 = f.n;
-		var i i64 = 0;
-		while (i < 64) { buf_u8(&f, 0); i = i + 1; }
+		var z i64 = 0;
+		while (z < 64) { buf_u8(&f, 0); z = z + 1; }
 		shdr_addr = hdr;
 		shdr_raw(&f, n_text, SHT_PROGBITS, 6, hdr, img.code.n);
 		shdr_raw(&f, n_line, SHT_PROGBITS, 0, off_line, dw_line.n);
@@ -240,7 +240,7 @@ fn o_str_name(id i64, data_sym bool) str {
 // and a hash table is not worth the bytes. A nameless relocation is a
 // string: PC-relative slots (in code) point at the {ptr, len} header,
 // REL_ABS64 slots (the header's own ptr, in .rodata) point at the bytes.
-fn o_sym_index(img *Image, r *Reloc) int {
+fn o_sym_index(r *Reloc) int {
 	var want str = r.name;
 	if (want.len == 0) {
 		if (r.kind == REL_ABS64) { want = o_str_name(r.id, true); }
@@ -391,9 +391,9 @@ fn elf_reloc_type(kind int) int {
 	return 11;                                  // R_X86_64_32S
 }
 
-fn o_rela_rec(f *Buf, r *Reloc, img *Image, base i64) {
+fn o_rela_rec(f *Buf, r *Reloc, base i64) {
 	buf_u64(f, r.at - base);
-	buf_u64(f, (o_sym_index(img, r) as i64) << 32 | (elf_reloc_type(r.kind) as i64));
+	buf_u64(f, (o_sym_index(r) as i64) << 32 | (elf_reloc_type(r.kind) as i64));
 	// x86 PC-relative slots resolve from the *next* instruction; the
 	// linker's P is the slot's own address, so a -4 addend aligns the two
 	// (gcc emits the same). Absolute relocations carry no addend, and none
@@ -417,12 +417,10 @@ fn write_object(path str, img *Image) {
 	var sec_drro int = 3;
 	var sec_data int = 4;
 	var sec_bss int = 5;
-	var sec_relatext int = 6;
-	var sec_reladrro int = 7;
 	var sec_symtab int = 8;
 	var sec_strtab int = 9;
 	var sec_shstr int = 10;
-	if (!has_rr) { sec_drro = -1; sec_data = 3; sec_bss = 4; sec_reladrro = -1; sec_symtab = 6; sec_strtab = 7; sec_shstr = 8; }
+	if (!has_rr) { sec_drro = -1; sec_data = 3; sec_bss = 4; sec_symtab = 6; sec_strtab = 7; sec_shstr = 8; }
 
 	o_build_syms(img, sec_text, sec_rodata, sec_drro, sec_data, sec_bss);
 
@@ -507,10 +505,10 @@ fn write_object(path str, img *Image) {
 	while (f.n < relatext_off) { buf_u8(&f, 0); }
 
 	var r *Reloc = img.relocs;
-	while (r as i64 != 0) { o_rela_rec(&f, r, img, 0); r = r.next; }
+	while (r as i64 != 0) { o_rela_rec(&f, r, 0); r = r.next; }
 	while (f.n < reladrro_off) { buf_u8(&f, 0); }
 	r = img.rodata_relocs;
-	while (r as i64 != 0) { o_rela_rec(&f, r, img, hdr_off); r = r.next; }
+	while (r as i64 != 0) { o_rela_rec(&f, r, hdr_off); r = r.next; }
 	while (f.n < symtab_off) { buf_u8(&f, 0); }
 	var si int = 0;
 	while (si < o_nsyms) { o_sym_rec(&f, si); si = si + 1; }
