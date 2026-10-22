@@ -1816,6 +1816,13 @@ fn gen_expr(n *Node) {
 	}
 	if (k == ND_CAST) {
 		gen_expr(n.lhs);
+		// An enum expression is an address (an enum is an aggregate), so
+		// a numeric or boolean cast must mean the tag -- the first word
+		// of its memory -- not the address itself. A pointer target keeps
+		// the address (it points at the value).
+		if (n.lhs.ty.kind == TY_ENUM && n.ty.kind != TY_PTR) {
+			ir_load_acc(ty_i64, n.pos);
+		}
 		if (n.val == 1) {
 			// A bit-reinterpret, not a numeric conversion: the raw bits
 			// already sit in RAX exactly as they should (see type_interp).

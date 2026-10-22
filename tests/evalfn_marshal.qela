@@ -7,6 +7,7 @@ import "std/eval.qela";
 import "std/io.qela";
 
 struct Pair { a i64, b i64 }
+enum Lvl { Lo, Hi }
 
 eval fn ulen(s str) i64 {
 	return s.len;
@@ -25,6 +26,13 @@ eval fn usum(p Pair, x f64) f64 {
 fn interpreted from_interp(s str) i64 {
 	return ulen(s) + ucat("x", s).len;
 }
+eval fn lvl_tag(l Lvl) i64 {
+	return l as i64;
+}
+eval fn next_lvl(l Lvl) Lvl {
+	if (l as i64 == 0) { return Lvl.Hi; }
+	return Lvl.Lo;
+}
 
 fn main() int {
 	var fails i64 = 0;
@@ -32,6 +40,10 @@ fn main() int {
 	if (eval("ucat(\"ab\", \"cd\").len") != 4) { fails = fails + 1; }
 	if (eval("(usum(Pair{a: 3, b: 4}, 0.5) as i64)") != 7) { fails = fails + 1; }
 	if (from_interp("abc") != 7) { fails = fails + 1; }
+	if (eval("lvl_tag(Lvl.Hi)") != 1) { fails = fails + 1; }
+	if (eval("lvl_tag(Lvl.Lo)") != 0) { fails = fails + 1; }
+	if (eval("next_lvl(Lvl.Lo) as i64") != 1) { fails = fails + 1; }
+	if (eval("next_lvl(Lvl.Hi) as i64") != 0) { fails = fails + 1; }
 	if (fails == 0) { write_str(STDOUT, "eval fn marshalling ok\n"); }
 	return fails as int;
 }
