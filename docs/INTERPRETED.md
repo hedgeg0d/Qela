@@ -864,8 +864,8 @@ not necessarily how valuable it is:
    binary using `eval`/`interpreted`/`dynamic` doesn't need `qela`
    installed on the machine that runs it. Needs a genuinely new
    primitive — "embed an arbitrary byte blob into the output ELF" doesn't
-   exist yet (`std_blob.qela` embeds *qela's own* std/ as string
-   literals at *qela's* build time via `genblob.py`, which is a
+   exist yet (`std_blob.qela` embeds *qela's own* std/ at *qela's* build
+   time via `genblob.py` — packed source and a directory table — which is a
    different mechanism solving a different problem: source text baked
    into `qela` itself, not raw bytes baked into something `qela`
    produces). The natural place to start: extend `elf.qela`'s writer
