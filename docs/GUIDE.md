@@ -366,7 +366,9 @@ arrays work like any 4- or 8-byte value. (On the `extern` boundary — a call
 to or from a C function — scalar floats marshal into the SysV XMM registers
 instead, so `f32`/`f64` arguments and results cross into C directly; an
 all-float struct that would spill past the FP registers is a compile error
-(pass it earlier). Integer and two-word aggregate arguments that spill move
+(pass it earlier), and an all-float struct wider than 16 bytes cannot cross
+the extern boundary at all (x86's SysV hands it over in SSE registers Qela
+does not stage). Integer and two-word aggregate arguments that spill move
 to the stack exactly as SysV lays them out.) Interpolation prints floats
 (`"${a}"` → `1.5`). Decimal
 literals retain subnormals; fixed-point printing rounds to nearest with ties
