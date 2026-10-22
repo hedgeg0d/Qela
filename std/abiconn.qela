@@ -9,6 +9,14 @@ var abi_pid i64 = -1;
 var abi_in i64 = -1;
 var abi_out i64 = -1;
 
+// The embedded compiler copy: the compiler itself fills these in when it
+// builds a program that pulls in the ABI (see codegen's embed handling),
+// so a shipped binary can spawn its own child without qela installed.
+// Zero in a program that was not compiled with the embed (e.g. under
+// `qela irun`, where no codegen runs) -- the spawn falls back then.
+var __qela_embedded *u8 = 0 as *u8;
+var __qela_embedded_len i64 = 0;
+
 fn abi_path_exists(p str) bool {
 	var st [144]u8;
 	return sys_stat(cstr(p), &st[0]) == 0;
@@ -35,20 +43,24 @@ fn abi_find_on_path(name str) str {
 	return e;
 }
 
-fn abi_self_path() str {
-	var qp str = sys_getenv("QELAPATH");
-	if (qp.len > 0) { return qp; }
-	var found str = abi_find_on_path("qela");
-	if (found.len > 0) { return found; }
-	eprint("eval/interpreted/dynamic needs the qela compiler at runtime; set QELAPATH=$(which qela) or put qela on PATH\n");
-	sys_exit(1);
-	var e str;
-	return e;
-}
-
 fn abi_spawn() {
 	if (abi_pid >= 0) { return; }
-	var path str = abi_self_path();
+	// $QELAPATH is an explicit override; otherwise the embedded compiler
+	// copy (if the build embedded one), then a $PATH search.
+	var qp str = sys_getenv("QELAPATH");
+	var use_memfd bool = false;
+	var path str;
+	if (qp.len > 0) {
+		path = qp;
+	} else if (__qela_embedded_len > 0) {
+		use_memfd = true;
+	} else {
+		path = abi_find_on_path("qela");
+		if (path.len == 0) {
+			eprint("eval/interpreted/dynamic needs the qela compiler at runtime; set QELAPATH=$(which qela) or put qela on PATH\n");
+			sys_exit(1);
+		}
+	}
 
 	var in_pipe [2]i32;
 	var out_pipe [2]i32;
@@ -71,13 +83,21 @@ fn abi_spawn() {
 		if (out_pipe[1] as i64 != ABI_FD_HOST_TO_CHILD && out_pipe[1] as i64 != ABI_FD_CHILD_TO_HOST) {
 			sys_close(out_pipe[1] as i64);
 		}
-		var cpath *u8 = cstr(path);
 		var cargv [3]i64;
-		cargv[0] = cpath as i64;
+		cargv[0] = cstr("qela") as i64;
 		cargv[1] = cstr("--abi-server") as i64;
 		cargv[2] = 0;
 		var envp [1]i64;
 		envp[0] = 0;
+		if (use_memfd) {
+			var mfd i64 = sys_memfd_create(cstr("qela"), 0);
+			if (mfd < 0) { sys_exit(126); }
+			abi_write_exact(mfd, __qela_embedded, __qela_embedded_len);
+			sys_fexecve(mfd, &cargv[0] as *u8, &envp[0] as *u8);
+			sys_exit(127);
+		}
+		var cpath *u8 = cstr(path);
+		cargv[0] = cpath as i64;
 		sys_execve(cpath, &cargv[0] as *u8, &envp[0] as *u8);
 		sys_exit(127);
 	}
