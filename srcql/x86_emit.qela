@@ -1286,6 +1286,11 @@ fn gen_thread_clone(n *Node) {
 // declared a tvar) and once per spawned OS thread.
 fn gen_tls_init_stub() {
 	tls_stub_at = code.n;
+	// r12 is the stub's working register and it is callee-saved: the
+	// caller (any compiled call of tls_init) may keep a promoted local
+	// live in it across this call, so it is preserved like any other
+	// callee-saved register.
+	b1(0x41); b1(0x54);                  // push r12
 	// mmap(0, tls_block_size, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)
 	mov_reg_imm(RDI, 0);
 	mov_reg_imm(RSI, tls_block_size);
@@ -1316,7 +1321,8 @@ fn gen_tls_init_stub() {
 	mov_reg_imm(RDI, 0x1002);
 	mov_reg_imm(RAX, 158);
 	b1(0x0f); b1(0x05);
-	b1(0xc3);                      // ret
+	b1(0x41); b1(0x5c);                  // pop r12
+	b1(0xc3);                            // ret
 }
 
 

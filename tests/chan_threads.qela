@@ -1,4 +1,3 @@
-// interp-todo
 // stage1-only
 // expect-exit: 42
 // A buffered channel actually shared between two real OS threads: one
