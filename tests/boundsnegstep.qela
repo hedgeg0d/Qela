@@ -1,0 +1,14 @@
+// stage1-only
+// expect-exit: 134
+// expect-out: index out of bounds
+// A variable step keeps its check unless it is provably non-negative. The
+// loop test proves j < K but says nothing about j walking off the bottom,
+// which is exactly what a negative step does here: the bounds check is what
+// turns that into a panic instead of a write below the array.
+fn main() int {
+	var a [8]int;
+	var s int = -1;
+	var j int = 0;
+	while (j < 8) { a[j] = 1; j = j + s; }
+	return 0;
+}
