@@ -181,6 +181,47 @@ fn chan_recv(comptime T: type, c *Chan(T)) T {
 	}
 }
 
+// The receive half of `for x in ch`: blocks exactly like chan_recv, but
+// reports through *ok whether a real value was taken. A closed, drained
+// channel answers ok=false (with a zeroed value) instead of looping, so a
+// range loop can stop without losing the last buffered value or running its
+// body on a zero. While the channel is open and empty it blocks like any
+// other receive, so the loop simply waits for the next value.
+fn chan_recv_range(comptime T: type, c *Chan(T), ok *bool) T {
+	var zero T;
+	*ok = false;
+	while (true) {
+		chan_lock(c);
+		if (c.cap == 0) {
+			if (c.waiting) {
+				var v T = c.buf[0];
+				c.waiting = false;
+				chan_unlock(c);
+				atomic_add(&chan_epoch, 1);
+				*ok = true;
+				return v;
+			}
+			if (c.closed) { chan_unlock(c); return zero; }
+			chan_unlock(c);
+			chan_block("receive");
+			continue;
+		}
+		if (c.n != 0) {
+			var v T = c.buf[c.head];
+			c.head = c.head + 1;
+			if (c.head >= c.cap) { c.head = 0; }
+			c.n = c.n - 1;
+			chan_unlock(c);
+			atomic_add(&chan_epoch, 1);
+			*ok = true;
+			return v;
+		}
+		if (c.closed) { chan_unlock(c); return zero; }
+		chan_unlock(c);
+		chan_block("receive");
+	}
+}
+
 // Non-blocking receive for `select`. Returns the value and sets *ok only
 // when one is immediately available; a closed channel counts as ready with
 // a zeroed value (the same value chan_recv would return), matching select's
