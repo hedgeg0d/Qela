@@ -1,0 +1,81 @@
+// expect-exit: 2
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = -48;
+fn sub2(a int, b int) int { return a - b; }
+fn zero() int { return 3; }
+fn twice(n int) int { return n + n; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn nest_sum(n Nest) int { return n.tag + n.p.x + n.p.y; }
+fn wide_sum(w Wide) int { return w.a + w.b + w.c; }
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn main() int {
+    var v0 int = 4;
+    var v1 int = 6;
+    var v2 int = 0;
+    var sv0 str = "xyzzy";
+    var sv1 str = "hi";
+    var fv double = 1.7;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    e = E.C(tag_e(e), ((((-606) as double) as i64) << twice(((255 / ((false & 15) + 1)) % (('a' & 15) + 1)))));
+    n.tag = (('f' as i16) | true);
+    v0, v2 = v2, v0;
+    n = Nest{tag: ("hi")[1], p: Pair{x: p.y, y: true}};
+    v2 = ((((fv / 1.5) * fv) as i64) < (!(-(534 as i8))));
+    p.x = ((fv as i64) & str_eq((sv0)[0..2], ("abc")[0..2]));
+    if (((((('c' > v2) + p.x) as u32) & gv) == ("abc").len)) {
+        e = E.B((((("qwerty")[2..6]).len != (gv as i8)) | ((('c' as u16) % (((true as u16) & 15) + 1)) * (("xyz")[0..3]).len)));
+    } else {
+        n.p.x = ((-241 > (!-589)) as u8);
+    }
+    if (((-255) >= (gv + -328))) {
+        sv1 = sv0;
+        n.tag = ((((2 << v0) << zero()) >= (gv | (10 << v0))) as u8);
+    } else {
+        n.p.x = ((('g' / (((-10) & 15) + 1)) == a[(false & 3)]) ^ v0);
+    }
+    if ((((((gv == gv) ^ gv) == (!'3')) as i32) <= (-(((("abcd")[1..4]).len as i32) | sub2((-2.0 > -0.5), false))))) {
+        sv1 = "no";
+        v1 >>= (((('\t' != 100) <= (((("xyz")[0..2])[0..2])[0..2]).len) | (fv as i64)) == (("hello")[0..2]).len);
+    } else {
+        gv = (((('2' == 44) % ((twice(true) & 15) + 1)) as u32) < (((42 >> true) << (-100)) % (((255 >> (!1)) & 15) + 1)));
+    }
+    v0 = ((((gv <= 737) ^ (466 as i32)) > ((gv * -924) << (!94))) < ((v2 & (100 as i8)) ^ p.x));
+    p.y = a[((a[((-789 + 412) & 3)] * ((false >= 'a') as u16)) & 3)];
+    var ob Buf;
+    fmt_i64(&ob, v2);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return 2;
+}
