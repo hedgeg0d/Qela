@@ -121,6 +121,15 @@ if b"\x1b[" not in colored_with_stderr_tty():
 if b"\x1b[" in colored_with_stderr_pipe():
     fails.append("escapes were written while stderr was not a terminal")
 
+NARROW = ('import "std/io.qela";\n'
+          'fn cube(n i32) i32 { return n * n * n; }\n'
+          'fn main() int { return 0; }\n')
+out = compile_colored(NARROW)
+if "implicit conversion" not in out:
+    fails.append("the narrowing error is missing")
+if "both operands are narrower" not in out:
+    fails.append("the width rule is not explained next to the error")
+
 MEMBER = ('import "std/io.qela";\nstruct P { x i64 }\n'
           'fn main() int { var p P; println("${nosuchz.pos}"); return 0; }\n')
 INDEX = ('import "std/io.qela";\n'
