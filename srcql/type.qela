@@ -1926,6 +1926,7 @@ fn type_interp(n *Node) {
 		var part *Node = p.lhs;
 		var fname str;
 		if (p.val != 0 || same_type(part.ty, type_str())) { fname = "fmt_put_str"; }
+		else if (part.ty.kind == TY_BOOL) { fname = "fmt_put_bool"; }
 		else if (part.ty.kind == TY_PTR) {
 			// fmt_put_hex takes the bits; a pointer needs an explicit cast.
 			var c *Node = arena_alloc(sizeof(Node), 8) as *Node;
@@ -1961,7 +1962,10 @@ fn type_interp(n *Node) {
 			fname = "fmt_put_f64_bits";
 		}
 		else {
-			emsg("cannot interpolate a value of type '"); emsg_ty(part.ty); emsg("'"); efail(part.pos);
+			fname = fmtgen_for(part.ty, part.pos);
+			if (fname.len == 0) {
+				emsg("cannot interpolate a value of type '"); emsg_ty(part.ty); emsg("'"); efail(part.pos);
+			}
 		}
 		b = mk_call2(fname, b, part);
 		p = p.next;
