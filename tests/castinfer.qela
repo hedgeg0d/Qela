@@ -1,0 +1,38 @@
+// expect-exit: 0
+// expect-out: ok
+// `as _` is a cast whose target comes from the destination: a declaration with
+// a type, an assignment, a return, an argument. What this pins: the value is
+// converted exactly as if the type had been written out (including the wrap of
+// a narrowing), and a cast that nothing asks a type of is reported rather than
+// ignored (tests/castinfer_reject.qela).
+import "std/io.qela";
+
+fn narrow(n i32) i32 { return (n * n) as _; }
+fn wants(n i32) int { return n as int; }
+
+fn main() int {
+	var fails i64 = 0;
+	var wide i64 = 300;
+	var small i32 = wide as _;
+	if (small != 300) { fails = fails + 1; }
+
+	var x i32 = 10;
+	x = (x + 1) as _;
+	if (x != 11) { fails = fails + 1; }
+
+	if (narrow(3) != 9) { fails = fails + 1; }
+	if (wants(wide as _) != 300) { fails = fails + 1; }
+
+	// A real narrowing: 2^32 does not fit in i32, and the cast wraps it the
+	// same way `as i32` would.
+	var big i64 = 4294967296;
+	var wrapped i32 = big as _;
+	if (wrapped != 0) { fails = fails + 1; }
+
+	if (fails != 0) {
+		print("failed\n");
+		return 1;
+	}
+	println("ok");
+	return 0;
+}
