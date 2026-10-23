@@ -1,0 +1,60 @@
+// expect-exit: 0
+// expect-out: ok
+// stage1-only
+// An undeclared name reached through eval is an error, not a zero: the host
+// answers "no such name" and the evaluator reports it. A name the host does
+// declare keeps working, which is the control in the same test.
+import "std/eval.qela";
+import "std/io.qela";
+import "std/sys.qela";
+
+eval var visible i64;
+
+fn stderr_to(path str) i64 {
+	var saved i64 = 90;
+	if (sys_dup2(2, saved) < 0) { return -1; }
+	var fd i64 = sys_open_append(cstr(path));
+	if (fd < 0) { return -1; }
+	sys_dup2(fd, 2);
+	sys_close(fd);
+	return saved;
+}
+
+fn stderr_back(saved i64) {
+	sys_dup2(saved, 2);
+	sys_close(saved);
+}
+
+fn main() int {
+	visible = 7;
+	var fails i64 = 0;
+
+	// The name does not exist anywhere: the value comes back as 0 (that is
+	// what eval returns for a source it could not run) and the message says
+	// why.
+	var path str = "/tmp/qela_evalunknown_err";
+	sys_unlink(cstr(path));
+	var saved i64 = stderr_to(path);
+	if (saved < 0) { println("no stderr to capture"); return 1; }
+	var v i64 = eval("nosuchname_zzz");
+	stderr_back(saved);
+	var said str = read_file(path);
+	sys_unlink(cstr(path));
+	if (v != 0) { fails = fails + 1; }
+	if (str_index(said, "undefined") < 0) {
+		fails = fails + 1;
+		print("no diagnostic: [");
+		print(said);
+		println("]");
+	}
+
+	// The control: a declared name still reads.
+	if (eval("visible + 1") != 8) { fails = fails + 1; }
+
+	if (fails != 0) {
+		print("failed\n");
+		return 1;
+	}
+	println("ok");
+	return 0;
+}
