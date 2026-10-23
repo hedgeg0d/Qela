@@ -28,6 +28,7 @@ let SYS_EXECVEAT = 322;
 let SYS_PIPE2 = 293;
 let SYS_SOCKETPAIR = 53;
 let SYS_MPROTECT = 10;
+let SYS_UNAME   = 63;
 
 $if (TARGET != "x86_64") {
 let SYS_READ_N  = 63;
@@ -55,6 +56,7 @@ let SYS_EXECVEAT_N = 281;
 let SYS_PIPE2_N = 59;
 let SYS_SOCKETPAIR_N = 199;
 let SYS_MPROTECT_N = 226;
+let SYS_UNAME_N   = 160;
 let AT_FDCWD = -100;
 }
 
@@ -345,6 +347,17 @@ fn sys_mprotect(addr i64, len i64, prot i64) i64 {
 		return syscall(SYS_MPROTECT_N, addr, len, prot);
 	}
 	return syscall(SYS_MPROTECT, addr, len, prot);
+}
+
+// uname(2): fills the 390-byte struct utsname (six 65-byte fields:
+// sysname, nodename, release, version, machine, domainname). The machine
+// field starts at offset 195. Used by the compiler to detect the host
+// architecture when no --target was given.
+fn sys_uname(buf *u8) i64 {
+	$if (TARGET != "x86_64") {
+		return syscall(SYS_UNAME_N, buf as i64, 0, 0);
+	}
+	return syscall(SYS_UNAME, buf as i64, 0, 0);
 }
 
 // A syscall whose number is only known at runtime, for srcql/interp.qela:
