@@ -7,17 +7,28 @@ Updated 2026-08-10. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **612 432 B** |
+| **S2 — the shipped compiler, Qela compiled by itself** | **615 512 B** |
 | stage1 sources | 20 608 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
 
-Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 146-test corpus under S2, the embedded stdlib resolving outside the source tree,
+Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 147-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
 backtrace, interpolation and the repl, the compiler flags (`-g`,
 `--backtrace`, `--no-bounds-checks`, `--dump-std`), and a scripted language
 server conversation.
 
 ## Done
+
+**`for x in ch` over a channel (2026-08-10).** Go's `for v := range ch`:
+receive until the channel is closed and drained. The loop desugars to
+`while (true) { var _$sok = false; x = chan_recv_range(g, &_$sok); if
+(!_$sok) { break; } <body> }` -- `chan_recv_range` (chan_recv with an ok
+flag) blocks while the channel is open and empty, so the body runs exactly
+once per delivered value, never on the trailing zero, and a closed empty
+channel iterates zero times. Works over a `Chan(T)` value, a `*Chan(T)`
+variable and a function returning either; `break` stops the range,
+`continue` receives the next value. Costs +3 120 B in S2 (612 392 ->
+615 512, with select and generators). Pinned by `tests/range_chan.qela`.
 
 **`select` over channels (2026-08-10).** `select { case <-ch: ... case x =
 <-ch: ... case ch <- v: ... default: ... }` polls the channel scheduler the
