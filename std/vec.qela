@@ -70,3 +70,8 @@ fn vec_view(comptime T: type, v *Vec(T)) []T {
 	s.len = v.len;
 	return s;
 }
+
+fn vec_set(comptime T: type, v *Vec(T), i i64, x T) {
+	if (i < 0 || i >= v.len) { return; }
+	*(v.data + i) = x;
+}
