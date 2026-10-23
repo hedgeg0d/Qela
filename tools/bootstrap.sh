@@ -350,6 +350,8 @@ fn main() int {
 	ratio = 1.5;
 	p = P{x: 3, y: 4};
 	var a i64 = eval("price * 2");
+	// An unexported global is neither readable nor silent: the read is
+	// reported (the eval's stderr is checked below) and the value is 0.
 	var b i64 = eval("secret");
 	eval("price = price + 50;");
 	var tl i64 = eval("tag.len");
@@ -365,8 +367,10 @@ fn main() int {
 EOF
 ( cd "$tmp2" &&
   "$root/$OUT/s2" evalvar.qela -o evalvar &&
-  [ "$(QELAPATH="$root/$OUT/s2" ./evalvar)" = "a=200 b=0 price=150 tl=2 rm=3 px=7 tag=yo! ratio=2.0 p=1,2" ] ) ||
-	fail "eval var does not expose an exported global, leak an unexported one, double-apply a write, or marshal str/float/struct values"
+  QELAPATH="$root/$OUT/s2" ./evalvar >evalvar.out 2>evalvar.err &&
+  [ "$(cat evalvar.out)" = "a=200 b=0 price=150 tl=2 rm=3 px=7 tag=yo! ratio=2.0 p=1,2" ] &&
+  grep -q "undefined function 'secret'" evalvar.err ) ||
+	fail "eval var does not expose an exported global, report an unexported one instead of reading it, double-apply a write, or marshal str/float/struct values"
 printf '    ok\n'
 
 
@@ -741,9 +745,12 @@ cat > "$tmp2/tc.qela" <<'EOF'
 // expect-compile-error
 fn main() int { var x i64 = "no"; return 0; }
 EOF
+# The rejected file's diagnostic is the runner's business, not the build's:
+# the step checks the runner's verdict, so the message would only read as a
+# failure in the middle of a green build.
 ( "$root/$OUT/s2" test "$tmp2/tt.qela" &&
-  "$root/$OUT/s2" test "$tmp2/tc.qela" &&
-  "$root/$OUT/s2" test "$tmp2/tt.qela" "$tmp2/tc.qela" >/dev/null ) ||
+  "$root/$OUT/s2" test "$tmp2/tc.qela" 2>/dev/null &&
+  "$root/$OUT/s2" test "$tmp2/tt.qela" "$tmp2/tc.qela" >/dev/null 2>&1 ) ||
 	fail "qela test does not check expect-exit/expect-out/expect-compile-error"
 printf '    ok\n'
 
