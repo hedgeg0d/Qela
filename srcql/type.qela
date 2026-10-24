@@ -1092,7 +1092,6 @@ fn type_assign(n *Node) {
 	if (ty_dynval_cache as i64 != 0 && n.rhs.ty as i64 == ty_dynval_cache as i64) {
 		error_at(n.pos, "cannot assign a dynamic value directly; cast it out with 'as' first");
 	}
-	if (n.lhs.ty.kind == TY_ARRAY) { error_at(n.pos, "cannot assign to an array"); }
 	if (is_aggregate(n.lhs.ty)) {
 		n.rhs = coerce(n.rhs, n.lhs.ty);
 		if (!same_type(n.lhs.ty, n.rhs.ty)) {
@@ -1885,6 +1884,7 @@ fn add_type(n *Node) {
 	if (k == ND_ASM) { type_asm(n); return; }
 	if (k == ND_ASSERT) { type_assert(n); return; }
 	if (k == ND_INTERP) { type_interp(n); return; }
+	if (k == ND_ARRLIT) { type_arrlit(n); return; }
 
 	if (n.ty as i64 == 0) { n.ty = ty_void; }
 }
@@ -1917,6 +1917,62 @@ fn mk_call2(name str, a0 *Node, a1 *Node) *Node {
 	a0.next = a1;
 	n.nargs = 2;
 	return n;
+}
+
+fn type_arrlit(n *Node) {
+	if (n.nargs == 0) { error_at(n.pos, "an array literal needs at least one element"); }
+	var elem *Type = 0 as *Type;
+	if (n.ty as i64 != 0 && n.ty.kind == TY_ARRAY) {
+		if (n.ty.len != n.nargs as i64) {
+			error_at(n.pos, "this array literal has the wrong number of elements");
+		}
+		elem = n.ty.base;
+	} else {
+		elem = n.args.ty;
+		if (elem.kind != TY_ARRAY) { elem = to_value(n.args).ty; }
+	}
+	if (elem.kind == TY_VOID) { error_at(n.pos, "an array element cannot be void"); }
+	var arrty *Type = type_array(elem, n.nargs as i64);
+	var tmp *Var = alloc_temp(arrty);
+	if (tmp as i64 == 0) { error_at(n.pos, "an array literal needs a function scope"); }
+
+	var chain *Node = 0 as *Node;
+	var a *Node = n.args;
+	var i i64 = 0;
+	while (a as i64 != 0) {
+		var nxt *Node = a.next;
+		a.next = 0 as *Node;
+
+		var idx *Node = node_alloc();
+		idx.kind = ND_NUM; idx.val = i; idx.ty = ty_i64; idx.typed = true; idx.pos = n.pos;
+		var tv *Node = node_alloc();
+		tv.kind = ND_VAR; tv.varp = tmp; tv.ty = arrty; tv.typed = true; tv.pos = n.pos;
+		var ix *Node = node_alloc();
+		ix.kind = ND_INDEX; ix.lhs = tv; ix.rhs = idx; ix.pos = n.pos;
+		var asg *Node = node_alloc();
+		asg.kind = ND_ASSIGN; asg.lhs = ix; asg.rhs = a; asg.pos = n.pos;
+		add_type(asg);
+
+		if (chain as i64 == 0) { chain = asg; }
+		else {
+			var cm *Node = node_alloc();
+			cm.kind = ND_COMMA; cm.lhs = chain; cm.rhs = asg; cm.ty = asg.ty;
+			cm.typed = true; cm.pos = n.pos;
+			chain = cm;
+		}
+		a = nxt;
+		i = i + 1;
+	}
+
+	var fin *Node = node_alloc();
+	fin.kind = ND_VAR; fin.varp = tmp; fin.ty = arrty; fin.typed = true; fin.pos = n.pos;
+	var last *Node = node_alloc();
+	last.kind = ND_COMMA; last.lhs = chain; last.rhs = fin; last.ty = arrty;
+	last.typed = true; last.pos = n.pos;
+
+	var nxt2 *Node = n.next;
+	*n = *last;
+	n.next = nxt2;
 }
 
 fn type_interp(n *Node) {
