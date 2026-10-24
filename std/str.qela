@@ -1,4 +1,5 @@
 import "arena.qela";
+import "buf.qela";
 
 fn str_eq(a str, b str) bool {
 	if (a.len != b.len) { return false; }
@@ -62,4 +63,178 @@ fn str_from_char(c u8) str {
 	r.ptr = p;
 	r.len = 1;
 	return r;
+}
+
+fn str_rfind(s str, c u8) i64 {
+	var i i64 = s.len;
+	while (i > 0) {
+		i = i - 1;
+		if (s.ptr[i] == c) { return i; }
+	}
+	return -1;
+}
+
+fn str_index(s str, sub str) i64 {
+	if (sub.len == 0) { return 0; }
+	if (sub.len > s.len) { return -1; }
+	var i i64 = 0;
+	while (i + sub.len <= s.len) {
+		var j i64 = 0;
+		while (j < sub.len) {
+			if (s.ptr[i + j] != sub.ptr[j]) { j = sub.len + 1; }
+			else { j = j + 1; }
+		}
+		if (j == sub.len) { return i; }
+		i = i + 1;
+	}
+	return -1;
+}
+
+fn str_contains(s str, sub str) bool {
+	return str_index(s, sub) >= 0;
+}
+
+fn str_starts_with(s str, p str) bool {
+	if (p.len > s.len) { return false; }
+	return str_eq(str_slice(s, 0, p.len), p);
+}
+
+fn str_ends_with(s str, p str) bool {
+	if (p.len > s.len) { return false; }
+	return str_eq(str_slice(s, s.len - p.len, s.len), p);
+}
+
+fn str_is_space(c u8) bool {
+	return c == ' ' || c == 9 as u8 || c == 10 as u8 || c == 13 as u8;
+}
+
+fn str_trim_left(s str) str {
+	var i i64 = 0;
+	while (i < s.len && str_is_space(s.ptr[i])) { i = i + 1; }
+	return str_slice(s, i, s.len);
+}
+
+fn str_trim_right(s str) str {
+	var n i64 = s.len;
+	while (n > 0 && str_is_space(s.ptr[n - 1])) { n = n - 1; }
+	return str_slice(s, 0, n);
+}
+
+fn str_trim(s str) str {
+	return str_trim_left(str_trim_right(s));
+}
+
+fn str_cat(a str, b str) str {
+	var p *u8 = arena_alloc(a.len + b.len + 1, 1);
+	var i i64 = 0;
+	while (i < a.len) { p[i] = a.ptr[i]; i = i + 1; }
+	i = 0;
+	while (i < b.len) { p[a.len + i] = b.ptr[i]; i = i + 1; }
+	p[a.len + b.len] = 0;
+	var r str;
+	r.ptr = p;
+	r.len = a.len + b.len;
+	return r;
+}
+
+fn str_repeat(s str, n i64) str {
+	if (n <= 0) { return ""; }
+	var p *u8 = arena_alloc(s.len * n + 1, 1);
+	var k i64 = 0;
+	while (k < n) {
+		var i i64 = 0;
+		while (i < s.len) { p[k * s.len + i] = s.ptr[i]; i = i + 1; }
+		k = k + 1;
+	}
+	p[s.len * n] = 0;
+	var r str;
+	r.ptr = p;
+	r.len = s.len * n;
+	return r;
+}
+
+fn str_lower(s str) str {
+	var d str = str_dup(s);
+	var i i64 = 0;
+	while (i < d.len) {
+		if (d.ptr[i] >= 'A' && d.ptr[i] <= 'Z') {
+			d.ptr[i] = (d.ptr[i] as i64 + 32) as u8;
+		}
+		i = i + 1;
+	}
+	return d;
+}
+
+fn str_upper(s str) str {
+	var d str = str_dup(s);
+	var i i64 = 0;
+	while (i < d.len) {
+		if (d.ptr[i] >= 'a' && d.ptr[i] <= 'z') {
+			d.ptr[i] = (d.ptr[i] as i64 - 32) as u8;
+		}
+		i = i + 1;
+	}
+	return d;
+}
+
+fn str_cmp(a str, b str) i64 {
+	var n i64 = a.len;
+	if (b.len < n) { n = b.len; }
+	var i i64 = 0;
+	while (i < n) {
+		if (a.ptr[i] != b.ptr[i]) {
+			if (a.ptr[i] < b.ptr[i]) { return -1; }
+			return 1;
+		}
+		i = i + 1;
+	}
+	if (a.len < b.len) { return -1; }
+	if (a.len > b.len) { return 1; }
+	return 0;
+}
+
+fn str_replace(s str, old str, new str) str {
+	if (old.len == 0) { return s; }
+	var b Buf;
+	var i i64 = 0;
+	while (i < s.len) {
+		var rest str = str_slice(s, i, s.len);
+		if (old.len <= rest.len && str_starts_with(rest, old)) {
+			buf_bytes(&b, new.ptr, new.len);
+			i = i + old.len;
+		} else {
+			buf_u8(&b, s.ptr[i]);
+			i = i + 1;
+		}
+	}
+	buf_u8(&b, 0);
+	b.n = b.n - 1;
+	return buf_str(&b);
+}
+
+fn str_to_int(s str, ok *bool) i64 {
+	var t str = str_trim(s);
+	*ok = false;
+	if (t.len == 0) { return 0; }
+	var i i64 = 0;
+	var neg bool = false;
+	if (t.ptr[0] == '-' || t.ptr[0] == '+') {
+		neg = t.ptr[0] == '-';
+		i = 1;
+	}
+	if (i >= t.len) { return 0; }
+	var v i64 = 0;
+	while (i < t.len) {
+		if (t.ptr[i] < '0' || t.ptr[i] > '9') { return 0; }
+		v = v * 10 + (t.ptr[i] as i64 - '0' as i64);
+		i = i + 1;
+	}
+	*ok = true;
+	if (neg) { return -v; }
+	return v;
+}
+
+fn str_int(s str) i64 {
+	var ok bool = false;
+	return str_to_int(s, &ok);
 }

@@ -1,0 +1,44 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: P{x: 7, name: bob, in: Inner{a: 1, ok: true}, arr: [1, 2, 3], f: 1.5}
+// expect-out: Rect(3, 4)
+// expect-out: Point
+// expect-out: Circle(9)
+// expect-out: [1, 2]
+// expect-out: [10, 20, 30]
+// expect-out: true false
+// expect-out: Inner{a: 2, ok: false}
+import "std/io.qela";
+
+struct Inner { a i64, ok bool }
+struct P { x i64, name str, in Inner, arr [3]i64, f f64 }
+enum Shape { Circle(i64), Rect(i64, i64), Point }
+
+fn main() int {
+	var p P;
+	p.x = 7;
+	p.name = "bob";
+	p.in.a = 1;
+	p.in.ok = true;
+	p.arr[0] = 1; p.arr[1] = 2; p.arr[2] = 3;
+	p.f = 1.5;
+	println("${p}");
+	var s Shape = Shape.Rect(3, 4);
+	println("${s}");
+	s = Shape.Point;
+	println("${s}");
+	s = Shape.Circle(9);
+	println("${s}");
+	var sl []i64 = p.arr[0..2];
+	println("${sl}");
+	var a [3]i64;
+	a[0] = 10; a[1] = 20; a[2] = 30;
+	println("${a}");
+	var t bool = 1 < 2;
+	var f bool = 1 > 2;
+	println("${t} ${f}");
+	var i2 Inner;
+	i2.a = 2;
+	println("${i2}");
+	return 0;
+}
