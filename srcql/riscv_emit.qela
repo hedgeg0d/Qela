@@ -161,6 +161,10 @@ fn c_addi16sp16(imm i64) bool {
 	if (q < 0) { q = -q; }
 	q = q >> 4;
 	if (q < 2 || q > 32) { return false; }
+	// nzimm is a sign-extended 6-bit field: +496 is the largest positive
+	// value, and +512 would encode as the reserved all-zero field (a real
+	// Ky X1 traps it as an illegal instruction; qemu executes it).
+	if (imm > 0 && q > 31) { return false; }
 	var r i64 = 0;
 	if (imm > 0) { r = q >> 1; } else { r = (q - 1) >> 1; }
 	var p i64 = (((r >> 1) & 1) << 3) | (((r >> 3) & 1) << 2) | (((r >> 2) & 1) << 1) | (r & 1);
@@ -397,8 +401,13 @@ fn riscv_alu_imm(aop int, rd int, rs1 int, imm i64, uns bool) {
 // has none). Stack frames are comfortably under that.
 fn riscv_add_imm(rd int, rn int, imm i64) {
 	if (imm >= -2048 && imm <= 2047) { riscv_addi(rd, rn, imm); return; }
-	riscv_li64(T0, imm);
-	riscv_r(0, T0, rn, 0, rd, 0x33);        // add rd, rn, t0
+	// The immediate travels in T1 (never T0: callers may hold a live
+	// value in T0 -- st_local's store value, a lea's index -- and the
+	// big-immediate build would clobber it).
+	var scr int = T1;
+	if (rd == T1 || rn == T1) { scr = T2; }
+	riscv_li64(scr, imm);
+	riscv_r(0, scr, rn, 0, rd, 0x33);        // add rd, rn, scr
 }
 
 fn riscv_sub_imm(rd int, rn int, imm i64) {
@@ -408,8 +417,10 @@ fn riscv_sub_imm(rd int, rn int, imm i64) {
 	if (imm < 0) { riscv_add_imm(rd, rn, -imm); return; }
 	// sub rd, rn, imm is addi rd, rn, -imm when the negated immediate fits.
 	if (-imm >= -2048 && -imm <= 2047) { riscv_addi(rd, rn, -imm); return; }
-	riscv_li64(T0, imm);
-	riscv_r(0x20, T0, rn, 0, rd, 0x33);     // sub rd, rn, t0
+	var scr int = T1;
+	if (rd == T1 || rn == T1) { scr = T2; }
+	riscv_li64(scr, imm);
+	riscv_r(0x20, scr, rn, 0, rd, 0x33);     // sub rd, rn, scr
 }
 
 // ── frame ──
@@ -467,9 +478,13 @@ fn riscv_st_local(off i64, reg int) {
 		riscv_s(imm, reg, S0, 3, 0x23);
 		return;
 	}
+	// The address is built in the scratch itself, never via riscv_add_imm:
+	// its internal immediate scratch could clobber the store's value
+	// register (a value riding in T0, as stmt_update's k = k + 1 does).
 	var scr int = T1;
 	if (reg == T1) { scr = T2; }
-	riscv_add_imm(scr, S0, imm);
+	riscv_li64(scr, imm);
+	riscv_r(0, scr, S0, 0, scr, 0x33);       // add scr, s0, scr
 	riscv_s(0, reg, scr, 3, 0x23);
 }
 
@@ -482,7 +497,8 @@ fn riscv_ld_local(reg int, off i64) {
 	}
 	var scr int = T1;
 	if (reg == T1) { scr = T2; }
-	riscv_add_imm(scr, S0, imm);
+	riscv_li64(scr, imm);
+	riscv_r(0, scr, S0, 0, scr, 0x33);       // add scr, s0, scr
 	riscv_i(0, scr, 3, reg, 0x03);
 }
 
