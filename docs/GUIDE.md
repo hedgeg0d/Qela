@@ -2040,6 +2040,31 @@ the library's own references to it still point at its own copy, so shared
 mutable data can diverge). Bounds checks and `assert` work in object mode
 too.
 
+### C struct pointers
+
+Declare a Qela struct with the same field order and C-compatible field types;
+natural layout includes alignment padding. Cast an opaque C pointer to the
+typed pointer, then use normal field and index access:
+
+```qela
+struct NcInput {
+	utf8 [5]u8,
+	reserved [3]u8,
+	modifiers u32,
+}
+extern fn notcurses_get(nc *u8, ts *u8, input *u8) u32;
+
+var raw [64]u8;
+notcurses_get(nc, null, &raw[0]);
+var input *NcInput = &raw[0] as *NcInput;
+var modifiers u32 = input.modifiers;
+var first u8 = input.utf8[0];
+```
+
+Include explicit padding fields when the C declaration has alignment gaps.
+This avoids guessed byte offsets while keeping the external API's opaque
+pointer signature.
+
 ## 22. Raw machine code
 
 Qela's low-level escape hatches, for kernels, bootloaders and bare-metal.
