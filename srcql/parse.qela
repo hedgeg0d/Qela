@@ -781,6 +781,16 @@ fn parse_primary(t **Token) *Node {
 			if (cnt > 0) { tok_expect(t, ","); }
 			if (tok_eq(*t, "]")) { break; }
 			var e *Node = parse_assign(t);
+			if (tok_eq(*t, ":")) {
+				*t = (*t).next;
+				var pair *Node = new_node(ND_FIELD, e.pos);
+				pair.lhs = e;
+				pair.rhs = parse_assign(t);
+				n.kind = ND_MAPLIT;
+				e = pair;
+			} else if (n.kind == ND_MAPLIT) {
+				error_at(e.pos, "every entry of a map literal needs a key");
+			}
 			tail.next = e;
 			tail = e;
 			cnt = cnt + 1;
