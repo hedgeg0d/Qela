@@ -46,9 +46,22 @@ arm64/riscv64 match their non-PIE baselines under qemu (the only extra
 failures are the intentional rejections and the usual qemu-environment
 set). `tests/pie.qela` pins strings, data/bss globals, bounds checks, a
 tvar and a coroutine, and `tools/bootstrap.sh` compiles and runs it
-under `--pie` on every gate run. S2 700 616 -> 703 152 B (+2 536;
-arm64 +2 632, riscv +2 688 for the two prologues and the patch
-branches). Full writeup in this file.
+under `--pie` on every gate run. S2 700 616 -> 705 344 B (+4 728).
+Full writeup in this file.
+
+**Verified on real ARM64 hardware (2026-08-15).** An ARM64 PIE runs
+on stock Android through bionic's linker64, which forced the strict
+ELF apparatus out of it one rejection at a time: `e_shentsize` must
+equal sizeof(Shdr), `e_shstrndx` must be nonzero, a real SHT_DYNAMIC
+section must match the PT_DYNAMIC phdr and link to a SHT_STRTAB, a
+PT_PHDR must come first, and a DT_GNU_HASH must parse. An ARM64 PIE
+therefore carries a 392-byte block after its data (gnu hash, symtab,
+strtab, dynamic table, section table) — gated on `--pie` + arm64, so
+nothing else pays a byte. The same hardware round trip caught a real
+bug qemu missed: the first table placement overlapped the bss
+zero-fill, so a bss spinlock read a GNU-hash word as its value and
+hung every gc program. Verified on the device: cas on data and bss
+locks, the full gc corpus test, coro, pie — all green.
 
 ## Done
 
