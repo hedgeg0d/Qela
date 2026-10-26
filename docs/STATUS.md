@@ -19,6 +19,32 @@ server conversation.
 
 ## Done
 
+**Four small syntax batches (2026-08-15).** Struct spread, vec
+literals, binary literals and the `:b` format spec, all pure
+parse/type-time rewrites over shapes that already existed. S2 707 512
+-> 712 944 B (+5 432). Corpus 198 -> 201. Full writeup in
+this file.
+
+- **Struct spread**: `P{...q, f: v}` copies q's fields into the new
+  value. q evaluates once (hoisted into a temp before the literal),
+  an explicit field beats every spread, a later spread overrides an
+  earlier one for the same field, and a `*P` spread dereferences.
+  `tests/structspread.qela`.
+- **Vec literals**: `vec[1, 2, 3]` with the element type inferred
+  from the first element, rewritten at type time into `vec_init` +
+  one `vec_push` per element — nested literals, `for x in v` and the
+  ordinary `Vec` API on the other side. A real variable named `vec`
+  indexed the usual way wins when one resolves at parse time.
+  `tests/veclit.qela`.
+- **Binary literals**: `0b1010`, `0b1111_0000` (underscores between
+  digits, like hex), guarded against the float suffix/dot paths.
+  `tests/binlit.qela`.
+- **`:b` format spec**: `${x:b}` and `${x:08b}` (the low w bits,
+  zero-padded) next to `:x`/`:d` in interpolation, through new
+  `fmt_put_bin`/`fmt_put_bin_w` in `std/fmt.qela`.
+
+## Done
+
 **Source compile flags: `$flag` (2026-08-15).** A top-level `$flag`
 directive sets a compile flag for the whole unit — the file, its
 imports and, for `qela .`, every merged project file — the Go build
