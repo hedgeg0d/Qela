@@ -1,0 +1,415 @@
+import "arena.qela";
+import "buf.qela";
+import "str.qela";
+import "fmt.qela";
+
+// JSON parse and print. Everything is arena-allocated; no free. Values are
+// a tagged node:
+//
+//   kind     payload
+//   J_NULL   --
+//   J_BOOL   i = 0/1
+//   J_INT    i
+//   J_FLOAT  num
+//   J_STR    s
+//   J_ARR    head = first element, elements chained by next
+//   J_OBJ    head = first pair; a pair has kind J_PAIR, s = key,
+//            head = value, next = the next pair
+//
+// json_parse returns null on any syntax error and says nothing about why.
+// Numbers with a fraction or exponent become J_FLOAT, everything else
+// J_INT. Duplicate object keys are kept; json_get sees the first.
+
+let J_NULL  = 0;
+let J_BOOL  = 1;
+let J_INT   = 2;
+let J_FLOAT = 3;
+let J_STR   = 4;
+let J_ARR   = 5;
+let J_OBJ   = 6;
+let J_PAIR  = 7;
+
+struct Json {
+	kind i64,
+	num f64,
+	i i64,
+	s str,
+	head *Json,
+	next *Json,
+}
+
+fn json_alloc(kind i64) *Json {
+	var j *Json = arena_alloc(sizeof(Json), 8) as *Json;
+	j.kind = kind;
+	return j;
+}
+
+// --- parser -------------------------------------------------------------
+
+fn jskip(s str, i *i64) {
+	while (*i < s.len && (s.ptr[*i] == ' ' || s.ptr[*i] == 9 as u8 ||
+	    s.ptr[*i] == 10 as u8 || s.ptr[*i] == 13 as u8)) { *i = *i + 1; }
+}
+
+fn json_parse(s str) *Json {
+	var i i64 = 0;
+	return json_value(s, &i);
+}
+
+fn json_value(s str, i *i64) *Json {
+	jskip(s, i);
+	if (*i >= s.len) { return null; }
+	var c i64 = s.ptr[*i] as i64;
+	if (c == '{') { return json_object(s, i); }
+	if (c == '[') { return json_array(s, i); }
+	if (c == '"') { return json_string(s, i); }
+	if (c == 't') {
+		if (json_word(s, i, "true")) {
+			var t *Json = json_alloc(J_BOOL);
+			t.i = 1;
+			return t;
+		}
+		return null;
+	}
+	if (c == 'f') { if (json_word(s, i, "false")) { return json_alloc(J_BOOL); } return null; }
+	if (c == 'n') { if (json_word(s, i, "null")) { return json_alloc(J_NULL); } return null; }
+	return json_number(s, i);
+}
+
+fn json_word(s str, i *i64, w str) bool {
+	if (*i + w.len > s.len) { return false; }
+	var k i64 = 0;
+	while (k < w.len) {
+		if (s.ptr[*i + k] != w.ptr[k]) { return false; }
+		k = k + 1;
+	}
+	*i = *i + w.len;
+	return true;
+}
+
+fn json_object(s str, i *i64) *Json {
+	var obj *Json = json_alloc(J_OBJ);
+	var head *Json = null;
+	var tail *Json = null;
+	*i = *i + 1;
+	jskip(s, i);
+	if (*i < s.len && s.ptr[*i] == '}') { *i = *i + 1; return obj; }
+	while (*i < s.len) {
+		jskip(s, i);
+		if (*i >= s.len || s.ptr[*i] != '"') { return null; }
+		var key *Json = json_string(s, i);
+		if (key as i64 == 0) { return null; }
+		jskip(s, i);
+		if (*i >= s.len || s.ptr[*i] != ':') { return null; }
+		*i = *i + 1;
+		var val *Json = json_value(s, i);
+		if (val as i64 == 0) { return null; }
+		var pair *Json = json_alloc(J_PAIR);
+		pair.s = key.s;
+		pair.head = val;
+		if (tail as i64 == 0) { head = pair; } else { tail.next = pair; }
+		tail = pair;
+		jskip(s, i);
+		if (*i >= s.len) { return null; }
+		if (s.ptr[*i] == ',') { *i = *i + 1; continue; }
+		if (s.ptr[*i] == '}') { *i = *i + 1; obj.head = head; return obj; }
+		return null;
+	}
+	return null;
+}
+
+fn json_array(s str, i *i64) *Json {
+	var arr *Json = json_alloc(J_ARR);
+	var head *Json = null;
+	var tail *Json = null;
+	*i = *i + 1;
+	jskip(s, i);
+	if (*i < s.len && s.ptr[*i] == ']') { *i = *i + 1; return arr; }
+	while (*i < s.len) {
+		var v *Json = json_value(s, i);
+		if (v as i64 == 0) { return null; }
+		if (tail as i64 == 0) { head = v; } else { tail.next = v; }
+		tail = v;
+		jskip(s, i);
+		if (*i >= s.len) { return null; }
+		if (s.ptr[*i] == ',') { *i = *i + 1; continue; }
+		if (s.ptr[*i] == ']') { *i = *i + 1; arr.head = head; return arr; }
+		return null;
+	}
+	return null;
+}
+
+// One UTF-8 code point from the escape \uXXXX, with the surrogate-pair
+// combine for astral characters.
+fn json_hex4(s str, i *i64) i64 {
+	if (*i + 4 > s.len) { return -1; }
+	var v i64 = 0;
+	var k int = 0;
+	while (k < 4) {
+		var c i64 = s.ptr[*i] as i64;
+		var d i64 = -1;
+		if (c >= '0' && c <= '9') { d = c - '0'; }
+		else if (c >= 'a' && c <= 'f') { d = c - 'a' + 10; }
+		else if (c >= 'A' && c <= 'F') { d = c - 'A' + 10; }
+		if (d < 0) { return -1; }
+		v = (v << 4) | d;
+		*i = *i + 1;
+		k = k + 1;
+	}
+	return v;
+}
+
+fn json_utf8(b *Buf, cp i64) {
+	if (cp < 0x80) { buf_u8(b, cp as u8); return; }
+	if (cp < 0x800) {
+		buf_u8(b, (0xc0 | (cp >> 6)) as u8);
+		buf_u8(b, (0x80 | (cp & 63)) as u8);
+		return;
+	}
+	if (cp < 0x10000) {
+		buf_u8(b, (0xe0 | (cp >> 12)) as u8);
+		buf_u8(b, (0x80 | ((cp >> 6) & 63)) as u8);
+		buf_u8(b, (0x80 | (cp & 63)) as u8);
+		return;
+	}
+	buf_u8(b, (0xf0 | (cp >> 18)) as u8);
+	buf_u8(b, (0x80 | ((cp >> 12) & 63)) as u8);
+	buf_u8(b, (0x80 | ((cp >> 6) & 63)) as u8);
+	buf_u8(b, (0x80 | (cp & 63)) as u8);
+}
+
+fn json_string(s str, i *i64) *Json {
+	var j *Json = json_alloc(J_STR);
+	var b Buf;
+	*i = *i + 1;
+	while (*i < s.len) {
+		var c i64 = s.ptr[*i] as i64;
+		if (c == '"') { *i = *i + 1; j.s = buf_str(&b); return j; }
+		if (c == '\\') {
+			*i = *i + 1;
+			if (*i >= s.len) { return null; }
+			var e i64 = s.ptr[*i] as i64;
+			if (e == '"' || e == '\\' || e == '/') { buf_u8(&b, e as u8); *i = *i + 1; }
+			else if (e == 'b') { buf_u8(&b, 8 as u8); *i = *i + 1; }
+			else if (e == 'f') { buf_u8(&b, 12 as u8); *i = *i + 1; }
+			else if (e == 'n') { buf_u8(&b, 10 as u8); *i = *i + 1; }
+			else if (e == 'r') { buf_u8(&b, 13 as u8); *i = *i + 1; }
+			else if (e == 't') { buf_u8(&b, 9 as u8); *i = *i + 1; }
+			else if (e == 'u') {
+				*i = *i + 1;
+				var cp i64 = json_hex4(s, i);
+				if (cp < 0) { return null; }
+				if (cp >= 0xd800 && cp <= 0xdbff && *i + 6 <= s.len &&
+				    s.ptr[*i] == '\\' && s.ptr[*i + 1] == 'u') {
+					var lo i64 = 0;
+					*i = *i + 2;
+					lo = json_hex4(s, i);
+					if (lo >= 0xdc00 && lo <= 0xdfff) {
+						cp = 0x10000 + ((cp - 0xd800) << 10) + (lo - 0xdc00);
+					} else if (lo < 0) { return null; }
+				}
+				json_utf8(&b, cp);
+			}
+			else { return null; }
+		} else {
+			buf_u8(&b, c as u8);
+			*i = *i + 1;
+		}
+	}
+	return null;
+}
+
+fn json_number(s str, i *i64) *Json {
+	var start i64 = *i;
+	var is_float bool = false;
+	var c i64 = s.ptr[*i] as i64;
+	if (c == '-') { *i = *i + 1; }
+	while (*i < s.len) {
+		c = s.ptr[*i] as i64;
+		if (c >= '0' && c <= '9') { *i = *i + 1; }
+		else if (c == '.' || c == 'e' || c == 'E') { is_float = true; *i = *i + 1; }
+		else if (c == '+' || c == '-') {
+			if (*i > start && (s.ptr[*i - 1] == 'e' || s.ptr[*i - 1] == 'E')) { *i = *i + 1; }
+			else { break; }
+		} else { break; }
+	}
+	if (*i == start || (*i == start + 1 && s.ptr[start] == '-')) { return null; }
+	var num str = str_slice(s, start, *i);
+	var j *Json = json_alloc(J_INT);
+	if (!is_float) {
+		var ok bool = false;
+		j.i = str_to_int(num, &ok);
+		if (!ok) { return null; }
+		return j;
+	}
+	j.kind = J_FLOAT;
+	j.num = json_str_to_f64(num);
+	return j;
+}
+
+// A hand-rolled decimal parse for the fraction/exponent forms; the
+// exponent multiplies by powers of ten with plain f64 arithmetic, so
+// precision is good enough for configs, not for accounting.
+fn json_str_to_f64(num str) f64 {
+	var i i64 = 0;
+	var neg bool = false;
+	if (i < num.len && num.ptr[i] == '-') { neg = true; i = i + 1; }
+	var v f64 = 0.0;
+	while (i < num.len && num.ptr[i] >= '0' && num.ptr[i] <= '9') {
+		v = v * 10.0 + (num.ptr[i] as i64 - '0' as i64) as f64;
+		i = i + 1;
+	}
+	var frac f64 = 0.1;
+	if (i < num.len && num.ptr[i] == '.') {
+		i = i + 1;
+		while (i < num.len && num.ptr[i] >= '0' && num.ptr[i] <= '9') {
+			v = v + (num.ptr[i] as i64 - '0' as i64) as f64 * frac;
+			frac = frac * 0.1;
+			i = i + 1;
+		}
+	}
+	var eexp i64 = 0;
+	if (i < num.len && (num.ptr[i] == 'e' || num.ptr[i] == 'E')) {
+		i = i + 1;
+		var eneg bool = false;
+		if (i < num.len && (num.ptr[i] == '+' || num.ptr[i] == '-')) {
+			eneg = num.ptr[i] == '-';
+			i = i + 1;
+		}
+		while (i < num.len && num.ptr[i] >= '0' && num.ptr[i] <= '9') {
+			eexp = eexp * 10 + (num.ptr[i] as i64 - '0' as i64);
+			i = i + 1;
+		}
+		if (eneg) { eexp = -eexp; }
+	}
+	if (eexp > 0) {
+		while (eexp > 0) { v = v * 10.0; eexp = eexp - 1; }
+	} else {
+		while (eexp < 0) { v = v * 0.1; eexp = eexp + 1; }
+	}
+	if (neg) { return -v; }
+	return v;
+}
+
+// --- accessors ----------------------------------------------------------
+
+fn json_type(v *Json) i64 { return v.kind; }
+
+fn json_is_null(v *Json) bool { return v.kind == J_NULL; }
+
+fn json_bool(v *Json) bool { return v.i != 0; }
+
+fn json_int(v *Json) i64 { return v.i; }
+
+fn json_float(v *Json) f64 { return v.num; }
+
+fn json_str(v *Json) str { return v.s; }
+
+fn json_arr_len(v *Json) i64 {
+	var n i64 = 0;
+	var e *Json = v.head;
+	while (e as i64 != 0) { n = n + 1; e = e.next; }
+	return n;
+}
+
+fn json_arr_at(v *Json, at i64) *Json {
+	var e *Json = v.head;
+	var n i64 = 0;
+	while (e as i64 != 0) {
+		if (n == at) { return e; }
+		n = n + 1;
+		e = e.next;
+	}
+	return null;
+}
+
+fn json_get(v *Json, key str) *Json {
+	var p *Json = v.head;
+	while (p as i64 != 0) {
+		if (str_eq(p.s, key)) { return p.head; }
+		p = p.next;
+	}
+	return null;
+}
+
+fn json_has(v *Json, key str) bool { return json_get(v, key) as i64 != 0; }
+
+// --- printing -----------------------------------------------------------
+
+fn json_strify(v *Json) str {
+	var b Buf;
+	json_emit(&b, v);
+	return buf_str(&b);
+}
+
+fn json_emit(b *Buf, v *Json) {
+	if (v.kind == J_NULL) { fmt_str(b, "null"); return; }
+	if (v.kind == J_BOOL) {
+		if (v.i != 0) { fmt_str(b, "true"); } else { fmt_str(b, "false"); }
+		return;
+	}
+	if (v.kind == J_INT) { fmt_i64(b, v.i); return; }
+	if (v.kind == J_FLOAT) {
+		// NaN and infinities have no JSON spelling; print null instead.
+		var fp *i64 = &v.num as *i64;
+		if ((*fp & 0x7ff0000000000000) == 0x7ff0000000000000) {
+			fmt_str(b, "null");
+			return;
+		}
+		fmt_f64_bits(b, *fp);
+		return;
+	}
+	if (v.kind == J_STR) { json_emit_str(b, v.s); return; }
+	if (v.kind == J_ARR) {
+		buf_u8(b, '[');
+		var e *Json = v.head;
+		var first bool = true;
+		while (e as i64 != 0) {
+			if (!first) { buf_u8(b, ','); }
+			first = false;
+			json_emit(b, e);
+			e = e.next;
+		}
+		buf_u8(b, ']');
+		return;
+	}
+	if (v.kind == J_OBJ) {
+		buf_u8(b, '{');
+		var p *Json = v.head;
+		var first bool = true;
+		while (p as i64 != 0) {
+			if (!first) { buf_u8(b, ','); }
+			first = false;
+			json_emit_str(b, p.s);
+			buf_u8(b, ':');
+			json_emit(b, p.head);
+			p = p.next;
+		}
+		buf_u8(b, '}');
+		return;
+	}
+}
+
+fn json_emit_str(b *Buf, s str) {
+	buf_u8(b, '"');
+	var i i64 = 0;
+	while (i < s.len) {
+		var c i64 = s.ptr[i] as i64;
+		if (c == '"') { fmt_str(b, "\\\""); }
+		else if (c == '\\') { fmt_str(b, "\\\\"); }
+		else if (c == 10 as u8) { fmt_str(b, "\\n"); }
+		else if (c == 9 as u8) { fmt_str(b, "\\t"); }
+		else if (c == 13 as u8) { fmt_str(b, "\\r"); }
+		else if (c == 8 as u8) { fmt_str(b, "\\b"); }
+		else if (c == 12 as u8) { fmt_str(b, "\\f"); }
+		else if (c < 32) {
+			fmt_str(b, "\\u00");
+			var hexd str = "0123456789abcdef";
+			buf_u8(b, hexd.ptr[(c >> 4) & 15]);
+			buf_u8(b, hexd.ptr[c & 15]);
+		}
+		else { buf_u8(b, c as u8); }
+		i = i + 1;
+	}
+	buf_u8(b, '"');
+}
