@@ -2507,10 +2507,9 @@ fn gen_thread_clone_arm64(n *Node) {
 // MOVZ+MOVK placeholder pair every absolute-address site uses, recorded in
 // the same gc_*_refs lists and patched at finalize to the real dbase.
 fn gen_gc_bound(n *Node, is_base bool) {
-	arm64_movz(X0, 0, 0);
-	arm64_movk(X0, 0, 1);
-	if (is_base) { ilist_push(&gc_base_refs, code.n - 8); }
-	else { ilist_push(&gc_end_refs, code.n - 8); }
+	var at i64 = arm64_addr_slot(X0);
+	if (is_base) { ilist_push(&gc_base_refs, at); }
+	else { ilist_push(&gc_end_refs, at); }
 }
 
 // gc_save_regs(ptr): spill the callee-saved registers the GC must scan --
@@ -2529,9 +2528,7 @@ fn gen_gc_save_regs(n *Node) {
 
 // coro_entry_addr(): the coroutine trampoline's address.
 fn gen_coro_entry_addr() {
-	arm64_movz(X0, 0, 0);
-	arm64_movk(X0, 0, 1);
-	ilist_push(&coro_stub_refs, code.n - 8);
+	ilist_push(&coro_stub_refs, arm64_addr_slot(X0));
 }
 
 
