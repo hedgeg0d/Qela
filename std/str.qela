@@ -1,5 +1,4 @@
 import "arena.qela";
-import "buf.qela";
 
 fn str_eq(a str, b str) bool {
 	if (a.len != b.len) { return false; }
@@ -193,23 +192,46 @@ fn str_cmp(a str, b str) i64 {
 	return 0;
 }
 
-fn str_replace(s str, old str, new str) str {
-	if (old.len == 0) { return s; }
-	var b Buf;
+fn str_count(s str, sub str) i64 {
+	if (sub.len == 0) { return 0; }
+	var n i64 = 0;
 	var i i64 = 0;
-	while (i < s.len) {
-		var rest str = str_slice(s, i, s.len);
-		if (old.len <= rest.len && str_starts_with(rest, old)) {
-			buf_bytes(&b, new.ptr, new.len);
-			i = i + old.len;
+	while (i + sub.len <= s.len) {
+		if (str_starts_with(str_slice(s, i, s.len), sub)) {
+			n = n + 1;
+			i = i + sub.len;
 		} else {
-			buf_u8(&b, s.ptr[i]);
 			i = i + 1;
 		}
 	}
-	buf_u8(&b, 0);
-	b.n = b.n - 1;
-	return buf_str(&b);
+	return n;
+}
+
+fn str_replace(s str, old str, new str) str {
+	if (old.len == 0) { return s; }
+	var hits i64 = str_count(s, old);
+	if (hits == 0) { return s; }
+	var n i64 = s.len + hits * (new.len - old.len);
+	var p *u8 = arena_alloc(n + 1, 1);
+	var i i64 = 0;
+	var o i64 = 0;
+	while (i < s.len) {
+		if (i + old.len <= s.len && str_starts_with(str_slice(s, i, s.len), old)) {
+			var k i64 = 0;
+			while (k < new.len) { p[o + k] = new.ptr[k]; k = k + 1; }
+			o = o + new.len;
+			i = i + old.len;
+		} else {
+			p[o] = s.ptr[i];
+			o = o + 1;
+			i = i + 1;
+		}
+	}
+	p[o] = 0;
+	var r str;
+	r.ptr = p;
+	r.len = o;
+	return r;
 }
 
 fn str_to_int(s str, ok *bool) i64 {

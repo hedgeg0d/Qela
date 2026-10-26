@@ -1,0 +1,69 @@
+// expect-exit: 10
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = -23;
+fn min2(a int, b int) int { if (a < b) { return a; } else { return b; } }
+fn mix6(a int, b int, c int, d int, e int, f int) int { return a - b + c - d + e - f; }
+fn fact(n int) int { if (n <= 1) { return 1; } return n * fact(n - 1); }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn wide_make(a int, b int, c int) Wide { return Wide{a: a, b: b, c: c}; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn main() int {
+    var v0 int = 4;
+    var v1 int = 0;
+    var v2 int = 6;
+    var sv0 str = "xyz";
+    var sv1 str = "aa";
+    var fv double = 0.5;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    match (e) {
+        A => {
+            return 10;
+        }
+        B(mb0) => {
+            return ((!(((fv / 1.7) + (fv - fv)) > ((2.5 * 100.0) * (10 as double)))) * mb0);
+        }
+        C(mb0, mb1) => {
+            return (((!str_eq(("xyzzy")[1..4], sv1)) > ((!str_eq(("foobar")[0..3], sv1)) / (((('3' != 1) | (gv as u8)) & 15) + 1))) ^ mb1);
+        }
+    }
+    sv1 = sv0;
+    fv = 0.1;
+    fv = ((fv + ((1.5 as i64) as double)) + (((fv == fv) as double) / 0.125));
+    n.tag = false;
+    v1 = fact(((fact((v0 & 15)) - p.y) & 15));
+    n.tag = a[((str_eq(sv1, ("xyzzy")[0..4]) as u16) & 3)];
+    sv0 = (("hello")[2..5])[0..2];
+    p = Pair{x: (-((((sv1)[0..2])[1] as double) < ((gv == -408) as double))), y: false};
+    v0 = ((fv as i64) % (((((fv + fv) < fv) < ((-false) - ('0' | -261))) & 15) + 1));
+    var ob Buf;
+    fmt_i64(&ob, v1);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return mix6(p.y, ((('e' as double) > fv) - ((gv - v0) >> ('d' as i32))), gv, (v0 - false), (gv <= (("hello")[0..2]).len), ((fact((gv & 15)) >> ('e' <= 127)) >= (gv / (((0.5 <= fv) & 15) + 1))));
+}

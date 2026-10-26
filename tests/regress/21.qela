@@ -1,0 +1,87 @@
+// expect-exit: 255
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+fn diff4(a int, b int, c int, d int) int { return a - b - c - d; }
+fn fact(n int) int { if (n <= 1) { return 1; } return n * fact(n - 1); }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn bag_sum(b Bag) int { return b.p + b.q + b.r + b.s; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn main() int {
+    var v0 int = 0;
+    var v1 int = 5;
+    var v2 int = 9;
+    var sv0 str = "xyzzy";
+    var sv1 str = "hello";
+    var fv double = 2.5;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    match (e) {
+        A => {
+            return (0 - (!(-(true >= 328))));
+        }
+        B(mb0) => {
+            return (-str_eq((("abcd")[0..2])[0..2], "no"));
+        }
+        C(mb0, mb1) => {
+            return (((!((6 as i8) >= (-675 / ((708 & 15) + 1)))) * ((pair_sum(Pair{x: 255, y: 'e'}) as i16) << 255)) | mb1);
+        }
+    }
+    sv0 = sv0;
+    n.tag = ((-((fv - fv) as i64)) != (((fv + fv) >= fv) >> true));
+    match (e) {
+        A => {
+            return ((!pair_sum(Pair{x: (2 % ((-141 & 15) + 1)), y: (2 * false)})) ^ 127);
+        }
+        B(mb0) => {
+            return ((v0 as u32) + mb0);
+        }
+        C(mb0, mb1) => {
+            return ((((sv0)[0..2]).len != (((-2.0 / 10.5) * fv) as i64)) ^ mb1);
+        }
+    }
+    v1 = ((-tag_e(e)) >> (!(true | true)));
+    n.tag = ((v2 == 'g') == (((1.5 / 0.3) < (3 as double)) >= ((v2 - v2) ^ false)));
+    match (e) {
+        A => {
+            return (v2 >= v2);
+        }
+        B(mb0) => {
+            return (tag_e(e) % (((p.y << ((sv1)[0..2]).len) & 15) + 1));
+        }
+        C(mb0, mb1) => {
+            return ((-(!(('g' as i8) as u8))) + mb1);
+        }
+    }
+    v1, v2 = (-(((10 + 42) >> ('g' as i16)) < ((v2 << '3') >= (127 * -18)))), (v1 | v0);
+    fv = (3.75 / 1.7);
+    var ob Buf;
+    fmt_i64(&ob, v1);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return ((((v2 != -847) ^ (0 / ((-615 & 15) + 1))) < a[((!'0') & 3)]) != (((-1 | v0) as u32) / ((-341 & 15) + 1)));
+}

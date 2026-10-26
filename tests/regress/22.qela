@@ -1,0 +1,77 @@
+// expect-exit: 2
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+fn max2(a int, b int) int { if (a > b) { return a; } else { return b; } }
+fn add2(a int, b int) int { return a + b; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn wide_sum(w Wide) int { return w.a + w.b + w.c; }
+fn wide_make(a int, b int, c int) Wide { return Wide{a: a, b: b, c: c}; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 2;
+    var v1 int = 8;
+    var v2 int = 10;
+    var sv0 str = "zz";
+    var sv1 str = "xyzzy";
+    var fv double = 1.0;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    sv1 = sv0;
+    match (e) {
+        A => {
+            return ("zz").len;
+        }
+        B(mb0) => {
+            return ((((v2 < v2) % ((((!10) as i32) & 15) + 1)) == ((1.7 as i64) ^ (a[(-299 & 3)] % (((10 as i16) & 15) + 1)))) + mb0);
+        }
+        C(mb0, mb1) => {
+            return add2(a[((('f' ^ 119) - (-61 >> 'a')) & 3)], p.y);
+        }
+    }
+    a[(255 & 3)] = (fv != 1.0);
+    v1, v0 = (-max2(((-963 & v1) >= (317 as u32)), v1)), p.x;
+    v2 = (!-844);
+    v1, v0 = v1, true;
+    if (((!((("no")[0..2]).len >> (21 & (42 * v0)))) < v0)) {
+        sv0 = ("xyz")[0..2];
+    } else {
+        v1, v0 = v0, v1;
+    }
+    v2, v1 = (((v0 as u16) + ((v1 ^ false) & pair_sum(Pair{x: v1, y: 10}))) > a[(p.y & 3)]), (v2 == a[((('f' ^ -897) as u8) & 3)]);
+    var ob Buf;
+    fmt_i64(&ob, v1);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return (255 != v1);
+}

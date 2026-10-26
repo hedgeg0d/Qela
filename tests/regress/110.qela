@@ -1,0 +1,70 @@
+// expect-exit: 0
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = 15;
+fn gcd2(a int, b int) int { while (b != 0) { var t int = a % b; a = b; b = t; } return a; }
+fn mix5(a int, b int, c int, d int, e int) int { return a + b - c + d - e; }
+fn max2(a int, b int) int { if (a > b) { return a; } else { return b; } }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn nest_sum(n Nest) int { return n.tag + n.p.x + n.p.y; }
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn main() int {
+    var v0 int = 1;
+    var v1 int = 2;
+    var v2 int = 7;
+    var sv0 str = "aa";
+    var sv1 str = "abc";
+    var fv double = 1.7;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    gv &= (a[(((fv * 1.7) >= (100.0 / -1.5)) & 3)] as i8);
+    a[(((p.y as i8) == ((v1 << (v1 >= gv)) ^ (-51 | (gv / ((0 & 15) + 1))))) & 3)] = 127;
+    e = E.B(((947 as double) as i64));
+    gv = str_eq(sv0, ("foobar")[0..2]);
+    v2 = -909;
+    i0 = 0;
+    while ((i0 < 4)) {
+        n.tag = gv;
+        a[i0] = (pair_sum(Pair{x: (!pair_sum(Pair{x: 10, y: 255})), y: ((2.5 < 2.5) >= str_eq(("xyz")[0..2], ("qwerty")[1..6]))}) + 6);
+        i0 = (i0 + 1);
+    }
+    e = E.C(v2, (((fv as i64) < ((255 >> '3') as u32)) ^ (42 >= (a[(733 & 3)] << (1 | -865)))));
+    b = Bag{p: (-true), q: (((42 / (((gv as i32) & 15) + 1)) != ('g' / ((('c' < 557) & 15) + 1))) >> (!gv)), r: ((((gv as double) / 1.5) as i64) | ((-mix5(1, 2, 'f', '0', true)) + (opt_d(D.Some('c')) & ('3' as i8)))), s: (("hi")[0] as i8)};
+    gv += ((str_eq(sv0, sv0) + true) == (fv >= ((100.0 * fv) - (3.75 / 2.0))));
+    var ob Buf;
+    fmt_i64(&ob, v1);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return (-nest_sum(n));
+}

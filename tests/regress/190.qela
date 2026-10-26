@@ -1,0 +1,119 @@
+// expect-exit: 1
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+fn mul2(a int, b int) int { return a * b; }
+fn sum3(a int, b int, c int) int { return a + b + c; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn bag_sum(b Bag) int { return b.p + b.q + b.r + b.s; }
+fn wide_sum(w Wide) int { return w.a + w.b + w.c; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn main() int {
+    var v0 int = 8;
+    var v1 int = 0;
+    var v2 int = 9;
+    var sv0 str = "foobar";
+    var sv1 str = "hello";
+    var fv double = 0.1;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    p = Pair{x: ((((-277) >> (true ^ true)) as u8) << (a[(('2' < v1) & 3)] * (!(true & v0)))), y: (((sv1).len as i16) == (((100.0 as i64) ^ (false - '2')) == ((!false) << (v0 > false))))};
+    fv = fv;
+    i0 = 0;
+    while ((i0 < 4)) {
+        a[((-(((3.75 as i64) as i8) <= (((sv0)[0..2])[0..2]).len)) & 3)] = ((((("foobar")[0..4])[0..2])[0..2])[1] % ((("zz").len & 15) + 1));
+        sv1 = "42";
+        a[i0] = ((str_eq(((("abc")[0..2])[0..2])[0..2], sv1) ^ (-(sv1).len)) as u32);
+        i0 = (i0 + 1);
+    }
+    p.x = a[((-(!(v2 / ((v1 & 15) + 1)))) & 3)];
+    v2, v0 = ((((10 as u16) % (((v0 << '1') & 15) + 1)) << (-('d' as u16))) != (((v1 as i32) % (((v2 - '2') & 15) + 1)) as u8)), (!(-1 as u8));
+    e = E.B(((v0 >> ((false % ((-373 & 15) + 1)) << a[(v0 & 3)])) * ((false ^ (-683 % ((false & 15) + 1))) as u32)));
+    i0 = 0;
+    while ((i0 < 4)) {
+        v0 = ((p.y as i16) <= ((("qwerty")[0..6])[1] != ((284 >> '\t') as u16)));
+        a[i0] = wide_sum(w);
+        i0 = (i0 + 1);
+    }
+    sv1 = ("hello")[0..2];
+    if ((sum3((-mul2((v1 as u8), 0)), ((("abcd")[1..4])[0..2]).len, (((-v0) / ((tag_e(e) & 15) + 1)) as i8)) > ((755 >= (a[(94 & 3)] < ('\t' > v0))) as u8))) {
+        w = Wide{a: ((("hello")[0] - ((18 as i32) / ((('g' & 273) & 15) + 1))) as u32), b: p.x, c: (10 ^ 'd')};
+    } else {
+        i1 = 0;
+        while ((i1 < 2)) {
+            i1 = (i1 + 1);
+            sv1 = "aa";
+            v2 = (!(((-1 > 'a') as i32) as i16));
+            if ((i1 != 0)) {
+                continue;
+            } else {
+            }
+        }
+        if (((!(-(!str_eq(("foobar")[2..4], sv1)))) == ((p.y as u32) - (!(((sv0)[0..2]).len | (v1 < false)))))) {
+            match (e) {
+                A => {
+                    return (((sv1).len == ((fv <= -2.0) as i32)) != str_eq(sv0, "foobar"));
+                }
+                B(mb0) => {
+                    return ((3.75 < ((v2 as double) / 0.125)) < ((('d' != 298) as i32) < (v2 - (1 <= 10))));
+                }
+                C(mb0, mb1) => {
+                    return (a[(((v0 - ('c' << 127)) as i32) & 3)] - mb1);
+                }
+            }
+            return v1;
+        } else {
+            i2 = 0;
+            while ((i2 < 1)) {
+                i2 = (i2 + 1);
+                v1 = (v0 > ((a[(v2 & 3)] as u8) ^ (false as u32)));
+                match (e) {
+                    A => {
+                        return true;
+                    }
+                    B(mb0) => {
+                        return ((p.x == (((v2 <= '2') as i16) as i8)) - mb0);
+                    }
+                    C(mb0, mb1) => {
+                        return (((-391 != p.y) << ((("hello")[0..3])[0] & sum3(v0, (10 >= '1'), (!'f')))) + mb1);
+                    }
+                }
+                if ((i2 != 0)) {
+                    continue;
+                } else {
+                }
+            }
+            return a[(981 & 3)];
+        }
+    }
+    a[((-908 ^ ((sv1)[0..2])[1]) & 3)] = ((((3 as i32) ^ (255 % ((0 & 15) + 1))) as i16) == v1);
+    var ob Buf;
+    fmt_i64(&ob, v0);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return true;
+}
