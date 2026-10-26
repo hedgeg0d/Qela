@@ -140,14 +140,14 @@ fn gc_chunk(need i64) bool {
 fn gc_take(size i64) *u8 {
 	var total i64 = GC_HEADER + ((size + 7) & ~7);
 	if (gc_end - gc_cur < total) {
-		if (!gc_chunk(total)) { return 0 as *u8; }
+		if (!gc_chunk(total)) { return null; }
 	}
 	var b *GcBlock = gc_cur as *GcBlock;
 	gc_cur = gc_cur + total;
 	b.size = total;
 	b.marked = 0;
 	b.next = gc_blocks;
-	b.free = 0 as *GcBlock;
+	b.free = null;
 	gc_blocks = b;
 	gc_live = gc_live + total;
 	return (b as i64 + GC_HEADER) as *u8;
@@ -155,13 +155,13 @@ fn gc_take(size i64) *u8 {
 
 fn gc_reuse(size i64) *u8 {
 	var total i64 = GC_HEADER + ((size + 7) & ~7);
-	var prev *GcBlock = 0 as *GcBlock;
+	var prev *GcBlock = null;
 	var b *GcBlock = gc_freelist;
 	while (b as i64 != 0) {
 		if (b.size >= total) {
 			if (prev as i64 == 0) { gc_freelist = b.free; }
 			else { prev.free = b.free; }
-			b.free = 0 as *GcBlock;
+			b.free = null;
 			b.marked = 0;
 			gc_live = gc_live + b.size;
 			return (b as i64 + GC_HEADER) as *u8;
@@ -169,7 +169,7 @@ fn gc_reuse(size i64) *u8 {
 		prev = b;
 		b = b.free;
 	}
-	return 0 as *u8;
+	return null;
 }
 
 fn gc_alloc(size i64) *u8 {
@@ -186,14 +186,14 @@ fn gc_alloc(size i64) *u8 {
 // A word is a candidate only if it lands inside a mapped chunk and points
 // exactly at a block's payload.
 fn gc_block_at(addr i64) *GcBlock {
-	if (addr < gc_lo + GC_HEADER || addr >= gc_hi) { return 0 as *GcBlock; }
-	if ((addr & 7) != 0) { return 0 as *GcBlock; }
+	if (addr < gc_lo + GC_HEADER || addr >= gc_hi) { return null; }
+	if ((addr & 7) != 0) { return null; }
 	var b *GcBlock = gc_blocks;
 	while (b as i64 != 0) {
 		if ((b as i64) + GC_HEADER == addr) { return b; }
 		b = b.next;
 	}
-	return 0 as *GcBlock;
+	return null;
 }
 
 fn gc_mark_word(w i64) {

@@ -24,7 +24,7 @@ fn proc_run(path str, args []str) i64 {
 	var argv *u8 = proc_argv(path, args);
 	var pid i64 = sys_fork();
 	if (pid == 0) {
-		sys_execve(cstr(path), argv, 0 as *u8);
+		sys_execve(cstr(path), argv, null);
 		sys_exit(127);
 	}
 	if (pid < 0) { return -1; }
@@ -47,7 +47,7 @@ fn proc_capture(path str, args []str, code *i64) str {
 		sys_close(rd);
 		sys_dup2(wr, 1);
 		sys_close(wr);
-		sys_execve(cstr(path), argv, 0 as *u8);
+		sys_execve(cstr(path), argv, null);
 		sys_exit(127);
 	}
 	sys_close(wr);

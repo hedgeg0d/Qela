@@ -21,7 +21,7 @@ fn elide_bounds(f *Func) {
 	var taken [64]*Var;
 	var ntaken int = 0;
 	ntaken = addr_scan(f.body, &taken[0], ntaken);
-	elide_chain(f.body, 0 as *Node, &taken[0], ntaken);
+	elide_chain(f.body, null, &taken[0], ntaken);
 }
 
 // ── address-of scan ──
@@ -82,18 +82,18 @@ fn elide_chain(n *Node, prev *Node, taken **Var, ntaken int) {
 fn elide_stmt(n *Node, prev *Node, taken **Var, ntaken int) {
 	if (n.kind == ND_FOR) {
 		elide_loop(n, prev, taken, ntaken);
-		elide_chain(n.body, 0 as *Node, taken, ntaken);
+		elide_chain(n.body, null, taken, ntaken);
 	} else if (n.kind == ND_BLOCK) {
-		elide_chain(n.body, 0 as *Node, taken, ntaken);
+		elide_chain(n.body, null, taken, ntaken);
 	} else if (n.kind == ND_IF) {
-		elide_chain(n.then, 0 as *Node, taken, ntaken);
-		elide_chain(n.els, 0 as *Node, taken, ntaken);
+		elide_chain(n.then, null, taken, ntaken);
+		elide_chain(n.els, null, taken, ntaken);
 	} else if (n.kind == ND_DEFER) {
-		elide_chain(n.lhs, 0 as *Node, taken, ntaken);
+		elide_chain(n.lhs, null, taken, ntaken);
 	} else if (n.kind == ND_MATCH) {
-		elide_chain(n.body, 0 as *Node, taken, ntaken);
+		elide_chain(n.body, null, taken, ntaken);
 	} else if (n.kind == ND_ARM) {
-		elide_chain(n.body, 0 as *Node, taken, ntaken);
+		elide_chain(n.body, null, taken, ntaken);
 	}
 }
 
@@ -167,7 +167,7 @@ fn field_scan(n *Node, iv *Var) bool {
 // block, shaped `i = i + 1` / `i += 1`, and it must be the only write to i.
 fn body_inc(n *Node, iv *Var, out **Node) bool {
 	if (n.kind != ND_BLOCK) { return false; }
-	var found *Node = 0 as *Node;
+	var found *Node = null;
 	var i *Node = n.body;
 	while (i as i64 != 0) {
 		if (is_iwrite(i, iv)) {
@@ -211,7 +211,7 @@ fn elide_loop(n *Node, prev *Node, taken **Var, ntaken int) {
 		if (scan_write(n.body, iv)) { return; }
 		mark_chain(n.body, iv, K);
 	} else {
-		var inc *Node = 0 as *Node;
+		var inc *Node = null;
 		if (!body_inc(n.body, iv, &inc)) { return; }
 		mark_until(n.body, iv, K, inc);
 	}

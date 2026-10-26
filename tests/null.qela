@@ -1,0 +1,23 @@
+// expect-exit: 0
+// expect-out: null ok
+import "std/io.qela";
+
+fn take(p *int) int {
+	if (p == null) { return 42; }
+	return *p;
+}
+
+fn ret() *int { return null; }
+
+fn main() int {
+	var fails int = 0;
+	var a *int = null;
+	var b *int = null;
+	if (a != null) { fails = fails + 1; }
+	if (a != b) { fails = fails + 1; }
+	if (take(a) != 42) { fails = fails + 1; }
+	if (ret() != null) { fails = fails + 1; }
+	if (take(ret()) != 42) { fails = fails + 1; }
+	write_str(STDOUT, "null ok\n");
+	return fails;
+}

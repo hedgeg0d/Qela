@@ -16,7 +16,7 @@ import "blob.qela";
 // mirrors `keywords[]` in src/lex.c; both must agree. The function
 // returns the keyword text, or "" if nothing is close enough.
 
-var keywords [22]str;
+var keywords [23]str;
 var keywords_inited bool = false;
 
 fn keywords_setup() {
@@ -44,6 +44,7 @@ fn keywords_setup() {
 	keywords[19] = "true";
 	keywords[20] = "false";
 	keywords[21] = "asm";
+	keywords[22] = "null";
 }
 
 fn lev_dist(a str, b str) i64 {
@@ -254,7 +255,7 @@ fn find_global(name str) *Var {
 		if (str_eq(v.name, name)) { return v; }
 		v = v.next;
 	}
-	return 0 as *Var;
+	return null;
 }
 
 fn parse_top_asm(t **Token) {
@@ -301,7 +302,7 @@ fn macro_find(name str) *Macro {
 		if (str_eq(m.name, name)) { return m; }
 		m = m.next;
 	}
-	return 0 as *Macro;
+	return null;
 }
 
 fn macro_param(m *Macro, i int) *Var {
@@ -319,7 +320,7 @@ fn macro_param(m *Macro, i int) *Var {
 fn macro_decl_param(name str, pos i64) *Var {
 	var v *Var = arena_alloc(sizeof(Var), 8) as *Var;
 	v.name = name;
-	v.ty = 0 as *Type;
+	v.ty = null;
 	v.pos = pos;
 	var vsc *VarScope = arena_alloc(sizeof(VarScope), 8) as *VarScope;
 	vsc.next = scope_root.vars;
@@ -407,7 +408,7 @@ fn find_var(name str) *Var {
 		}
 		s = s.next;
 	}
-	return 0 as *Var;
+	return null;
 }
 
 fn declare_var(name str, ty *Type, pos i64) *Var {
@@ -563,8 +564,8 @@ fn parse_comptime_if(t **Token) {
 	var a_close *Token = skip_balanced(tok);
 	var after_a *Token = a_close.next;
 	var rest *Token = after_a;
-	var b_start *Token = 0 as *Token;
-	var b_close *Token = 0 as *Token;
+	var b_start *Token = null;
+	var b_close *Token = null;
 	if (tok_eq(after_a, "$") && tok_eq(after_a.next, "else")) {
 		var btok *Token = after_a.next.next;
 		tok_expect(&btok, "{");
@@ -716,7 +717,7 @@ fn parse_type(t **Token) *Type {
 		*t = (*t).next;
 		tok_expect(t, "(");
 		var a0 *Type = parse_type(t);
-		var a1 *Type = 0 as *Type;
+		var a1 *Type = null;
 		if (tm.nparams > 1) {
 			tok_expect(t, ",");
 			a1 = parse_type(t);
@@ -733,7 +734,7 @@ fn parse_type(t **Token) *Type {
 // struct Name(T) / enum Name(T, U): bind the parameters as type variables for
 // the duration of the body, and hand back the template to fill in.
 fn parse_tmpl_params(t **Token, name str, p i64) *Tmpl {
-	if (!tok_eq(*t, "(")) { return 0 as *Tmpl; }
+	if (!tok_eq(*t, "(")) { return null; }
 	*t = (*t).next;
 	var tm *Tmpl = arena_alloc(sizeof(Tmpl), 8) as *Tmpl;
 	tm.name = name;
@@ -930,6 +931,7 @@ fn parse_primary(t **Token) *Node {
 	}
 	if (tok_consume(t, "true")) { return num_node(1, (*t).pos); }
 	if (tok_consume(t, "false")) { return num_node(0, (*t).pos); }
+	if (tok_consume(t, "null")) { return num_node(0, (*t).pos); }
 	if (tok_consume(t, "comptime")) {
 		var p i64 = (*t).pos;
 		var n *Node = new_node(ND_COMPTIME, p);
@@ -1041,13 +1043,13 @@ fn parse_primary(t **Token) *Node {
 			// call through it; type.qela checks its type and turns it into an
 			// indirect call. Functions declared later are not in the table
 			// yet, so a bare name is left alone for find_func in type_call.
-			var f0 *Func = 0 as *Func;
+			var f0 *Func = null;
 			if (kind == ND_CALL) {
 				var v *Var = find_var(name);
 				if (v as i64 != 0) { n.varp = v; }
 				else {
 					f0 = find_func(name);
-					if (f0 as i64 != 0 && f0.nct != 0) { f0 = 0 as *Func; }
+					if (f0 as i64 != 0 && f0.nct != 0) { f0 = null; }
 				}
 			}
 			if (f0 as i64 != 0) { call_args_named(t, n, f0); }
@@ -1109,7 +1111,7 @@ fn parse_primary(t **Token) *Node {
 		return n;
 	}
 	error_at((*t).pos, "expected expression");
-	return 0 as *Node;
+	return null;
 }
 
 fn parse_postfix(t **Token) *Node {
@@ -1122,7 +1124,7 @@ fn parse_postfix(t **Token) *Node {
 			continue;
 		}
 		if (tok_consume(t, "[")) {
-			var lo *Node = 0 as *Node;
+			var lo *Node = null;
 			if (!tok_eq(*t, "..")) { lo = parse_expr(t); }
 			if (tok_consume(t, "..")) {
 				var s *Node = new_node(ND_SLICE, p);
@@ -1396,11 +1398,11 @@ fn parse_decl(t **Token) *Node {
 	var name str = (*t).text;
 	var p i64 = (*t).pos;
 	*t = (*t).next;
-	var ty *Type = 0 as *Type;
+	var ty *Type = null;
 	if (is_dyn) { ty = type_dynval(); }
 	else if (typed && !tok_eq(*t, "=")) { ty = parse_type(t); }
 	var n *Node = new_node(ND_EXPRSTMT, p);
-	var dyn_zero *Node = 0 as *Node;
+	var dyn_zero *Node = null;
 	if (tok_consume(t, "=")) {
 		var rhs *Node = parse_assign(t);
 		if (rhs.kind == ND_ARRLIT && ty as i64 != 0 && ty.kind == TY_ARRAY) {
@@ -1436,7 +1438,7 @@ fn parse_decl(t **Token) *Node {
 		lhs.varp = v;
 		n.lhs = bin_node(ND_ASSIGN, lhs, rhs, p);
 		// `var ~n = ...` chains a hidden `defer { heap_free(n.ptr); n.ptr =
-		// 0 as *u8; }` right after itself -- built from the same node kinds
+		// null; }` right after itself -- built from the same node kinds
 		// a hand-written defer would use, so it goes through the ordinary
 		// type-check and codegen paths unchanged. This frees whatever box
 		// is left in `n` when its declaring block/function exits, which
@@ -1513,7 +1515,7 @@ fn macro_call(m *Macro, t **Token, pos i64) *Node {
 }
 
 fn macro_expand(n *Node, m *Macro, args **Node, nargs int, pos i64) *Node {
-	if (n as i64 == 0) { return 0 as *Node; }
+	if (n as i64 == 0) { return null; }
 	if (n.kind == ND_VAR) {
 		var i int = 0;
 		while (i < nargs) {
@@ -1543,8 +1545,8 @@ fn parse_stmt(t **Token) *Node {
 	parse_enter(t);
 	var saved_head *Node = try_head;
 	var saved_tail *Node = try_tail;
-	try_head = 0 as *Node;
-	try_tail = 0 as *Node;
+	try_head = null;
+	try_tail = null;
 	var n *Node = parse_stmt_inner(t);
 	if (try_head as i64 != 0) {
 		if (n.kind == ND_FOR) {
@@ -1763,7 +1765,7 @@ fn select_count_cont(n *Node) i64 {
 // does target the enclosing loop. A continue inside a nested loop belongs
 // to that loop and is left alone; the rewrite stops at any ND_FOR.
 fn select_rewrite_cont(n *Node, fv *Var) *Node {
-	if (n as i64 == 0) { return 0 as *Node; }
+	if (n as i64 == 0) { return null; }
 	if (n.kind == ND_CONT) {
 		var av *Node = new_node(ND_ASSIGN, n.pos);
 		var fvn *Node = new_node(ND_VAR, n.pos);
@@ -1817,7 +1819,7 @@ fn select_case(e *Node, body *Node, p i64) *Node {
 		tail = es;
 		var cv *Node = new_node(ND_VAR, p);
 		cv.varp = okv;
-		tail.next = select_if(cv, 0 as *Node, body, p);
+		tail.next = select_if(cv, null, body, p);
 		return head.next;
 	}
 	// `case x = <-ch:` -- receive into an already-declared variable. The
@@ -1827,7 +1829,7 @@ fn select_case(e *Node, body *Node, p i64) *Node {
 		var head Node;
 		var tail *Node = &head;
 		var okv *Var = declare_var(select_name("ok"), type_lookup("bool"), p);
-		var vv *Var = declare_var(select_name("val"), 0 as *Type, p);
+		var vv *Var = declare_var(select_name("val"), null, p);
 		tail.next = select_ok_decl(okv, p);
 		tail = tail.next;
 		var call *Node = new_node(ND_CALL, p);
@@ -1861,10 +1863,10 @@ fn select_case(e *Node, body *Node, p i64) *Node {
 		call.name = "chan_try_send";
 		call.args = e.args;
 		call.nargs = 2;
-		return select_if(call, 0 as *Node, body, p);
+		return select_if(call, null, body, p);
 	}
 	error_at(p, "a select case must be a channel send or receive");
-	return 0 as *Node;
+	return null;
 }
 
 fn parse_select(t **Token, p i64) *Node {
@@ -1875,8 +1877,8 @@ fn parse_select(t **Token, p i64) *Node {
 	var bhead Node;
 	var btail *Node = &bhead;
 	var has_default bool = false;
-	var fv *Var = 0 as *Var;
-	var fdecl *Node = 0 as *Node;
+	var fv *Var = null;
+	var fdecl *Node = null;
 	while (!tok_eq(*t, "}")) {
 		if (tok_consume(t, "default")) {
 			if (has_default) { error_at((*t).pos, "a select can have only one 'default'"); }
@@ -1961,15 +1963,15 @@ fn parse_select(t **Token, p i64) *Node {
 // parameter references rebound to its own (freshly cloned) parameters and
 // every `return` rewritten to gen_finish.
 fn gen_elem_of(ty *Type) *Type {
-	if (ty as i64 == 0) { return 0 as *Type; }
+	if (ty as i64 == 0) { return null; }
 	var tm *Tmpl = tmpl_find("Gen");
-	if (tm as i64 == 0) { return 0 as *Type; }
+	if (tm as i64 == 0) { return null; }
 	if (ty.kind == TY_PTR && ty.base as i64 != 0) {
 		if (ty.base.tmpl as i64 == tm as i64) { return ty.base.ga0; }
-		return 0 as *Type;
+		return null;
 	}
 	if (ty.tmpl as i64 == tm as i64) { return ty.ga0; }
-	return 0 as *Type;
+	return null;
 }
 
 // The element type of a `Chan(T)` or `*Chan(T)` -- the loop variable's type
@@ -1990,12 +1992,12 @@ fn iter_prefix(ty *Type) str {
 
 fn iter_protocol_call(coll *Node, pos i64) *Node {
 	var ty *Type = coll.ty;
-	if (ty as i64 == 0) { return 0 as *Node; }
+	if (ty as i64 == 0) { return null; }
 	if (ty.kind == TY_PTR) { ty = ty.base; }
-	if (ty.kind != TY_STRUCT) { return 0 as *Node; }
-	if (ty.name.len == 0) { return 0 as *Node; }
+	if (ty.kind != TY_STRUCT) { return null; }
+	if (ty.name.len == 0) { return null; }
 	var pre str = iter_prefix(ty);
-	if (pre.len == 0) { return 0 as *Node; }
+	if (pre.len == 0) { return null; }
 
 	var ib Buf;
 	fmt_str(&ib, pre);
@@ -2006,14 +2008,14 @@ fn iter_protocol_call(coll *Node, pos i64) *Node {
 		fmt_str(&vb, pre);
 		fmt_str(&vb, "_view");
 		fname = buf_str(&vb);
-		if (find_func(fname) as i64 == 0) { return 0 as *Node; }
+		if (find_func(fname) as i64 == 0) { return null; }
 	}
 	var f *Func = find_func(fname);
-	if (f.nparams <= f.nct) { return 0 as *Node; }
+	if (f.nparams <= f.nct) { return null; }
 	var want *Type = func_param(f, f.nct).ty;
 	var recv *Node = coll;
 	if (want.kind == TY_PTR && coll.ty.kind != TY_PTR) {
-		if (!is_addr_expr(coll)) { return 0 as *Node; }
+		if (!is_addr_expr(coll)) { return null; }
 		var ad *Node = new_node(ND_ADDR, pos);
 		ad.lhs = coll;
 		recv = ad;
@@ -2031,15 +2033,15 @@ fn iter_protocol_call(coll *Node, pos i64) *Node {
 }
 
 fn chan_elem_of(ty *Type) *Type {
-	if (ty as i64 == 0) { return 0 as *Type; }
+	if (ty as i64 == 0) { return null; }
 	var tm *Tmpl = tmpl_find("Chan");
-	if (tm as i64 == 0) { return 0 as *Type; }
+	if (tm as i64 == 0) { return null; }
 	if (ty.kind == TY_PTR && ty.base as i64 != 0) {
 		if (ty.base.tmpl as i64 == tm as i64) { return ty.base.ga0; }
-		return 0 as *Type;
+		return null;
 	}
 	if (ty.tmpl as i64 == tm as i64) { return ty.ga0; }
-	return 0 as *Type;
+	return null;
 }
 
 // Rebinds the body's references to the visible function's parameters onto
@@ -2048,7 +2050,7 @@ fn chan_elem_of(ty *Type) *Type {
 // one-way coro_finish would round-robin away from the consumer). A
 // generator cannot return a value: rejected here.
 fn gen_rewrite(n *Node, f *Func, hf *Func) *Node {
-	if (n as i64 == 0) { return 0 as *Node; }
+	if (n as i64 == 0) { return null; }
 	if (n.kind == ND_RET) {
 		if (n.lhs as i64 != 0) { error_at(n.pos, "a generator cannot return a value"); }
 		var c *Node = new_node(ND_CALL, n.pos);
@@ -2117,8 +2119,8 @@ fn parse_generator_rewrite(f *Func) {
 		var src *Var = func_param(f, i);
 		var pv *Var = arena_alloc(sizeof(Var), 8) as *Var;
 		*pv = *src;
-		pv.next = 0 as *Var;
-		pv.pnext = 0 as *Var;
+		pv.next = null;
+		pv.pnext = null;
 		set_func_param(hf, i, pv);
 		i = i + 1;
 	}
@@ -2151,7 +2153,7 @@ fn parse_generator_rewrite(f *Func) {
 	var v *Var = f.locals;
 	while (v as i64 != 0) {
 		var nxt *Var = v.next;
-		v.next = 0 as *Var;
+		v.next = null;
 		if ((v as i64) == (gen_g_var as i64)) {
 			// Now a hidden-function parameter; in neither locals chain.
 		} else {
@@ -2542,9 +2544,9 @@ fn parse_stmt_inner(t **Token) *Node {
 				// emitted twice. The body is `var x = coll[i]` prepended,
 				// which is exactly the shape the bounds elision knows.
 				var coll *Node = lo;
-				var coll_init *Node = 0 as *Node;
+				var coll_init *Node = null;
 				if (coll.kind != ND_VAR) {
-					var cv *Var = declare_var("_$c", 0 as *Type, np);
+					var cv *Var = declare_var("_$c", null, np);
 					add_type(coll);
 					cv.ty = coll.ty;
 					var clhs *Node = new_node(ND_VAR, np);
@@ -2555,7 +2557,7 @@ fn parse_stmt_inner(t **Token) *Node {
 					cr.varp = cv;
 					coll = cr;
 				}
-				var v *Var = declare_var(name, 0 as *Type, np);
+				var v *Var = declare_var(name, null, np);
 				var hv *Var = declare_var("_$i", type_lookup("int"), np);
 				var iv *Node = new_node(ND_VAR, np);
 				iv.varp = hv;
@@ -2656,7 +2658,7 @@ fn parse_stmt_inner(t **Token) *Node {
 				while (!tok_eq(*t, ")")) {
 					if (bt != &bh) { tok_expect(t, ","); }
 					var b *Node = new_node(ND_VAR, (*t).pos);
-					b.varp = declare_var((*t).text, 0 as *Type, (*t).pos);
+					b.varp = declare_var((*t).text, null, (*t).pos);
 					*t = (*t).next;
 					bt.next = b;
 					bt = b;
@@ -2745,8 +2747,8 @@ fn multi_assign_ahead(t **Token) bool {
 // b = 5, 6;` keeps the fitting-constant rule; otherwise the right side's
 // type is used.
 fn parse_multi_assign(t **Token, p i64) *Node {
-	var lhs_head *Node = 0 as *Node;
-	var lhs_tail *Node = 0 as *Node;
+	var lhs_head *Node = null;
+	var lhs_tail *Node = null;
 	var nlhs int = 0;
 	while (true) {
 		var lhs *Node = parse_logor(t);
@@ -2762,8 +2764,8 @@ fn parse_multi_assign(t **Token, p i64) *Node {
 	}
 	tok_expect(t, "=");
 
-	var rhs_head *Node = 0 as *Node;
-	var rhs_tail *Node = 0 as *Node;
+	var rhs_head *Node = null;
+	var rhs_tail *Node = null;
 	var nrhs int = 0;
 	while (true) {
 		if (nrhs > 0) { tok_expect(t, ","); }
@@ -2780,8 +2782,8 @@ fn parse_multi_assign(t **Token, p i64) *Node {
 	}
 	tok_expect(t, ";");
 
-	var chain_head *Node = 0 as *Node;
-	var chain_tail *Node = 0 as *Node;
+	var chain_head *Node = null;
+	var chain_tail *Node = null;
 	var tvars [16]*Var;
 	if (nlhs > 16) { error_at(p, "too many targets in a multi-assignment (at most 16)"); }
 	var rnode *Node = rhs_head;
@@ -2855,7 +2857,7 @@ fn expr_refs_default_param(n *Node) bool {
 // same clone-per-reference shape as `macro_expand`, keyed by Func params
 // instead of Macro params.
 fn default_expand(n *Node, f *Func, provided **Node) *Node {
-	if (n as i64 == 0) { return 0 as *Node; }
+	if (n as i64 == 0) { return null; }
 	if (n.kind == ND_VAR) {
 		var i int = 0;
 		while (i < f.nparams) {
@@ -2977,7 +2979,7 @@ fn call_args_named(t **Token, n *Node, f *Func) *Node {
 		tail = tail.next;
 		i = i + 1;
 	}
-	tail.next = 0 as *Node;
+	tail.next = null;
 	n.args = head.next;
 	n.nargs = f.nparams;
 	return n;
@@ -3841,7 +3843,7 @@ fn parse_function(t **Token, is_extern bool) *Func {
 		// earlier, non-defaulted parameter of this same function
 		// (substituted at the call site); it may not name a defaulted
 		// parameter -- there is no dependency order between defaults.
-		var pdefault *Node = 0 as *Node;
+		var pdefault *Node = null;
 		if (tok_consume(t, "=")) {
 			pdefault = parse_assign(t);
 			if (expr_refs_default_param(pdefault)) {
@@ -3889,16 +3891,16 @@ fn parse_function(t **Token, is_extern bool) *Func {
 	// only in its body, and the body is rewritten to a coroutine below when
 	// it actually contains one. A Gen-returning function without yields is
 	// an ordinary factory and is left alone.
-	cur_gen_ret = 0 as *Type;
+	cur_gen_ret = null;
 	if (gen_elem_of(f.ret) as i64 != 0) { cur_gen_ret = f.ret; }
 	gen_yields_seen = false;
-	gen_g_var = 0 as *Var;
+	gen_g_var = null;
 	if (tok_eq(*t, ";")) {
 		// `extern fn f(...) t;` -- a declaration only. A plain function
 		// still has to have a body; a bare prototype needs the extern to
 		// mean "the linker supplies this symbol".
 		if (!f.extern) { error_at((*t).pos, "function declaration without a body needs 'extern'"); }
-		f.body = 0 as *Node;
+		f.body = null;
 		*t = (*t).next;
 	} else {
 		var body_start i64 = (*t).pos;
@@ -3910,8 +3912,8 @@ fn parse_function(t **Token, is_extern bool) *Func {
 	}
 	leave_scope();
 	ntype_vars = saved_ntype_vars;
-	cur_func = 0 as *Func;
-	type_set_fn(0 as *Func);
+	cur_func = null;
+	type_set_fn(null);
 	return f;
 }
 
@@ -4018,7 +4020,7 @@ fn parse_lambda(t **Token, p i64) *Node {
 
 	var f *Func = arena_alloc(sizeof(Func), 8) as *Func;
 	f.name = name;
-	f.ret = 0 as *Type;
+	f.ret = null;
 	f.pos = p;
 	var saved_func *Func = cur_func;
 	cur_func = f;
@@ -4037,18 +4039,18 @@ fn parse_lambda(t **Token, p i64) *Node {
 	var saved_cap_size i64 = lam_cap_size;
 	var saved_env *Var = lam_env;
 	lam_capturing = true;
-	lam_cap_head = 0 as *LamCap;
-	lam_cap_tail = 0 as *LamCap;
+	lam_cap_head = null;
+	lam_cap_tail = null;
 	lam_cap_size = 8;
-	lam_env = 0 as *Var;
+	lam_env = null;
 	// A lambda is its own function: `yield` inside one is an error even
 	// when the lambda is nested in a generator body.
 	var saved_gen_ret *Type = cur_gen_ret;
 	var saved_gen_yields bool = gen_yields_seen;
 	var saved_gen_g *Var = gen_g_var;
-	cur_gen_ret = 0 as *Type;
+	cur_gen_ret = null;
 	gen_yields_seen = false;
-	gen_g_var = 0 as *Var;
+	gen_g_var = null;
 	tok_expect(t, "(");
 	var nparams int = 0;
 	var rwords int = 0;
@@ -4155,8 +4157,8 @@ fn parse_typed_block(t **Token, p i64, ty *Type) *Node {
 	var saved_cap_n int = cap_n;
 	var saved_cap_rwords int = cap_rwords;
 	var saved_cap_stack_slot int = cap_stack_slot;
-	cap_head = 0 as *Capture;
-	cap_tail = 0 as *Capture;
+	cap_head = null;
+	cap_tail = null;
 	cap_n = 0;
 	cap_rwords = 0;
 	cap_stack_slot = 0;
@@ -4164,9 +4166,9 @@ fn parse_typed_block(t **Token, p i64, ty *Type) *Node {
 	var saved_gen_ret *Type = cur_gen_ret;
 	var saved_gen_yields bool = gen_yields_seen;
 	var saved_gen_g *Var = gen_g_var;
-	cur_gen_ret = 0 as *Type;
+	cur_gen_ret = null;
 	gen_yields_seen = false;
-	gen_g_var = 0 as *Var;
+	gen_g_var = null;
 
 	f.body = parse_block(t);
 	f.nparams = cap_n;
@@ -4234,7 +4236,7 @@ fn parse_struct(t **Token) {
 
 	var saved_tv int = ntype_vars;
 	var tm *Tmpl = parse_tmpl_params(t, name, p);
-	var ty *Type = 0 as *Type;
+	var ty *Type = null;
 	if (tm as i64 != 0) {
 		ty = tm.proto;
 		ty.kind = TY_STRUCT;
@@ -4253,7 +4255,7 @@ fn parse_struct(t **Token) {
 	var mtail *Member = &mhead;
 	var off int = 0; var align int = 1;
 	var bitpos int = 0;
-	var bitunit *Type = 0 as *Type;
+	var bitunit *Type = null;
 	while (!tok_eq(*t, "}")) {
 		if (mtail != &mhead) { tok_expect(t, ","); }
 		if (tok_eq(*t, "}")) { break; }
@@ -4289,7 +4291,7 @@ fn parse_struct(t **Token) {
 			mtail.next = m; mtail = m;
 			continue;
 		}
-		bitunit = 0 as *Type;
+		bitunit = null;
 		bitpos = 0;
 		if (!packed) { off = (off + fty.align - 1) & ~(fty.align - 1); }
 		m.offset = off;
@@ -4314,7 +4316,7 @@ fn parse_enum(t **Token) {
 
 	var saved_tv int = ntype_vars;
 	var tm *Tmpl = parse_tmpl_params(t, name, p);
-	var ty *Type = 0 as *Type;
+	var ty *Type = null;
 	if (tm as i64 != 0) {
 		ty = tm.proto;
 		ty.kind = TY_ENUM; ty.align = 8;
@@ -4463,7 +4465,7 @@ fn parse_global(t **Token, is_extern bool, is_eval bool) {
 	var name str = (*t).text;
 	var p i64 = (*t).pos;
 	*t = (*t).next;
-	var ty *Type = 0 as *Type;
+	var ty *Type = null;
 	if (typed && !tok_eq(*t, "=")) { ty = parse_type(t); }
 	var init i64 = 0;
 	var has_init bool = false;

@@ -10,7 +10,7 @@ import "heap.qela";
 fn dyn_box(id i64, src *u8, size i64) DynVal {
 	var d DynVal;
 	d.type_id = id;
-	if (size <= 0) { d.ptr = 0 as *u8; return d; }
+	if (size <= 0) { d.ptr = null; return d; }
 	var p *u8 = heap_alloc(size);
 	var i i64 = 0;
 	while (i < size) {
