@@ -1,0 +1,6 @@
+var kstack [2048]i64;
+var uframe [5]u64;
+var saved_rsp i64 = 0;
+var saved_rip i64 = 0;
+var saved_fl i64 = 0;
+var heap_top i64 = 0x2020000;
