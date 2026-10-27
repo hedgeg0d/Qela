@@ -6,13 +6,16 @@ import "sys.qela";
 /// Appends v as a decimal integer.
 fn fmt_i64(b *Buf, v i64) {
 	var neg bool = v < 0;
-	if (neg) { v = -v; }
+	// The magnitude is negated in u64: in i64, i64 min wraps to itself
+	// and the digit loop would emit nothing but the sign.
+	var m u64 = v as u64;
+	if (neg) { m = 0 - m; }
 	var rev [24]u8;
 	var n i64 = 0;
-	if (v == 0) { rev[0] = '0'; n = 1; }
-	while (v > 0) {
-		rev[n] = ('0' as i64 + v % 10) as u8;
-		v = v / 10;
+	if (m == 0) { rev[0] = '0'; n = 1; }
+	while (m > 0) {
+		rev[n] = ('0' as i64 + (m % 10) as i64) as u8;
+		m = m / 10;
 		n = n + 1;
 	}
 	if (neg) { rev[n] = '-'; n = n + 1; }
@@ -24,13 +27,16 @@ fn fmt_i64(b *Buf, v i64) {
 /// Writes v as decimal straight to a file descriptor.
 fn fmt_i64_to_fd(fd i64, v i64) {
 	var neg bool = v < 0;
-	if (neg) { v = -v; }
+	// The magnitude is negated in u64: in i64, i64 min wraps to itself
+	// and the digit loop would emit nothing but the sign.
+	var m u64 = v as u64;
+	if (neg) { m = 0 - m; }
 	var rev [24]u8;
 	var n i64 = 0;
-	if (v == 0) { rev[0] = '0'; n = 1; }
-	while (v > 0) {
-		rev[n] = ('0' as i64 + v % 10) as u8;
-		v = v / 10;
+	if (m == 0) { rev[0] = '0'; n = 1; }
+	while (m > 0) {
+		rev[n] = ('0' as i64 + (m % 10) as i64) as u8;
+		m = m / 10;
 		n = n + 1;
 	}
 	if (neg) { rev[n] = '-'; n = n + 1; }
@@ -146,13 +152,16 @@ fn fmt_put_repr(b Buf, s str) Buf {
 /// Appends an integer padded to width w, space or zero filled.
 fn fmt_put_i64_w(b Buf, v i64, w i64, zp bool) Buf {
 	var neg bool = v < 0;
-	if (neg) { v = -v; }
+	// The magnitude is negated in u64: in i64, i64 min wraps to itself
+	// and the digit loop would emit nothing but the sign.
+	var m u64 = v as u64;
+	if (neg) { m = 0 - m; }
 	var rev [24]u8;
 	var n i64 = 0;
-	if (v == 0) { rev[0] = '0'; n = 1; }
-	while (v > 0) {
-		rev[n] = ('0' as i64 + v % 10) as u8;
-		v = v / 10;
+	if (m == 0) { rev[0] = '0'; n = 1; }
+	while (m > 0) {
+		rev[n] = ('0' as i64 + (m % 10) as i64) as u8;
+		m = m / 10;
 		n = n + 1;
 	}
 	var pad i64 = w - n;
