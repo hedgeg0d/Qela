@@ -107,6 +107,8 @@ struct VarScope;
 var scope_root *Scope;
 var global_vars *Var;
 
+var global_vars_tail *Var;
+
 // The innermost lambda's own scope and a counter for its hidden name. Both
 // are nonzero/active only while a lambda body is being parsed: a variable
 // resolved outside that scope chain but inside the enclosing function is a
@@ -463,9 +465,16 @@ fn declare_var(name str, ty *Type, pos i64) *Var {
 		v.next = cur_func.locals;
 		cur_func.locals = v;
 	} else {
+		// Globals keep declaration order in the chain: layout_globals
+		// walks it to assign .data/.bss slots, and a layout that ran
+		// backwards made every global address sit on top of its
+		// neighbour's slot from the reader's point of view (kb_tail
+		// resolving to kb_head). Declaration order is also what
+		// BOOTSTRAP.md promises for output.
 		v.is_global = true;
-		v.next = global_vars;
-		global_vars = v;
+		if (global_vars_tail as i64 == 0) { global_vars = v; }
+		else { global_vars_tail.next = v; }
+		global_vars_tail = v;
 	}
 	var vsc *VarScope = arena_alloc(sizeof(VarScope), 8) as *VarScope;
 	vsc.name = name;
@@ -852,6 +861,27 @@ fn parse_primary(t **Token) *Node {
 		var sname str = (*t).text;
 		*t = (*t).next;
 		var n *Node = new_node(ND_ASMREF, p);
+		if (str_eq(sname, "le") && (*t).kind == TK_NUM) {
+			// `$le N v`: v as N bytes, little-endian -- the opposite of
+			// the print-order byte strings a bare constant emits.
+			var width i64 = (*t).val;
+			*t = (*t).next;
+			if ((*t).kind != TK_NUM) { error_at((*t).pos, "$le needs a width then a value"); }
+			if (width < 1 || width > 8) { error_at(p, "$le width must be 1..8 bytes"); }
+			n.kind = ND_ASMLE;
+			n.nargs = width as int;
+			n.val = (*t).val;
+			*t = (*t).next;
+			return n;
+		}
+		if (str_eq(sname, "abs") && (*t).kind == TK_IDENT) {
+			// `$abs name`: the symbol's address as a 32-bit slot, for
+			// 32-bit code where the 8-byte `$name` would not fit.
+			n.val = 2;
+			n.name = (*t).text;
+			*t = (*t).next;
+			return n;
+		}
 		if (str_eq(sname, "rel") && (*t).kind == TK_IDENT) {
 			n.val = 1;
 			n.name = (*t).text;

@@ -3,14 +3,10 @@ var kb_head i64 = 0;
 var kb_t2 i64 = 0;
 var kb_shift i64 = 0;
 
-fn kb_head_set(v i64) {
-	kb_head = v;
-}
-
 fn kb_push(c u8) {
-	if (kb_head_get() - kb_t2_get() < 128) {
-		kb_q_set(kb_head_get() % 128, c);
-		kb_head_set(kb_head_get() + 1);
+	if (kb_head - kb_t2 < 128) {
+		kb_q[kb_head % 128] = c;
+		kb_head = kb_head + 1;
 	}
 }
 
@@ -74,23 +70,23 @@ fn kb_init() {
 		i = i + 1;
 	}
 	kb_head = 0;
-	kb_t2_set(0);
-	kb_shift_set(0);
+	kb_t2 = 0;
+	kb_shift = 0;
 }
 
 fn kb_scan(sc i64) {
 	if ((sc & 0x80) == 0) {
 		if (sc == 0x2a || sc == 0x36) {
-			kb_shift_set(1);
+			kb_shift = 1;
 		} else {
-			var c i64 = kb_char(sc, kb_shift_get());
+			var c i64 = kb_char(sc, kb_shift);
 			if (c != 0) {
 				kb_push(c as u8);
 			}
 		}
 	} else {
 		if (sc == 0xaa || sc == 0xb6) {
-			kb_shift_set(0);
+			kb_shift = 0;
 		}
 	}
 }
@@ -105,12 +101,4 @@ fn kb_poll() {
 fn interrupt kbd_irq() {
 	kb_scan(inb(0x60));
 	outb(0x20, 0x20);
-}
-
-fn kb_t2_get() i64 {
-	return kb_t2;
-}
-
-fn kb_t2_set(v i64) {
-	kb_t2 = v;
 }

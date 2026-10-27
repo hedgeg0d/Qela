@@ -1,0 +1,27 @@
+// expect-exit: 0
+// Globals keep declaration order in memory: a layout that ran backwards
+// made every global resolve to its neighbour's slot (kb_tail reading
+// kb_head), so address deltas and through-pointer writes must agree.
+var a i64 = 1;
+var b i64 = 2;
+var c i64 = 3;
+var d i64 = 4;
+var z i64;
+
+fn main() int {
+	var pa i64 = &a as i64;
+	var pb i64 = &b as i64;
+	var pc i64 = &c as i64;
+	var pd i64 = &d as i64;
+	var pz i64 = &z as i64;
+	if (pb - pa != 8) { return 1; }
+	if (pc - pb != 8) { return 2; }
+	if (pd - pc != 8) { return 3; }
+	if (pz - pd != 8) { return 4; }
+	if (a != 1 || b != 2 || c != 3 || d != 4) { return 5; }
+	*(pb as *i64) = 77;
+	if (b != 77 || a != 1 || c != 3) { return 6; }
+	z = 99;
+	if (z != 99 || d != 4) { return 7; }
+	return 0;
+}
