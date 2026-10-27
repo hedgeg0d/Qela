@@ -3666,9 +3666,23 @@ fn codegen(u *Unit, img *Image) {
 		u.nstrs = nstrs;
 	}
 	// Exe mode drops what nothing reachable touches; object mode ships
-	// everything (a linker decides what it needs). Marking runs before
-	// rodata and .data layout, since those skip unmarked entries.
-	if (!opt_object) { mark_reachable(u); }
+	// everything (a linker decides what it needs). Linked foreign objects
+	// may reference any Qela symbol by name, so nothing can be dropped
+	// there either. Marking runs before rodata and .data layout, since
+	// those skip unmarked entries.
+	if (!opt_object) {
+		if (link_npaths > 0) {
+			// Linked objects may reference any Qela symbol by name, so
+			// nothing is dropped.
+			var fk *Func = u.funcs;
+			while (fk as i64 != 0) {
+				fk.reachable = true;
+				fk = fk.next;
+			}
+		} else {
+			mark_reachable(u);
+		}
+	}
 	var bytes_off *i64 = arena_alloc((u.nstrs as i64 + 1) * 8, 8) as *i64;
 	str_off = arena_alloc((u.nstrs as i64 + 1) * 8, 8) as *i64;
 
@@ -3914,6 +3928,20 @@ fn codegen(u *Unit, img *Image) {
 	}
 	while ((rodata.n & 7) != 0) { buf_u8(&rodata, 0); }
 
+	// Linked objects land after Qela's own code and data: appended now so
+	// every patch below sees the final sizes, and Qela-internal rel32s
+	// stay untouched (relative distances only change between functions,
+	// never inside a function's already-fixed rel32s... they are patched
+	// below anyway, against final addresses).
+	if (link_npaths > 0) {
+		link_load(hdr);
+		// Linked objects may add the program's only data: re-decide the
+		// RW segment and the header size it implies.
+		if (gdata.n + bss_size > 0) { nph = 2; }
+		hdr = EHDR_SZ + PHDR_SZ * (nph as i64);
+		lnk_set_hdr(hdr);
+	}
+
 	var dbase i64 = eff_base() + SEG_GAP + hdr + code.n + rodata.n;
 	if (opt_pie) {
 		var pp i64 = pie_str_pair;
@@ -4033,12 +4061,22 @@ fn codegen(u *Unit, img *Image) {
 	var cf *CallFixup = calls_head;
 	while (cf as i64 != 0) {
 		var target *Func = find_func(cf.name);
-		if (target as i64 == 0) {
-			emsg("undefined function '"); emsg(cf.name); emsg("'"); efail(cf.pos);
-		}
-		if (target.body as i64 == 0) {
-			emsg("extern '"); emsg(cf.name);
-			emsg("' is not linked (extern needs -c and the linker)"); efail(cf.pos);
+		if (target as i64 == 0 || target.body as i64 == 0) {
+			// An extern call (or an unknown name): a linked object may
+			// provide the symbol.
+			var lv i64 = lnk_sym_vaddr_of(cf.name);
+			if (lv < 0) {
+				if (target as i64 == 0) {
+					emsg("undefined function '"); emsg(cf.name); emsg("'"); efail(cf.pos);
+				}
+				emsg("extern '"); emsg(cf.name);
+				emsg("' is not linked (pass the object, or use -c with a linker)"); efail(cf.pos);
+			}
+			if (opt_target == TARGET_RISCV64) { riscv_patch_jal(&code, cf.at, lv - (eff_base() + hdr + cf.at)); }
+			else if (opt_target == TARGET_ARM64) { arm64_patch_call(&code, cf.at, lv - (eff_base() + hdr + cf.at)); }
+			else { buf_patch32(&code, cf.at, lv - (eff_base() + hdr + cf.at + 4)); }
+			cf = cf.next;
+			continue;
 		}
 		if (opt_target == TARGET_RISCV64) { riscv_patch_jal(&code, cf.at, target.addr - cf.at); }
 		else if (opt_target == TARGET_ARM64) { arm64_patch_call(&code, cf.at, target.addr - cf.at); }
@@ -4054,10 +4092,14 @@ fn codegen(u *Unit, img *Image) {
 			aval = eff_base() + hdr + afn.addr;
 		} else {
 			var gv *Var = find_global(ar.name);
-			if (gv as i64 == 0) {
-				emsg("undefined symbol '"); emsg(ar.name); emsg("'"); efail(ar.pos);
+			if (gv as i64 != 0) {
+				aval = dbase + gv.data_off;
+			} else {
+				aval = lnk_sym_vaddr_of(ar.name);
+				if (aval < 0) {
+					emsg("undefined symbol '"); emsg(ar.name); emsg("'"); efail(ar.pos);
+				}
 			}
-			aval = dbase + gv.data_off;
 		}
 		if (opt_target == TARGET_RISCV64) { riscv_patch_auipc_addi(ar.at, aval); }
 		else if (opt_target == TARGET_ARM64) { arm64_patch_movz_movk_addr(ar.at, aval); }
@@ -4137,13 +4179,23 @@ fn codegen(u *Unit, img *Image) {
 
 	var df *DataFixup = datarefs_head;
 	while (df as i64 != 0) {
-		if (opt_target == TARGET_RISCV64) {
-			riscv_patch_auipc_addi(df.at, dbase + df.varp.data_off);
+		var dv i64 = dbase + df.varp.data_off;
+		// An imported extern global has no slot here; a linked object
+		// provides the address.
+		if (df.varp.extern && !df.varp.has_init) {
+			dv = lnk_sym_vaddr_of(df.varp.name);
+			if (dv < 0) {
+				emsg("extern var '"); emsg(df.varp.name);
+				emsg("' is not linked (pass the object, or use -c with a linker)"); efail(0);
+			}
 		}
-		else if (opt_target == TARGET_ARM64) { arm64_patch_movz_movk_addr(df.at, dbase + df.varp.data_off); }
-		else if (opt_pie) { buf_patch32(&code, df.at, dbase + df.varp.data_off - hdr - (df.at + 4)); }
-		else if (base_is_wide()) { patch64(&code, df.at, dbase + df.varp.data_off); }
-		else { buf_patch32(&code, df.at, dbase + df.varp.data_off); }
+		if (opt_target == TARGET_RISCV64) {
+			riscv_patch_auipc_addi(df.at, dv);
+		}
+		else if (opt_target == TARGET_ARM64) { arm64_patch_movz_movk_addr(df.at, dv); }
+		else if (opt_pie) { buf_patch32(&code, df.at, dv - hdr - (df.at + 4)); }
+		else if (base_is_wide()) { patch64(&code, df.at, dv); }
+		else { buf_patch32(&code, df.at, dv); }
 		df = df.next;
 	}
 
@@ -4156,6 +4208,10 @@ fn codegen(u *Unit, img *Image) {
 			buf_patch32(&code, pie_table_site, code.n + pie_table_off - pie_table_site - 4);
 		}
 	}
+
+	// Foreign relocations resolve last: they may reference Qela symbols,
+	// whose final addresses only the passes above know.
+	if (link_npaths > 0) { link_apply(hdr, dbase); }
 
 	img.code = code;
 	img.rodata = rodata;

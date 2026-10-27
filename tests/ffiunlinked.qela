@@ -1,0 +1,6 @@
+// expect-compile-error
+// An extern call without a linked object is a clean error, not a crash.
+extern fn c_add(a i64, b i64) i64;
+fn main() int {
+	return c_add(1, 2) as int;
+}
