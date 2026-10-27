@@ -1,0 +1,12 @@
+// expect-compile-error
+// Soft errors: several independent name mistakes are reported in one
+// run instead of the compiler dying on the first.
+struct P { x i64, y i64 }
+fn main() {
+	var a Qqq = 1;
+	var p P;
+	use(p.z);
+	use(missing_fn);
+	var b Rrr = 2;
+	use(p.w);
+}
