@@ -7,7 +7,7 @@ Updated 2026-08-11. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **664 752 B** (63.4% of the 1 MiB budget) |
+| **S2 — the shipped compiler, Qela compiled by itself** | **604 952 B** (57.7% of the 1 MiB budget) |
 | stage1 sources | ~21 500 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
 
@@ -18,6 +18,17 @@ backtrace, interpolation and the repl, the compiler flags (`-g`,
 server conversation.
 
 ## Done
+
+**The embedded stdlib is LZSS-packed (2026-08-11).** The 29 std modules are
+100 951 bytes of source; they now travel through the binary compressed to
+39 835 (39.5%), unpacked once into the arena on the first blob import.
+`tools/genblob.py` holds the compressor and verifies the round trip in
+Python; only the 65-line decoder (`srcql/blob.qela`) ships. The packed bytes
+sit in ordinary string literals -- raw, with `"`/`\\`/LF/CR/NUL escaped and a
+chunk boundary forced between any `$` and `{`, since the lexer has no escape
+for `$`. Costs about 1 ms on a compile that touches the blob (18.2 ms ->
+19.0 ms on a two-import program) and nothing on a self-compile, which reads
+`std/` from disk. **S2 664 752 -> 604 952 B (-60 128, -9.0%).**
 
 **The scripting and OS batch (2026-08-11).** Eleven features in one pass;
 this file covers each batch in full, including the two bugs found on
