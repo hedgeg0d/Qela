@@ -904,6 +904,16 @@ fn parse_type(t **Token) *Type {
 		if (tok_consume(t, "volatile")) { return type_ptr_volatile(parse_type(t)); }
 		return type_ptr(parse_type(t));
 	}
+	// `~` names the dynamic type: a parameter, field, return or plain var
+	// of this type holds a DynVal and is checked at runtime instead of
+	// compile time (see type.qela's `~` section). `var ~n = expr` is the
+	// other, older spelling of a dynamic local.
+	if (tok_eq(*t, "~")) {
+		*t = (*t).next;
+		type_dynval();
+		need_dyn = true;
+		return ty_dynval_cache;
+	}
 	if (tok_eq(*t, "[")) {
 		*t = (*t).next;
 		if (tok_consume(t, "]")) {
@@ -4755,6 +4765,31 @@ fn interp_synthesize_trampoline(t **Token, f *Func, fn_start i64, body_start i64
 	need_interp = true;
 }
 
+// `dyn_clone_into(x, &x);` prepended to a function body for each `~`
+// parameter: the parameter then owns a deep copy of the caller's boxed
+// payload, so a later write (which frees the slot's old box) never frees
+// the caller's memory. A call statement, not an assignment: a
+// dynamic-to-dynamic assignment is rejected (it could alias two boxes).
+// The name resolves once std/dyn.qela is spliced in; std files skip the
+// rewrite because std/dyn.qela's own helpers manage boxes internally.
+fn dyn_param_clone(v *Var, body *Node, pos i64) {
+	var xr *Node = new_node(ND_VAR, pos);
+	xr.varp = v;
+	var xw *Node = new_node(ND_VAR, pos);
+	xw.varp = v;
+	var ad *Node = new_node(ND_ADDR, pos);
+	ad.lhs = xw;
+	var cc *Node = new_node(ND_CALL, pos);
+	cc.name = "dyn_clone_into";
+	cc.args = xr;
+	xr.next = ad;
+	cc.nargs = 2;
+	var st *Node = new_node(ND_EXPRSTMT, pos);
+	st.lhs = cc;
+	st.next = body.body;
+	body.body = st;
+}
+
 fn parse_function(t **Token, is_extern bool) *Func {
 	var fn_start i64 = (*t).pos;
 	tok_expect(t, "fn");
@@ -4882,7 +4917,24 @@ fn parse_function(t **Token, is_extern bool) *Func {
 		error_at(p, "an interrupt handler takes no parameters");
 	}
 
+	// A dynamic value's type id is only stable within the compilation that
+	// assigned it, so a `~` parameter or return cannot cross the object
+	// boundary -- same rule as `extern ~var`.
+	if (f.extern && ty_dynval_cache as i64 != 0) {
+		var dpi int = 0;
+		while (dpi < nparams) {
+			if (func_param(f, dpi).ty as i64 == ty_dynval_cache as i64) {
+				error_at(p, "an extern function cannot take or return a dynamic value");
+			}
+			dpi = dpi + 1;
+		}
+	}
+
 	if (!tok_eq(*t, "{")) { f.ret = parse_type(t); }
+	if (f.extern && ty_dynval_cache as i64 != 0 &&
+	    f.ret as i64 == ty_dynval_cache as i64) {
+		error_at(p, "an extern function cannot take or return a dynamic value");
+	}
 	// A *Gen(T) return type marks a generator candidate: `yield` is legal
 	// only in its body, and the body is rewritten to a coroutine below when
 	// it actually contains one. A Gen-returning function without yields is
@@ -4901,6 +4953,22 @@ fn parse_function(t **Token, is_extern bool) *Func {
 	} else {
 		var body_start i64 = (*t).pos;
 		f.body = parse_block(t);
+		// A `~` parameter arrives as a shallow DynVal copy: its ptr aliases
+		// the caller's box, and the first write to the parameter would free
+		// that box out from under the caller. Prepend `x = dyn_clone(x);`
+		// so the parameter owns its payload from the start. Runs before the
+		// generator rewrite below, so a generator body keeps its clones.
+		if (ty_dynval_cache as i64 != 0 &&
+		    !is_std_path(diag_path_of(diag_file_of(p)))) {
+			var dpi int = 0;
+			while (dpi < nparams) {
+				var dv *Var = func_param(f, dpi);
+				if (dv.ty as i64 == ty_dynval_cache as i64) {
+					dyn_param_clone(dv, f.body, p);
+				}
+				dpi = dpi + 1;
+			}
+		}
 		if (gen_yields_seen) { parse_generator_rewrite(f); }
 		if (f.interpreted || f.dynamic) {
 			interp_synthesize_trampoline(t, f, fn_start, body_start, (*t).pos);
@@ -5481,6 +5549,12 @@ fn parse_global(t **Token, is_extern bool, is_eval bool) {
 	}
 	if (is_extern && ty as i64 == 0) {
 		error_at(p, "extern var needs a type");
+	}
+	// A dynamic global would need a function scope for its box rewrites,
+	// and its type id is not stable across the object boundary -- same
+	// rule as `extern fn` and the local-only `~` of the first cut.
+	if (ty as i64 != 0 && ty_dynval_cache as i64 != 0 && ty as i64 == ty_dynval_cache as i64) {
+		error_at(p, "a global cannot be dynamic");
 	}
 	if (is_tls && is_extern) { error_at(p, "tvar cannot be extern"); }
 	var gv *Var = declare_var(name, ty, p);

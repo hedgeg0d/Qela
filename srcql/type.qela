@@ -191,11 +191,16 @@ fn type_dynval() *Type {
 	type_init();
 	if (ty_dynval_cache as i64 == 0) {
 		var t *Type = type_alloc();
-		*t = Type{kind: TY_STRUCT, size: 16, align: 8, name: "DynVal"};
+		// {type_id, size, ptr}: size lets dyn_clone deep-copy a box at
+		// runtime, which is how `~` parameters take ownership of their
+		// payload. The box struct mirrors std/dyn.qela exactly.
+		*t = Type{kind: TY_STRUCT, size: 24, align: 8, name: "DynVal"};
 		var pm *Member = member_alloc();
-		*pm = Member{name: "ptr", ty: type_ptr(ty_u8), offset: 8};
+		*pm = Member{name: "ptr", ty: type_ptr(ty_u8), offset: 16};
+		var sm *Member = member_alloc();
+		*sm = Member{next: pm, name: "size", ty: ty_i64, offset: 8};
 		var idm *Member = member_alloc();
-		*idm = Member{next: pm, name: "type_id", ty: ty_i64, offset: 0};
+		*idm = Member{next: sm, name: "type_id", ty: ty_i64, offset: 0};
 		t.members = idm;
 		ty_dynval_cache = t;
 		type_define("DynVal", t);
@@ -1041,26 +1046,16 @@ fn type_addsub(n *Node) {
 	n.ty = n.lhs.ty;
 }
 
-// Rewrites `dynvar = expr;` into
-// `dynvar = (tmp = expr, heap_free(dynvar.ptr), dyn_box(id, &tmp,
-// sizeof(expr's type)));` -- three ordinary node kinds chained by comma, so
-// codegen needs no new cases. `tmp = expr` runs first so an expression that
-// reads the old `dynvar` (through a prior `as` cast) sees valid memory
-// before it is freed; `heap_free` on the not-yet-assigned local's
-// zeroed-at-frame-entry slot is a no-op the very first time, and on every
-// later reassignment or loop re-execution of the same `var ~n = ...` frees
-// exactly the box this write is about to replace -- the local's slot is not
-// re-zeroed between iterations for the with-initializer form, so it still
-// holds the previous box's pointer.
-fn type_assign_dyn(n *Node) {
-	if (n.rhs.ty as i64 == ty_dynval_cache as i64) {
-		error_at(n.pos, "cannot assign a dynamic value directly; cast it out with 'as' first");
-	}
-	var rv *Node = to_value(n.rhs);
+// Rewrites a plain value into a fresh dynamic box: `(tmp = expr, dyn_box(
+// id, &tmp, size))` -- the comma of an ordinary assign and an ordinary
+// call, so codegen needs no new cases. Used by `~` return values, `~` call
+// arguments, and (behind a free) dynamic assignments.
+fn dyn_box_expr(n *Node) *Node {
+	var rv *Node = to_value(n);
 	if (rv.ty.kind == TY_VOID) { error_at(n.pos, "cannot box a void value"); }
 	var id i64 = type_id_of(rv.ty);
 	var tmp *Var = alloc_temp(rv.ty);
-	if (tmp as i64 == 0) { error_at(n.pos, "a dynamic variable needs a function scope"); }
+	if (tmp as i64 == 0) { error_at(n.pos, "a dynamic value needs a function scope"); }
 
 	var tv *Node = node_alloc();
 	tv.kind = ND_VAR; tv.varp = tmp; tv.ty = rv.ty; tv.typed = true; tv.pos = n.pos;
@@ -1082,27 +1077,64 @@ fn type_assign_dyn(n *Node) {
 	call.typed = true;
 	type_call(call);
 
-	var oldv *Node = node_alloc();
-	oldv.kind = ND_VAR; oldv.varp = n.lhs.varp; oldv.ty = ty_dynval_cache; oldv.typed = true; oldv.pos = n.pos;
+	var comma *Node = node_alloc();
+	comma.kind = ND_COMMA; comma.lhs = asg; comma.rhs = call;
+	comma.ty = ty_dynval_cache; comma.typed = true; comma.pos = n.pos;
+	return comma;
+}
+
+// A read of an lvalue with fresh nodes, so the tree may hold the same slot
+// both as the write target and as the pre-write read (the target is
+// evaluated first; the free must read the old payload from the slot as it
+// is *before* the write lands).
+fn dyn_read_of(src *Node) *Node {
+	var c *Node = node_alloc();
+	*c = *src;
+	c.typed = true;
+	c.next = null;
+	if (c.kind == ND_MEMBER || c.kind == ND_DEREF || c.kind == ND_INDEX) {
+		c.lhs = dyn_read_of(c.lhs);
+	}
+	return c;
+}
+
+// Rewrites `dynslot = expr;` into
+// `dynslot = (tmp = expr, heap_free(dynslot.ptr), dyn_box(id, &tmp,
+// sizeof(expr's type)));` -- ordinary node kinds chained by comma, so
+// codegen needs no new cases. `tmp = expr` runs first so an expression that
+// reads the old value of the same slot (through a prior `as` cast) sees
+// valid memory before it is freed; `heap_free` on a slot that was zeroed
+// (a fresh local, a fresh struct) is a no-op. The target may be any
+// DynVal-typed lvalue -- a local, a parameter, a struct field or an
+// indexed element -- dyn_read_of produces the read of whatever shape the
+// write uses.
+fn type_assign_dyn(n *Node) {
+	if (n.rhs.ty as i64 == ty_dynval_cache as i64) {
+		error_at(n.pos, "cannot assign a dynamic value directly; cast it out with 'as' first");
+	}
+	var rv *Node = to_value(n.rhs);
+	var nb *Node = dyn_box_expr(rv);
+	var inner *Node = nb.rhs;
+
+	var oldv *Node = dyn_read_of(n.lhs);
 	var ptrmem *Member = ty_dynval_cache.members;
 	while (ptrmem as i64 != 0 && !str_eq(ptrmem.name, "ptr")) { ptrmem = ptrmem.next; }
 	var oldptr *Node = node_alloc();
 	oldptr.kind = ND_MEMBER; oldptr.lhs = oldv; oldptr.member = ptrmem; oldptr.ty = type_ptr(ty_u8);
 	oldptr.typed = true; oldptr.pos = n.pos;
 
-	var freecall *Node = mk_call0("heap_free");
-	freecall.args = oldptr;
-	freecall.nargs = 1;
-	freecall.pos = n.pos;
-	freecall.typed = true;
-	type_call(freecall);
+	var fc *Node = node_alloc();
+	fc.kind = ND_CALL; fc.name = "heap_free"; fc.args = oldptr; fc.nargs = 1;
+	fc.pos = n.pos; fc.typed = true;
+	type_call(fc);
 
-	var inner *Node = node_alloc();
-	inner.kind = ND_COMMA; inner.lhs = freecall; inner.rhs = call; inner.ty = call.ty;
-	inner.typed = true; inner.pos = n.pos;
+	var inner2 *Node = node_alloc();
+	inner2.kind = ND_COMMA; inner2.lhs = fc; inner2.rhs = inner; inner2.ty = inner.ty;
+	inner2.typed = true; inner2.pos = n.pos;
+	inner2.next = null;
 
 	var comma *Node = node_alloc();
-	comma.kind = ND_COMMA; comma.lhs = asg; comma.rhs = inner; comma.ty = inner.ty;
+	comma.kind = ND_COMMA; comma.lhs = nb.lhs; comma.rhs = inner2; comma.ty = inner.ty;
 	comma.typed = true; comma.pos = n.pos;
 
 	n.rhs = comma;
@@ -1389,6 +1421,11 @@ fn type_ret(n *Node) {
 		return;
 	}
 	if (want.kind == TY_VOID) { error_at(n.pos, "this function returns nothing"); }
+	// A `~` return type boxes the value at the return site.
+	if (ty_dynval_cache as i64 != 0 && want as i64 == ty_dynval_cache as i64) {
+		if (n.lhs.ty as i64 != ty_dynval_cache as i64) { n.lhs = dyn_box_expr(n.lhs); }
+		return;
+	}
 	n.lhs = coerce(n.lhs, want);
 	if (is_aggregate(want)) {
 		if (!same_type(want, n.lhs.ty)) {
@@ -1758,6 +1795,12 @@ fn type_call(n *Node) {
 		var want *Type = pv.ty;
 		if (n.dotcall && i == 0) { a = dot_receiver(a, want, n.pos); }
 		i = i + 1;
+		// A `~` parameter boxes a plain argument at the call site: the
+		// callee's clone-on-entry then owns a copy of exactly this box.
+		if (ty_dynval_cache as i64 != 0 && want as i64 == ty_dynval_cache as i64 &&
+		    a.ty as i64 != ty_dynval_cache as i64) {
+			a = dyn_box_expr(a);
+		}
 		a = coerce(a, want);
 		if (is_aggregate(want)) {
 			if (!same_type(want, a.ty)) {
