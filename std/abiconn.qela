@@ -222,6 +222,24 @@ fn abi_spawn() {
 		if (out_pipe[1] as i64 != ABI_FD_HOST_TO_CHILD && out_pipe[1] as i64 != ABI_FD_CHILD_TO_HOST) {
 			sys_close(out_pipe[1] as i64);
 		}
+		// Ignored dispositions survive exec: reset the keyboard ones so a
+		// runaway evaluation can still be interrupted.
+		var sa [4]i64;
+		sa[0] = SIG_DFL;
+		sa[1] = 0;
+		sa[2] = 0;
+		sa[3] = 0;
+		var sigs [5]i64;
+		sigs[0] = SIGINT;
+		sigs[1] = SIGQUIT;
+		sigs[2] = SIGTSTP;
+		sigs[3] = SIGTTIN;
+		sigs[4] = SIGTTOU;
+		var si int = 0;
+		while (si < 5) {
+			sys_rt_sigaction(sigs[si], &sa[0] as *u8, null as *u8);
+			si = si + 1;
+		}
 		var cargv [3]i64;
 		cargv[0] = cstr("qela") as i64;
 		cargv[1] = cstr("--abi-server") as i64;
