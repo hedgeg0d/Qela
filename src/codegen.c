@@ -1065,7 +1065,12 @@ Image codegen(Unit *u) {
 	isize hdr = EHDR_SZ + PHDR_SZ * nph;
 
 	Func *main_fn = find_func(S("main"));
-	if (!main_fn) die("error: no 'main' function\n");
+	if (!main_fn) {
+		int n = 0;
+		for (Func *f = u->funcs; f; f = f->next) n++;
+		if (n == 0) die("error: no 'main' function (nothing was parsed from the input)\n");
+		die("error: no 'main' function\n");
+	}
 	if (main_fn->nparams != 0 && main_fn->nparams != 2)
 		die("error: 'main' takes no parameters or (argc, argv)\n");
 
