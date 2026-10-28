@@ -10,9 +10,9 @@ fn std_blob_data() str { return $bytes("std.lzss"); }
 fn std_blob_data() str { return ""; }
 }
 
-fn std_blob_count() int { return 29; }
+fn std_blob_count() int { return 34; }
 
-fn std_blob_total() i64 { return 100752; }
+fn std_blob_total() i64 { return 119723; }
 
 fn std_blob_name(i int) str {
 	if (i == 0) { return "std/abiconn.qela"; }
@@ -22,28 +22,33 @@ fn std_blob_name(i int) str {
 	if (i == 4) { return "std/chan.qela"; }
 	if (i == 5) { return "std/coro.qela"; }
 	if (i == 6) { return "std/dyn.qela"; }
-	if (i == 7) { return "std/eval.qela"; }
-	if (i == 8) { return "std/fmt.qela"; }
-	if (i == 9) { return "std/gc.qela"; }
-	if (i == 10) { return "std/gen.qela"; }
-	if (i == 11) { return "std/heap.qela"; }
-	if (i == 12) { return "std/interpcall.qela"; }
-	if (i == 13) { return "std/io.qela"; }
-	if (i == 14) { return "std/list.qela"; }
-	if (i == 15) { return "std/map.qela"; }
-	if (i == 16) { return "std/math.qela"; }
-	if (i == 17) { return "std/net.qela"; }
-	if (i == 18) { return "std/opt.qela"; }
-	if (i == 19) { return "std/proc.qela"; }
-	if (i == 20) { return "std/rand.qela"; }
-	if (i == 21) { return "std/res.qela"; }
-	if (i == 22) { return "std/sort.qela"; }
-	if (i == 23) { return "std/sortcmp.qela"; }
-	if (i == 24) { return "std/str.qela"; }
-	if (i == 25) { return "std/sys.qela"; }
-	if (i == 26) { return "std/thread.qela"; }
-	if (i == 27) { return "std/time.qela"; }
-	if (i == 28) { return "std/vec.qela"; }
+	if (i == 7) { return "std/encoding.qela"; }
+	if (i == 8) { return "std/eval.qela"; }
+	if (i == 9) { return "std/fmath.qela"; }
+	if (i == 10) { return "std/fmt.qela"; }
+	if (i == 11) { return "std/gc.qela"; }
+	if (i == 12) { return "std/gen.qela"; }
+	if (i == 13) { return "std/hash.qela"; }
+	if (i == 14) { return "std/heap.qela"; }
+	if (i == 15) { return "std/interpcall.qela"; }
+	if (i == 16) { return "std/io.qela"; }
+	if (i == 17) { return "std/json.qela"; }
+	if (i == 18) { return "std/list.qela"; }
+	if (i == 19) { return "std/map.qela"; }
+	if (i == 20) { return "std/math.qela"; }
+	if (i == 21) { return "std/net.qela"; }
+	if (i == 22) { return "std/opt.qela"; }
+	if (i == 23) { return "std/path.qela"; }
+	if (i == 24) { return "std/proc.qela"; }
+	if (i == 25) { return "std/rand.qela"; }
+	if (i == 26) { return "std/res.qela"; }
+	if (i == 27) { return "std/sort.qela"; }
+	if (i == 28) { return "std/sortcmp.qela"; }
+	if (i == 29) { return "std/str.qela"; }
+	if (i == 30) { return "std/sys.qela"; }
+	if (i == 31) { return "std/thread.qela"; }
+	if (i == 32) { return "std/time.qela"; }
+	if (i == 33) { return "std/vec.qela"; }
 	return "";
 }
 
@@ -56,27 +61,32 @@ fn std_blob_off(i int) i64 {
 	if (i == 5) { return 23600; }
 	if (i == 6) { return 29278; }
 	if (i == 7) { return 30379; }
-	if (i == 8) { return 35315; }
-	if (i == 9) { return 41287; }
-	if (i == 10) { return 50765; }
-	if (i == 11) { return 53976; }
-	if (i == 12) { return 56485; }
-	if (i == 13) { return 61492; }
-	if (i == 14) { return 66180; }
-	if (i == 15) { return 67110; }
-	if (i == 16) { return 69636; }
-	if (i == 17) { return 69873; }
-	if (i == 18) { return 72331; }
-	if (i == 19) { return 72877; }
-	if (i == 20) { return 74328; }
-	if (i == 21) { return 75220; }
-	if (i == 22) { return 75851; }
-	if (i == 23) { return 76289; }
-	if (i == 24) { return 77009; }
-	if (i == 25) { return 82079; }
-	if (i == 26) { return 92949; }
-	if (i == 27) { return 98308; }
-	if (i == 28) { return 99107; }
+	if (i == 8) { return 33238; }
+	if (i == 9) { return 38174; }
+	if (i == 10) { return 39274; }
+	if (i == 11) { return 45246; }
+	if (i == 12) { return 54724; }
+	if (i == 13) { return 57935; }
+	if (i == 14) { return 58656; }
+	if (i == 15) { return 61165; }
+	if (i == 16) { return 66172; }
+	if (i == 17) { return 70860; }
+	if (i == 18) { return 81805; }
+	if (i == 19) { return 82735; }
+	if (i == 20) { return 85261; }
+	if (i == 21) { return 85767; }
+	if (i == 22) { return 88225; }
+	if (i == 23) { return 88771; }
+	if (i == 24) { return 90035; }
+	if (i == 25) { return 91486; }
+	if (i == 26) { return 92378; }
+	if (i == 27) { return 93009; }
+	if (i == 28) { return 93447; }
+	if (i == 29) { return 94167; }
+	if (i == 30) { return 101050; }
+	if (i == 31) { return 111920; }
+	if (i == 32) { return 117279; }
+	if (i == 33) { return 118078; }
 	return -1;
 }
 
@@ -88,27 +98,32 @@ fn std_blob_len(i int) i64 {
 	if (i == 4) { return 8841; }
 	if (i == 5) { return 5678; }
 	if (i == 6) { return 1101; }
-	if (i == 7) { return 4936; }
-	if (i == 8) { return 5972; }
-	if (i == 9) { return 9478; }
-	if (i == 10) { return 3211; }
-	if (i == 11) { return 2509; }
-	if (i == 12) { return 5007; }
-	if (i == 13) { return 4688; }
-	if (i == 14) { return 930; }
-	if (i == 15) { return 2526; }
-	if (i == 16) { return 237; }
-	if (i == 17) { return 2458; }
-	if (i == 18) { return 546; }
-	if (i == 19) { return 1451; }
-	if (i == 20) { return 892; }
-	if (i == 21) { return 631; }
-	if (i == 22) { return 438; }
-	if (i == 23) { return 720; }
-	if (i == 24) { return 5070; }
-	if (i == 25) { return 10870; }
-	if (i == 26) { return 5359; }
-	if (i == 27) { return 799; }
-	if (i == 28) { return 1645; }
+	if (i == 7) { return 2859; }
+	if (i == 8) { return 4936; }
+	if (i == 9) { return 1100; }
+	if (i == 10) { return 5972; }
+	if (i == 11) { return 9478; }
+	if (i == 12) { return 3211; }
+	if (i == 13) { return 721; }
+	if (i == 14) { return 2509; }
+	if (i == 15) { return 5007; }
+	if (i == 16) { return 4688; }
+	if (i == 17) { return 10945; }
+	if (i == 18) { return 930; }
+	if (i == 19) { return 2526; }
+	if (i == 20) { return 506; }
+	if (i == 21) { return 2458; }
+	if (i == 22) { return 546; }
+	if (i == 23) { return 1264; }
+	if (i == 24) { return 1451; }
+	if (i == 25) { return 892; }
+	if (i == 26) { return 631; }
+	if (i == 27) { return 438; }
+	if (i == 28) { return 720; }
+	if (i == 29) { return 6883; }
+	if (i == 30) { return 10870; }
+	if (i == 31) { return 5359; }
+	if (i == 32) { return 799; }
+	if (i == 33) { return 1645; }
 	return 0;
 }

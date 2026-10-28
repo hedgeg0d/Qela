@@ -1,0 +1,60 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: json ok
+import "std/json.qela";
+import "std/io.qela";
+import "std/str.qela";
+
+fn main() int {
+	var fails int = 0;
+
+	var j *Json = json_parse("{\"a\":1,\"b\":[true,null,\"x\"],\"c\":{\"d\":2.5},\"s\":\"hi\"}");
+	if (j as i64 == 0) { fails = fails + 1; }
+
+	var a *Json = json_get(j, "a");
+	if (a as i64 == 0 || json_type(a) != J_INT || json_int(a) != 1) { fails = fails + 1; }
+
+	var b *Json = json_get(j, "b");
+	if (b as i64 == 0 || json_type(b) != J_ARR || json_arr_len(b) != 3) { fails = fails + 1; }
+	if (json_bool(json_arr_at(b, 0)) != true) { fails = fails + 1; }
+	if (json_type(json_arr_at(b, 1)) != J_NULL) { fails = fails + 1; }
+	if (!str_eq(json_str(json_arr_at(b, 2)), "x")) { fails = fails + 1; }
+
+	var c *Json = json_get(j, "c");
+	if (c as i64 == 0 || json_type(c) != J_OBJ) { fails = fails + 1; }
+	var d *Json = json_get(c, "d");
+	if (d as i64 == 0 || json_type(d) != J_FLOAT) { fails = fails + 1; }
+	if (json_float(d) != 2.5) { fails = fails + 1; }
+
+	if (!json_has(j, "s")) { fails = fails + 1; }
+	if (json_has(j, "nope")) { fails = fails + 1; }
+	if (json_get(j, "nope") as i64 != 0) { fails = fails + 1; }
+
+	var e *Json = json_parse("[1,2.5,-3,1e2]");
+	if (e as i64 == 0 || json_arr_len(e) != 4) { fails = fails + 1; }
+	if (json_int(json_arr_at(e, 0)) != 1) { fails = fails + 1; }
+	if (json_float(json_arr_at(e, 1)) != 2.5) { fails = fails + 1; }
+	if (json_int(json_arr_at(e, 2)) != -3) { fails = fails + 1; }
+	if (json_float(json_arr_at(e, 3)) != 100.0) { fails = fails + 1; }
+
+	var esc *Json = json_parse("\"a\\\"b\\\\c\\n\\t\\u0041\"");
+	if (esc as i64 == 0) { fails = fails + 1; }
+	if (!str_eq(json_str(esc), "a\"b\\c\n\tA")) { fails = fails + 1; }
+
+	var rt *Json = json_parse("{\"k\":[1,\"v\",null]}");
+	if (rt as i64 == 0) { fails = fails + 1; }
+	if (!str_eq(json_strify(rt), "{\"k\":[1,\"v\",null]}")) { fails = fails + 1; }
+
+	if (json_parse("{") as i64 != 0) { fails = fails + 1; }
+	if (json_parse("[1,]") as i64 != 0) { fails = fails + 1; }
+	if (json_parse("{\"a\":}") as i64 != 0) { fails = fails + 1; }
+	if (json_parse("") as i64 != 0) { fails = fails + 1; }
+	if (json_parse("tru") as i64 != 0) { fails = fails + 1; }
+
+	var n *Json = json_parse("null");
+	if (n as i64 == 0 || json_type(n) != J_NULL) { fails = fails + 1; }
+	if (!str_eq(json_strify(n), "null")) { fails = fails + 1; }
+
+	if (fails == 0) { write_str(STDOUT, "json ok\n"); }
+	return fails;
+}
