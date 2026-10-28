@@ -519,7 +519,7 @@ fn parse_macro(t **Token) {
 	macro_tail = m;
 }
 
-var type_vars [6]*Type;
+var type_vars [10]*Type;
 var ntype_vars int;
 
 struct VarScope {
@@ -969,14 +969,16 @@ fn parse_type(t **Token) *Type {
 	if (tm as i64 != 0) {
 		*t = (*t).next;
 		tok_expect(t, "(");
+		gen_errpos = (*t).pos;
 		var a0 *Type = parse_type(t);
 		var a1 *Type = null;
-		if (tm.nparams > 1) {
-			tok_expect(t, ",");
-			a1 = parse_type(t);
-		}
+		var a2 *Type = null;
+		var a3 *Type = null;
+		if (tm.nparams > 1) { tok_expect(t, ","); a1 = parse_type(t); }
+		if (tm.nparams > 2) { tok_expect(t, ","); a2 = parse_type(t); }
+		if (tm.nparams > 3) { tok_expect(t, ","); a3 = parse_type(t); }
 		tok_expect(t, ")");
-		return generic_instance(tm, a0, a1);
+		return generic_instance(tm, a0, a1, a2, a3);
 	}
 	var ty *Type = type_lookup((*t).text);
 	if (ty as i64 == 0) {
@@ -993,7 +995,8 @@ fn parse_type(t **Token) *Type {
 }
 
 // struct Name(T) / enum Name(T, U): bind the parameters as type variables for
-// the duration of the body, and hand back the template to fill in.
+// the duration of the body, and hand back the template to fill in. `T: str`
+// constrains the argument to that type or an implicit widening of it.
 fn parse_tmpl_params(t **Token, name str, p i64) *Tmpl {
 	if (!tok_eq(*t, "(")) { return null; }
 	*t = (*t).next;
@@ -1001,14 +1004,19 @@ fn parse_tmpl_params(t **Token, name str, p i64) *Tmpl {
 	tm.name = name;
 	while (!tok_eq(*t, ")")) {
 		if (tm.nparams > 0) { tok_expect(t, ","); }
-		if (tm.nparams == 2) { error_at((*t).pos, "at most two type parameters"); }
+		if (tm.nparams == 4) { error_at((*t).pos, "at most four type parameters"); }
 		var pn str = (*t).text;
 		*t = (*t).next;
-		if (ntype_vars == 6) { error_at((*t).pos, "too many type variables in scope"); }
+		if (ntype_vars == 10) { error_at((*t).pos, "too many type variables in scope"); }
 		var tv *Type = type_new_var(pn);
 		type_vars[ntype_vars] = tv;
 		ntype_vars = ntype_vars + 1;
-		if (tm.nparams == 0) { tm.tv0 = tv; } else { tm.tv1 = tv; }
+		var ct *Type = null;
+		if (tok_consume(t, ":")) { ct = parse_type(t); }
+		if (tm.nparams == 0) { tm.tv0 = tv; tm.ct0 = ct; }
+		else if (tm.nparams == 1) { tm.tv1 = tv; tm.ct1 = ct; }
+		else if (tm.nparams == 2) { tm.tv2 = tv; tm.ct2 = ct; }
+		else { tm.tv3 = tv; tm.ct3 = ct; }
 		tm.nparams = tm.nparams + 1;
 	}
 	tok_expect(t, ")");
@@ -1175,7 +1183,7 @@ fn parse_comprehension(t **Token, p i64, first *Token, ft *Token) *Node {
 	if (tm as i64 == 0) { error_at(p, "a comprehension needs 'import std/vec.qela'"); }
 	var vty *Type = null;
 	if (val_expr as i64 == 0) {
-		vty = generic_instance(tm, elem_expr.ty, null);
+		vty = generic_instance(tm, elem_expr.ty, null, null, null);
 	} else {
 		add_type(val_expr);
 		if (elem_expr.ty as i64 != type_str() as i64) {
@@ -1183,7 +1191,7 @@ fn parse_comprehension(t **Token, p i64, first *Token, ft *Token) *Node {
 		}
 		var mt *Tmpl = tmpl_find("Map");
 		if (mt as i64 == 0) { error_at(p, "a map comprehension needs 'import std/map.qela'"); }
-		vty = generic_instance(mt, val_expr.ty, null);
+		vty = generic_instance(mt, val_expr.ty, null, null, null);
 	}
 	var vv *Var = declare_var(hidden_name("v"), vty, np);
 
@@ -4537,10 +4545,9 @@ fn interp_emit_tmpl(b *Buf, tm *Tmpl) {
 	fmt_str(b, tm.name);
 	fmt_str(b, "(");
 	fmt_str(b, tm.tv0.name);
-	if (tm.nparams == 2) {
-		fmt_str(b, ", ");
-		fmt_str(b, tm.tv1.name);
-	}
+	if (tm.nparams >= 2) { fmt_str(b, ", "); fmt_str(b, tm.tv1.name); }
+	if (tm.nparams >= 3) { fmt_str(b, ", "); fmt_str(b, tm.tv2.name); }
+	if (tm.nparams >= 4) { fmt_str(b, ", "); fmt_str(b, tm.tv3.name); }
 	fmt_str(b, ") ");
 	if (tm.proto.kind == TY_STRUCT) { interp_emit_struct_body(b, tm.proto); }
 	else { interp_emit_enum_body(b, tm.proto); }
