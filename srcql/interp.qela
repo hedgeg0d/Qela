@@ -588,12 +588,12 @@ fn ip_foreign_root(n *Node) *Var {
 	while (n as i64 != 0) {
 		if (n.kind == ND_VAR) {
 			if (n.varp.extern && type_abi_mode) { return n.varp; }
-			return 0 as *Var;
+			return null;
 		}
 		if (n.kind == ND_MEMBER || n.kind == ND_INDEX || n.kind == ND_DEREF) { n = n.lhs; }
-		else { return 0 as *Var; }
+		else { return null; }
 	}
-	return 0 as *Var;
+	return null;
 }
 
 // The address of `n`'s value relative to a materialised copy of its
@@ -965,7 +965,7 @@ fn ip_syscall(n *Node) i64 {
 fn abi_unmarshal_value(p *u8, addr i64, ty *Type) *u8 {
 	if (ty.kind == TY_SLICE) {
 		var slen i64 = abi_decode_u64(p);
-		var sp *u8 = 0 as *u8;
+		var sp *u8 = null;
 		if (slen > 0) {
 			var tmp str;
 			tmp.ptr = p + 8;
@@ -1075,7 +1075,7 @@ fn ip_call_node(n *Node) i64 {
 		else { dst = ip_temp(n.ty.size as i64); }
 	}
 	if (n.foreign) { return ip_foreign_call(n, dst); }
-	var f *Func = 0 as *Func;
+	var f *Func = null;
 	if (n.varp as i64 != 0) {
 		// Indirect: the value is the *Func ND_FUNCADDR handed out.
 		var target i64 = ip_load(ip_var_addr(n.varp), n.varp.ty);
@@ -1260,27 +1260,27 @@ fn ip_intrinsic(n *Node) *Func {
 	ip_intrinsic_val = 0;
 	var nm str = n.name;
 
-	if (str_eq(nm, "gc_data_base")) { ip_was_intrinsic = true; ip_intrinsic_val = ip_data; return 0 as *Func; }
-	if (str_eq(nm, "gc_data_end")) { ip_was_intrinsic = true; ip_intrinsic_val = ip_data_end; return 0 as *Func; }
+	if (str_eq(nm, "gc_data_base")) { ip_was_intrinsic = true; ip_intrinsic_val = ip_data; return null; }
+	if (str_eq(nm, "gc_data_end")) { ip_was_intrinsic = true; ip_intrinsic_val = ip_data_end; return null; }
 	if (str_eq(nm, "gc_save_regs")) {
 		// Nothing of the interpreted program lives in a machine register:
 		// every root is a frame slot in the interpreter's own stack region,
 		// which the collector already scans.
 		ip_eval(n.args);
 		ip_was_intrinsic = true;
-		return 0 as *Func;
+		return null;
 	}
-	if (str_eq(nm, "fence")) { ip_was_intrinsic = true; return 0 as *Func; }
+	if (str_eq(nm, "fence")) { ip_was_intrinsic = true; return null; }
 	if (str_eq(nm, "atomic_load")) {
 		ip_was_intrinsic = true;
 		ip_intrinsic_val = ip_ld64(ip_eval(n.args));
-		return 0 as *Func;
+		return null;
 	}
 	if (str_eq(nm, "atomic_store")) {
 		var a i64 = ip_eval(n.args);
 		ip_st64(a, ip_eval(n.args.next));
 		ip_was_intrinsic = true;
-		return 0 as *Func;
+		return null;
 	}
 	if (str_eq(nm, "atomic_add")) {
 		var a i64 = ip_eval(n.args);
@@ -1288,7 +1288,7 @@ fn ip_intrinsic(n *Node) *Func {
 		ip_st64(a, old + ip_eval(n.args.next));
 		ip_was_intrinsic = true;
 		ip_intrinsic_val = old;
-		return 0 as *Func;
+		return null;
 	}
 	if (str_eq(nm, "atomic_cas")) {
 		var a i64 = ip_eval(n.args);
@@ -1296,30 +1296,30 @@ fn ip_intrinsic(n *Node) *Func {
 		var new i64 = ip_eval(n.args.next.next);
 		ip_was_intrinsic = true;
 		if (ip_ld64(a) == want) { ip_st64(a, new); ip_intrinsic_val = 1; }
-		return 0 as *Func;
+		return null;
 	}
 	if (str_eq(nm, "interp_coro_spawn")) {
 		ip_coro_spawn(n);
 		ip_was_intrinsic = true;
-		return 0 as *Func;
+		return null;
 	}
 	if (str_eq(nm, "interp_coro_switch")) {
 		ip_coro_switch(n);
 		ip_was_intrinsic = true;
-		return 0 as *Func;
+		return null;
 	}
 	if (str_eq(nm, "interp_coro_sp")) {
 		var id int = ip_eval(n.args) as int;
 		ip_was_intrinsic = true;
 		if (id == ip_cur) { ip_intrinsic_val = ip_sp; }
 		else { ip_intrinsic_val = ip_coro[id].fsp; }
-		return 0 as *Func;
+		return null;
 	}
 	if (str_eq(nm, "interp_coro_top")) {
 		var id int = ip_eval(n.args) as int;
 		ip_was_intrinsic = true;
 		ip_intrinsic_val = ip_coro[id].fhi;
-		return 0 as *Func;
+		return null;
 	}
 	if (str_eq(nm, "coro_switch") || str_eq(nm, "coro_entry_addr")) {
 		error_at(n.pos, "interpreter: a program cannot switch machine stacks under the interpreter");
@@ -1330,9 +1330,9 @@ fn ip_intrinsic(n *Node) *Func {
 	if (str_eq(nm, "tls_init")) {
 		// The single TLS block is part of the data segment already.
 		ip_was_intrinsic = true;
-		return 0 as *Func;
+		return null;
 	}
-	return 0 as *Func;
+	return null;
 }
 
 // ── coroutines ──
@@ -1407,7 +1407,7 @@ fn ip_coro_spawn(n *Node) {
 	ip_coro[id].fhi = frames + IP_CORO_FRAMES;
 	ip_coro[id].fsp = frames + IP_CORO_FRAMES;
 	ip_coro[id].fp = 0;
-	ip_coro[id].fnp = 0 as *Func;
+	ip_coro[id].fnp = null;
 	ip_coro[id].retdst = 0;
 	ip_coro[id].ret = 0;
 	ip_coro[id].returning = false;
@@ -1534,7 +1534,7 @@ fn ip_match(n *Node) {
 		var hit bool = arm.name.len == 0;
 		if (!hit) { hit = (arm.variant.tag as i64) == tag; }
 		if (hit) {
-			var f *Member = 0 as *Member;
+			var f *Member = null;
 			if (arm.variant as i64 != 0) { f = arm.variant.fields; }
 			var b *Node = arm.args;
 			while (b as i64 != 0) {
@@ -1640,7 +1640,7 @@ fn ip_run(u *Unit, argc int, argv **u8) int {
 	if (top_asm_head as i64 != 0) { ip_warn_asm(top_asm_head.pos); }
 
 	var f *Func = ip_find_main();
-	var args *Node = 0 as *Node;
+	var args *Node = null;
 	if (f.nparams == 2) { args = ip_argv_nodes(argc, argv); }
 	return (ip_call(f, args, 0, f.pos) & 255) as int;
 }
@@ -1666,7 +1666,7 @@ fn ip_reset() {
 	ip_stack_lo = 0;
 	ip_sp = 0;
 	ip_fp = 0;
-	ip_fn = 0 as *Func;
+	ip_fn = null;
 	ip_retdst = 0;
 	ip_ret = 0;
 	ip_returning = false;
@@ -1734,7 +1734,7 @@ fn cmd_irun(argc int, argv **u8) int {
 	// they cannot do here themselves.
 	comptime_set("INTERP", "1");
 	diag_setup();
-	var unit *Unit = 0 as *Unit;
+	var unit *Unit = null;
 	if (is_dir(input)) {
 		unit = parse_dir(input);
 	} else {
