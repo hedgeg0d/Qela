@@ -10,19 +10,21 @@ let ABI_REQ_RUN_AST = 8;
 fn eval(src str) i64 {
 	abi_spawn();
 	abi_send_frame(abi_in, ABI_REQ_RUN as u8, src.ptr, src.len);
-	var buf [8]u8;
 	var kind u8 = 0;
-	var n i64 = abi_wait_result(&kind, &buf[0], 8);
-	if (n < 0) {
+	var resp str = abi_wait_result_payload(&kind);
+	if (kind == 0) {
 		if (!abi_respawned && abi_respawn()) { return eval(src); }
 		eprint("eval: the qela subprocess died\n");
 		sys_exit(1);
 	}
 	if (kind == (ABI_RESP_ERR as u8)) {
-		eprint("eval: compile or runtime error in the evaluated source\n");
-		sys_exit(1);
+		// A bad source reports and skips: the evaluator survives a typo,
+		// so a later eval in the same program still runs.
+		if (resp.len > 0) { eprint(resp); }
+		else { eprint("eval: compile or runtime error in the evaluated source\n"); }
+		return 0;
 	}
-	return *(&buf[0] as *i64);
+	return abi_decode_u64(resp.ptr);
 }
 
 /// Parses source code into a manipulable abstract tree.
@@ -31,20 +33,20 @@ fn parse_ast(src str) *Ast {
 	var attempt bool = false;
 	while (true) {
 		abi_send_frame(abi_in, ABI_REQ_PARSE as u8, src.ptr, src.len);
-		var buf [8]u8;
 		var kind u8 = 0;
-		var n i64 = abi_wait_result(&kind, &buf[0], 8);
-		if (n < 0) {
+		var resp str = abi_wait_result_payload(&kind);
+		if (kind == 0) {
 			if (!attempt && abi_respawn()) { attempt = true; continue; }
 			eprint("parse_ast: the qela subprocess died\n");
 			sys_exit(1);
 		}
 		if (kind == (ABI_RESP_ERR as u8)) {
-			eprint("parse_ast: could not parse the source\n");
+			if (resp.len > 0) { eprint(resp); }
+			else { eprint("parse_ast: could not parse the source\n"); }
 			sys_exit(1);
 		}
 		var a *Ast = arena_alloc(sizeof(Ast), 8) as *Ast;
-		a.id = *(&buf[0] as *i64);
+		a.id = abi_decode_u64(resp.ptr);
 		a.src = str_dup(src);
 		abi_ast_register(a);
 		return a;
@@ -59,19 +61,19 @@ fn run_ast(a *Ast) i64 {
 		var hb [8]u8;
 		*(&hb[0] as *i64) = a.id;
 		abi_send_frame(abi_in, ABI_REQ_RUN_AST as u8, &hb[0], 8);
-		var buf [8]u8;
 		var kind u8 = 0;
-		var n i64 = abi_wait_result(&kind, &buf[0], 8);
-		if (n < 0) {
+		var resp str = abi_wait_result_payload(&kind);
+		if (kind == 0) {
 			if (!attempt && abi_respawn()) { attempt = true; continue; }
 			eprint("run_ast: the qela subprocess died\n");
 			sys_exit(1);
 		}
 		if (kind == (ABI_RESP_ERR as u8)) {
-			eprint("run_ast: runtime error, or an unknown ast handle\n");
+			if (resp.len > 0) { eprint(resp); }
+			else { eprint("run_ast: runtime error, or an unknown ast handle\n"); }
 			sys_exit(1);
 		}
-		return *(&buf[0] as *i64);
+		return abi_decode_u64(resp.ptr);
 	}
 }
 
