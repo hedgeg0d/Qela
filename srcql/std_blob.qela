@@ -17,4 +17,4 @@ fn std_blob_index() str { return ""; }
 
 fn std_blob_count() int { return 39; }
 
-fn std_blob_total() i64 { return 180473; }
+fn std_blob_total() i64 { return 180867; }
