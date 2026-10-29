@@ -1,0 +1,21 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: 1-4-9
+// `[k: v for k in m]` builds a Map from a comprehension: the key is a
+// str, the value expression may use the loop variable.
+import "std/fmt.qela";
+import "std/vec.qela";
+import "std/map.qela";
+
+fn main() int {
+	var m Map(i64);
+	map_put(&m, "a", 1);
+	map_put(&m, "b", 2);
+	map_put(&m, "c", 3);
+	var sq Map(i64) = [k: m[k] * m[k] for k in m];
+	var o = fmt_begin();
+	o = fmt_put_str(o, "${sq.get("a")}-${sq.get("b")}-${sq.get("c")}");
+	var r = fmt_result(o);
+	sys_write(1, r.ptr, r.len);
+	return 0;
+}

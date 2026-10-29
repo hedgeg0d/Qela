@@ -1,0 +1,122 @@
+// The filesystem, script-side: list, size, mtime, mkdir, rmdir, rename,
+// unlink, getcwd. Reads never die on a missing path -- fs_listdir and
+// fs_file_size report it with an empty result / -1, so a script can check
+// before it acts. Writes return 0 on success or a negated errno, and
+// never call exit.
+import "sys.qela";
+import "io.qela";
+import "buf.qela";
+import "str.qela";
+
+// Every entry name under a directory (files and directories, in
+// directory order, "." and ".." skipped). An empty slice means an empty
+// or unreadable directory.
+fn fs_listdir(path str) []str {
+	var fd i64 = sys_open_read(cstr(path));
+	if (fd < 0) {
+		var s []str;
+		s.ptr = null;
+		s.len = 0;
+		return s;
+	}
+	var all Buf;
+	var chunk [2048]u8;
+	while (true) {
+		var got i64 = sys_getdents(fd, &chunk[0], 2048);
+		if (got <= 0) { break; }
+		var k i64 = 0;
+		while (k < got) { buf_u8(&all, chunk[k]); k = k + 1; }
+	}
+	sys_close(fd);
+
+	var n i64 = 0;
+	var off i64 = 0;
+	while (off < all.n) {
+		var reclen i64 = (all.p[off + 16] as i64) | ((all.p[off + 17] as i64) << 8);
+		var nl i64 = 0;
+		while (all.p[off + 19 + nl] != 0) { nl = nl + 1; }
+		var dot bool = all.p[off + 19] == '.';
+		if (!dot && nl > 0) { n = n + 1; }
+		off = off + reclen;
+	}
+	var out *str = arena_alloc(n * 16, 8) as *str;
+	var m i64 = 0;
+	off = 0;
+	while (off < all.n) {
+		var reclen i64 = (all.p[off + 16] as i64) | ((all.p[off + 17] as i64) << 8);
+		var nl i64 = 0;
+		while (all.p[off + 19 + nl] != 0) { nl = nl + 1; }
+		var dot bool = all.p[off + 19] == '.';
+		if (!dot && nl > 0) {
+			out[m].ptr = all.p + off + 19;
+			out[m].len = nl;
+			m = m + 1;
+		}
+		off = off + reclen;
+	}
+	var s []str;
+	s.ptr = out;
+	s.len = m;
+	return s;
+}
+
+// The file's size in bytes, -1 when it cannot be stat'ed. The x86-64
+// struct stat has st_size at 48 and st_mtime at 88; the generic layout
+// used by arm64 and riscv64 at 40 and 80.
+fn fs_file_size(path str) i64 {
+	var st Stat;
+	if (sys_stat(cstr(path), &st as *u8) != 0) { return -1; }
+	var size i64 = st.d6;
+	$if (TARGET != "x86_64") {
+		size = st.d5;
+	}
+	return size;
+}
+
+// The file's mtime in seconds since the epoch, -1 when it cannot be
+// stat'ed.
+fn fs_mtime(path str) i64 {
+	var st Stat;
+	if (sys_stat(cstr(path), &st as *u8) != 0) { return -1; }
+	var mt i64 = st.d11;
+	$if (TARGET != "x86_64") {
+		mt = st.d10;
+	}
+	return mt;
+}
+
+fn fs_mkdir(path str) i64 {
+	return sys_mkdir(cstr(path));
+}
+
+fn fs_rmdir(path str) i64 {
+	return sys_rmdir(cstr(path));
+}
+
+fn fs_rename(a str, b str) i64 {
+	return sys_rename(cstr(a), cstr(b));
+}
+
+fn fs_unlink(path str) i64 {
+	return sys_unlink(cstr(path));
+}
+
+fn fs_getcwd() str {
+	var buf [1024]u8;
+	var n i64 = sys_getcwd(&buf[0], 1024);
+	if (n <= 0) {
+		var s str;
+		s.ptr = null;
+		s.len = 0;
+		return s;
+	}
+	// The kernel counts the terminating NUL in the length.
+	if (buf[n - 1] == 0) { n = n - 1; }
+	var copy *u8 = arena_alloc(n, 1);
+	var k i64 = 0;
+	while (k < n) { copy[k] = buf[k]; k = k + 1; }
+	var s str;
+	s.ptr = copy;
+	s.len = n;
+	return s;
+}
