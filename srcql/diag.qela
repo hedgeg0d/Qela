@@ -42,11 +42,14 @@ var diag_setup_done bool = false;
 // initializers, so the bytes go into a local Buf each emit. The Buf init
 // is cheap (a few stores) and runs only when coloured output is on, so the
 // cold path stays free.
-fn esc_red()  str { var b Buf; buf_bytes(&b, "\033[31m".ptr, 5); return buf_str(&b); }
-fn esc_yel()  str { var b Buf; buf_bytes(&b, "\033[33m".ptr, 5); return buf_str(&b); }
-fn esc_dim()  str { var b Buf; buf_bytes(&b, "\033[2m".ptr,  4); return buf_str(&b); }
-fn esc_bold() str { var b Buf; buf_bytes(&b, "\033[1m".ptr,  4); return buf_str(&b); }
-fn esc_rst()  str { var b Buf; buf_bytes(&b, "\033[0m".ptr,  4); return buf_str(&b); }
+// The escape byte is written as a byte: the language has no \x or octal
+// escape, so a literal "\033[31m" is a NUL followed by the text, and the
+// colour codes went out as garbage on every terminal.
+fn esc_red()  str { var b Buf; buf_u8(&b, 27); buf_bytes(&b, "[31m".ptr, 4); return buf_str(&b); }
+fn esc_yel()  str { var b Buf; buf_u8(&b, 27); buf_bytes(&b, "[33m".ptr, 4); return buf_str(&b); }
+fn esc_dim()  str { var b Buf; buf_u8(&b, 27); buf_bytes(&b, "[2m".ptr,  3); return buf_str(&b); }
+fn esc_bold() str { var b Buf; buf_u8(&b, 27); buf_bytes(&b, "[1m".ptr,  3); return buf_str(&b); }
+fn esc_rst()  str { var b Buf; buf_u8(&b, 27); buf_bytes(&b, "[0m".ptr,  3); return buf_str(&b); }
 
 // A pending secondary span to be printed after the primary. Errors may have
 // one, warnings too. Hint/note may set their own pos; secondary is a span
