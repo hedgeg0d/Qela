@@ -138,7 +138,6 @@ var lam_cap_size i64 = 8;
 var lam_env *Var;
 var lam_capturing bool = false;
 var need_arena bool = false;
-
 // Generator rewrite state, live only while one function's body is being
 // parsed. cur_gen_ret is the function's return type when it is a generator
 // candidate (*Gen(T) -- set before the body so `yield` can be recognized),
@@ -212,6 +211,11 @@ fn capture_get_or_add(v *Var, p i64) *Var {
 // rejected there, because codegen runs defer bodies while unwinding and
 // another return would re-enter the same defer forever.
 var in_defer_body bool = false;
+
+// Set while parsing a comprehension's for-clause: the clause's own `if`
+// must not be mistaken for a ternary (`x if y else z`), which would
+// swallow `[f(x) for x in xs if cond]`'s condition filter.
+var in_comp_clause bool = false;
 
 // The parser recurses on nested parentheses, unary prefixes, assignments
 // and blocks; each recursion is counted here and capped, so a hostile
@@ -807,10 +811,233 @@ fn parse_bytes(raw str, pos i64) *Node {
 	return n;
 }
 
+// Scans the tokens of a `[...]` literal for a top-level `for` keyword,
+// which turns the literal into a comprehension. Brackets, parens and
+// braces nest; a `for` inside a lambda body or a nested literal does not
+// count. Strings and comments are single tokens already, so they cannot
+// fake a keyword.
+fn arrlit_has_for(t *Token) *Token {
+	var depth i64 = 1;
+	while (t.kind != TK_EOF) {
+		if (t.kind == TK_PUNCT) {
+			if (str_eq(t.text, "[") || str_eq(t.text, "(") || str_eq(t.text, "{")) {
+				depth = depth + 1;
+			} else if (str_eq(t.text, "]") || str_eq(t.text, ")") || str_eq(t.text, "}")) {
+				depth = depth - 1;
+				if (depth == 0) { return null; }
+			}
+		} else if (t.kind == TK_KW && str_eq(t.text, "for") && depth == 1) {
+			return t;
+		}
+		t = t.next;
+	}
+	return null;
+}
+
+// `[<expr> for <var> in <coll> if <cond>]`: the element is parsed last
+// (after the loop variable is in scope), then the whole thing becomes an
+// ND_ARRCOMP whose `.init` chain zeroes a hidden Vec, hoists the
+// collection and runs the collection loop, and whose `.lhs` is
+// vec_view(&_$v). The Vec is arena-backed, like every Vec: the result
+// lives for the program.
+fn parse_comprehension(t **Token, p i64, first *Token, ft *Token) *Node {
+	*t = ft;
+	*t = (*t).next;
+	if ((*t).kind != TK_IDENT) { error_at((*t).pos, "expected a loop variable in a comprehension"); }
+	var name str = (*t).text;
+	var np i64 = (*t).pos;
+	*t = (*t).next;
+	tok_expect(t, "in");
+	in_comp_clause = true;
+	var coll *Node = parse_assign(t);
+	var cond_start *Token = null;
+	if (tok_consume(t, "if")) { cond_start = *t; }
+	in_comp_clause = false;
+
+	add_type(coll);
+	var cty *Type = coll.ty;
+	if (cty.kind == TY_PTR) { cty = cty.base; }
+	var elem *Type = null;
+	if (cty.kind == TY_ARRAY || cty.kind == TY_SLICE) { elem = cty.base; }
+	else if (cty.kind == TY_STRUCT && cty.tmpl as i64 != 0 && str_eq(cty.tmpl.name, "Gen")) {
+		elem = cty.ga0;
+	}
+	if (elem as i64 == 0) {
+		// The <prefix>_iter / <prefix>_view protocol, like for-in.
+		var pit *Node = iter_protocol_call(coll, np);
+		if (pit as i64 != 0) {
+			add_type(pit);
+			coll = pit;
+			elem = gen_elem_of(coll.ty);
+			if (elem as i64 == 0 && coll.ty.kind == TY_SLICE) { elem = coll.ty.base; }
+		}
+	}
+	if (elem as i64 == 0) {
+		error_at(np, "a comprehension needs an array, a slice, a string, a Map, or a generator");
+	}
+	if (elem.kind == TY_VOID) { error_at(np, "a comprehension cannot iterate a void element"); }
+
+	enter_scope();
+	var v *Var = declare_var(name, elem, np);
+	// The condition filter is parsed now too: it references the loop
+	// variable, which is in scope from here on.
+	var cond *Node = null;
+	if (cond_start as i64 != 0) {
+		*t = cond_start;
+		cond = parse_assign(t);
+	}
+	// The element expression: the loop variable is in scope now. Its type
+	// fixes the hidden Vec's element type, which must be known at parse
+	// time -- so, like for-in's collection, an element that calls a
+	// function declared below this point cannot be typed here.
+	*t = first;
+	var elem_expr *Node = parse_assign(t);
+	add_type(elem_expr);
+	if (elem_expr.ty.kind == TY_VOID) { error_at(np, "a comprehension element cannot be void"); }
+	// The for-clause was consumed before the element; re-walk the token
+	// stream past it and take the close bracket here: the caller is
+	// bypassed entirely.
+	*t = ft;
+	while (!tok_eq(*t, "]")) { *t = (*t).next; }
+	tok_expect(t, "]");
+
+	// The hidden Vec carries the element type.
+	var tm *Tmpl = tmpl_find("Vec");
+	if (tm as i64 == 0) { error_at(p, "a comprehension needs 'import std/vec.qela'"); }
+	var vty *Type = generic_instance(tm, elem_expr.ty, null);
+	var vv *Var = declare_var(hidden_name("v"), vty, np);
+
+	var chain_head Node;
+	var chain_tail *Node = &chain_head;
+	var zv *Node = new_node(ND_ZERO, np);
+	zv.varp = vv;
+	var zs *Node = new_node(ND_EXPRSTMT, np);
+	zs.lhs = zv;
+	chain_tail.next = zs;
+	chain_tail = zs;
+
+	var is_gen bool = false;
+	var gty *Type = coll.ty;
+	if (gty.kind == TY_PTR) { gty = gty.base; }
+	if (gen_elem_of(gty) as i64 != 0) { is_gen = true; }
+
+	var collref *Node = coll;
+	if (coll.kind != ND_VAR) {
+		var cv *Var = declare_var(hidden_name("c"), coll.ty, np);
+		var clhs *Node = new_node(ND_VAR, np);
+		clhs.varp = cv;
+		var ca *Node = new_node(ND_EXPRSTMT, np);
+		ca.lhs = bin_node(ND_ASSIGN, clhs, coll, np);
+		chain_tail.next = ca;
+		chain_tail = ca;
+		var cr *Node = new_node(ND_VAR, np);
+		cr.varp = cv;
+		collref = cr;
+	}
+
+	// The push call: vec_push(&_$v, elem_expr).
+	var pv *Node = new_node(ND_ADDR, np);
+	var pvv *Node = new_node(ND_VAR, np);
+	pvv.varp = vv;
+	pv.lhs = pvv;
+	var pc *Node = new_node(ND_CALL, np);
+	pc.name = "vec_push";
+	pc.args = pv;
+	pv.next = elem_expr;
+	pc.nargs = 2;
+	var pstmt *Node = new_node(ND_EXPRSTMT, np);
+	pstmt.lhs = pc;
+
+	var f *Node = new_node(ND_FOR, np);
+	if (is_gen) {
+		// while (gen_next(&g, &x)) { push }
+		var xv *Node = new_node(ND_VAR, np);
+		xv.varp = v;
+		var gn *Node = new_node(ND_CALL, np);
+		gn.name = "gen_next";
+		var g1 *Node = collref;
+		var g2 *Node = new_node(ND_ADDR, np);
+		g2.lhs = xv;
+		gn.args = g1;
+		g1.next = g2;
+		gn.nargs = 2;
+		f.cond = gn;
+		if (cond as i64 != 0) { f.body = stmt_if_expr(cond, pstmt, np); }
+		else { f.body = pstmt; }
+	} else {
+		// for _$i in 0..coll.len { x = coll[_$i]; ... }
+		var iv *Var = declare_var(hidden_name("i"), type_lookup("int"), np);
+		var i0 *Node = new_node(ND_VAR, np);
+		i0.varp = iv;
+		var init *Node = new_node(ND_EXPRSTMT, np);
+		init.lhs = bin_node(ND_ASSIGN, i0, num_node(0, np), np);
+		f.init = init;
+		var i1 *Node = new_node(ND_VAR, np);
+		i1.varp = iv;
+		var ml *Node = new_node(ND_MEMBER, np);
+		ml.lhs = collref;
+		ml.name = "len";
+		f.cond = bin_node(ND_LT, i1, ml, np);
+		var i2 *Node = new_node(ND_VAR, np);
+		i2.varp = iv;
+		var st *Node = bin_node(ND_OPASSIGN, i2, num_node(1, np), np);
+		st.val = ND_ADD;
+		f.step = st;
+		var i3 *Node = new_node(ND_VAR, np);
+		i3.varp = iv;
+		var idx *Node = bin_node(ND_INDEX, collref, i3, np);
+		var xa *Node = new_node(ND_EXPRSTMT, np);
+		var xv2 *Node = new_node(ND_VAR, np);
+		xv2.varp = v;
+		xa.lhs = bin_node(ND_ASSIGN, xv2, idx, np);
+		if (cond as i64 != 0) { xa.next = stmt_if_expr(cond, pstmt, np); }
+		else { xa.next = pstmt; }
+		var b1 *Node = new_node(ND_BLOCK, np);
+		b1.body = xa;
+		f.body = b1;
+	}
+	chain_tail.next = f;
+	chain_tail = f;
+
+	var vv2 *Node = new_node(ND_VAR, np);
+	vv2.varp = vv;
+	var av *Node = new_node(ND_ADDR, np);
+	av.lhs = vv2;
+	var vc *Node = new_node(ND_CALL, np);
+	vc.name = "vec_view";
+	vc.args = av;
+	vc.nargs = 1;
+
+	leave_scope();
+
+	var n *Node = new_node(ND_ARRCOMP, p);
+	n.init = chain_head.next;
+	n.lhs = vc;
+	n.ty = type_slice(elem);
+	return n;
+}
+
+// A tiny if-statement builder: if (cond) { body } — used by the
+// comprehension desugar, which parses its pieces by hand.
+fn stmt_if_expr(cond *Node, body *Node, pos i64) *Node {
+	var ifn *Node = new_node(ND_IF, pos);
+	ifn.cond = cond;
+	var blk *Node = new_node(ND_BLOCK, pos);
+	blk.body = body;
+	ifn.then = blk;
+	return ifn;
+}
+
 fn parse_primary(t **Token) *Node {
 	if (tok_eq(*t, "[")) {
 		var p i64 = (*t).pos;
 		*t = (*t).next;
+		// A comprehension: `[<expr> for <var> in <coll> if <cond>]`. The
+		// element expression comes before the loop variable in source, so
+		// the for-clause is found by token scan and parsed first -- the
+		// variable is in scope by the time the element parses.
+		var comp_for *Token = arrlit_has_for(*t);
+		if (comp_for as i64 != 0) { return parse_comprehension(t, p, *t, comp_for); }
 		var n *Node = new_node(ND_ARRLIT, p);
 		var head Node;
 		var tail *Node = &head;
@@ -934,6 +1161,10 @@ fn parse_primary(t **Token) *Node {
 			var ep *Node = new_node(ND_STRPART, (*t).pos);
 			ep.val = 0;
 			ep.lhs = parse_assign(t);
+			if ((*t).kind == TK_FMTSPEC) {
+				ep.name = (*t).text;
+				*t = (*t).next;
+			}
 			ftail.next = ep;
 			ftail = ep;
 			tok_expect(t, "}");
@@ -1278,16 +1509,286 @@ fn parse_add(t **Token) *Node {
 	}
 }
 
+fn rel_op_peek(t *Token) int {
+	if (tok_eq(t, "<")) { return ND_LT; }
+	if (tok_eq(t, "<=")) { return ND_LE; }
+	if (tok_eq(t, ">")) { return -ND_LT; }
+	if (tok_eq(t, ">=")) { return -ND_LE; }
+	return 0;
+}
+
+fn rel_op_take(t **Token) int {
+	var rv int = rel_op_peek(*t);
+	if (rv != 0) { *t = (*t).next; }
+	return rv;
+}
+
+// a op b with `>`/`>=` folded: a negative op means the operands swap.
+fn rel_cmp_node(op int, a *Node, b *Node, pos i64) *Node {
+	if (op > 0) { return bin_node(op, a, b, pos); }
+	return bin_node(-op, b, a, pos);
+}
+
+// A comparison operand that is safe to evaluate twice: a variable read or
+// a literal has no side effects, so it needs no hidden temp.
+fn chain_mid_plain(n *Node) bool {
+	return n.kind == ND_VAR || n.kind == ND_NUM;
+}
+
+// A unique `_$`-prefixed name: no identifier can contain `$`, so these can
+// never collide with user code, and the gen_seq counter keeps two
+// expansions in the same scope apart.
+fn hidden_name(prefix str) str {
+	var b Buf;
+	fmt_str(&b, "_$");
+	fmt_str(&b, prefix);
+	fmt_i64(&b, gen_seq as i64);
+	gen_seq = gen_seq + 1;
+	return buf_str(&b);
+}
+
+// Hoists a chained-comparison middle operand into a hidden temp: returns
+// the value to put in this compare and, via `rd`, the variable read for
+// the next one. A plain variable or literal is used twice as itself.
+fn chain_hoist_mid(mid *Node, pos i64, rd **Node) *Node {
+	if (chain_mid_plain(mid)) {
+		*rd = mid;
+		return mid;
+	}
+	add_type(mid);
+	var hv *Var = declare_var(hidden_name("m"), mid.ty, pos);
+	var lhs *Node = new_node(ND_VAR, pos);
+	lhs.varp = hv;
+	var asn *Node = bin_node(ND_ASSIGN, lhs, mid, pos);
+	var r *Node = new_node(ND_VAR, pos);
+	r.varp = hv;
+	*rd = r;
+	return asn;
+}
+
+// Chained comparisons: `a < b <= c` becomes `a < b && b <= c`, with every
+// middle operand evaluated exactly once, and only when the comparison
+// before it held. The hoist is a plain assignment in the operand's place:
+// `a < (t = b) && t <= c` -- the assign stores b once and yields its
+// value, so the second compare reads the temp. Evaluation order matches
+// the language's own rhs-first compare (a < b() evaluates b() first).
+fn parse_chain(t **Token, pos i64, n *Node, op1 int, mid *Node) *Node {
+	var oh Node;
+	var ot *Node = &oh;
+	var mh Node;
+	var mt *Node = &mh;
+	mt.next = mid;
+	mt = mid;
+	while (true) {
+		var op int = rel_op_take(t);
+		if (op == 0) { break; }
+		var on *Node = num_node(op as i64, (*t).pos);
+		ot.next = on;
+		ot = on;
+		var rhs *Node = parse_add(t);
+		mt.next = rhs;
+		mt = rhs;
+	}
+	var rd *Node = null;
+	var midref *Node = chain_hoist_mid(mid, pos, &rd);
+	var cur *Node = rel_cmp_node(op1, n, midref, pos);
+	var op *Node = oh.next;
+	// The operand list is [mid, rhs2, rhs3...]: the first element is the
+	// right side of the first compare, already consumed into `mid`.
+	var opnd *Node = mh.next;
+	opnd = opnd.next;
+	while (op as i64 != 0) {
+		var nxt *Node = op.next;
+		var opnd_next *Node = opnd.next;
+		var rd2 *Node = null;
+		if (nxt as i64 != 0) {
+			opnd = chain_hoist_mid(opnd, pos, &rd2);
+			rd = rd2;
+		}
+		var cmp *Node = rel_cmp_node(op.val as int, rd, opnd, pos);
+		var and *Node = bin_node(ND_AND, cur, cmp, pos);
+		cur = and;
+		opnd = opnd_next;
+		op = nxt;
+	}
+	return cur;
+}
+
+// `x in coll` / `x not in coll`. A string membership is str_contains, a
+// struct membership is `<prefix>_has` (map_has for a Map), and an array or
+// slice scan becomes a hidden loop on an ND_IN node: the chain in `.init`
+// zeroes the result, hoists the collection and runs the scan, `.lhs` is
+// the result variable.
+fn parse_in_expr(lhs *Node, coll *Node, pos i64, neg bool) *Node {
+	add_type(coll);
+	var cty *Type = coll.ty;
+	if (cty.kind == TY_PTR) { cty = cty.base; }
+	var node *Node = null;
+	if (cty.kind == TY_SLICE && cty.base as i64 == ty_u8 as i64) {
+		// A str is a []u8: membership is substring, not a byte scan.
+		var c *Node = new_node(ND_CALL, pos);
+		c.name = "str_contains";
+		c.args = coll;
+		coll.next = lhs;
+		c.nargs = 2;
+		node = c;
+	} else if (cty.kind == TY_STRUCT && cty.name.len > 0) {
+		var pre str = iter_prefix(cty);
+		var fb Buf;
+		fmt_str(&fb, pre);
+		fmt_str(&fb, "_has");
+		var fname str = buf_str(&fb);
+		var f *Func = find_func(fname);
+		if (f as i64 == 0) {
+			var mb Buf;
+			fmt_str(&mb, "this type has no 'in' support (no ");
+			fmt_str(&mb, fname);
+			fmt_str(&mb, ")");
+			error_at(pos, buf_str(&mb));
+		}
+		var ch *Node = null;
+		var recv *Node = coll;
+		if (coll.ty.kind != TY_PTR) {
+			if (coll.kind != ND_VAR) {
+				var cv *Var = declare_var(hidden_name("c"), coll.ty, pos);
+				var clhs *Node = new_node(ND_VAR, pos);
+				clhs.varp = cv;
+				var ca *Node = new_node(ND_EXPRSTMT, pos);
+				ca.lhs = bin_node(ND_ASSIGN, clhs, coll, pos);
+				ch = ca;
+				var cr *Node = new_node(ND_VAR, pos);
+				cr.varp = cv;
+				coll = cr;
+			}
+			var ad *Node = new_node(ND_ADDR, pos);
+			ad.lhs = coll;
+			recv = ad;
+		}
+		var c *Node = new_node(ND_CALL, pos);
+		c.name = fname;
+		c.args = recv;
+		recv.next = lhs;
+		c.nargs = 2;
+		if (ch as i64 != 0) {
+			var n *Node = new_node(ND_IN, pos);
+			n.init = ch;
+			n.lhs = c;
+			n.ty = ty_bool;
+			node = n;
+		} else {
+			node = c;
+		}
+	} else if (cty.kind == TY_ARRAY || cty.kind == TY_SLICE) {
+		var fv *Var = declare_var(hidden_name("f"), ty_bool, pos);
+		var iv *Var = declare_var(hidden_name("i"), type_lookup("int"), pos);
+		var zf *Node = new_node(ND_ZERO, pos);
+		zf.varp = fv;
+		var zfs *Node = new_node(ND_EXPRSTMT, pos);
+		zfs.lhs = zf;
+		var ch *Node = zfs;
+		var ct *Node = zfs;
+		var collref *Node = coll;
+		if (coll.kind != ND_VAR) {
+			var cv *Var = declare_var(hidden_name("c"), coll.ty, pos);
+			var clhs *Node = new_node(ND_VAR, pos);
+			clhs.varp = cv;
+			var ca *Node = new_node(ND_EXPRSTMT, pos);
+			ca.lhs = bin_node(ND_ASSIGN, clhs, coll, pos);
+			ct.next = ca;
+			ct = ca;
+			var cr *Node = new_node(ND_VAR, pos);
+			cr.varp = cv;
+			collref = cr;
+		}
+		var lref *Node = lhs;
+		if (!chain_mid_plain(lhs)) {
+			add_type(lhs);
+			var lv *Var = declare_var(hidden_name("in"), lhs.ty, pos);
+			var llhs *Node = new_node(ND_VAR, pos);
+			llhs.varp = lv;
+			var la *Node = new_node(ND_EXPRSTMT, pos);
+			la.lhs = bin_node(ND_ASSIGN, llhs, lhs, pos);
+			ct.next = la;
+			ct = la;
+			var lr *Node = new_node(ND_VAR, pos);
+			lr.varp = lv;
+			lref = lr;
+		}
+		var f *Node = new_node(ND_FOR, pos);
+		var i0 *Node = new_node(ND_VAR, pos);
+		i0.varp = iv;
+		var init *Node = new_node(ND_EXPRSTMT, pos);
+		init.lhs = bin_node(ND_ASSIGN, i0, num_node(0, pos), pos);
+		f.init = init;
+		var i1 *Node = new_node(ND_VAR, pos);
+		i1.varp = iv;
+		var ml *Node = new_node(ND_MEMBER, pos);
+		ml.lhs = collref;
+		ml.name = "len";
+		f.cond = bin_node(ND_LT, i1, ml, pos);
+		var i2 *Node = new_node(ND_VAR, pos);
+		i2.varp = iv;
+		var st *Node = bin_node(ND_OPASSIGN, i2, num_node(1, pos), pos);
+		st.val = ND_ADD;
+		f.step = st;
+		var i3 *Node = new_node(ND_VAR, pos);
+		i3.varp = iv;
+		var idx *Node = bin_node(ND_INDEX, collref, i3, pos);
+		var eq *Node = bin_node(ND_EQ, lref, idx, pos);
+		var ifn *Node = new_node(ND_IF, pos);
+		ifn.cond = eq;
+		var bhead Node;
+		var btail *Node = &bhead;
+		var fset *Node = new_node(ND_EXPRSTMT, pos);
+		var fv2 *Node = new_node(ND_VAR, pos);
+		fv2.varp = fv;
+		fset.lhs = bin_node(ND_ASSIGN, fv2, num_node(1, pos), pos);
+		btail.next = fset;
+		btail = fset;
+		var brk *Node = new_node(ND_BREAK, pos);
+		btail.next = brk;
+		btail = brk;
+		var blk *Node = new_node(ND_BLOCK, pos);
+		blk.body = bhead.next;
+		ifn.then = blk;
+		var fbody *Node = new_node(ND_BLOCK, pos);
+		fbody.body = ifn;
+		f.body = fbody;
+		ct.next = f;
+		ct = f;
+		var n *Node = new_node(ND_IN, pos);
+		n.init = ch;
+		var fr *Node = new_node(ND_VAR, pos);
+		fr.varp = fv;
+		n.lhs = fr;
+		n.ty = ty_bool;
+		node = n;
+	} else {
+		error_at(pos, "'in' needs an array, a slice, a string, or a struct with a <prefix>_has function");
+	}
+	if (neg) {
+		var nn *Node = new_node(ND_NOT, pos);
+		nn.lhs = node;
+		return nn;
+	}
+	return node;
+}
+
 fn parse_rel(t **Token) *Node {
 	var n *Node = parse_add(t);
-	while (true) {
-		var p i64 = (*t).pos;
-		if (tok_consume(t, "<")) { n = bin_node(ND_LT, n, parse_add(t), p); }
-		else if (tok_consume(t, "<=")) { n = bin_node(ND_LE, n, parse_add(t), p); }
-		else if (tok_consume(t, ">")) { n = bin_node(ND_LT, parse_add(t), n, p); }
-		else if (tok_consume(t, ">=")) { n = bin_node(ND_LE, parse_add(t), n, p); }
-		else { return n; }
+	var p i64 = (*t).pos;
+	var op int = rel_op_take(t);
+	if (op == 0) {
+		if (tok_consume(t, "in")) { return parse_in_expr(n, parse_add(t), p, false); }
+		if (tok_eq(*t, "not") && tok_eq((*t).next, "in")) {
+			*t = (*t).next.next;
+			return parse_in_expr(n, parse_add(t), p, true);
+		}
+		return n;
 	}
+	var mid *Node = parse_add(t);
+	if (rel_op_peek(*t) != 0) { return parse_chain(t, p, n, op, mid); }
+	return rel_cmp_node(op, n, mid, p);
 }
 
 fn parse_eq(t **Token) *Node {
@@ -1357,6 +1858,20 @@ fn parse_assign_inner(t **Token) *Node {
 	if (tok_consume(t, "^=")) { return opassign_node(n, parse_assign(t), ND_BITXOR, p); }
 	if (tok_consume(t, "<<=")) { return opassign_node(n, parse_assign(t), ND_SHL, p); }
 	if (tok_consume(t, ">>=")) { return opassign_node(n, parse_assign(t), ND_SHR, p); }
+	// `a if c else b`: a conditional expression. The condition and the
+	// value branches are ordinary expressions; the else branch parses with
+	// parse_assign, so `a if c else b if d else e` nests to the right.
+	// Suppressed inside a comprehension's for-clause, where `if` is the
+	// element filter.
+	if (!in_comp_clause && tok_consume(t, "if")) {
+		var c *Node = parse_logor(t);
+		tok_expect(t, "else");
+		var n2 *Node = new_node(ND_IFEXPR, p);
+		n2.cond = c;
+		n2.then = n;
+		n2.els = parse_assign(t);
+		return n2;
+	}
 	return n;
 }
 
