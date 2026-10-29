@@ -1,0 +1,116 @@
+var kb_q [128]u8;
+var kb_head i64 = 0;
+var kb_t2 i64 = 0;
+var kb_shift i64 = 0;
+
+fn kb_head_set(v i64) {
+	kb_head = v;
+}
+
+fn kb_push(c u8) {
+	if (kb_head_get() - kb_t2_get() < 128) {
+		kb_q_set(kb_head_get() % 128, c);
+		kb_head_set(kb_head_get() + 1);
+	}
+}
+
+fn kb_char(sc i64, sh i64) i64 {
+	if (sc == 0x39) { return 32; }
+	if (sc == 0x1c) { return 10; }
+	if (sc == 0x0e) { return 8; }
+	if (sc == 0x0f) { return 9; }
+	if (sc >= 0x02 && sc <= 0x0b) {
+		var sd str = "1234567890";
+		if (sh != 0) {
+			sd = "!@#$%^&*()";
+		}
+		return sd[sc - 0x02];
+	}
+	if (sc >= 0x10 && sc <= 0x19) {
+		var sq str = "qwertyuiop";
+		if (sh != 0) {
+			sq = "QWERTYUIOP";
+		}
+		return sq[sc - 0x10];
+	}
+	if (sc >= 0x1e && sc <= 0x26) {
+		var sa str = "asdfghjkl";
+		if (sh != 0) {
+			sa = "ASDFGHJKL";
+		}
+		return sa[sc - 0x1e];
+	}
+	if (sc >= 0x2c && sc <= 0x32) {
+		var sz str = "zxcvbnm";
+		if (sh != 0) {
+			sz = "ZXCVBNM";
+		}
+		return sz[sc - 0x2c];
+	}
+	if (sc == 0x0c) { if (sh != 0) { return 0x5f; } return 0x2d; }
+	if (sc == 0x0d) { if (sh != 0) { return 0x2b; } return 0x3d; }
+	if (sc == 0x1a) { if (sh != 0) { return 0x7b; } return 0x5b; }
+	if (sc == 0x1b) { if (sh != 0) { return 0x7d; } return 0x5d; }
+	if (sc == 0x27) { if (sh != 0) { return 0x3a; } return 0x3b; }
+	if (sc == 0x28) { if (sh != 0) { return 0x22; } return 0x27; }
+	if (sc == 0x29) { if (sh != 0) { return 0x7e; } return 0x60; }
+	if (sc == 0x2b) { if (sh != 0) { return 0x7c; } return 0x5c; }
+	if (sc == 0x33) { if (sh != 0) { return 0x3c; } return 0x2c; }
+	if (sc == 0x34) { if (sh != 0) { return 0x3e; } return 0x2e; }
+	if (sc == 0x35) { if (sh != 0) { return 0x3f; } return 0x2f; }
+	return 0;
+}
+
+fn kb_init() {
+	outb(0x64, 0xae);
+	while ((inb(0x64) & 1) != 0) {
+		var d i64 = inb(0x60);
+	}
+	outb(0x64, 0x60);
+	outb(0x60, 0x41);
+	var i i64 = 0;
+	while (i < 128) {
+		kb_q[i] = 0 as u8;
+		i = i + 1;
+	}
+	kb_head = 0;
+	kb_t2_set(0);
+	kb_shift_set(0);
+}
+
+fn kb_scan(sc i64) {
+	if ((sc & 0x80) == 0) {
+		if (sc == 0x2a || sc == 0x36) {
+			kb_shift_set(1);
+		} else {
+			var c i64 = kb_char(sc, kb_shift_get());
+			if (c != 0) {
+				kb_push(c as u8);
+			}
+		}
+	} else {
+		if (sc == 0xaa || sc == 0xb6) {
+			kb_shift_set(0);
+		}
+	}
+}
+
+fn kb_poll() {
+	var st i64 = inb(0x64);
+	if ((st & 1) != 0) {
+		kb_scan(inb(0x60));
+	}
+}
+
+fn interrupt kbd_irq() {
+	kb_scan(inb(0x60));
+	outb(0x20, 0x20);
+}
+
+fn kb_t2_get() i64 {
+	return kb_t2;
+}
+
+fn kb_t2_set(v i64) {
+	kb_t2 = v;
+}
