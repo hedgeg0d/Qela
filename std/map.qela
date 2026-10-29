@@ -10,6 +10,7 @@ struct Map(V) {
 	nb   i64,
 }
 
+/// Hashes a string key into a bounded integer.
 fn map_hash(k str) i64 {
 	var h i64 = 2166136261;
 	var i i64 = 0;
@@ -21,6 +22,7 @@ fn map_hash(k str) i64 {
 	return h;
 }
 
+/// Creates an empty map in place.
 fn map_init(comptime V: type, m *Map(V)) {
 	m.keys = null;
 	m.vals = null;
@@ -30,6 +32,7 @@ fn map_init(comptime V: type, m *Map(V)) {
 	m.nb = 0;
 }
 
+/// Rebucketizes all keys into a fresh index array.
 fn map_rehash(comptime V: type, m *Map(V), nb i64) {
 	m.idx = arena_alloc(nb * 8, 8) as *i64;
 	m.nb = nb;
@@ -50,6 +53,7 @@ fn map_rehash(comptime V: type, m *Map(V), nb i64) {
 	}
 }
 
+/// Doubles the map capacity and rehashes entries.
 fn map_grow(comptime V: type, m *Map(V)) {
 	var cap i64 = m.cap;
 	if (cap == 0) { cap = 8; } else { cap = cap * 2; }
@@ -67,6 +71,7 @@ fn map_grow(comptime V: type, m *Map(V)) {
 	map_rehash(m, cap * 4);
 }
 
+/// Finds the bucket index for a key.
 fn map_slot(comptime V: type, m *Map(V), k str) i64 {
 	var b i64 = map_hash(k) % m.nb;
 	while (true) {
@@ -79,6 +84,7 @@ fn map_slot(comptime V: type, m *Map(V), k str) i64 {
 	return 0;
 }
 
+/// Stores a value under a string key.
 fn map_put(comptime V: type, m *Map(V), k str, v V) {
 	if (m.n + 1 > m.cap) { map_grow(m); }
 	var b i64 = map_slot(m, k);
@@ -93,11 +99,13 @@ fn map_put(comptime V: type, m *Map(V), k str, v V) {
 	*(m.idx + b) = m.n;
 }
 
+/// Reports whether a key is present.
 fn map_has(comptime V: type, m *Map(V), k str) bool {
 	if (m.nb == 0) { return false; }
 	return *(m.idx + map_slot(m, k)) != 0;
 }
 
+/// Returns the value stored under a key.
 fn map_get(comptime V: type, m *Map(V), k str) V {
 	if (m.nb == 0) {
 		var z V;
@@ -111,15 +119,18 @@ fn map_get(comptime V: type, m *Map(V), k str) V {
 	return *(m.vals + e - 1);
 }
 
+/// Returns the number of stored entries.
 fn map_len(comptime V: type, m *Map(V)) i64 {
 	return m.n;
 }
 
+/// Returns the key stored at a position.
 fn map_key_at(comptime V: type, m *Map(V), i i64) str {
 	if (i < 0 || i >= m.n) { return ""; }
 	return *(m.keys + i);
 }
 
+/// Returns the value stored at a position.
 fn map_val_at(comptime V: type, m *Map(V), i i64) V {
 	if (i < 0 || i >= m.n) {
 		var z V;
@@ -128,6 +139,7 @@ fn map_val_at(comptime V: type, m *Map(V), i i64) V {
 	return *(m.vals + i);
 }
 
+/// Returns the map keys as a slice.
 fn map_view(comptime V: type, m *Map(V)) []str {
 	var s []str;
 	s.ptr = m.keys;

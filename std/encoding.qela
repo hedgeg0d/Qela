@@ -6,6 +6,7 @@ import "str.qela";
 // return an empty string) on any malformed input; the encode helpers
 // always succeed and arena-allocate.
 
+/// Encodes raw bytes as a base64 string.
 fn base64_encode(data *u8, n i64) str {
 	var b64 str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 	var b Buf;
@@ -29,10 +30,12 @@ fn base64_encode(data *u8, n i64) str {
 	return buf_str(&b);
 }
 
+/// Encodes a string as a base64 string.
 fn base64_encode_str(s str) str {
 	return base64_encode(s.ptr, s.len);
 }
 
+/// Decodes a base64 string, reporting success through ok.
 fn base64_decode(s str, ok *bool) str {
 	*ok = false;
 	if ((s.len & 3) != 0) { return ""; }
@@ -66,6 +69,7 @@ fn base64_decode(s str, ok *bool) str {
 	return buf_str(&b);
 }
 
+/// Encodes raw bytes as a lowercase hex string.
 fn hex_encode(data *u8, n i64) str {
 	var hexd str = "0123456789abcdef";
 	var b Buf;
@@ -79,10 +83,12 @@ fn hex_encode(data *u8, n i64) str {
 	return buf_str(&b);
 }
 
+/// Encodes a string as a lowercase hex string.
 fn hex_encode_str(s str) str {
 	return hex_encode(s.ptr, s.len);
 }
 
+/// Decodes a hex string, reporting success through ok.
 fn hex_decode(s str, ok *bool) str {
 	*ok = false;
 	if ((s.len & 1) != 0) { return ""; }

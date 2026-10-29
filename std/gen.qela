@@ -24,6 +24,7 @@ struct Gen(T) {
 // Advance the generator to its next value (or completion). The value is
 // read from g.val after the switch, so the first call -- made by the
 // spawner right after coro_spawn -- delivers the first yield.
+/// Advances a generator to its next yielded value.
 fn gen_resume(comptime T: type, g *Gen(T)) bool {
 	if (g.done || g.coro == 0) { return false; }
 	var from int = cur_coro;
@@ -43,6 +44,7 @@ fn gen_resume(comptime T: type, g *Gen(T)) bool {
 // the last one, which the advance may end with -- and false only when the
 // generator was already finished before this call, so a consumer never
 // loses the final value.
+/// Delivers the current value and advances the generator.
 fn gen_next(comptime T: type, g *Gen(T), out *T) bool {
 	if (g.done || g.coro == 0) { return false; }
 	*out = g.val;
@@ -59,6 +61,7 @@ fn gen_next(comptime T: type, g *Gen(T), out *T) bool {
 
 // Runs on the generator's own coroutine: stores the value and hands control
 // back to the consumer. g.parent was set by the last gen_resume/gen_next.
+/// Yields a value back to the generator's consumer.
 fn gen_yield(comptime T: type, g *Gen(T), v T) {
 	g.val = v;
 	var from int = cur_coro;
@@ -74,6 +77,7 @@ fn gen_yield(comptime T: type, g *Gen(T), v T) {
 // scheduler must forget the slot, or coro_live/coro_pending would count a
 // finished generator forever) and switches back to the consumer one last
 // time. Never returns on the generator's own coroutine.
+/// Marks the generator finished and switches back.
 fn gen_finish(comptime T: type, g *Gen(T)) {
 	g.done = true;
 	coros[cur_coro].done = true;

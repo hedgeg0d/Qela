@@ -1,0 +1,86 @@
+// expect-exit: 97
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/str.qela";
+var gv int = 29;
+fn mix5(a int, b int, c int, d int, e int) int { return a + b - c + d - e; }
+fn fact(n int) int { if (n <= 1) { return 1; } return n * fact(n - 1); }
+fn sum3(a int, b int, c int) int { return a + b + c; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn wide_make(a int, b int, c int) Wide { return Wide{a: a, b: b, c: c}; }
+fn nest_sum(n Nest) int { return n.tag + n.p.x + n.p.y; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 8;
+    var v1 int = 1;
+    var v2 int = 10;
+    var sv0 str = "42";
+    var sv1 str = """x
+yz""";
+    var fv double = 0.1;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0x0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    match (e) {
+        A => {
+            return ("""ab
+cd""")[0];
+        }
+        B(mb0) => {
+            return (((0 as u8) >= ((("qwerty")[2..4])[0..2]).len) + mb0);
+        }
+        C(mb0, mb1) => {
+            return ((fv + (('\n' < 42) as double)) as i64);
+        }
+    }
+    a[((p.x ^ ((((-374 != gv) <= (('1' >= -960) && (-960 >= -969))) && ((('1' >= -960) && (-960 >= -969)) <= (false as u32))) if ((p.x if (42 <= ((a[((-671 as i32) & 3)] ^ (!(true in 0..((true & 15) + 1)))) >= gv)) else (0x140 >= p.y)) > (((((-false) as u16) & (((v1 & 127) <= ('c' as u8)) && (('c' as u8) < (-127)))) <= ((-((false < -926) && (-926 > gv))) < (!fact((578 & 15))))) && (((-((false < -926) && (-926 > gv))) < (!fact((578 & 15)))) >= (p.y if (('3' >> ((-(3.75 as i64)) as i8)) <= 2) else ((true in a) / (((0xa in 0..((3 & 15) + 1)) & 15) + 0x1)))))) else ((fv > fv) in a))) & 0x3)] = (v2 in a);
+    v2 = opt_d(D.Some(751));
+    n.p.x = (("42" + (sv0)[0..2])).len;
+    sv0 += ("abcd")[1..3];
+    a[((((((gv <= gv) && (gv <= 'c')) + 639) in a) in 0..(((10 as u8) & 15) + 1)) & 3)] = gv;
+    gv = ((v0 in a) << (((589 / ((true & 15) + 1)) as i16) in 0..((((-991 - false) < (!220)) & 0xf) + 1)));
+    if ((2 == ((-((10 < 42) / ((p.x & 15) + 1))) if (((((((sv1).len < sum3(-948, 0x384, 52)) && (sum3(-948, 900, 52) < (--876))) <= true) && (true >= str_eq("qwerty", (("""x
+yz""")[1..3])[0..2]))) << (-((42 >= 255) >> (('1' < 297) && (297 > 127))))) <= (fv != (((fv + fv) / 2.0) / 1.7))) else (((10 as i8) as u32) as u8)))) {
+        sv1 += "hi";
+        fv = ((tag_e(e) in 0..((((-522 * '\t') >= ('b' in a)) & 15) + 1)) as double);
+    } else {
+        v1 = (p.x <= (((v2 / ((true & 15) + 1)) in 0..(((true in a) & 15) + 1)) as i8));
+    }
+    gv = (((('\n' as i16) * (100.0 as i64)) != (p.y <= (false in 0..((false & 15) + 1)))) ^ (!-1));
+    if (((-(((10 as u16) in 0..((p.x & 15) + 1)) as i16)) >= ((((((277 < '1') && ('1' > '2')) > (2 as i16)) && ((2 as i16) >= 255)) in 0..((((52 != false) as i16) & 15) + 1)) as i32))) {
+        v1 %= ((((!((3.75 as i64) * (-'0'))) << -618) & 15) + 1);
+        n.tag = (((mix5(0, 'b', 10, 993, 'g') in 0..((p.y & 15) + 1)) >> 'd') in a);
+    } else {
+        gv, v1 = ('f' in a), ((((271 as i8) >> ((-1 <= '0') && ('0' >= v2))) % (((p.x << ('0' in 0..((-702 & 15) + 1))) & 15) + 1)) in 0..((((!opt_d(D.Some(578))) in a) & 15) + 1));
+    }
+    b = Bag{p: -32, q: ((!sum3(str_eq(sv1, "hi"), ((2 <= 127) && (127 < true)), (("aa" + sv0))[0])) << ('2' > str_eq(("qwerty")[3..5], (("abcd")[0..4] + ("xyzzy")[1..5])))), r: (-949 | ((((("xyzzy")[1..3] + ("qwerty")[0..2]) + """x
+yz""") + ("abc")[0..2])).len), s: -1};
+    return (("""ab
+cd""")[1] < ((fv != (fv + -1.5)) != (('g' & -218) if ((("qwerty" + "hi"))[1] != (((((gv < false) < (('0' >= 100) && (100 < 255))) && ((('0' >= 100) && (0x64 < 255)) >= (--214))) < (sv1)[0]) in a)) else a[(162 & 3)])));
+}

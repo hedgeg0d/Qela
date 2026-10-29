@@ -3,14 +3,17 @@ enum Opt(T) {
 	None,
 }
 
+/// Builds an option holding the given value.
 fn opt_some(comptime T: type, v T) Opt(T) {
 	return Opt(T).Some(v);
 }
 
+/// Builds an option holding no value.
 fn opt_none(comptime T: type) Opt(T) {
 	return Opt(T).None;
 }
 
+/// Reports whether the option holds a value.
 fn opt_is_some(comptime T: type, o Opt(T)) bool {
 	match (o) {
 		Some(_v) => { return true; }
@@ -18,6 +21,7 @@ fn opt_is_some(comptime T: type, o Opt(T)) bool {
 	}
 }
 
+/// Returns the held value or the zero value.
 fn opt_val(comptime T: type, o Opt(T)) T {
 	match (o) {
 		Some(v) => { return v; }
@@ -28,6 +32,7 @@ fn opt_val(comptime T: type, o Opt(T)) T {
 	}
 }
 
+/// Returns the held value or a fallback alternative.
 fn opt_or(comptime T: type, o Opt(T), alt T) T {
 	match (o) {
 		Some(v) => { return v; }

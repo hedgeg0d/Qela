@@ -1,4 +1,4 @@
-// expect-exit: 1
+// expect-exit: 255
 // got: CRASH
 struct Pair { x int, y int, }
 struct Wide { a int, b int, c int, }
@@ -33,56 +33,24 @@ fn main() int {
     var p Pair = Pair{};
     var w Wide = Wide{};
     var b Bag = Bag{};
-    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0x0, y: 0}};
     var e E = E.A;
     var a [4]int;
     var i0 int = 0;
     var i1 int = 0;
     var i2 int = 0;
     var i3 int = 0;
-    var i4 int = 0;
-    var i5 int = 0;
-    match (e) {
-        A => {
-            return ((10.5 > (fv - 0.1)) as u32);
-        }
-        B(mb0) => {
-            return ((opt_d(D.None) ^ (((false as i8) >= ('1' > '0')) as u8)) - mb0);
-        }
-        C(mb0, mb1) => {
-            return (true ^ mb1);
-        }
-    }
-    v1 &= v0;
-    match (e) {
-        A => {
-            return -1;
-        }
-        B(mb0) => {
-            return (((((-577 as u16) as double) / 0.125) as i64) * mb0);
-        }
-        C(mb0, mb1) => {
-            return ((p.y as i8) | a[((!(v1 < false)) & 3)]);
-        }
-    }
-    v2 >>= (false >= (370 * 10));
-    v2 = gv;
-    match (e) {
-        A => {
-            return nest_sum(Nest{tag: (('\t' as i32) > v0), p: Pair{x: ((100 >> ((827 > 127) as i8)) as i16), y: gv}});
-        }
-        B(mb0) => {
-            return ((((false < '1') as i32) < ('g' ^ (v1 % ((false & 15) + 1)))) ^ (-p.x));
-        }
-        C(mb0, mb1) => {
-            return (((('g' > (!-123)) | 871) as i16) | mb1);
-        }
-    }
-    v1 = (v1 as u16);
-    a[((((0.1 + (fv * fv)) != (zero() as double)) >> opt_d(D.None)) & 3)] = ((((0.5 as i64) as u16) as u8) as i32);
-    var ob Buf;
-    fmt_i64(&ob, v1);
-    write_str(STDOUT, buf_str(&ob));
-    write_str(STDOUT, "\n");
-    return ((("hello")[0..3]).len & zero());
+    var i4 int = 0x0;
+    var i5 int = 0x0;
+    sv1 += "qwerty";
+    v0 += ((!(!('f' as i8))) >> (("xyzzy")[1..5])[0]);
+    gv = ((((-360 as u16) in a) << ((false / (('\n' & 15) + 0x1)) / (((gv | gv) & 15) + 1))) >= (('g' != ((v0 < gv) && (gv >= '1'))) < ((false * 0x179) != -659)));
+    v1 = ((-(((-527 as i32) >= (true as u32)) && ((true as u32) < (827 > 0x7f)))) << ((((gv < -253) && (-253 < gv)) * 10) in 0..(('d' & 0xf) + 0x1)));
+    e = E.B((!gv));
+    p.x = (-((((-611 * v1) ^ (true < true)) <= ((255 as u16) >= (false < '1'))) && (((255 as u16) >= (false < '1')) > 871)));
+    a[((!a[('g' & 3)]) & 3)] = (v1 << ((10.5 * (fv - fv)) as i64));
+    n = Nest{tag: ((p.x ^ false) in a), p: Pair{x: nest_sum(n), y: ((-(("""ab
+cd""")[0..3]).len) > (((zero() as u32) < (('a' as u16) as u32)) && ((('a' as u16) as u32) < (-(3 as i8)))))}};
+    write_str(STDOUT, "${v1=}\n");
+    return (-(((true in a) & ((gv >= gv) && (gv <= v0))) if ((!(((-336 & 'd') ^ (-gv)) > (v2 / ((zero() & 15) + 1)))) <= (((("foobar")[1..3])[0..2]).len * (((455 < (gv in 0..((-472 & 15) + 1))) && ((gv in 0..((-472 & 15) + 1)) <= (-v0))) & (a[(v0 & 3)] in a)))) else (('3' in 0..(('d' & 15) + 1)) in a)));
 }
