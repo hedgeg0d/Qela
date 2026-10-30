@@ -7,6 +7,8 @@
 var G f32 = 900.0;
 var N f32 = -340.0;
 var D f64 = 2.5;
+var T f32 = 1e-45;
 fn main() int {
+	if (T <= 0.0 as f32 || T + T <= T) { return 0; }
 	return (G / 10.0 as f32) as i64 as int + (N / 10.0 as f32) as i64 as int + (D as i64 as int);
 }
