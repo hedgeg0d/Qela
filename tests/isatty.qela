@@ -1,12 +1,36 @@
 // expect-exit: 0
-// expect-out: pipe=true
-// Under the test harness stdout is never a terminal, so sys_isatty has
-// to report nonzero. (On a real tty it returns 0; that half is not
-// covered here.)
+// expect-out: ok
+// The contract has two halves: 0 on a terminal, nonzero on anything else. The
+// terminal half needs a terminal and is pinned by the shell-driven
+// diagnostics test (tools/diag-test.py puts a pty on stderr); the pipe half is
+// pinned here, on descriptors this test opens itself. The first version asked
+// whether the *harness's* stdout was a pipe, which is true when the suite is
+// run from a pipe and false when it is run from a terminal -- so the test
+// passed in one place and failed in the other.
 import "std/sys.qela";
 import "std/io.qela";
 
 fn main() int {
-	println("pipe=${sys_isatty() != 0}");
+	var ends [2]i32;
+	if (sys_pipe2(&ends[0], 0) != 0) {
+		println("no pipe");
+		return 1;
+	}
+	var fails i64 = 0;
+	if (sys_isatty_fd(ends[0] as i64) == 0) {
+		fails = fails + 1;
+		print("the read end of a pipe reported a terminal\n");
+	}
+	if (sys_isatty_fd(ends[1] as i64) == 0) {
+		fails = fails + 1;
+		print("the write end of a pipe reported a terminal\n");
+	}
+	sys_close(ends[0] as i64);
+	sys_close(ends[1] as i64);
+	if (fails != 0) {
+		print("failed\n");
+		return 1;
+	}
+	println("ok");
 	return 0;
 }
