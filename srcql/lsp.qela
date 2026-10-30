@@ -594,7 +594,6 @@ fn lsp_publish(diag_path str) {
 		js_src = txt;
 		js_i = 0;
 		var d *JVal = js_value();
-		var file *JVal = j_get(d, "file");
 		var line *JVal = j_get(d, "line");
 		var col *JVal = j_get(d, "col");
 		var msg *JVal = j_get(d, "msg");

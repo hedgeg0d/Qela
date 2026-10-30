@@ -1065,7 +1065,7 @@ fn riscv_fneg(fd int, fn_ int, sz i64) {
 // FP. rs2 encodes the integer width/signedness: 0 = W, 2 = L, 1 = WU,
 // 3 = LU. funct5 11000 = float -> int, 11010 = int -> float; the fmt bit
 // is the float operand's width.
-fn riscv_fcvt_to_int(rd int, fs int, dsz i64, ssz i64, uns bool) {
+fn riscv_fcvt_to_int(rd int, fs int, _dsz i64, ssz i64, uns bool) {
 	var rs2 i64 = 2;
 	if (uns) { rs2 = 3; }
 	if (ssz == 4) { rs2 = 0; }
@@ -1184,7 +1184,7 @@ fn riscv_gen_gc_save_regs(n *Node) {
 
 // gc_data_base()/gc_data_end(): the .data bounds the GC scans, loaded as
 // the AUIPC+ADDI placeholder pair patched at finalize.
-fn riscv_gen_gc_bound(n *Node, is_base bool) {
+fn riscv_gen_gc_bound(_n *Node, is_base bool) {
 	riscv_auipc_addi(A0);
 	if (is_base) { ilist_push(&gc_base_refs, code.n - 8); }
 	else { ilist_push(&gc_end_refs, code.n - 8); }

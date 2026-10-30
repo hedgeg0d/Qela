@@ -259,22 +259,22 @@ fn bl_pred(args Obj, name str, kind int) Obj {
 	if (!bl_expect(args, 1, name)) { return Obj.Nil; }
 	var o Obj = obj_car(args);
 	match (o) {
-		Int(v) => {
+		Int(_) => {
 			if (kind == 1) { return bl_true(); }
 		}
-		Sym(s) => {
+		Sym(_) => {
 			if (kind == 2) { return bl_true(); }
 		}
-		Str(s) => {
+		Str(_) => {
 			if (kind == 3) { return bl_true(); }
 		}
-		Cons(c) => {
+		Cons(_) => {
 			if (kind == 4) { return bl_true(); }
 		}
-		Builtin(n) => {
+		Builtin(_) => {
 			if (kind == 6) { return bl_true(); }
 		}
-		Lambda(c) => {
+		Lambda(_) => {
 			if (kind == 6) { return bl_true(); }
 		}
 		Nil => {
@@ -427,7 +427,7 @@ fn bl_write(args Obj) Obj {
 	return Obj.Nil;
 }
 
-fn bl_newline(args Obj) Obj {
+fn bl_newline(_args Obj) Obj {
 	write_str(1, "\n");
 	return Obj.Nil;
 }
@@ -460,7 +460,7 @@ fn bl_map(args Obj) Obj {
 
 // ── I/O and control ──
 
-fn bl_read_line(args Obj) Obj {
+fn bl_read_line(_args Obj) Obj {
 	var b Buf;
 	var got i64 = io_read_line(&b);
 	if (got == 0) { return Obj.Nil; }
