@@ -31,20 +31,11 @@ fn sys_read(fd i64, buf u64, len i64) i64 {
 		if (kb_head != kb_t2) {
 			break;
 		}
-		if (n != 0) {
-			break;
-		}
-		// A blocking wait, and the first place the kernel enables IF
-		// in ring 0: the timer IRQ lands on the ring-0 entry frame and
-		// its handler iretq's back to the hlt. The interrupt frame
-		// padding for ring-0 entries lives in the compiler's
-		// gen_isr_save.
 		sti();
 		hlt();
 		cli();
 	}
 	while (n < len) {
-		kb_poll();
 		if (kb_head == kb_t2) {
 			break;
 		}
