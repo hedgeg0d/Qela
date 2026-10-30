@@ -1,0 +1,40 @@
+// interp-skip
+// expect-exit: 0
+// stage1-only
+// The SysV boundary now spills parameters past the register budgets to the
+// stack instead of rejecting the declaration, and hands aggregates wider
+// than 16 bytes by value: x86-64 copies them into the outgoing stack area
+// (MEMORY class, one word per eightbyte), AAPCS64 and LP64D pass a pointer
+// -- Qela's own by_ref shape. These body-ful extern functions run the full
+// marshalled round trip without any C: the caller places arguments SysV-
+// style and the callee re-stages them, so a mismatch in either half shows
+// up as a wrong exit code on every target.
+struct Big { a i64, b i64, c i64, d i64 }
+extern fn spill9(a i64, b i64, c i64, d i64, e i64, f i64, g i64, h i64, i i64) i64 {
+	return a + b + c + d + e + f + g + h + i;
+}
+extern fn big_sum(b Big) i64 {
+	return b.a + b.b + b.c + b.d;
+}
+extern fn big_inc(b Big) Big {
+	b.a = b.a + 100;
+	return b;
+}
+extern fn fsum9(a f32, b f32, c f32, d f32, e f32, f f32, g f32, h f32, i f32) f64 {
+	return a as f64 + b as f64 + c as f64 + d as f64 + e as f64 +
+	       f as f64 + g as f64 + h as f64 + i as f64;
+}
+extern fn mixed(a i64, b i64, c i64, d i64, e i64, f i64, x f64, g i64) i64 {
+	return a + b + c + d + e + f + g + (x as i64);
+}
+fn main() int {
+	if (spill9(1, 2, 3, 4, 5, 6, 7, 8, 9) != 45) { return 1; }
+	var big Big = Big{a: 1, b: 2, c: 3, d: 4};
+	if (big_sum(big) != 10) { return 2; }
+	var inc Big = big_inc(big);
+	if (inc.a != 101 || inc.b != 2) { return 3; }
+	var fs f64 = fsum9(1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5);
+	if (fs < 49.4 || fs > 49.6) { return 4; }
+	if (mixed(1, 2, 3, 4, 5, 6, 2.0, 9) != 32) { return 5; }
+	return 0;
+}
