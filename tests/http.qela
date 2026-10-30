@@ -1,0 +1,76 @@
+// expect-exit: 0
+// expect-out: GET /hello HTTP/1.1
+// expect-out: hi there
+// expect-out: http ok
+// A real HTTP round trip over loopback: listen, connect, request with a
+// body, response with a body. One thread, sequential -- TCP's listen
+// backlog makes the client's connect succeed before the accept.
+import "std/io.qela";
+import "std/http.qela";
+import "std/net.qela";
+
+fn main() int {
+	var srv i64 = net_listen(18080);
+	if (srv < 0) {
+		write_str(STDOUT, "no listen\n");
+		return 1;
+	}
+	var cli i64 = net_connect("127.0.0.1", 18080);
+	if (cli < 0) {
+		write_str(STDOUT, "no connect\n");
+		return 2;
+	}
+	var conn i64 = net_accept(srv);
+	if (conn < 0) {
+		write_str(STDOUT, "no accept\n");
+		return 3;
+	}
+	net_send(cli, "GET /hello HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\n\r\nhi");
+	var buf [2048]u8;
+	var req HttpReq = http_recv_req(conn, &buf[0], 2048);
+	if (req.method.len == 0) {
+		write_str(STDOUT, "no request\n");
+		return 4;
+	}
+	write_str(STDOUT, req.method);
+	write_str(STDOUT, " ");
+	write_str(STDOUT, req.path);
+	write_str(STDOUT, " HTTP/1.1\n");
+	if (!str_eq(req.method, "GET") || !str_eq(req.path, "/hello")) { return 5; }
+	if (!str_eq(req.body, "hi")) { return 6; }
+	http_respond(conn, 200, "text/plain", "hi there");
+	var resp [2048]u8;
+	var rn i64 = net_recv(cli, &resp[0], 2048);
+	if (rn <= 0) {
+		write_str(STDOUT, "no response\n");
+		return 7;
+	}
+	var rstr str;
+	rstr.ptr = &resp[0];
+	rstr.len = rn;
+	if (str_find(rstr, '2') < 0 || str_find(rstr, '0') < 0 || str_find(rstr, '0') < 0) {
+		write_str(STDOUT, "bad status\n");
+		return 8;
+	}
+	if (str_find(rstr, 'h') < 0 || str_find(rstr, 'i') < 0 || str_find(rstr, ' ') < 0) {
+		write_str(STDOUT, "no body\n");
+		return 9;
+	}
+	var body_ok bool = false;
+	var k i64 = 0;
+	while (k + 8 <= rstr.len) {
+		if (rstr.ptr[k] == 'h' && rstr.ptr[k + 1] == 'i' && rstr.ptr[k + 2] == ' ' &&
+		    rstr.ptr[k + 3] == 't' && rstr.ptr[k + 4] == 'h' && rstr.ptr[k + 5] == 'e' &&
+		    rstr.ptr[k + 6] == 'r' && rstr.ptr[k + 7] == 'e') { body_ok = true; }
+		k = k + 1;
+	}
+	if (!body_ok) {
+		write_str(STDOUT, "no body text\n");
+		return 10;
+	}
+	write_str(STDOUT, "hi there\n");
+	net_close(cli);
+	net_close(srv);
+	write_str(STDOUT, "http ok\n");
+	return 0;
+}
