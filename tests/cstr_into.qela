@@ -1,0 +1,22 @@
+// expect-exit: 0
+// stage1-only
+import "std/str.qela";
+
+fn main() int {
+	var buf [5]u8;
+	buf[0] = 99;
+	if (cstr_into("qela", &buf[0], 4) || buf[0] != 99) { return 1; }
+	if (!cstr_into("qela", &buf[0], 5) || buf[4] != 0) { return 2; }
+	if (!str_eq(str_from_cstr(&buf[0]), "qela")) { return 3; }
+	var bytes [3]u8;
+	bytes[0] = 65;
+	bytes[1] = 0;
+	bytes[2] = 66;
+	var embedded str;
+	embedded.ptr = &bytes[0];
+	embedded.len = 3;
+	if (cstr_into(embedded, &buf[0], 5) || buf[0] != 113) { return 4; }
+	if (!cstr_into("", &buf[0], 1) || buf[0] != 0) { return 5; }
+	if (cstr_into("", null, 1) || cstr_into("", &buf[0], 0)) { return 6; }
+	return 0;
+}
