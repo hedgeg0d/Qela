@@ -914,17 +914,20 @@ unrelated bugs were found and fixed along the way: an FP-marshalling
 pop into the accumulator shredded the first integer argument on
 AArch64/LP64D (the accumulator *is* `x0`/`a0`; the pop now goes through
 `X9`/`T0`), and the exported callee's float restaging clobbered the
-same register. Honest rejections remain where SysV has no Qela
-representation: a str that would straddle the GPR budget on x86, an
+same register. A str that would straddle the GPR budget on x86 now
+spills the whole `{ptr,len}` pair to the stack, SysV-style (the caller
+pushes both words high-to-low and the callee reads them in place),
+verified against gcc and pinned by `tests/externstrspill.qela`.
+Honest rejections remain where SysV has no Qela representation: an
 all-float struct spilling past the FP registers, and an all-float
 struct of 17..32 bytes on AArch64/LP64D (an HFA there -- up to four
 elements on AAPCS64, eight on LP64D -- rides FP registers Qela cannot
 stage; x86-64 stacks it, verified against gcc). Pinned by
 `tests/externspill.qela`, `tests/externagg_reject.qela`,
-`tests/externstr_reject.qela` and the rewritten
+`tests/externstrspill.qela` and the rewritten
 `tests/externfloat_reject.qela`; `tools/ffi-test.sh` gained the
-9-argument, struct-by-value and six-return cases against gcc on all
-three targets.
+9-argument, struct-by-value, six-return and straddling-two-word cases
+against gcc on all three targets.
 
 **Float global initializers (2026-08-05).** Two constants bugs, both found
 while writing the raylib example (`examples/flappy/`): an `f32` global
