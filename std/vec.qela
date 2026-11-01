@@ -59,6 +59,16 @@ fn vec_pop(comptime T: type, v *Vec(T)) T {
 	return *(v.data + v.len);
 }
 
+// The `<prefix>_has` behind `x in v`.
+fn vec_has(comptime T: type, v *Vec(T), x T) bool {
+	var i i64 = 0;
+	while (i < v.len) {
+		if (*(v.data + i) == x) { return true; }
+		i = i + 1;
+	}
+	return false;
+}
+
 fn vec_clear(comptime T: type, v *Vec(T)) {
 	v.len = 0;
 }

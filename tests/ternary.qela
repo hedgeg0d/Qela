@@ -1,0 +1,28 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: 1-2-x-y-false
+// `a if c else b`: a conditional expression. The else branch nests to the
+// right, and the branches must have the same scalar type.
+import "std/fmt.qela";
+
+fn main() int {
+	var z i64 = 5;
+	var a i64 = 1 if z > 3 else 2;
+	var b i64 = 1 if z > 9 else 2 if z > 4 else 3;
+	var c str = "x" if z == 5 else "y";
+	var d str = "x" if z != 5 else "y";
+	var e bool = true if z < 0 else false;
+	var o = fmt_begin();
+	o = fmt_put_i64(o, a);
+	o = fmt_put_str(o, "-");
+	o = fmt_put_i64(o, b);
+	o = fmt_put_str(o, "-");
+	o = fmt_put_str(o, c);
+	o = fmt_put_str(o, "-");
+	o = fmt_put_str(o, d);
+	o = fmt_put_str(o, "-");
+	o = fmt_put_bool(o, e);
+	var r = fmt_result(o);
+	sys_write(1, r.ptr, r.len);
+	return 0;
+}

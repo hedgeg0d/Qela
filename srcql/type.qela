@@ -449,17 +449,27 @@ fn int_fits(val i64, ty *Type) bool {
 	return val >= min && val <= max;
 }
 
+// A conditional expression of literals coerces like a literal: the
+// branches are both constant, so a `true if c else false` may become a
+// bool anywhere a literal could.
+fn lit_fits(n *Node, ty *Type) bool {
+	if (n.kind == ND_NUM) { return int_fits(n.val, ty); }
+	if (n.kind == ND_IFEXPR) { return lit_fits(n.then, ty) && lit_fits(n.els, ty); }
+	return false;
+}
+
 fn can_implicit(n *Node, ty *Type) bool {
 	var src *Type = n.ty;
 	if (is_float(src) || is_float(ty)) {
 		if (!is_float(src) || !is_float(ty)) { return false; }
 		if (ty.size > src.size) { return true; }
-		return n.kind == ND_NUM;
+		return n.kind == ND_NUM ||
+		       (n.kind == ND_IFEXPR && n.then.kind == ND_NUM && n.els.kind == ND_NUM);
 	}
 	if (is_integer(src) && is_integer(ty)) {
 		var widening bool = ty.size > src.size;
 		if (widening && !(ty.is_unsigned && !src.is_unsigned)) { return true; }
-		return n.kind == ND_NUM && int_fits(n.val, ty);
+		return lit_fits(n, ty);
 	}
 	return true;
 }
@@ -1486,6 +1496,34 @@ fn type_call(n *Node) {
 	if (type_intrinsic(n)) { return; }
 	if (n.varp as i64 != 0) { type_indirect_call(n); return; }
 	var f *Func = find_func(n.name);
+	// `x.method(args)` where no function named 'method' exists: the
+	// receiver's type prefix is tried, so `s.trim()` means str_trim(s)
+	// and `m.get(k)` means map_get(m, k). The prefix is the type name
+	// lowercased with generic arguments cut -- the same rule the index
+	// and iteration sugar use. A bare name wins when both exist.
+	if (f as i64 == 0 && n.dotcall && n.args as i64 != 0) {
+		var rt *Type = n.args.ty;
+		if (rt as i64 != 0 && rt.kind == TY_PTR) { rt = rt.base; }
+		var pre str;
+		if (rt as i64 != 0 && rt.kind == TY_STRUCT && rt.name.len > 0) {
+			pre = iter_prefix(rt);
+		} else if (rt as i64 != 0 && rt.kind == TY_SLICE && rt.base as i64 == ty_u8 as i64) {
+			// A str is a []u8: the string methods live under str_*.
+			pre = "str";
+		}
+		if (pre.len > 0) {
+			var fb Buf;
+			fmt_str(&fb, pre);
+			fmt_str(&fb, "_");
+			fmt_str(&fb, n.name);
+			var fname str = buf_str(&fb);
+			var pf *Func = find_func(fname);
+			if (pf as i64 != 0) {
+				f = pf;
+				n.name = fname;
+			}
+		}
+	}
 	// A function is appended to the table only after its own body parses,
 	// so a self-call inside a saved `interp_body` (typed mid-parse by
 	// interp_synthesize_trampoline) would resolve as undefined. The
@@ -1512,6 +1550,33 @@ fn type_call(n *Node) {
 		emsg("undefined function '"); emsg(n.name); emsg("'"); efail(n.pos);
 	}
 	if (f.nct != 0) {
+		// A dotcall receiver is address-wrapped before inference: the
+		// generic's type variable is read off the receiver's type, so
+		// m.get(k) must unify Map(i64) against *Map(V). The wrap leaves
+		// the node untyped -- add_type gives it the concrete *Map(i64),
+		// exactly like index_recv's, which is what the unify reads.
+		if (n.dotcall && n.args as i64 != 0) {
+			var recv *Node = n.args;
+			var want0 *Type = func_param(f, f.nct).ty;
+			var wrapped *Node = recv;
+			if (want0.kind == TY_PTR && recv.ty.kind != TY_PTR) {
+				if (!is_addr_expr(recv)) {
+					error_at(n.pos, "cannot call a method with a pointer first parameter on a temporary");
+				}
+				wrapped = node_alloc();
+				wrapped.kind = ND_ADDR;
+				wrapped.lhs = recv;
+				wrapped.pos = recv.pos;
+			} else if (want0.kind != TY_PTR && recv.ty.kind == TY_PTR) {
+				wrapped = node_alloc();
+				wrapped.kind = ND_DEREF;
+				wrapped.lhs = recv;
+				wrapped.pos = recv.pos;
+			}
+			wrapped.next = recv.next;
+			n.args = wrapped;
+			add_type(wrapped);
+		}
 		monomorphize_call(n, f);
 		f = find_func(n.name);
 	}
@@ -1815,6 +1880,24 @@ fn add_type(n *Node) {
 	}
 
 	if (k == ND_NOT || k == ND_AND || k == ND_OR) { n.ty = ty_bool; return; }
+	if (k == ND_IN) { n.ty = ty_bool; return; }
+	if (k == ND_ARRCOMP) { n.ty = n.lhs.ty; return; }
+	if (k == ND_IFEXPR) {
+		// `a if c else b`: the branches must agree. An aggregate branch
+		// is fine: its codegen leaves a pointer in the accumulator and
+		// the consumer memcpys from it, same shape as any aggregate
+		// expression.
+		if (!same_type(n.then.ty, n.els.ty)) {
+			emsg("both branches of a conditional expression must have the same type; the first has '");
+			emsg_ty(n.then.ty);
+			emsg("', the second '");
+			emsg_ty(n.els.ty);
+			emsg("'");
+			efail(n.pos);
+		}
+		n.ty = n.then.ty;
+		return;
+	}
 	if (k == ND_ASSIGN) { type_assign(n); return; }
 
 	if (k == ND_INDEX) {
@@ -2266,15 +2349,143 @@ fn type_arrlit(n *Node) {
 	n.next = nxt2;
 }
 
+fn interp_arg(v i64, pos i64) *Node {
+	var n *Node = node_alloc();
+	n.kind = ND_NUM;
+	n.val = v;
+	n.ty = ty_i64;
+	n.typed = true;
+	n.pos = pos;
+	return n;
+}
+
+// Parses a format spec (":08x", ":5d", ":.2f", "!r") attached to an
+// interpolation part and returns the fmt function to call, appending
+// width/precision argument nodes after `part`. A float part is rewritten
+// through `part` into its bit-reinterpret cast. An empty spec -- or one
+// the type cannot use, like "!r" on an int -- returns "" and the caller's
+// normal dispatch applies.
+fn interp_spec_fn(spec str, part **Node, pos i64) str {
+	var pt *Node = *part;
+	if (spec.len >= 2 && spec.ptr[0] == '!' && spec.ptr[1] == 'r') {
+		if (spec.len > 2) {
+			error_at(pos, "a format spec after '!r' is not supported");
+		}
+		if (same_type(pt.ty, type_str())) { return "fmt_put_repr"; }
+		return "";
+	}
+	if (spec.len == 0) { return ""; }
+	if (spec.ptr[0] != ':') {
+		var mb Buf;
+		fmt_str(&mb, "unsupported format specifier '");
+		fmt_str(&mb, spec);
+		fmt_str(&mb, "'");
+		error_at(pos, buf_str(&mb));
+	}
+	var i i64 = 1;
+	var w i64 = 0;
+	var zp bool = false;
+	if (i < spec.len && spec.ptr[i] == '0') { zp = true; i = i + 1; }
+	while (i < spec.len && spec.ptr[i] >= '0' && spec.ptr[i] <= '9') {
+		w = w * 10 + (spec.ptr[i] as i64 - '0');
+		i = i + 1;
+	}
+	var prec i64 = 6;
+	var has_prec bool = false;
+	if (i < spec.len && spec.ptr[i] == '.') {
+		i = i + 1;
+		prec = 0;
+		has_prec = true;
+		while (i < spec.len && spec.ptr[i] >= '0' && spec.ptr[i] <= '9') {
+			prec = prec * 10 + (spec.ptr[i] as i64 - '0');
+			i = i + 1;
+		}
+	}
+	var tc u8 = 0;
+	if (i < spec.len) { tc = spec.ptr[i]; i = i + 1; }
+	if (i != spec.len) {
+		var mb Buf;
+		fmt_str(&mb, "unsupported format specifier '");
+		fmt_str(&mb, spec);
+		fmt_str(&mb, "'");
+		error_at(pos, buf_str(&mb));
+	}
+	if (has_prec || tc == 'f') {
+		if (!is_float(pt.ty)) {
+			var fb Buf;
+			fmt_str(&fb, "'f' needs a float value, but the part has type '");
+			fmt_str(&fb, pt.ty.name);
+			fmt_str(&fb, "'");
+			error_at(pos, buf_str(&fb));
+		}
+		// The bits travel as an i64: the same bit-reinterpret cast the
+		// default float path uses.
+		if (pt.ty.size != 8) {
+			var fc *Node = node_alloc();
+			fc.kind = ND_CAST;
+			fc.lhs = pt;
+			fc.ty = ty_f64;
+			fc.typed = true;
+			pt = fc;
+		}
+		var bc *Node = node_alloc();
+		bc.kind = ND_CAST;
+		bc.lhs = pt;
+		bc.ty = ty_i64;
+		bc.typed = true;
+		bc.val = 1;
+		*part = bc;
+		var pn *Node = interp_arg(prec, pos);
+		bc.next = pn;
+		return "fmt_put_f64_fixed";
+	}
+	if (!is_integer(pt.ty)) {
+		var ib Buf;
+		fmt_str(&ib, "a format spec needs an integer or float value, but the part has type '");
+		fmt_str(&ib, pt.ty.name);
+		fmt_str(&ib, "'");
+		error_at(pos, buf_str(&ib));
+	}
+	if (tc == 0) { tc = 'd'; }
+	if (tc == 'd') {
+		if (w == 0) { return "fmt_put_i64"; }
+		var wn *Node = interp_arg(w, pos);
+		var zn *Node = interp_arg(zp as i64, pos);
+		pt.next = wn;
+		wn.next = zn;
+		return "fmt_put_i64_w";
+	}
+	if (tc == 'x' || tc == 'X') {
+		if (w == 0) { return "fmt_put_hex"; }
+		var wn *Node = interp_arg(w, pos);
+		var un *Node = interp_arg((tc == 'X') as i64, pos);
+		pt.next = wn;
+		wn.next = un;
+		return "fmt_put_hex_w";
+	}
+	var mb Buf;
+	fmt_str(&mb, "unsupported format specifier '");
+	fmt_str(&mb, spec);
+	fmt_str(&mb, "'");
+	error_at(pos, buf_str(&mb));
+	return "";
+}
+
 fn type_interp(n *Node) {
 	var b *Node = mk_call0("fmt_begin");
 	var p *Node = n.args;
 	while (p as i64 != 0) {
 		var part *Node = p.lhs;
 		var fname str;
-		if (p.val != 0 || same_type(part.ty, type_str())) { fname = "fmt_put_str"; }
-		else if (part.ty.kind == TY_BOOL) { fname = "fmt_put_bool"; }
-		else if (part.ty.kind == TY_PTR) {
+		// A format spec on an expression part picks its own fmt function;
+		// literal parts and the unspec'd types fall through below.
+		if (p.val == 0 && p.name.len > 0) {
+			fname = interp_spec_fn(p.name, &part, part.pos);
+		}
+		if (fname.len == 0) {
+			if (p.val != 0 || same_type(part.ty, type_str())) { fname = "fmt_put_str"; }
+			else if (part.ty.kind == TY_BOOL) { fname = "fmt_put_bool"; }
+			else if (part.ty.kind == TY_PTR) {
 			// fmt_put_hex takes the bits; a pointer needs an explicit cast.
 			var c *Node = arena_alloc(sizeof(Node), 8) as *Node;
 			c.kind = ND_CAST;
@@ -2314,7 +2525,16 @@ fn type_interp(n *Node) {
 				emsg("cannot interpolate a value of type '"); emsg_ty(part.ty); emsg("'"); efail(part.pos);
 			}
 		}
+		}
 		b = mk_call2(fname, b, part);
+		// A format spec appended width/precision arguments after `part`;
+		// mk_call2 counted only the two it placed, so recount.
+		if (p.val == 0 && p.name.len > 0) {
+			var cnt int = 0;
+			var an *Node = b.args;
+			while (an as i64 != 0) { cnt = cnt + 1; an = an.next; }
+			b.nargs = cnt;
+		}
 		p = p.next;
 	}
 	var end *Node = mk_call1("fmt_result", b);
