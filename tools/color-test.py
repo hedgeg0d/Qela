@@ -8,6 +8,11 @@ diagnostic rendered as garbage on a terminal. Piped runs never showed it,
 because auto colour is off without a tty, which is why this check asks for
 colour explicitly.
 
+It also covers the second half of the same subject: a soft error poisons its
+node, and the interpolation check used to report "cannot interpolate a value
+of type 'poison'" on top of the real diagnostic, which the poison design
+exists to prevent.
+
 QELA is the compiler to test, set by the caller.
 """
 import os, subprocess, sys, tempfile
@@ -31,6 +36,8 @@ def compile_colored(src: str) -> str:
                 pass
 
 
+CASCADE = ('import "std/io.qela";\n'
+           'fn main() int { var counter i64 = 1; println("${countre}"); return 0; }\n')
 BAD = 'import "std/io.qela";\nfn main() int { println("${nosuchvar}"); return 0; }\n'
 WARN = 'import "std/io.qela";\nfn main() int { var unused i64 = 1; println("x"); return 0; }\n'
 
@@ -47,6 +54,12 @@ if "\x00" in out:
 out = compile_colored(WARN)
 if "\x1b[33m" not in out:
     fails.append("a warning is not coloured yellow")
+
+out = compile_colored(CASCADE)
+if "undefined function 'countre'" not in out:
+    fails.append("the real error is missing")
+if "cannot interpolate" in out:
+    fails.append("a poisoned part reported a second, useless error")
 
 if fails:
     for f in fails:
