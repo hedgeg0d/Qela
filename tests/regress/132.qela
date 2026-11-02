@@ -1,4 +1,4 @@
-// expect-exit: 1
+// expect-exit: 248
 // got: CRASH
 struct Pair { x int, y int, }
 struct Wide { a int, b int, c int, }
@@ -6,8 +6,6 @@ struct Bag { p int, q int, r int, s int, }
 struct Nest { tag int, p Pair, }
 enum E { A, B(int), C(int, int), }
 enum D { None, Some(int), }
-import "std/fmt.qela";
-import "std/io.qela";
 import "std/str.qela";
 var gv int = 7;
 fn mul2(a int, b int) int { return a * b; }
@@ -41,55 +39,57 @@ fn main() int {
     var i3 int = 0;
     var i4 int = 0;
     var i5 int = 0;
-    b = Bag{p: (((mul2(-1, v1) / ((('d' | 524) & 15) + 1)) * p.x) * 237), q: (gv < 42), r: a[(pair_sum(Pair{x: (1.7 == (0 as double)), y: (a[(-1 & 3)] as i16)}) & 3)], s: (-opt_d(D.Some(((fv as i64) & (0.3 as i64)))))};
-    a[((((fv as i64) > p.x) as u32) & 3)] = (((('\t' as u8) as u32) as i16) >> (p.y - ((57 * v0) as i16)));
-    gv = (((('a' & 127) < (v2 + false)) - (((sv1)[0..2])[0] as u32)) % ((((788 >> (-669 > v0)) ^ mul2(str_eq("no", (("abc")[0..3])[0..2]), gv)) & 15) + 1));
-    if ((p.y <= nest_sum(Nest{tag: (42 + (-diff4((false | true), gv, ('e' != v1), 3))), p: Pair{x: 2, y: (((-p.y) + 'c') * p.x)}}))) {
-        if (((!(diff4(gv, (-gv), (0 % (('d' & 15) + 1)), p.x) >= (wide_sum(w) % ((((sv1)[0..2])[1] & 15) + 1)))) == (-210 as i8))) {
-            e = E.C(("abcd").len, ((((10 & 3) > (255 != 869)) as double) > 0.5));
+    b = Bag{p: ((add2(('3' <= -839), gv) != ((2 if ((((-(('c' as double) >= (true as double))) >= (-1.5 <= 0.5)) && ((-1.5 <= 0.5) <= (((10.5 as i64) > p.x) < (('0' as double) as i64)))) <= (127 - (((false != -465) * ((57 <= false) && (false >= true))) as i16))) else 1) * str_eq((("hello")[1..4])[0..2], sv1))) * (((v2 in a) > p.x) && (p.x < ((0xffffffffffffffff & 'c') != ("zz")[1])))), q: ((0x314 >> (-2)) in a), r: ((((('3' * false) >= (255 != 869)) && ((255 != 869) <= (0xfffffffffffffd28 as u8))) < (diff4(561, false, gv, '1') + (895 != 255))) - (((sv1)[0..2])[0] as u32)), s: ((diff4((true ^ v0), -374, a[(22 & 3)], ((1 >= true) && (true <= true))) in a) * (((!(v0 & 557)) > ("xyz")[1]) && (("xyz")[1] > ((100 + 3) in 0..((('3' as u32) & 15) + 0x1)))))};
+    i0 = 0;
+    while ((i0 < 1)) {
+        i0 = (i0 + 1);
+        if ((((((false ^ true) in a) << (('\t' <= 'c') as i32)) & (-112 % ((((sv1).len < (gv ^ v1)) & 15) + 1))) < (127 * ((!(false as i8)) as u8)))) {
+            sv1 += ("hello")[1..4];
+            p.x = ((p.x + ((v1 if ((add2((fv as i64), a[(v0 & 3)]) ^ ("hi").len) >= a[(((!(v0 >> gv)) as i32) & 3)]) else 'f') <= (((sv1 + (((((("qwerty")[1..5])[0..2] + ("""x
+yz""")[1..3]) + ("""x
+yz""")[1..3]))[0..2])[0..2]) + ((sv1 + (sv1 + ("hello")[2..4])) + "42"))).len)) | str_eq("aa", ("xyzzy")[2..4]));
+            return diff4(((('g' - true) * (false == 0)) in a), (p.x != (fv as i64)), (sv1).len, (gv * ((1 ^ -979) if (((((100.0 / -0.5) * fv) * 1.0) as i64) <= (add2(10, (-(gv in 0..((947 & 15) + 1)))) & (a[(true & 3)] >> v1))) else (gv == v1))));
         } else {
-            if ((((((506 << false) as u32) == 42) << (fv as i64)) > (("abcd")[0..2])[0])) {
-                match (e) {
-                    A => {
-                        return (((('d' as double) - 3.75) != fv) & ((-856 as double) == 3.75));
-                    }
-                    B(mb0) => {
-                        return (str_eq(("abcd")[1..4], ("no")[0..2]) | mb0);
-                    }
-                    C(mb0, mb1) => {
-                        return v0;
-                    }
-                }
-                p.y = -374;
-            } else {
-                p = Pair{x: '\n', y: p.x};
-            }
-            p.y = (("xyzzy")[1..3]).len;
+            e = E.C((((((("abc")[0..2] + sv1))[0..2]).len % ((gv & 0xf) + 1)) in a), ((((fv / 1.5) == 0.1) if ((mul2(((v0 + false) ^ 'c'), (0.25 as i64)) % (((((1 as u32) | (2 % ((-808 & 15) + 1))) & str_eq(((((sv1)[0..2] + ("abc")[0..3]))[0..2])[0..2], sv1)) & 0xf) + 1)) != ((((("hello")[2..4]).len as double) != -2.0) as i16)) else a[((v0 & 0x8f) & 3)]) * ((0x0 as i16) if (((((100 as u32) >> p.y) in 0..(((((false > 127) <= (450 if (((((-42) as double) as i64) / (((v0 & ((fv != 0.25) in a)) & 0xf) + 1)) != (127 * (a[((2 in 0..((true & 15) + 1)) & 3)] >= -281))) else 'd')) && ((450 if (((((-42) as double) as i64) / (((v0 & ((fv != 0.25) in a)) & 15) + 1)) != (127 * (a[((2 in 0..((true & 15) + 1)) & 3)] >= -281))) else 'd') <= (112 < true))) & 15) + 1)) * (((305 if ('\t' < a[((((gv - false) == (31 in 0..(('3' & 15) + 1))) & true) & 3)]) else -991) * 'e') % (((("abcd")[0..2])[0] & 0xf) + 1))) == ((((1 as double) as i64) ^ p.x) != ((!false) in a))) else (v0 in a))));
+            v1 = ('a' == (("xyz").len if ((((('2' % (('1' & 15) + 1)) as i8) != ((0 in a) in 0..(((0xfffffffffffffef6 != gv) & 15) + 1))) if ((((fv - (1.7 * 0.25)) != (42 as double)) >= wide_sum(w)) < ((((('d' <= 494) && (494 <= 0x2)) >> (v0 as i8)) < (gv & (-false))) in 0..((((((sv0)[0..2] + sv0)).len < ((true as u8) | ('3' + gv))) & 15) + 1))) else ((((("no" + (("abcd")[1..4] + (sv1)[0..2])) + ((sv0 + ("xyzzy")[2..5]) + ("""x
+yz""" + (((sv1 + ("""x
+yz""")[0..4]) + sv0) + (((((sv0)[0..2] + (("abc")[0..3] + (("""x
+yz""")[1..4])[0..2])) + "abc"))[0..2])[0..2])))))[0..2])[1] as i8)) == ((("hello")[0..2])[1] * (((255 in a) in a) & (mul2(255, 0x64) if (((((-109 << gv) % ((("abc").len & 15) + 1)) > str_eq(("xyzzy")[2..4], "hello")) != (0.3 < fv)) > (a[('a' & 3)] as i8)) else str_eq((((((("""ab
+cd""")[2..4] + (sv0 + "xyz")))[0..2] + (("hello")[1..5])[0..2]))[0..2] + (("""ab
+cd""")[0..4])[0..2]), (("abc")[0..3] + (sv1 + ((sv1)[0..2])[0..2]))))))) else 'c'));
         }
-        v0 |= ((!((false << '1') >> (gv << v0))) as i32);
-    } else {
-        b = Bag{p: gv, q: ((("xyzzy")[1..5])[0..2]).len, r: -669, s: ((v2 * gv) as i32)};
-        match (e) {
-            A => {
-                return (p.y as i8);
-            }
-            B(mb0) => {
-                return (((((gv - false) == (-v1)) & true) & ((sv0)[1] + ((1 as u32) * 'e'))) * mb0);
-            }
-            C(mb0, mb1) => {
-                return (((((-42) as double) as i64) != ((v0 >> ((sv0)[0..2])[0]) ^ ((-0.5 as i64) - (false > 127)))) ^ mb1);
-            }
+        v2 >>= p.x;
+        e = E.B(((((1 as u32) as i16) < (((("qwerty")[3..5])[0..2]).len == (-0xffffffffffffffff))) as i32));
+    }
+    match (e) {
+        A => {
+            return ((gv > (((3.75 - fv) as i64) in a)) && ((((3.75 - fv) as i64) in a) < ((-(3.75 as i64)) & ((1.7 + 2.5) == (fv + -0.5)))));
+        }
+        B(mb0) => {
+            return (((((("qwerty")[3..6] + (sv1)[0..2]))[0..2]).len if (((((gv as i32) <= (false if (127 == (!(-(sv0)[1]))) else '\n')) in 0..((((-false) != (false - 255)) & 15) + 1)) - (opt_d(D.None) in a)) < (0.5 < (gv as double))) else (p.x as u32)) - mb0);
+        }
+        C(mb0, mb1) => {
+            return ((fv == -0.5) * mb1);
         }
     }
-    v2 %= ((((nest_sum(Nest{tag: (("hello")[1..3])[0], p: Pair{x: (str_eq(("xyz")[0..3], ("abc")[0..2]) | (((v2 as double) != 2.0) + ((v2 * 689) <= wide_sum(w)))), y: (fv == 2.5)}}) % ((3 & 15) + 1)) >= (gv >> ((-224 as i16) as u32))) & 15) + 1);
-    a[((false == -1) & 3)] = ((((-1.5 != fv) >= wide_sum(w)) | ((-420) * ('1' >= 'e'))) >> (opt_d(D.None) > wide_sum(w)));
-    e = E.C((p.x <= (str_eq("qwerty", "xyz") << (((("xyz")[0..3])[0..2])[0] as u16))), ((str_eq("xyz", sv1) != ((gv - 2) != (10.5 > 10.5))) >> (((2 & v0) - ("no").len) as i32)));
-    n = Nest{tag: diff4((sv1).len, (!((748 < '\n') % ((('c' as i8) & 15) + 1))), (!(-(true ^ 1))), (!("no").len)), p: Pair{x: a[((4 % ((p.y & 15) + 1)) & 3)], y: p.x}};
-    gv *= mul2(gv, (((false + -750) as i16) >> (a[('b' & 3)] + -173)));
-    v0 = ((((false - -657) <= (v1 <= v2)) - 127) << (a[(a[(gv & 3)] & 3)] as i8));
-    var ob Buf;
-    fmt_i64(&ob, v0);
-    write_str(STDOUT, buf_str(&ob));
-    write_str(STDOUT, "\n");
-    return ((!((true | gv) / (((false != -1) & 15) + 1))) == ((-(-191 >= v2)) as i32));
+    sv0 += ("xyz")[0..2];
+    match (e) {
+        A => {
+            return a[((((-387 in 0..((1 & 0xf) + 0x1)) ^ ((297 > 0xffffffffffffff42) && (-190 < false))) < (((("xyz")[0..3])[0..2])[1] in a)) & 3)];
+        }
+        B(mb0) => {
+            return ((-(v2 in a)) | mb0);
+        }
+        C(mb0, mb1) => {
+            return (((!((true in a) < (fv as i64))) % (((p.x <= opt_d(D.Some((10 << v2)))) & 15) + 1)) - mb1);
+        }
+    }
+    gv *= ((((fv - fv) / -0.5) <= -0.5) * (!((gv as u32) != (-673 > false))));
+    w = Wide{a: ((-((false in a) as i8)) >> opt_d(D.Some(0x22b))), b: (((('2' if (gv > v0) else 'b') / (((true as u8) & 15) + 1)) == ((gv in 0..((127 & 15) + 1)) if (((0.125 <= ((-2.0 * fv) / 0.1)) << '0') > 370) else a[(true & 3)])) > (-str_eq(((((sv0)[0..2])[0..2] + sv0) + sv0), ((("hello" + "xyzzy") + ("""x
+yz""" + ("""ab
+cd""")[1..4])))[0..2]))), c: (((-('b' % ((1 & 15) + 1))) <= ((-735 in a) in a)) as u16)};
+    v0, v1 = gv, (v2 / ((false & 15) + 0x1));
+    sv1 = (("abc")[0..2])[0..2];
+    a[((!((("hi" + sv1)).len as u8)) & 3)] = ((((868 == gv) as i16) ^ ((gv + true) as i16)) % (((("foobar")[1] + (nest_sum(n) - gv)) & 15) + 0x1));
+    return p.y;
 }

@@ -7,6 +7,7 @@ import "heap.qela";
 // Boxes `size` bytes starting at `src` onto the heap and tags them `id`
 // (a compile-time-assigned integer identifying the source type). Always
 // boxes, even for a scalar: one path for every type keeps this small.
+/// Copies bytes onto the heap under a dynamic type tag.
 fn dyn_box(id i64, src *u8, size i64) DynVal {
 	var d DynVal;
 	d.type_id = id;
@@ -24,6 +25,7 @@ fn dyn_box(id i64, src *u8, size i64) DynVal {
 // The runtime half of `n as T`: T's compile-time id is compared against the
 // value's tag, and a mismatch panics rather than silently reinterpreting
 // bytes. The caller derefs the returned pointer as T.
+/// Verifies a dynamic value's type and returns its payload.
 fn dyn_check(d DynVal, id i64) *u8 {
 	if (d.type_id != id) { panic("dynamic cast: type mismatch"); }
 	return d.ptr;

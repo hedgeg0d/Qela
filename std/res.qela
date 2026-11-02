@@ -3,6 +3,7 @@ enum Res(T, E) {
 	Err(E),
 }
 
+/// Reports whether the result holds an ok value.
 fn res_is_ok(comptime T: type, comptime E: type, r Res(T, E)) bool {
 	match (r) {
 		Ok(_v) => { return true; }
@@ -10,6 +11,7 @@ fn res_is_ok(comptime T: type, comptime E: type, r Res(T, E)) bool {
 	}
 }
 
+/// Returns the ok value or the zero value.
 fn res_val(comptime T: type, comptime E: type, r Res(T, E)) T {
 	match (r) {
 		Ok(v) => { return v; }
@@ -20,6 +22,7 @@ fn res_val(comptime T: type, comptime E: type, r Res(T, E)) T {
 	}
 }
 
+/// Returns the error value or the zero value.
 fn res_err(comptime T: type, comptime E: type, r Res(T, E)) E {
 	match (r) {
 		Ok(_v) => {
@@ -30,6 +33,7 @@ fn res_err(comptime T: type, comptime E: type, r Res(T, E)) E {
 	}
 }
 
+/// Returns the ok value or a fallback alternative.
 fn res_or(comptime T: type, comptime E: type, r Res(T, E), alt T) T {
 	match (r) {
 		Ok(v) => { return v; }

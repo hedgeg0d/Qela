@@ -1,0 +1,91 @@
+// expect-exit: 102
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = 38;
+fn twice(n int) int { return n + n; }
+fn fact(n int) int { if (n <= 1) { return 1; } return n * fact(n - 1); }
+fn gcd2(a int, b int) int { while (b != 0) { var t int = a % b; a = b; b = t; } return a; }
+fn pair_sum(p Pair) int { return p.x + p.y; }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn bag_sum(b Bag) int { return b.p + b.q + b.r + b.s; }
+fn tag_e(e E) int {
+	match (e) {
+		A => { return 7; }
+		B(v) => { return v + 1; }
+		C(x, y) => { return x * 2 + y; }
+	}
+}
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 5;
+    var v1 int = 0x9;
+    var v2 int = 1;
+    var sv0 str = """ab
+cd""";
+    var sv1 str = "hi";
+    var fv double = 0.125;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    b = Bag{p: ((((fv / 0.25) / 0.25) / -2.0) as i64), q: v0, r: false, s: ((((fv != 1.7) + (536 / (('3' & 15) + 0x1))) > (('f' >= false) in 0..(((sv0)[1] & 15) + 1))) > 3)};
+    v2 -= v0;
+    if (((p.x < (564 >= (((!1) <= (false >> 'f')) && ((false >> 'f') >= (true ^ -959))))) <= ((gv if ((-fact((((927 in 0..((42 & 15) + 1)) | ('2' >= false)) & 15))) <= (((fv / -0.5) != (((0x252 <= 0x2a) && (42 >= true)) as double)) * ((a[(-724 & 3)] / (((sv0)[0] & 15) + 1)) & twice('a')))) else ((("abcd")[0..3]).len as u16)) as u8))) {
+        match (e) {
+            A => {
+                return 'f';
+            }
+            B(mb0) => {
+                return p.y;
+            }
+            C(mb0, mb1) => {
+                return (!'\t');
+            }
+        }
+        e = E.B('e');
+    } else {
+        i1 = 0;
+        while ((i1 < 3)) {
+            i1 = (i1 + 1);
+            a[(("hi").len & 0x3)] = ((!0x354) != (((10.5 as i64) / ((a[(v1 & 3)] & 15) + 1)) as i8));
+            sv1 = "abcd";
+            e = E.C(((255 as double) > fv), gcd2(((false if (((((127 if (bag_sum(b) < ((0.125 + ((fv * 100.0) + (1.7 / 1.7))) as i64)) else fact((301 & 15))) in 0..((gv & 15) + 0x1)) > (((879 in 0..(('d' & 15) + 1)) < (!gv)) as i32)) && ((((879 in 0..(('d' & 15) + 1)) < (!gv)) as i32) <= v0)) == (-((-(false >= -1)) as u16))) else 0x2a) & 15), (false & 15)));
+        }
+        i1 = 0;
+        while ((i1 < 0x3)) {
+            i1 = (i1 + 0x1);
+            w = Wide{a: ((("qwerty")[0..2] + ("xyz")[0..2])).len, b: (((('1' in 0..((100 & 0xf) + 1)) ^ (2 != 'b')) <= ((2 > '2') in 0..(((0xffffffffffffff69 as u16) & 15) + 1))) >= 10), c: ((!20) % (((fact((p.y & 15)) as i8) & 0xf) + 1))};
+        }
+    }
+    gv, v2 = v2, gv;
+    v2 = ((((10 / ((false & 15) + 1)) << -872) as double) != (gv as double));
+    gv = (((bag_sum(b) - 'f') / (((((-249 & true) > (210 - 938)) && ((210 - 938) <= ('f' as u32))) & 15) + 0x1)) * ((fact((v0 & 15)) in 0..(((false in 0..((gv & 15) + 1)) & 15) + 1)) as u16));
+    v2 = (str_eq(("""x
+yz""")[1..4], """x
+yz""") >= p.y);
+    v1 -= (gcd2((((true in 0..(('\n' & 15) + 1)) % (((!true) & 15) + 1)) & 15), ((p.x in 0..(((("qwerty")[0..2])[0] & 15) + 1)) & 15)) >> (gcd2((('c' & gv) & 15), (((-194 >= gv) && (gv <= 'g')) & 15)) < v1));
+    a[((((!(!true)) as u16) >= (p.y in 0..((("42")[0] & 0xf) + 1))) & 3)] = (!(('\n' in 0..(((42 if (('0' * ((twice((false ^ 2)) < (true as i16)) && ((true as i16) > ((sv1)[0] * 255)))) < (-895 in 0..(((((false in 0..((386 & 15) + 1)) != (255 & '\n')) in 0..(((a[(681 & 3)] as u32) & 15) + 1)) & 15) + 1))) else gv) & 15) + 1)) % ((((false >= 87) in 0..(((!0xfffffffffffffc39) & 15) + 1)) & 15) + 1)));
+    write_str(STDOUT, "${v2=}\n");
+    return ((((1.7 / -1.5) - (v2 as double)) < (p.y as double)) % (((((false in 0..((3 & 15) + 0x1)) ^ (-true)) >> (gcd2((v0 & 15), ('1' & 15)) as u32)) & 15) + 1));
+}

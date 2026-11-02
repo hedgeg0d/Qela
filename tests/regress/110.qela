@@ -39,32 +39,38 @@ fn main() int {
     var p Pair = Pair{};
     var w Wide = Wide{};
     var b Bag = Bag{};
-    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0}};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0x0, y: 0}};
     var e E = E.A;
     var a [4]int;
-    var i0 int = 0;
-    var i1 int = 0;
+    var i0 int = 0x0;
+    var i1 int = 0x0;
     var i2 int = 0;
     var i3 int = 0;
     var i4 int = 0;
     var i5 int = 0;
-    gv &= (a[(((fv * 1.7) >= (100.0 / -1.5)) & 3)] as i8);
-    a[(((p.y as i8) == ((v1 << (v1 >= gv)) ^ (-51 | (gv / ((0 & 15) + 1))))) & 3)] = 127;
-    e = E.B(((947 as double) as i64));
-    gv = str_eq(sv0, ("foobar")[0..2]);
-    v2 = -909;
-    i0 = 0;
-    while ((i0 < 4)) {
-        n.tag = gv;
-        a[i0] = (pair_sum(Pair{x: (!pair_sum(Pair{x: 10, y: 255})), y: ((2.5 < 2.5) >= str_eq(("xyz")[0..2], ("qwerty")[1..6]))}) + 6);
-        i0 = (i0 + 1);
+    gv &= (a[((('0' | 10) in 0..(((13 ^ 'd') & 15) + 1)) & 3)] as i16);
+    p.x = gv;
+    sv1 += sv0;
+    sv0 = "no";
+    w = Wide{a: ((!(v1 in a)) as i32), b: p.y, c: 1};
+    a[((false as i8) & 0x3)] = 0xfffffffffffffd24;
+    if (((((!(v0 == 2)) in a) >> ((p.x if (((((gv + 739) as i32) / (((p.x >= (('2' > -800) && (-800 <= 'c'))) & 15) + 1)) >> (((0xffffffffffffffc6 in a) in a) in 0..((((fv >= -1.5) != (true in a)) & 0xf) + 1))) != ('1' ^ (-mix5((sv0)[0], a[(true & 0x3)], ('2' & true), (v2 in 0..((318 & 15) + 1)), pair_sum(Pair{x: gv, y: true}))))) else (true & 'd')) <= ((v1 as double) <= (fv - fv)))) <= -633)) {
+        i1 = 0;
+        while ((i1 < 1)) {
+            i1 = (i1 + 1);
+            n.p.x = ((gv + -349) - (opt_d(D.Some(-909)) as u32));
+            p.x = 0x0;
+            a[(pair_sum(Pair{x: (!((10 in 0..((255 & 0xf) + 1)) in a)), y: ((v2 in 0..(((-1 ^ '0') & 0xf) + 0x1)) >= ((gv << 100) in 0..(((2.5 < 2.5) & 15) + 1)))}) & 3)] = (2 < (1.5 as i64));
+        }
+    } else {
+        sv0 += "aa";
     }
-    e = E.C(v2, (((fv as i64) < ((255 >> '3') as u32)) ^ (42 >= (a[(733 & 3)] << (1 | -865)))));
-    b = Bag{p: (-true), q: (((42 / (((gv as i32) & 15) + 1)) != ('g' / ((('c' < 557) & 15) + 1))) >> (!gv)), r: ((((gv as double) / 1.5) as i64) | ((-mix5(1, 2, 'f', '0', true)) + (opt_d(D.Some('c')) & ('3' as i8)))), s: (("hi")[0] as i8)};
-    gv += ((str_eq(sv0, sv0) + true) == (fv >= ((100.0 * fv) - (3.75 / 2.0))));
+    n = Nest{tag: str_eq(sv0, sv0), p: Pair{x: ((!((sv0)[0] < a[('\n' & 3)])) > false), y: ((((("zz" + "xyz") + "no")).len * ((sv1 + "hi"))[0]) if (((((-gcd2((64 & 15), ('c' & 15))) >= (fv as i64)) && ((fv as i64) >= (685 & (0xffffffffffffff18 if (true <= (!(v2 == 100))) else 0xfffffffffffffe2b)))) * ((-v0) + ((('2' > false) && (false >= v0)) in a))) <= str_eq(sv1, ("hello" + ("""x
+yz""" + "no")))) else (((gv << '3') * (!gv)) > (v1 as u8)))}};
+    v0, v2 = (-(-(p.x > (fv as i64)))), a[(((('d' * v1) >> (false in a)) >> gv) & 3)];
     var ob Buf;
-    fmt_i64(&ob, v1);
+    fmt_i64(&ob, v2);
     write_str(STDOUT, buf_str(&ob));
     write_str(STDOUT, "\n");
-    return (-nest_sum(n));
+    return (-(false as u32));
 }

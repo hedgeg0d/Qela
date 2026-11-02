@@ -1,0 +1,79 @@
+// expect-exit: 18
+// got: CRASH
+struct Pair { x int, y int, }
+struct Wide { a int, b int, c int, }
+struct Bag { p int, q int, r int, s int, }
+struct Nest { tag int, p Pair, }
+enum E { A, B(int), C(int, int), }
+enum D { None, Some(int), }
+import "std/fmt.qela";
+import "std/io.qela";
+import "std/str.qela";
+var gv int = -1;
+fn fact(n int) int { if (n <= 1) { return 1; } return n * fact(n - 1); }
+fn max2(a int, b int) int { if (a > b) { return a; } else { return b; } }
+fn pair_swap(p Pair) Pair { return Pair{x: p.y, y: p.x}; }
+fn nest_sum(n Nest) int { return n.tag + n.p.x + n.p.y; }
+fn wide_swap(w Wide) Wide { return Wide{a: w.b, b: w.a, c: w.c}; }
+fn opt_d(d D) int {
+	match (d) {
+		None => { return 0; }
+		Some(v) => { return v; }
+	}
+}
+fn main() int {
+    var v0 int = 1;
+    var v1 int = 7;
+    var v2 int = 8;
+    var sv0 str = "42";
+    var sv1 str = "zz";
+    var fv double = 1.5;
+    var p Pair = Pair{};
+    var w Wide = Wide{};
+    var b Bag = Bag{};
+    var n Nest = Nest{tag: 0, p: Pair{x: 0, y: 0x0}};
+    var e E = E.A;
+    var a [4]int;
+    var i0 int = 0;
+    var i1 int = 0;
+    var i2 int = 0;
+    var i3 int = 0;
+    var i4 int = 0;
+    var i5 int = 0;
+    v2 <<= gv;
+    v2 |= (((v0 > ((100 + gv) in 0..(((gv % (('d' & 0xf) + 0x1)) & 15) + 0x1))) && (((100 + gv) in 0..(((gv % (('d' & 15) + 1)) & 15) + 1)) > (('\t' << 255) == (false & 0xfffffffffffffe20)))) > (((v0 as i8) in a) != ((false & false) >= (901 in a))));
+    v0 = ((sv1)[0] in a);
+    v2 = false;
+    match (e) {
+        A => {
+            return 18;
+        }
+        B(mb0) => {
+            return ((str_eq(("hello")[0..2], ((("""ab
+cd""")[0..2] + "xyz") + sv0)) << ((138 ^ -427) in 0..(((-gv) & 15) + 1))) != ((!(true >= 2)) >> (((true > 0xfffffffffffffd96) && (-618 <= 100)) in a)));
+        }
+        C(mb0, mb1) => {
+            return (((!(("abc")[0..2]).len) & p.x) ^ mb1);
+        }
+    }
+    n = Nest{tag: ((((gv in a) <= ((3.75 / 1.5) <= (0.125 / 1.0))) && (((3.75 / 1.5) <= (0.125 / 1.0)) < ((2.0 < -0.5) as u16))) in a), p: Pair{x: ((((-75 as double) / -0.5) != ((-693 as double) + 0.125)) >= (a[((814 < 0xff) & 3)] < ((-true) * (v2 in 0..(('1' & 15) + 1))))), y: (a[(gv & 3)] if ('c' == ((((str_eq(("abc")[0..3], (((("qwerty")[3..6])[0..2])[0..2])[0..2]) in 0..(((false ^ true) & 15) + 1)) > ((-2.0 == 3.75) in 0..(((v1 / (('a' & 15) + 1)) & 15) + 1))) >= v2) && (v2 >= ((((v2 as i16) in a) >= p.x) && (p.x < (!a[(0x13 & 3)])))))) else '\t')}};
+    match (e) {
+        A => {
+            return (0 >> v1);
+        }
+        B(mb0) => {
+            return ((964 % ((-1 & 15) + 1)) ^ mb0);
+        }
+        C(mb0, mb1) => {
+            return (((((742 as i32) as double) - (-1.5 / -0.5)) as i64) - mb1);
+        }
+    }
+    e = E.B(((((((-202 <= -1) && (-1 < 'd')) in a) > ((sv0).len in a)) && (((sv0).len in a) < ((gv as u8) in 0..(('b' & 15) + 0x1)))) <= (((2 if (a[((!(gv / (((gv << 'f') & 0xf) + 0x1))) & 3)] > (p.x != (p.x in a))) else v0) if ((!(a[('c' & 3)] | ((3 in a) == (false in a)))) < ((p.y if (((((((false < gv) && (gv < 'b')) >= ((sv1)[0..2]).len) && (((sv1)[0..2]).len > ((-188 >= '0') && ('0' <= 3)))) in a) in 0..((((!(true | 0)) as u32) & 15) + 1)) >= (max2((('\n' % ((0 & 15) + 1)) if (v0 > ((((("xyzzy")[0..5] + ("abcd")[1..3]))[0] & ((gv + v0) % ((('b' <= true) & 15) + 1))) + p.x)) else v1), ((100 >> -676) if (((a[((false << 'd') & 3)] % (((((240 < true) && (true <= true)) as u16) & 15) + 1)) << (((-'c') ^ (gv as i8)) <= ((true if (((fv as i64) >= (((255 >> true) as i8) == ((100 * gv) as u32))) <= a[(((!gv) if ((fv as i64) >= 944) else (636 / ((("hi")[0] & 15) + 1))) & 3)]) else gv) < (255 as u8)))) < (((('3' <= 3) >= str_eq(sv1, ("foobar")[1..5])) >= ((42 in 0..(('2' & 15) + 1)) % (((88 if (((str_eq(("hello")[2..4], ((("abcd")[1..4] + ("""x
+yz""")[0..2]))[0..2]) as u32) ^ ((sv0 + sv0))[0]) <= (-634 >= ((!(true as u32)) as u8))) else 'g') & 15) + 1))) as i8)) else (435 * true))) in a)) else ((!gv) >> (-756 | true))) | (-252 * a[(((v1 <= v2) && (v2 > 1)) & 3)]))) else (10 & '\t')) % ((((100.0 < fv) | (10 as i32)) & 15) + 1))));
+    fv = fv;
+    var ob Buf;
+    fmt_i64(&ob, v0);
+    write_str(STDOUT, buf_str(&ob));
+    write_str(STDOUT, "\n");
+    return (opt_d(D.None) > (-a[((0.125 as i64) & 3)]));
+}

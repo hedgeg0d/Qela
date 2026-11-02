@@ -1,4 +1,4 @@
-// expect-exit: 195
+// expect-exit: 1
 // got: CRASH
 struct Pair { x int, y int, }
 struct Wide { a int, b int, c int, }
@@ -29,11 +29,12 @@ fn tag_e(e E) int {
 }
 fn main() int {
     var v0 int = 1;
-    var v1 int = 9;
+    var v1 int = 0x9;
     var v2 int = 4;
-    var sv0 str = "xyzzy";
-    var sv1 str = "hello";
-    var fv double = -0.5;
+    var sv0 str = """x
+yz""";
+    var sv1 str = "xyzzy";
+    var fv double = 2.0;
     var p Pair = Pair{};
     var w Wide = Wide{};
     var b Bag = Bag{};
@@ -44,63 +45,33 @@ fn main() int {
     var i1 int = 0;
     var i2 int = 0;
     var i3 int = 0;
-    var i4 int = 0;
-    var i5 int = 0;
-    p = Pair{x: ((((v1 != true) as i32) as u8) % ((((("foobar")[1..4])[0] > a[((false * -1) & 3)]) & 15) + 1)), y: v0};
-    v0 = wide_sum(w);
-    v2 = (((-(-116 as i32)) >> (-p.x)) + (((452 as u32) as i8) - gcd2((gv & 15), ((255 ^ 'a') & 15))));
-    gv = (false * (pair_sum(Pair{x: a[(gv & 3)], y: (true % ((100 & 15) + 1))}) >> str_eq(((("zz")[0..2])[0..2])[0..2], (("xyz")[0..2])[0..2])));
-    match (e) {
-        A => {
-            return v2;
-        }
-        B(mb0) => {
-            return ((opt_d(D.Some((!v2))) & a[((-219 < 65) & 3)]) >= (add2((false == -1), ('b' > 127)) != gv));
-        }
-        C(mb0, mb1) => {
-            return (("foobar")[0..3]).len;
-        }
-    }
-    n.tag = (-true);
-    if (((opt_d(D.None) as u8) == (!581))) {
-        i1 = 0;
-        while ((i1 < 1)) {
-            i1 = (i1 + 1);
-            match (e) {
-                A => {
-                    return (((fv != fv) as u32) - a[((('f' << v2) >> false) & 3)]);
-                }
-                B(mb0) => {
-                    return (((p.y & (2.5 as i64)) << (((fv >= 10.5) <= (!true)) as i32)) * mb0);
-                }
-                C(mb0, mb1) => {
-                    return (-88 % (((((fv * 1.5) * (fv / -1.5)) >= fv) & 15) + 1));
-                }
-            }
-            gv, v2 = ((((fv as i64) != (10 ^ false)) != (-(143 << '\t'))) ^ str_eq((("hello")[0..2])[0..2], ("zz")[0..2])), (!(((v0 > v2) % (((-true) & 15) + 1)) <= (('f' / (('g' & 15) + 1)) * str_eq("xyz", (("abc")[0..3])[0..2]))));
-            v2 = (42 & (((false & '\t') > (-gv)) as i8));
-        }
+    var i4 int = 0x0;
+    var i5 int = 0x0;
+    sv1 = ("hello")[2..5];
+    if ((((-(gv & a[(false & 3)])) | ((('d' in a) as u16) in a)) >= opt_d(D.Some(((-(-646 in 0..((gv & 15) + 1))) in 0..(('g' & 15) + 0x1)))))) {
+        p.y = a[((((gv / ((v1 & 15) + 1)) in a) * (('\t' as u8) == (0 >= -1))) & 3)];
+        e = E.B(true);
+        return ((v2 == ((fv as i64) << (gv == -77))) in 0..(((((true != -390) as u8) in a) & 0xf) + 1));
     } else {
-        p.x = (p.x as i16);
-        return ((-(str_eq(("qwerty")[2..6], ("abcd")[0..2]) <= ('3' % ((false & 15) + 1)))) + gv);
+        v0 = (gcd2((gv & 15), ((add2(255, '0') if ((fv > (2.5 / 0.125)) < a[(((v2 != (947 & true)) & (-(true % ((v2 & 15) + 0x1)))) & 3)]) else (("xyzzy")[0..4]).len) & 15)) != v0);
     }
-    match (e) {
-        A => {
-            return (!(str_eq(("foobar")[1..6], "xyz") >= gv));
-        }
-        B(mb0) => {
-            return (((gv as u8) == p.y) ^ mb0);
-        }
-        C(mb0, mb1) => {
-            return (-104 | mb1);
-        }
-    }
-    v0 = p.y;
-    n.tag = (opt_d(D.Some(((true << gv) as u8))) as u16);
-    b = Bag{p: gv, q: (!false), r: (fv as i64), s: (!(p.y > p.y))};
-    var ob Buf;
-    fmt_i64(&ob, v0);
-    write_str(STDOUT, buf_str(&ob));
-    write_str(STDOUT, "\n");
-    return ((-str_eq(sv0, ((("xyzzy")[0..2])[0..2])[0..2])) + (((3.75 != 2.5) / (((42 <= 'e') & 15) + 1)) * ('a' > (!154))));
+    fv = ((((2 as u8) - a[(-1 & 3)]) * a[((523 * 0x217) & 3)]) as double);
+    fv = (fv * (((3 * 3) in 0..(((100 as u16) & 15) + 1)) as double));
+    b = Bag{p: (true % ((((10.5 - (true as double)) >= fv) & 0xf) + 0x1)), q: p.y, r: gv, s: (((('2' >> -999) in 0..((('\n' if (((((-gv) <= p.x) in 0..((((303 >> gv) ^ (100 >> false)) & 15) + 1)) ^ str_eq(((("hello")[0..4])[0..2])[0..2], """x
+yz""")) != ((v2 <= str_eq((("""ab
+cd""")[0..5])[0..2], (("abcd")[1..4] + ((((((sv1 + (sv1)[0..2]))[0..2])[0..2])[0..2] + ("""x
+yz""")[1..3]) + sv1)))) && (str_eq((("""ab
+cd""")[0..5])[0..2], (("abcd")[1..4] + ((((((sv1 + (sv1)[0..2]))[0..2])[0..2])[0..2] + ("""x
+yz""")[1..3]) + sv1))) >= wide_sum(w)))) else 'a') & 15) + 1)) as u32) & (!((v2 as i8) in a)))};
+    e = E.C(((((2 as u8) == v0) == (((gv % ((-798 & 15) + 1)) >= (813 in 0..((-1 & 15) + 0x1))) && ((813 in 0..((-1 & 15) + 1)) < ('3' % ((false & 0xf) + 1))))) & ((add2(-245, 45) & 42) in 0..((p.x & 15) + 1))), (-(!(((fv >= -1.5) < (10 as u16)) && ((10 as u16) < (-'2'))))));
+    v1 = ((((add2(255, -33) << ('3' as i8)) >= (gv as u8)) <= (-((gv <= '2') if ((((gv << ((42 <= '0') && ('0' > 'g'))) as u16) if (((!(p.y > p.y)) ^ ("foobar")[0]) != 'a') else ((42 % (((2 != 656) & 15) + 0x1)) * (((0 > false) && (false >= 255)) > (!154)))) <= ((-str_eq(sv0, (((sv0 + "qwerty"))[0..2])[0..2])) if ((((((('\n' if (((str_eq((("""ab
+cd""" + "aa"))[0..2], (sv1 + (((sv1)[0..2])[0..2] + (((((("foobar")[2..5] + ((("foobar")[3..5] + sv0))[0..2]))[0..2])[0..2] + (sv0)[0..2]) + (("foobar")[2..5] + sv0))))) >> -528) in 0..(((a[((10 as u8) & 0x3)] | (!858)) & 15) + 1)) > (("foobar" + (("xyzzy")[2..4])[0..2])).len) else 2) <= (false & -876)) && ((false & -876) >= (true % (('e' & 15) + 0x1)))) <= ((fv >= fv) & ((false >= 127) && (127 >= v2)))) && (((fv >= fv) & ((false >= 0x7f) && (127 >= v2))) <= ((((((("foobar")[0..5] + "abcd") + (("hello")[0..3] + sv1)))[0..2])[0..2] + ("hello")[1..5])).len)) as u32) >= (((('3' % ((-309 & 15) + 1)) * v1) if ((sv0)[0] == ((-2.0 != fv) in 0..(((((sv0)[0..2])[0..2]).len & 0xf) + 1))) else (str_eq(((sv1)[0..2] + sv1), ("""x
+yz""")[1..3]) as i32)) / (((((-1.5 / 1.5) as i64) | a[(('b' as i8) & 3)]) & 0xf) + 1))) else (((sv0)[1] in 0..((1 & 0xf) + 1)) % (((v0 >> (-'e')) & 15) + 1)))) else p.x))) && ((-((gv <= '2') if ((((gv << ((42 <= '0') && ('0' > 'g'))) as u16) if (((!(p.y > p.y)) ^ ("foobar")[0]) != 'a') else ((42 % (((2 != 656) & 15) + 1)) * (((0 > false) && (false >= 0xff)) > (!154)))) <= ((-str_eq(sv0, (((sv0 + "qwerty"))[0..2])[0..2])) if ((((((('\n' if (((str_eq((("""ab
+cd""" + "aa"))[0..2], (sv1 + (((sv1)[0..2])[0..2] + (((((("foobar")[2..5] + ((("foobar")[3..5] + sv0))[0..2]))[0..2])[0..2] + (sv0)[0..2]) + (("foobar")[2..5] + sv0))))) >> 0xfffffffffffffdf0) in 0..(((a[((10 as u8) & 3)] | (!858)) & 15) + 1)) > (("foobar" + (("xyzzy")[2..4])[0..2])).len) else 0x2) <= (false & -876)) && ((false & -876) >= (true % (('e' & 0xf) + 1)))) <= ((fv >= fv) & ((false >= 127) && (0x7f >= v2)))) && (((fv >= fv) & ((false >= 127) && (127 >= v2))) <= ((((((("foobar")[0..5] + "abcd") + (("hello")[0..3] + sv1)))[0..2])[0..2] + ("hello")[1..5])).len)) as u32) >= (((('3' % ((-309 & 15) + 1)) * v1) if ((sv0)[0] == ((-2.0 != fv) in 0..(((((sv0)[0..2])[0..2]).len & 15) + 1))) else (str_eq(((sv1)[0..2] + sv1), ("""x
+yz""")[1..3]) as i32)) / (((((-1.5 / 1.5) as i64) | a[(('b' as i8) & 0x3)]) & 15) + 1))) else (((sv0)[1] in 0..((1 & 15) + 1)) % (((v0 >> (-'e')) & 15) + 1)))) else p.x)) <= (((-938 in 0..(('3' & 15) + 1)) > ('a' as u8)) as u32)));
+    p.y = ((((-0.5 / -0.5) / 0.5) as i64) << str_eq(("xyzzy")[2..5], ("hello")[0..4]));
+    fv = -1.5;
+    gv = ((p.y ^ (fv as i64)) | (((('c' == -28) != 537) < ((v2 - 255) in 0..((p.x & 15) + 1))) && (((v2 - 255) in 0..((p.x & 15) + 1)) > (!2))));
+    write_str(STDOUT, "${v2:08x}\n");
+    return gv;
 }

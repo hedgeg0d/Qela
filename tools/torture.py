@@ -45,8 +45,10 @@ def wrap(v: int) -> int:
 
 # Every generated string has length >= 2: the char index is a constant 0/1
 # and the in-range slice of a variable is [0..2], so nothing can panic.
+# The last two carry a real newline, so they are emitted in the raw
+# """...""" form and exercise the multi-line lexer path.
 STRINGS = ["abc", "hello", "xyz", "abcd", "qwerty", "hi", "xyzzy", "no",
-           "foobar", "42", "aa", "zz"]
+           "foobar", "42", "aa", "zz", "ab\ncd", "x\nyz"]
 
 # Exact-binary fractions plus a few non-terminating decimals (0.1, 0.3,
 # 1.7 round to the same doubles in Python and in the compiler's parser).
@@ -179,6 +181,39 @@ def eval_expr(node, env: dict):
         return eval_expr(node[1], env)[node[2]:node[3]]
     if kind == "seq":
         return 1 if eval_expr(node[1], env) == eval_expr(node[2], env) else 0
+    if kind == "scat":
+        # "a" + "b": string concatenation.
+        return eval_expr(node[1], env) + eval_expr(node[2], env)
+    if kind == "chain":
+        # a op1 b op2 c: the middle operand is evaluated once and the
+        # second compare only when the first held. Expressions are pure,
+        # so the model may evaluate b twice -- the value is the same.
+        a = eval_expr(node[1], env)
+        b = eval_expr(node[2], env)
+        if node[3] == "<":   r1 = 1 if a < b else 0
+        elif node[3] == "<=": r1 = 1 if a <= b else 0
+        elif node[3] == ">":  r1 = 1 if a > b else 0
+        else:                 r1 = 1 if a >= b else 0
+        if not r1: return 0
+        c = eval_expr(node[4], env)
+        if node[5] == "<":   return 1 if b < c else 0
+        elif node[5] == "<=": return 1 if b <= c else 0
+        elif node[5] == ">":  return 1 if b > c else 0
+        return 1 if b >= c else 0
+    if kind == "tern":
+        # a if c else b.
+        if eval_expr(node[2], env) != 0:
+            return eval_expr(node[1], env)
+        return eval_expr(node[3], env)
+    if kind == "inarr":
+        # x in a: a linear scan of the 4-element array.
+        x = eval_expr(node[1], env)
+        return 1 if any(e == x for e in eval_expr(node[2], env)) else 0
+    if kind == "inrange":
+        # x in 0..hi: 0 <= x < hi.
+        x = eval_expr(node[1], env)
+        hi = eval_expr(node[2], env)
+        return 1 if 0 <= x < hi else 0
     if kind == "fnum":
         return node[1]
     if kind == "fvar":
@@ -307,7 +342,9 @@ def exec_stmt(st, env: dict):
         old = eval_expr(st[1], env)
         rhs = eval_expr(st[3], env)
         op = st[2]
-        if op == "+":   new = wrap(old + rhs)
+        if op == "+":
+            # s += "x" on a string is concatenation, not arithmetic.
+            new = old + rhs if isinstance(old, str) else wrap(old + rhs)
         elif op == "-": new = wrap(old - rhs)
         elif op == "*": new = wrap(old * rhs)
         elif op == "/": new = 0 if rhs == 0 else wrap(int(abs(old) / abs(rhs)) * (-1 if (old < 0) != (rhs < 0) else 1))
@@ -352,11 +389,31 @@ BINOPS = ["+","-","*","&","|","^","<<",">>","/","%",
           "==","!=","<","<=",">",">="]
 UNARY = ["-", "!"]
 
+# A fixed-seed rng for cosmetic emission choices (digit separators): the
+# shrinker re-renders programs, and the separators must stay deterministic.
+SEPR = random.Random(12345)
+
+
+def sep_emit_int(v: int) -> str:
+    """Decimal with random `_` separators, or a hex literal."""
+    r = SEPR.random()
+    if r < 0.12:
+        return "0x" + format(v & 0xFFFFFFFFFFFFFFFF, "x")
+    if r < 0.35:
+        neg = v < 0
+        digs = str(-v) if neg else str(v)
+        parts = []
+        for i in range(len(digs), 0, -3):
+            parts.append(digs[max(0, i - 3):i])
+        return ("-" if neg else "") + "_".join(reversed(parts))
+    return str(v)
+
+
 def emit(node, vars: set) -> str:
     if isinstance(node, tuple):
         kind = node[0]
         if kind == "int":
-            return str(qwrap(node[2], 64, True))
+            return sep_emit_int(qwrap(node[2], 64, True))
         if kind == "chr":
             return repr(node[1])
         if kind == "true": return "true"
@@ -365,8 +422,25 @@ def emit(node, vars: set) -> str:
             vars.add(node[1])
             return node[1]
         if kind == "strlit":
-            # Qela strings use double quotes; the pool holds no escapes.
+            # A string with a newline is emitted as the raw multi-line
+            # form; the pool holds nothing else that needs escaping.
+            if "\n" in node[1]:
+                return '"""' + node[1] + '"""'
             return '"' + node[1] + '"'
+        if kind == "scat":
+            return f"({emit(node[1], vars)} + {emit(node[2], vars)})"
+        if kind == "chain":
+            # The middle operand is emitted twice; the compiler hoists it
+            # into a hidden temp when it is not a plain variable.
+            return (f"(({emit(node[1], vars)} {node[3]} {emit(node[2], vars)})"
+                    f" && ({emit(node[2], vars)} {node[5]} {emit(node[4], vars)}))")
+        if kind == "tern":
+            return (f"({emit(node[1], vars)} if {emit(node[2], vars)}"
+                    f" else {emit(node[3], vars)})")
+        if kind == "inarr":
+            return f"({emit(node[1], vars)} in {emit(node[2], vars)})"
+        if kind == "inrange":
+            return f"({emit(node[1], vars)} in 0..{emit(node[2], vars)})"
         if kind == "slen":
             return f"({emit(node[1], vars)}).len"
         if kind == "sidx":
@@ -466,13 +540,14 @@ class Program:
     statements and re-evaluates, so no expectation goes stale."""
 
     def __init__(self, helpers, decls, stmts, ret_expr,
-                 g_init=None, print_var=None):
+                 g_init=None, print_var=None, print_form=0):
         self.helpers = helpers
         self.decls = decls      # ("decl", name, ty, value-node)
         self.stmts = stmts
         self.ret_expr = ret_expr
         self.g_init = g_init    # global `var gv int = ...`, or None
         self.print_var = print_var  # prints this var's value before return
+        self.print_form = print_form  # 0: fmt_i64, 1: ${v=}, 2: ${v:08x}
 
     def run(self) -> tuple:
         """Returns (exit code, stdout text)."""
@@ -485,7 +560,15 @@ class Program:
             # The print sits between the statements and the return
             # expression, so an early return skips it -- mirror that.
             if self.print_var is not None:
-                out = str(wrap(env[self.print_var])) + "\n"
+                v = wrap(env[self.print_var])
+                if self.print_form == 0:
+                    out = str(v) + "\n"
+                elif self.print_form == 1:
+                    # "${v=}" prints the variable's source text and value.
+                    out = f"{self.print_var}={v}\n"
+                else:
+                    # "${v:08x}": the low 8 hex digits of the bit pattern.
+                    out = format(v & 0xFFFFFFFFFFFFFFFF, "016x")[-8:] + "\n"
             r = eval_expr(self.ret_expr, env)
         return wrap(r) & 0xff, out
 
@@ -511,10 +594,15 @@ class Program:
         out += [render_stmt(d, 1) for d in self.decls]
         out += [render_stmt(s, 1) for s in self.stmts]
         if self.print_var is not None:
-            out.append(f"    var ob Buf;")
-            out.append(f"    fmt_i64(&ob, {self.print_var});")
-            out.append(f"    write_str(STDOUT, buf_str(&ob));")
-            out.append(f"    write_str(STDOUT, \"\\n\");")
+            if self.print_form == 0:
+                out.append(f"    var ob Buf;")
+                out.append(f"    fmt_i64(&ob, {self.print_var});")
+                out.append(f"    write_str(STDOUT, buf_str(&ob));")
+                out.append(f"    write_str(STDOUT, \"\\n\");")
+            elif self.print_form == 1:
+                out.append(f"    write_str(STDOUT, \"${{{self.print_var}=}}\\n\");")
+            else:
+                out.append(f"    write_str(STDOUT, \"${{{self.print_var}:08x}}\\n\");")
         out.append(f"    return {emit(self.ret_expr, set())};")
         out.append("}")
         return "\n".join(out) + "\n"
@@ -522,7 +610,7 @@ class Program:
     def without(self, i):
         return Program(self.helpers, self.decls,
                        self.stmts[:i] + self.stmts[i + 1:], self.ret_expr,
-                       self.g_init, self.print_var)
+                       self.g_init, self.print_var, self.print_form)
 
 
 # ── generator ───────────────────────────────────────────────────────────
@@ -643,18 +731,44 @@ class Gen:
     def expr(self, depth: int, vars_used: set) -> tuple:
         if depth >= self.md:
             return self.leaf(vars_used, depth)
-        k = self.rng.randint(0, 17)
+        k = self.rng.randint(0, 21)
         if k < 6:  return self.leaf(vars_used, depth)
         if k < 13: return self.binop(depth, vars_used)
         if k < 15: return self.unary(depth, vars_used)
         if k < 17: return self.cast(depth, vars_used)
+        if k < 21: return self.sugar(depth, vars_used)
         return self.leaf(vars_used, depth)
+
+    def sugar(self, depth: int, vused: set) -> tuple:
+        """The scripting-era expression forms: chained comparisons, the
+        ternary, and membership in an array or a range."""
+        k = self.rng.randint(0, 3)
+        if k == 0:
+            # The middle operand is a call or an operation most of the
+            # time, so the compiler's hoist path (not a plain variable)
+            # gets exercised.
+            return ("chain", self.expr(depth + 1, vused),
+                    self.expr(depth + 1, vused),
+                    self.rng.choice(["<", "<=", ">", ">="]),
+                    self.expr(depth + 1, vused),
+                    self.rng.choice(["<", "<=", ">", ">="]))
+        if k == 1:
+            return ("tern", self.expr(depth + 1, vused), self.cond(0),
+                    self.expr(depth + 1, vused))
+        if k == 2:
+            return ("inarr", self.expr(depth + 1, vused), ("var", "a"))
+        # x in 0..hi: the bound is forced nonzero like a divisor, so the
+        # range is sometimes nonempty.
+        return ("inrange", self.expr(depth + 1, vused),
+                ("+", ("&", self.expr(depth + 1, vused), ("int", "i64", 15)),
+                 ("int", "i64", 1)))
 
     def sexpr(self, depth: int = 0) -> tuple:
         """A string-typed expression. Every generated string value has
         length >= 2, so the constant char index 0/1 and the [0..2] slice
-        of a variable can never be out of range."""
-        k = self.rng.randint(0, 3)
+        of a variable can never be out of range. Concatenation keeps the
+        invariant: two >=2-char strings join into a >=4-char one."""
+        k = self.rng.randint(0, 4)
         if k == 0:
             return ("strlit", self.rng.choice(STRINGS))
         if k == 1:
@@ -663,6 +777,8 @@ class Gen:
             # A [0..2] slice is in range for any >=2-char string, literal
             # or variable.
             return ("sslice", self.sexpr(depth + 1), 0, 2)
+        if k == 3:
+            return ("scat", self.sexpr(depth + 1), self.sexpr(depth + 1))
         # A slice of a literal with constant bounds, in range and at
         # least two chars long by construction (the pool has >=3-char
         # strings for this); slicing a variable this way needs its
@@ -819,6 +935,11 @@ class Gen:
                 return [("asgn", ("mem", ("var", "n"), "tag"), self.expr(0, set()))]
             return [("asgn", ("mem", ("mem", ("var", "n"), "p"), "x"),
                      self.expr(0, set()))]
+        if k == 13:
+            # s += "x": string append. The target must be a string var
+            # and the rhs a string expression.
+            return [("opasgn", ("var", self.rng.choice(["sv0", "sv1"])),
+                     "+", self.sexpr(0))]
         if k == 12 and allow_flow and depth < self.md:
             body_t = self.stmts(True, depth + 1, self.rng.randint(1, 2))
             body_f = self.stmts(True, depth + 1, self.rng.randint(1, 2))
@@ -922,8 +1043,9 @@ def generate(seed: int, stmts: int = 8, max_depth: int = 4,
 
     body = gen.stmts(True, 0, stmts + rng.randint(0, 3))
     print_var = rng.choice(["v0", "v1", "v2", None])
+    print_form = rng.randint(0, 2) if print_var is not None else 0
     return Program(helpers, decls, body, gen.expr(0, set()),
-                   g_init, print_var)
+                   g_init, print_var, print_form)
 
 
 # ── compile & run ───────────────────────────────────────────────────────

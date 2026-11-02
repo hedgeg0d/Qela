@@ -1,0 +1,411 @@
+import "comp.qela";
+import "blob.qela";
+import "parse.qela";
+import "../std/io.qela";
+
+// `qela doc` — lookup for /// doc comments. A line of the form
+//
+//   /// one or two sentences
+//
+// directly above a `fn` is that function's documentation; the standard
+// library's source is packed inside the binary (srcql/blob.qela), so
+// `qela doc std <name>` searches every module without a copy on disk,
+// and `qela doc <file.qela> <name>` scans any user file the same way.
+// Names match exactly, then by substring, then by Levenshtein distance
+// (the same lev_dist the parser uses for keyword hints).
+
+struct DocEnt {
+	name str,
+	sig  str,
+	doc  str,
+	path str,
+}
+
+fn doc_has(hay str, needle str) bool {
+	if (needle.len == 0) { return true; }
+	var i i64 = 0;
+	while (i + needle.len <= hay.len) {
+		var j i64 = 0;
+		var hit bool = true;
+		while (j < needle.len) {
+			if (hay.ptr[i + j] != needle.ptr[j]) { hit = false; }
+			j = j + 1;
+		}
+		if (hit) { return true; }
+		i = i + 1;
+	}
+	return false;
+}
+
+fn doc_line_starts(s str, lo i64, p str) bool {
+	if (s.len - lo < p.len) { return false; }
+	var i i64 = 0;
+	while (i < p.len) {
+		if (s.ptr[lo + i] != p.ptr[i]) { return false; }
+		i = i + 1;
+	}
+	return true;
+}
+
+fn doc_line_ends(s str, hi i64, p str) bool {
+	if (hi < p.len) { return false; }
+	var i i64 = 0;
+	while (i < p.len) {
+		if (s.ptr[hi - p.len + i] != p.ptr[i]) { return false; }
+		i = i + 1;
+	}
+	return true;
+}
+
+// How many `"""` markers the line holds.
+fn doc_raw_count(line str) i64 {
+	var j i64 = 0;
+	var n i64 = 0;
+	while (j + 2 < line.len) {
+		if (line.ptr[j] == '"' && line.ptr[j + 1] == '"' && line.ptr[j + 2] == '"') {
+			n = n + 1;
+			j = j + 3;
+		} else {
+			j = j + 1;
+		}
+	}
+	return n;
+}
+
+// The next line in s starting at i: returns the offset of the first
+// char past the newline (or s.len), writing the line's start to *lo
+// and its end (excluding the newline) to *hi.
+fn doc_next_line(s str, i i64, lo *i64, hi *i64) i64 {
+	var j i64 = i;
+	while (j < s.len && s.ptr[j] != '\n') { j = j + 1; }
+	lo[0] = i;
+	hi[0] = j;
+	if (j < s.len) { return j + 1; }
+	return j;
+}
+
+// The first '{' at or after from within line [lo, hi), or -1.
+fn doc_first_brace(s str, lo i64, hi i64) i64 {
+	var b i64 = lo;
+	while (b < hi) {
+		if (s.ptr[b] == '{') { return b; }
+		b = b + 1;
+	}
+	return -1;
+}
+
+// Count or collect the documented functions of one source text. With
+// ents null, returns the count; otherwise fills ents[0..count) and
+// returns the count again.
+fn doc_scan(src str, path str, ents *DocEnt, cap int) int {
+	var n int = 0;
+	var i i64 = 0;
+	var pending bool = false;
+	var doc_lo i64 = 0;
+	var doc_hi i64 = 0;
+	var raw bool = false;
+	while (i < src.len) {
+		var lo i64;
+		var hi i64;
+		i = doc_next_line(src, i, &lo, &hi);
+		if (raw) {
+			// Inside a """ literal: any marker closes it.
+			if (doc_raw_count(str_slice(src, lo, hi)) >= 1) { raw = false; }
+			pending = false;
+			continue;
+		}
+		// A line that starts with `"""` and does not also end with it
+		// opens a multi-line string (a lone `"""` is an empty string).
+		if (doc_line_starts(src, lo, "\"\"\"") &&
+		    !doc_line_ends(src, hi, "\"\"\"")) {
+			raw = true;
+			pending = false;
+			continue;
+		}
+		if (doc_line_starts(src, lo, "///")) {
+			if (!pending) { doc_lo = lo; }
+			doc_hi = hi;
+			pending = true;
+			continue;
+		}
+		if (doc_line_starts(src, lo, "fn ")) {
+			var name_lo i64 = lo + 3;
+			var name_hi i64 = name_lo;
+			while (name_hi < hi && src.ptr[name_hi] != '(' &&
+			       src.ptr[name_hi] != ' ' && src.ptr[name_hi] != '\t' &&
+			       src.ptr[name_hi] != '[') { name_hi = name_hi + 1; }
+			if (pending && name_hi > name_lo) {
+				var sig_hi i64 = doc_first_brace(src, lo, hi);
+				if (sig_hi < 0) {
+					if (doc_has(str_slice(src, lo, hi), ")")) {
+						sig_hi = hi;
+					} else {
+						// The signature spans lines: pull lines until
+						// one holds the closing paren or a body brace.
+						var pull i64 = i;
+						while (pull <= src.len) {
+							var nlo i64;
+							var nhi i64;
+							pull = doc_next_line(src, pull, &nlo, &nhi);
+							var br i64 = doc_first_brace(src, nlo, nhi);
+							if (br >= 0) { sig_hi = br; break; }
+							sig_hi = nhi;
+							if (doc_has(str_slice(src, nlo, nhi), ")")) { break; }
+						}
+						i = pull;
+					}
+				}
+				if (ents as i64 != 0) {
+					if (n < cap) {
+						ents[n].name = str_slice(src, name_lo, name_hi);
+						ents[n].sig = str_slice(src, lo, sig_hi);
+						ents[n].doc = str_slice(src, doc_lo, doc_hi);
+						ents[n].path = path;
+						n = n + 1;
+					}
+				} else {
+					n = n + 1;
+				}
+			}
+			pending = false;
+			continue;
+		}
+		pending = false;
+	}
+	return n;
+}
+
+// Collect the documented entries of one source text into the arena;
+// returns the array (or null when nothing is documented) and the count.
+fn doc_collect(src str, path str, count *int) *DocEnt {
+	var n int = doc_scan(src, path, null, 0);
+	count[0] = n;
+	if (n == 0) { return null; }
+	var ents *DocEnt = arena_alloc(n as i64 * sizeof(DocEnt), 8) as *DocEnt;
+	doc_scan(src, path, ents, n);
+	return ents;
+}
+
+// Print one entry: module path (when show_mod), signature and the doc
+// lines, each minus its `///` marker.
+fn doc_emit(e *DocEnt, show_mod bool) {
+	if (show_mod) {
+		write_str(STDOUT, e.path);
+		write_str(STDOUT, "\n");
+	}
+	write_str(STDOUT, "  ");
+	write_str(STDOUT, e.sig);
+	write_str(STDOUT, "\n");
+	var i i64 = 0;
+	while (i < e.doc.len) {
+		var j i64 = i;
+		while (j < e.doc.len && e.doc.ptr[j] != '\n') { j = j + 1; }
+		var k i64 = i;
+		while (k < j && k < i + 3) { k = k + 1; }
+		if (k < j && e.doc.ptr[k] == ' ') { k = k + 1; }
+		if (k < j) {
+			write_str(STDOUT, "    ");
+			var text str;
+			text.ptr = e.doc.ptr + k;
+			text.len = j - k;
+			write_str(STDOUT, text);
+			write_str(STDOUT, "\n");
+		}
+		i = j + 1;
+	}
+}
+
+// The module path printed as a header the last time an entry was
+// emitted; equal paths suppress the header.
+var doc_last_path str;
+
+fn doc_print(e *DocEnt) {
+	var show bool = !str_eq(doc_last_path, e.path);
+	doc_last_path = e.path;
+	doc_emit(e, show);
+}
+
+// Decimal into the terminal.
+fn doc_put_i64(v i64) {
+	if (v == 0) { write_str(STDOUT, "0"); return; }
+	var buf [32]u8;
+	var i i64 = 0;
+	while (v > 0) {
+		buf[31 - i] = (((v % 10) as u8) + ('0' as u8)) as u8;
+		v = v / 10;
+		i = i + 1;
+	}
+	var out str;
+	out.ptr = &buf[32 - i];
+	out.len = i;
+	write_str(STDOUT, out);
+}
+
+fn doc_usage() {
+	eprint("usage: qela doc std [name]\n       qela doc <file.qela> [name]\n");
+}
+
+// Match names against a query: exact, then substring, then nearest
+// edit distance. Returns 0 on a hit.
+fn doc_match(ents *DocEnt, n int, query str) int {
+	doc_last_path = "";
+	var i int = 0;
+	while (i < n) {
+		if (str_eq(ents[i].name, query)) {
+			doc_print(&ents[i]);
+			return 0;
+		}
+		i = i + 1;
+	}
+	var found int = 0;
+	var j int = 0;
+	while (j < n) {
+		if (doc_has(ents[j].name, query)) {
+			doc_print(&ents[j]);
+			found = found + 1;
+			if (found == 5) { break; }
+		}
+		j = j + 1;
+	}
+	if (found > 0) {
+		write_str(STDOUT, "  (");
+		write_str(STDOUT, query);
+		write_str(STDOUT, " appears in ");
+		doc_put_i64(found as i64);
+		write_str(STDOUT, " names)\n");
+		return 0;
+	}
+	var best int = -1;
+	var best_d i64 = 99;
+	var k int = 0;
+	while (k < n) {
+		var d i64 = lev_dist(ents[k].name, query);
+		if (d < best_d) {
+			best_d = d;
+			best = k;
+		}
+		k = k + 1;
+	}
+	if (best >= 0 && best_d <= 3) {
+		write_str(STDOUT, "did you mean ");
+		write_str(STDOUT, ents[best].name);
+		write_str(STDOUT, "?\n");
+		doc_print(&ents[best]);
+		return 0;
+	}
+	// Nothing close: show the three nearest names.
+	eprint("no documented function matches '");
+	eprint(query);
+	eprint("'; closest:");
+	eprint("\n");
+	var top1 int = -1;
+	var top2 int = -1;
+	var top3 int = -1;
+	var m int = 0;
+	while (m < n) {
+		var d i64 = lev_dist(ents[m].name, query);
+		if (top1 < 0 || d < lev_dist(ents[top1].name, query)) {
+			top3 = top2;
+			top2 = top1;
+			top1 = m;
+		} else if (top2 < 0 || d < lev_dist(ents[top2].name, query)) {
+			top3 = top2;
+			top2 = m;
+		} else if (top3 < 0 || d < lev_dist(ents[top3].name, query)) {
+			top3 = m;
+		}
+		m = m + 1;
+	}
+	if (top1 >= 0) { eprint(ents[top1].name); eprint("\n"); }
+	if (top2 >= 0) { eprint(ents[top2].name); eprint("\n"); }
+	if (top3 >= 0) { eprint(ents[top3].name); eprint("\n"); }
+	return 1;
+}
+
+fn cmd_doc(argc int, argv **u8) int {
+	if (argc < 3) {
+		doc_usage();
+		return 1;
+	}
+	var what str = str_from_cstr(argv[2]);
+	if (str_eq(what, "-h") || str_eq(what, "--help")) {
+		doc_usage();
+		return 0;
+	}
+	if (str_eq(what, "std")) {
+		var nm int = std_blob_count();
+		if (argc < 4) {
+			var m int = 0;
+			while (m < nm) {
+				var full str = std_blob_name(m);
+				write_str(STDOUT, str_slice(full, 4, full.len - 5));
+				write_str(STDOUT, ": ");
+				var cnt int = doc_scan(std_blob_src(m), full, null, 0);
+				doc_put_i64(cnt as i64);
+				write_str(STDOUT, " documented functions\n");
+				m = m + 1;
+			}
+			return 0;
+		}
+		var query str = str_from_cstr(argv[3]);
+		// A query that names a module lists that module's functions.
+		var m int = 0;
+		while (m < nm) {
+			var full str = std_blob_name(m);
+			var bare str = str_slice(full, 4, full.len - 5);
+			if (str_eq(query, full) || str_eq(query, bare) ||
+			    str_eq(query, str_slice(bare, 0, bare.len - 5))) {
+				var count int;
+				var ents *DocEnt = doc_collect(std_blob_src(m), full, &count);
+				if (ents as i64 == 0) {
+					eprint("no /// docs in ");
+					eprint(full);
+					eprint("\n");
+					return 1;
+				}
+				doc_last_path = "";
+				var i int = 0;
+				while (i < count) { doc_print(&ents[i]); i = i + 1; }
+				return 0;
+			}
+			m = m + 1;
+		}
+		// Otherwise: fuzzy search across every module.
+		var total int = 0;
+		var idx int = 0;
+		while (idx < nm) {
+			total = total + doc_scan(std_blob_src(idx), std_blob_name(idx), null, 0);
+			idx = idx + 1;
+		}
+		if (total == 0) {
+			eprint("no /// docs in the embedded stdlib\n");
+			return 1;
+		}
+		var ents *DocEnt = arena_alloc(total as i64 * sizeof(DocEnt), 8) as *DocEnt;
+		var t int = 0;
+		var j int = 0;
+		while (j < nm) {
+			var full str = std_blob_name(j);
+			var cnt int = doc_scan(std_blob_src(j), full, ents + t, total - t);
+			t = t + cnt;
+			j = j + 1;
+		}
+		return doc_match(ents, total, query);
+	}
+	var src str = read_file(what);
+	var count int;
+	var ents *DocEnt = doc_collect(src, what, &count);
+	if (ents as i64 == 0) {
+		eprint("no /// docs in ");
+		eprint(what);
+		eprint("\n");
+		return 1;
+	}
+	if (argc < 4) {
+		doc_last_path = "";
+		var i int = 0;
+		while (i < count) { doc_print(&ents[i]); i = i + 1; }
+		return 0;
+	}
+	return doc_match(ents, count, str_from_cstr(argv[3]));
+}

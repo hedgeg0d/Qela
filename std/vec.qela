@@ -17,12 +17,14 @@ struct Vec(T) {
 	cap  i64,
 }
 
+/// Creates an empty vector in place.
 fn vec_init(comptime T: type, v *Vec(T)) {
 	v.data = null;
 	v.len = 0;
 	v.cap = 0;
 }
 
+/// Appends an element to the end.
 fn vec_push(comptime T: type, v *Vec(T), x T) {
 	if (v.len >= v.cap) {
 		var cap i64 = v.cap;
@@ -41,7 +43,7 @@ fn vec_push(comptime T: type, v *Vec(T), x T) {
 	v.len = v.len + 1;
 }
 
-// Out of range reads return a zeroed element, like list_get.
+/// Returns the element at index within bounds.
 fn vec_get(comptime T: type, v *Vec(T), i i64) T {
 	if (i < 0 || i >= v.len) {
 		var z T;
@@ -50,6 +52,7 @@ fn vec_get(comptime T: type, v *Vec(T), i i64) T {
 	return *(v.data + i);
 }
 
+/// Removes and returns the last element.
 fn vec_pop(comptime T: type, v *Vec(T)) T {
 	if (v.len == 0) {
 		var z T;
@@ -59,7 +62,7 @@ fn vec_pop(comptime T: type, v *Vec(T)) T {
 	return *(v.data + v.len);
 }
 
-// The `<prefix>_has` behind `x in v`.
+/// Reports whether the vector contains the value.
 fn vec_has(comptime T: type, v *Vec(T), x T) bool {
 	var i i64 = 0;
 	while (i < v.len) {
@@ -72,6 +75,7 @@ fn vec_has(comptime T: type, v *Vec(T), x T) bool {
 // The vec literal: vec_of([1, 2, 3]) copies an array literal into a fresh
 // Vec. The slice parameter also accepts any array, so `vec_of(a)` on a
 // fixed array works too.
+/// Builds a vector from an array literal or slice.
 fn vec_of(comptime T: type, a []T) Vec(T) {
 	var v Vec(T);
 	var i i64 = 0;
@@ -79,11 +83,12 @@ fn vec_of(comptime T: type, a []T) Vec(T) {
 	return v;
 }
 
+/// Removes all elements from the vector.
 fn vec_clear(comptime T: type, v *Vec(T)) {
 	v.len = 0;
 }
 
-// The whole vector as a slice: checked indexing, slicing and for-in.
+/// Returns the whole vector as a slice.
 fn vec_view(comptime T: type, v *Vec(T)) []T {
 	var s []T;
 	s.ptr = v.data;
@@ -91,6 +96,7 @@ fn vec_view(comptime T: type, v *Vec(T)) []T {
 	return s;
 }
 
+/// Overwrites the element at index within bounds.
 fn vec_set(comptime T: type, v *Vec(T), i i64, x T) {
 	if (i < 0 || i >= v.len) { return; }
 	*(v.data + i) = x;

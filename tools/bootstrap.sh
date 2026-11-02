@@ -678,6 +678,12 @@ EOF
 # --dump-std prints the embedded module source.
 "$root/$OUT/s2" --dump-std fmt | grep -q 'fmt_str' ||
 	fail "--dump-std did not print the embedded fmt module"
+# qela doc std resolves /// doc comments: exact name shows its signature
+# and doc, and the fuzzy fallback still finds a misspelled sibling.
+"$root/$OUT/s2" doc std str_dup | grep -q 'fn str_dup' ||
+	fail "qela doc std did not resolve an exact ///-documented name"
+"$root/$OUT/s2" doc std str_trm | grep -q 'fn str_trim' ||
+	fail "qela doc std did not fuzzy-match a misspelled /// name"
 printf '    ok\n'
 
 step "qela . project build"
