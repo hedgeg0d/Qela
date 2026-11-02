@@ -7,17 +7,41 @@ Updated 2026-08-12. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **623 616 B** (59.5% of the 1 MiB budget) |
-| stage1 sources | ~21 700 lines of Qela |
+| **S2 — the shipped compiler, Qela compiled by itself** | **633 496 B** (60.4% of the 1 MiB budget) |
+| stage1 sources | ~21 900 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
 
-Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 175-test corpus under S2, the embedded stdlib resolving outside the source tree,
+Everything is verified by `tools/bootstrap.sh`: S2 == S3 byte-for-byte, the 184-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
 backtrace, interpolation and the repl, the compiler flags (`-g`,
 `--backtrace`, `--no-bounds-checks`, `--dump-std`), and a scripted language
 server conversation.
 
 ## Done
+
+**The scripting ergonomics batch (2026-08-12).** Six small language
+features and three std modules on top of the scripting batch. S2
+624 664 -> 633 496 B (+8 832), corpus 177 -> 184, gate green,
+torture 200/200, subset clean. Full writeup in this file.
+
+- **`${x=}` debug interpolation**: prints the expression's source text
+  and its value; `1_000_000` digit separators (decimal and hex);
+  `s += "x"` and `"a" + "b"` string concatenation. `tests/interpdebug.qela`.
+- **`x in 0..10`**: range membership, `lo <= x < hi`, left side
+  evaluated once. `tests/rangein.qela`.
+- **`"""..."""` raw multi-line strings**: newlines verbatim, no escapes,
+  no interpolation. `tests/multiline.qela`.
+- **Map comprehensions**: `[k: v for k in m]` builds a Map (key must be
+  a str). `tests/mapcomp.qela`.
+- **`"x" in []str`**: the scan compares str elements with str_eq.
+- **std/fs.qela**: listdir, file_size, mtime, mkdir, rmdir, rename,
+  unlink, getcwd — all syscalls wrapped in sys.qela (plus a generic
+  sys_mmap next to the anon one). `tests/fs.qela`.
+- **std/signal.qela**: rt_sigaction, a naked rt_sigreturn restorer,
+  sig_set/sig_raise. `tests/signal.qela`.
+- **std/json.qela builder**: json_obj_new/json_put/json_arr_push,
+  scalar constructors, json_obj_len and json_view (arrays iterate with
+  for-in). `tests/jsonbuilder.qela`.
 
 **The scripting batch (2026-08-12).** Six Python-style features aimed at the
 scripting half of the two-worlds goal; the kernel side already has

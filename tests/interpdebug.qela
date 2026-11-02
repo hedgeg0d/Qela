@@ -1,0 +1,20 @@
+// stage1-only
+// expect-exit: 0
+// expect-out: x=5 s=ab cd i=1000000 h=4294967040
+// `${x=}` prints the expression's source text and its value; digit
+// separators (1_000_000, 0xFFFF_FF00) and `s += "x"` concatenation are
+// the other scripting ergonomics in this batch.
+import "std/fmt.qela";
+
+fn main() int {
+	var x i64 = 5;
+	var s str = "ab";
+	s += " cd";
+	var i i64 = 1_000_000;
+	var h i64 = 0xFFFF_FF00;
+	var o = fmt_begin();
+	o = fmt_put_str(o, "${x=} ${s=} ${i=} ${h=}");
+	var r = fmt_result(o);
+	sys_write(1, r.ptr, r.len);
+	return 0;
+}
