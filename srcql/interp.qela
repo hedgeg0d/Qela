@@ -1393,7 +1393,7 @@ fn coro_finish() {
 
 // Runs on the new context's native stack, with its interpreter state
 // already unparked by whoever switched here.
-fn ip_coro_trampoline(id i64, u1 i64, u2 i64, u3 i64, u4 i64) i64 {
+fn ip_coro_trampoline(id i64, _u1 i64, _u2 i64, _u3 i64, _u4 i64) i64 {
 	var slot int = id as int;
 	ip_call_vals(ip_coro[slot].target, ip_coro[slot].a0, ip_coro[slot].a1,
 	             ip_coro[slot].a2, ip_coro[slot].a3, ip_coro[slot].a4);
@@ -1586,8 +1586,8 @@ fn ip_st_if(n *Node) i64 {
 
 fn ip_st_for(n *Node) i64 { var mark i64 = ip_sp; ip_for(n); ip_sp = mark; return 0; }
 fn ip_st_match(n *Node) i64 { var mark i64 = ip_sp; ip_match(n); ip_sp = mark; return 0; }
-fn ip_st_break(n *Node) i64 { ip_broke = true; return 0; }
-fn ip_st_cont(n *Node) i64 { ip_continued = true; return 0; }
+fn ip_st_break(_n *Node) i64 { ip_broke = true; return 0; }
+fn ip_st_cont(_n *Node) i64 { ip_continued = true; return 0; }
 
 fn ip_st_defer(n *Node) i64 {
 	if (ip_ndefer >= IP_MAX_DEFERS) { error_at(n.pos, "interpreter: too many live defers"); }
