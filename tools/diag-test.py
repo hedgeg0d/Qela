@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """
-color-test.py — the coloured diagnostics must be real ANSI escapes.
+diag-test.py — how diagnostics are rendered: escapes and cascades.
+
+The escape part: the coloured diagnostics must be real ANSI escapes.
 
 The escape byte used to be written as the text `\033`, which the language
 does not know: the output carried a NUL and the characters "33[", so every
@@ -8,10 +10,11 @@ diagnostic rendered as garbage on a terminal. Piped runs never showed it,
 because auto colour is off without a tty, which is why this check asks for
 colour explicitly.
 
-It also covers the second half of the same subject: a soft error poisons its
-node, and the interpolation check used to report "cannot interpolate a value
-of type 'poison'" on top of the real diagnostic, which the poison design
-exists to prevent.
+The cascade part: a soft error poisons its node and the compile goes on, so
+one run can report several independent mistakes. A check that does not know
+about the poison type reports a second, useless error on top of the real
+one -- seen in interpolation, in a member access, and in an index. The real
+diagnostic must be there, the poison one must not.
 
 QELA is the compiler to test, set by the caller.
 """
@@ -61,8 +64,24 @@ if "undefined function 'countre'" not in out:
 if "cannot interpolate" in out:
     fails.append("a poisoned part reported a second, useless error")
 
+MEMBER = ('import "std/io.qela";\nstruct P { x i64 }\n'
+          'fn main() int { var p P; println("${nosuchz.pos}"); return 0; }\n')
+INDEX = ('import "std/io.qela";\n'
+         'fn main() int { var a []i64; println("${nosuchz[0]}"); return 0; }\n')
+
+DEREF = ('import "std/io.qela";\n'
+         'fn main() int { var v i64 = *nosuchz; return 0; }\n')
+for what, src in (("a member on a poisoned base", MEMBER),
+                  ("an index on a poisoned value", INDEX),
+                  ("a dereference of a poisoned value", DEREF)):
+    out = compile_colored(src)
+    if "undefined function 'nosuchz'" not in out:
+        fails.append("the real error is missing for %s" % what)
+    if "poison" in out:
+        fails.append("a poisoned node reported a second error for %s" % what)
+
 if fails:
     for f in fails:
         print("FAIL:", f)
     sys.exit(1)
-print("    ok   coloured diagnostics")
+print("    ok   diagnostics: escapes, cascades")
