@@ -7,7 +7,7 @@ Updated 2026-08-14. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **650 272 B** (62.0% of the 1 MiB budget) |
+| **S2 — the shipped compiler, Qela compiled by itself** | **674 712 B** (64.4% of the 1 MiB budget) |
 | stage1 sources | ~21 900 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
 
@@ -18,6 +18,21 @@ backtrace, interpolation and the repl, the compiler flags (`-g`,
 server conversation.
 
 ## Done
+
+**Real OS threads under the interpreter (2026-08-14).** The last six
+`// interp-todo` tests run under `qela irun` now: `thread_clone`,
+`tvar_threads`, `chan_threads`, `gc_threads`, `thread_pool`,
+`thread_steal`. The interpreter's per-thread state is tvar, the
+interpreted program's tvars live in per-thread blocks copied from a
+template, atomics/fence forward to the compiled intrinsics, and
+`thread_clone` spawns a real OS thread whose child runs the interpreted
+target on a fresh frame region. Two real compiler bugs found on the
+way, both fixed and pinned: the x86 tls_init stub clobbered r12
+(callee-saved) across every compiled call of tls_init, and a tls_init
+call with no tvar declared segfaulted (the template did not exist).
+S2 650 272 -> 674 712 B (+24 440, mostly the qela binary's own tls
+template). Corpus 192/192 compiled, 177/177 under `TARGET=interp`.
+Full writeup in this file.
 
 **Slices and payload enums over the ABI (2026-08-14).** The last two
 "clean rejection" edges of the marshalling work: `interpreted`/`dynamic`
