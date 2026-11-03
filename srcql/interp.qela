@@ -1778,12 +1778,19 @@ fn ip_run(u *Unit, argc int, argv **u8) int {
 		if (ip_tls_tmpl < 0 && ip_tls_tmpl > -4096) {
 			die("error: interpreter cannot map the thread-local template");
 		}
-		// The main thread's block is the template itself: there is no
-		// arch_prctl dance here, a fresh thread gets its own copy in
-		// ip_tls_init.
-		ip_tls_base = ip_tls_tmpl;
+		// The main thread gets its own copy of the template, never the
+		// template itself: a thread spawned later copies the template,
+		// and a main thread that had been writing its tvars into the
+		// template would hand every child a dirty block (a spawned
+		// coroutine count, say, switching the child into slots it never
+		// spawned).
+		ip_tls_base = sys_mmap_anon(ip_tls_size);
+		if (ip_tls_base < 0 && ip_tls_base > -4096) {
+			die("error: interpreter cannot map the main thread's thread-local block");
+		}
 	}
 	ip_layout(u, true);
+	if (ip_tls_size > 0) { ip_memcpy(ip_tls_base, ip_tls_tmpl, ip_tls_size); }
 
 	var s i64 = sys_mmap_anon(IP_STACK);
 	if (s < 0 && s > -4096) { die("error: interpreter cannot map the frame stack"); }
