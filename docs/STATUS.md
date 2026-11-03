@@ -9,19 +9,19 @@ history; the numbers in this section are the current snapshot.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 50 792 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **762 152 B** (72.7% of the 1 MiB budget) |
-| stage1 sources | 33 752 lines of Qela |
-| Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
-| ARM64 self-hosted compiler | **897 512 B** (85.6% of the 1 MiB budget), fixed point intact |
+| **S2 — the shipped compiler, Qela compiled by itself** | **763 936 B** (72.9% of the 1 MiB budget) |
+| stage1 sources | 33 879 lines of Qela |
+| Emitted code vs `gcc -Os` on `bench/` | **192%** — the same figure with bounds checks off, since every check in the benchmark is elided (M4 gate wants ≤150%) |
+| ARM64 self-hosted compiler | **899 720 B** (85.8% of the 1 MiB budget), fixed point intact |
 
-The last successful gate verifies S2 == S3 byte-for-byte, the 231-test corpus under S2, the embedded stdlib resolving outside the source tree,
+The last successful gate verifies S2 == S3 byte-for-byte, the 233-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
 backtrace, interpolation and the repl, the compiler flags (`-g`,
 `--backtrace`, `--no-bounds-checks`, `--dump-std`), and a scripted language
 server conversation.
 
-On the current workspace, `make build` reproduced the fixed point at 762 152 B,
-with the corpus at 231/231 compiled and 209/209 under `qela irun`, and the
+On the current workspace, `make build` reproduced the fixed point at 763 936 B,
+with the corpus at 233/233 compiled and 211/211 under `qela irun`, and the
 loopback tests (`http`, `netproc`) binding and passing here.
 
 ## Done
@@ -1418,12 +1418,18 @@ batch is complete; it is not an open item.
 
 ### 1. Emitted code size (M4)
 
-231% of `gcc -Os`, 193% with bounds checks off, which is the number comparable
-to what gcc emits. `fib` sits at 153%. The bounds-check panic message
-(`index out of bounds`) costs +21 bytes of rodata in every binary that
-actually has a bounds check — a program without arrays carries no panic
-machinery at all, so `fib` and `loop` are byte-identical to before the
-message existed.
+192% of `gcc -Os` — and 192% with bounds checks off as well, so the two
+numbers have finally converged: every check the benchmark carries is now
+elided by `srcql/bounds.qela`'s analysis, leaving the emitted code exactly
+what it would be if checks had never existed. What remains is not checks at
+all. `fib` sits at 153% and `loop` at 177%, neither of which has a bounds
+check in the first place, and `sieve`'s check-free code is 236% of gcc's.
+Even with `fib` and `loop` at gcc's own size the total would be 157%, so the
+150% gate needs the code shape below to improve; more elision cannot get it
+there. The bounds-check panic message (`index out of bounds`) costs +21 bytes
+of rodata in every binary that actually has a bounds check — a program
+without arrays carries no panic machinery at all, so `fib` and `loop` are
+byte-identical to before the message existed.
 
 Done, in `srcql/regalloc.qela`, `srcql/codegen.qela` and `srcql/bounds.qela`:
 
@@ -1456,6 +1462,21 @@ Done, in `srcql/regalloc.qela`, `srcql/codegen.qela` and `srcql/bounds.qela`:
   runs while `i < K <= 2^63-1`, so `i + 1` cannot wrap. Tests
   `tests/boundsloop.qela` and `tests/boundsoob.qela` pin the soundness both
   ways. `sieve` went 317% -> 297%.
+- **Redundant bounds checks, with a step that is not `+1`.** The elision used
+  to require a step of exactly `+1`, which left `while (j < K) { a[j]; j = j +
+  i; }` -- the shape `sieve`'s inner loop has -- carrying a check the loop's
+  own test already proves. The pass now carries an enclosing elided loop's
+  range (`0 <= v < K`) into nested loops, so the step may be such a variable,
+  or a literal other than 1, and the entry may be a sum of bounded terms.
+  Soundness rests on the same two halves: the test proves `i < K` before the
+  step runs, and `K + bound(step) <= 2^63 - 1` rules out a wrap, so the index
+  can neither go below zero nor overflow. A step that is unbounded, may be
+  negative, or is written inside the loop keeps its check, as does an access
+  whose index is not the loop variable. `tests/boundsstep.qela` pins the shape
+  (`+ s` and `+= s`), `tests/boundsnegstep.qela` the step of -1 that must
+  still panic. `sieve` 256 -> 184 bytes (328% -> 235%), which is exactly its
+  `--no-bounds-checks` size; the benchmark's checks are now all elided, and
+  the total goes 231% -> 192%.
 
 Both closed off, measured rather than assumed (see above):
 
@@ -1473,6 +1494,11 @@ Both closed off, measured rather than assumed (see above):
 
 x86 codegen has stopped moving on the remaining levers. Next size lever is
 ARM64 (below), or accept the ratio and spend budget on wow/byte elsewhere.
+Everything left in `bench/` is instruction selection and addressing, not
+safety: a global's base is re-materialized as a `mov reg, imm32` at each
+access instead of living in a register, expression temporaries still round
+trip through `push`/`pop`, and loops are top-tested with a trailing `jmp`
+where gcc rotates them. The hoist attempt above is what that costs.
 
 ### 2. Backends
 
