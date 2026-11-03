@@ -942,7 +942,291 @@ fn arm64_blr(reg int) {
 }
 
 
+// ---- push/pop pooling ----
+//
+// x86's accumulator machine stages expression temporaries with 1-byte
+// push/pop; A64 has no push instruction, so the same IR costs 4+4 bytes
+// (arm64_push/arm64_pop, SP pre/post-indexed). A push/pop pair whose
+// region is free of calls and register clobbers instead stages through a
+// scratch register: the push becomes one MOV (or one LDR for OP_MEM) and
+// the pop vanishes -- its consumer reads the scratch directly. Pooled
+// pops into the OP2 staging register leave a persistent override
+// (arm64_op2_ov) that every OP2 read sees until some op redefines or
+// clobbers it.
+//
+// arm64_pool_pass runs over each IR stretch before it is lowered
+// (ir_flush calls it for TARGET_ARM64): walk 1 pairs every push with its
+// pop so a push knows the pop's destination register, walk 2 marks the
+// poolable ones with exact clobber tracking.
+
+let ARM64_POOL_MAX = 16;
+let ARM64_POOL_OP2N = 5;   // depth 1..5 pool into x5..x1 for OP2 pops
+
+var pool_push_op [16]*IrOp;
+var pool_push_reg [16]int;
+var pool_push_dirty [16]bool;
+var pool_n int;
+
+// The OP2 override: set by a pooled pop (arm64_op2_ov = the staging
+// register) and read by arm64_op2() until some op redefines OP2 or
+// clobbers the staging register. A pooled pop's value can be read by
+// several ops (a bounds CMP then the ALU), unlike the one-shot x86 pop.
+var arm64_op2_ov int = -1;
+
+// op2_reg with the pooled-pop override applied: the READ shapes of
+// arm64_lower_op call this instead of op2_reg; the WRITE shapes (dst OP2)
+// never do, so an override redirects sources only.
+fn arm64_op2(reg int) int {
+	if (arm64_op2_ov != -1) { return arm64_op2_ov; }
+	return op2_reg(reg);
+}
+
+// Whether lowering this op writes register r (a pending pooled-pop staging
+// home must be flushed to X1 first, or the value would be clobbered).
+fn arm64_op_writes(op *IrOp, r int) bool {
+	var k int = op.kind;
+	if (k == IR_MOV || k == IR_LOAD) {
+		if (op.dst.kind == OP_ACC) { return r == X0; }
+		if (op.dst.kind == OP_OP2) { return r == X1; }
+		if (op.dst.kind == OP_VREG) { return r == op.dst.reg; }
+		return false;
+	}
+	if (k == IR_ALU) {
+		if (op.dst.kind == OP_ACC) { return r == X0; }
+		if (op.dst.kind == OP_VREG) { return r == op.dst.reg; }
+		if (op.dst.kind == OP_STACKSLOT) { return r == X9 || r == X10; }
+		return false;
+	}
+	if (k == IR_LEA) {
+		if (op.dst.kind == OP_ACC) { return r == X0; }
+		if (op.dst.kind == OP_OP2) { return r == X1; }
+		return false;
+	}
+	if (k == IR_UNARY || k == IR_CAST || k == IR_SETCC || k == IR_FUNCADDR || k == IR_TLSADDR || k == IR_STORE2) {
+		return r == X0;
+	}
+	if (k == IR_STORE) { return op.dst.kind == OP_VREG && r == op.dst.reg; }
+	if (k == IR_LOAD2) { return r == X0 || (op.aux > 8 && r == X1); }
+	if (k == IR_MEMCPY || k == IR_MEMCPYDST) { return r == X0 || r == X2 || r == X9; }
+	if (k == IR_MEMSET) { return r == X9; }
+	if (k == IR_PUSH) { return op.pooled && r == op.poolreg; }
+	return false;
+}
+
+fn arm64_pool_pass(head *IrOp) {
+	// Walk 1: pair pushes with their pops. IR_MEMCPY with an empty dst
+	// consumes the top entry (arm64_pop(X2) in the lowering), IR_STORE2
+	// and IR_LOAD2 do not.
+	pool_n = 0;
+	var op *IrOp = head;
+	while (op as i64 != 0) {
+		if (op.kind == IR_PUSH) {
+			if (pool_n < ARM64_POOL_MAX) { pool_push_op[pool_n] = op; }
+			pool_n = pool_n + 1;
+		} else if (op.kind == IR_POP) {
+			if (pool_n > 0) { pool_n = pool_n - 1; }
+			if (pool_n < ARM64_POOL_MAX) {
+				var p *IrOp = pool_push_op[pool_n];
+				p.pair = op;
+				op.pair = p;
+			}
+		} else if (op.kind == IR_MEMCPY && op.dst.kind == OP_NONE) {
+			if (pool_n > 0) { pool_n = pool_n - 1; }
+			if (pool_n < ARM64_POOL_MAX) {
+				var p *IrOp = pool_push_op[pool_n];
+				p.pair = op;
+				op.pair = p;
+			}
+		}
+		op = op.next;
+	}
+
+	// Walk 2: exact clobber tracking. pool_push_reg[i] = the register a
+	// pooled push writes (its value's new home), or -1 if it cannot pool
+	// (too deep, or a pop into the accumulator -- nothing to win there).
+	pool_n = 0;
+	op = head;
+	while (op as i64 != 0) {
+		var k int = op.kind;
+		if (k == IR_PUSH) {
+			op.pooled = false;
+			var pr int = -1;
+			if (pool_n < ARM64_POOL_MAX) {
+				var pair *IrOp = op.pair;
+				if (pair as i64 != 0) {
+					if (pair.kind == IR_POP && pair.dst.kind == OP_OP2) {
+						// Depth 1..5 pool into x5..x1: a nested region's own
+						// pool registers and its pops (x1) never collide
+						// with an outer staging's.
+						if (pool_n + 1 <= ARM64_POOL_OP2N) { pr = X5 + 1 - (pool_n + 1); }
+					} else if (pair.kind == IR_POP && pair.dst.kind == OP_REG) {
+						pr = pair.dst.reg;
+					} else if (pair.kind == IR_MEMCPY) {
+						pr = X2;
+					}
+				}
+				// A MEM push reads its base from X0: pooling it into X0
+				// itself would clobber the base for the next staged word
+				// (the two-word aggregate protocol reads [X0] then [X0+8]).
+				if (pr == X0 && op.src0.kind == OP_MEM) { pr = -1; }
+			}
+			if (pool_n < ARM64_POOL_MAX) {
+				pool_push_op[pool_n] = op;
+				pool_push_reg[pool_n] = pr;
+				pool_push_dirty[pool_n] = false;
+			}
+			op.poolreg = pr;
+			// The push itself writes pr; anything pending with the same
+			// home dies. (A pop into the accumulator leaves pr = -1 and
+			// stays memory.)
+			if (pr != -1) { arm64_pool_dirty_wr(pr); }
+			pool_n = pool_n + 1;
+		} else if (k == IR_POP) {
+			if (pool_n > 0) { pool_n = pool_n - 1; }
+			if (pool_n < ARM64_POOL_MAX) {
+				var p *IrOp = pool_push_op[pool_n];
+				var pr int = pool_push_reg[pool_n];
+				var ok bool = pr != -1 && !pool_push_dirty[pool_n] && p.pair as i64 == op as i64;
+				if (ok) { p.pooled = true; op.pooled = true; op.poolreg = pr; }
+				// A non-pooled pop still writes its destination register
+				// (a nested one would clobber an outer staging home).
+				if (!ok) {
+					if (op.dst.kind == OP_OP2) { arm64_pool_dirty_wr(X1); }
+					else if (op.dst.kind == OP_REG) { arm64_pool_dirty_wr(op.dst.reg); }
+					else { arm64_pool_dirty_wr(X0); }
+				}
+			}
+		} else if (k == IR_MEMCPY && op.dst.kind == OP_NONE) {
+			if (pool_n > 0) { pool_n = pool_n - 1; }
+			if (pool_n < ARM64_POOL_MAX) {
+				var p *IrOp = pool_push_op[pool_n];
+				if (pool_push_reg[pool_n] == X2 && !pool_push_dirty[pool_n] && p.pair as i64 == op as i64) {
+					p.pooled = true;
+					op.pooled = true;
+				} else {
+					arm64_pool_dirty_wr(X2);
+				}
+			}
+			// The memcpy loop itself uses X9 either way.
+			arm64_pool_dirty_wr(X9);
+		} else {
+			arm64_pool_dirty_op(op);
+		}
+		op = op.next;
+	}
+}
+
+fn arm64_pool_dirty_wr(wr int) {
+	var i int = 0;
+	while (i < pool_n && i < ARM64_POOL_MAX) {
+		if (pool_push_reg[i] == wr) { pool_push_dirty[i] = true; }
+		i = i + 1;
+	}
+}
+
+// The registers an op's lowering writes; a pending staging homed in one
+// of them must fall back to the memory pair.
+fn arm64_pool_dirty_op(op *IrOp) {
+	var k int = op.kind;
+	if (k == IR_CALL || k == IR_SYSCALL || k == IR_ASSERT) {
+		var i int = 0;
+		while (i < pool_n && i < ARM64_POOL_MAX) { pool_push_dirty[i] = true; i = i + 1; }
+		return;
+	}
+	if (k == IR_MOV || k == IR_LOAD) {
+		if (op.dst.kind == OP_ACC) { arm64_pool_dirty_wr(X0); return; }
+		if (op.dst.kind == OP_OP2) { arm64_pool_dirty_wr(X1); return; }
+		if (op.dst.kind == OP_VREG) { arm64_pool_dirty_wr(op.dst.reg); return; }
+		return;
+	}
+	if (k == IR_ALU) {
+		if (op.dst.kind == OP_ACC) { arm64_pool_dirty_wr(X0); return; }
+		if (op.dst.kind == OP_VREG) { arm64_pool_dirty_wr(op.dst.reg); return; }
+		if (op.dst.kind == OP_STACKSLOT) {
+			arm64_pool_dirty_wr(X9);
+			if (op.src1.kind == OP_IMM && !arm64_alu_imm_ok(op.aux, op.src1.off)) {
+				arm64_pool_dirty_wr(X10);
+			}
+			return;
+		}
+		return;
+	}
+	if (k == IR_LEA) {
+		if (op.dst.kind == OP_ACC) { arm64_pool_dirty_wr(X0); return; }
+		if (op.dst.kind == OP_OP2) { arm64_pool_dirty_wr(X1); return; }
+		return;
+	}
+	if (k == IR_UNARY || k == IR_CAST || k == IR_SETCC || k == IR_FUNCADDR || k == IR_TLSADDR || k == IR_STORE2) {
+		arm64_pool_dirty_wr(X0);
+		return;
+	}
+	if (k == IR_STORE) {
+		if (op.dst.kind == OP_VREG) { arm64_pool_dirty_wr(op.dst.reg); }
+		return;
+	}
+	if (k == IR_LOAD2) {
+		arm64_pool_dirty_wr(X0);
+		if (op.aux > 8) { arm64_pool_dirty_wr(X1); }
+		return;
+	}
+	if (k == IR_MEMCPY && op.dst.kind == OP_STACKSLOT) {
+		arm64_pool_dirty_wr(X0);
+		arm64_pool_dirty_wr(X2);
+		arm64_pool_dirty_wr(X9);
+		return;
+	}
+	if (k == IR_MEMCPYDST) {
+		arm64_pool_dirty_wr(X0);
+		arm64_pool_dirty_wr(X2);
+		arm64_pool_dirty_wr(X9);
+		return;
+	}
+	if (k == IR_MEMSET) {
+		arm64_pool_dirty_wr(X9);
+		return;
+	}
+}
+
+fn arm64_alu_imm_ok(aop int, v i64) bool {
+	if (aop == ALU_ADD || aop == ALU_SUB) {
+		var m i64 = v;
+		if (m < 0) { m = -m; }
+		if (m <= 4095) { return true; }
+		return (m & 0xfff) == 0 && (m >> 12) <= 4095;
+	}
+	if (aop == ALU_AND || aop == ALU_OR || aop == ALU_XOR) {
+		var immr i64 = 0;
+		var imms i64 = 0;
+		return arm64_logical_imm(v, &immr, &imms);
+	}
+	if (aop == ALU_SHL || aop == ALU_SHR) { return v >= 0 && v <= 63; }
+	if (aop == ALU_MUL || aop == ALU_SCALE) {
+		if (v <= 0) { return false; }
+		var t i64 = v;
+		while ((t & 1) == 0) { t = t >> 1; }
+		return t == 1;
+	}
+	return false;
+}
+
+
 fn arm64_lower_op(op *IrOp) {
+	// Maintain the OP2 override: ops that read OP2 keep it (several ops
+	// can read one pooled pop -- a bounds CMP then the ALU). An op that
+	// clobbers the staging register materialises the value into X1 first;
+	// one that redefines OP2, or a call/pop/ret that leaves the value
+	// dead, drops it.
+	if (arm64_op2_ov != -1) {
+		var pr int = arm64_op2_ov;
+		var reads2 bool = op.src0.kind == OP_OP2 || op.src1.kind == OP_OP2 ||
+			(op.dst.kind == OP_OP2 && op.kind == IR_STORE);
+		if (!reads2 && (arm64_op_writes(op, pr) || op.kind == IR_STORE2)) {
+			arm64_mov_reg(X1, pr);
+			arm64_op2_ov = -1;
+		} else if (!reads2 && (arm64_op_writes(op, X1) || op.kind == IR_CALL || op.kind == IR_SYSCALL || op.kind == IR_ASSERT || op.kind == IR_POP || op.kind == IR_RET)) {
+			arm64_op2_ov = -1;
+		}
+	}
 	if (op.kind == IR_MOV && op.dst.kind == OP_ACC && op.src0.kind == OP_IMM) {
 		arm64_mov_imm64(X0, op.src0.off);
 		return;
@@ -956,7 +1240,7 @@ fn arm64_lower_op(op *IrOp) {
 		return;
 	}
 	if (op.kind == IR_MOV && op.dst.kind == OP_ACC && op.src0.kind == OP_OP2) {
-		arm64_mov_reg(X0, op2_reg(op.src0.reg));
+		arm64_mov_reg(X0, arm64_op2(op.src0.reg));
 		return;
 	}
 	if (op.kind == IR_MOV && op.dst.kind == OP_VREG && op.src0.kind == OP_IMM) {
@@ -1008,8 +1292,9 @@ fn arm64_lower_op(op *IrOp) {
 	if (op.kind == IR_MEMCPY && op.dst.kind == OP_NONE) {
 		// copy_aggregate's protocol: pop the destination from the staging
 		// stack, copy aux bytes from [X0] to it, leave the destination
-		// address in X0 as the result.
-		arm64_pop(X2);
+		// address in X0 as the result. A pooled push staged it into X2
+		// already, so the pop is skipped.
+		if (!op.pooled) { arm64_pop(X2); }
 		arm64_memcpy(X2, X0, op.aux);
 		arm64_mov_reg(X0, X2);
 		return;
@@ -1094,7 +1379,7 @@ fn arm64_lower_op(op *IrOp) {
 		// (1/2/4/8), not a code -- ADD (shifted register) folds a
 		// power-of-two scale into the add via LSL.
 		var idx int;
-		if (op.src1.kind == OP_OP2) { idx = op2_reg(op.src1.reg); } else { idx = op.src1.reg; }
+		if (op.src1.kind == OP_OP2) { idx = arm64_op2(op.src1.reg); } else { idx = op.src1.reg; }
 		var scale i64 = op.aux;
 		if (scale == 1 || scale == 2 || scale == 4 || scale == 8) {
 			var shift i64 = 0;
@@ -1113,7 +1398,7 @@ fn arm64_lower_op(op *IrOp) {
 		// (ND_INDEX's slice path staged it there), the index in the
 		// accumulator. X0 is both the index and the destination, which ADD
 		// (shifted register) accepts: Rm = X0 is read before Rd = X0 writes.
-		var base int = op2_reg(op.src0.reg);
+		var base int = arm64_op2(op.src0.reg);
 		var scale i64 = op.aux;
 		if (scale == 1 || scale == 2 || scale == 4 || scale == 8) {
 			var shift i64 = 0;
@@ -1150,7 +1435,7 @@ fn arm64_lower_op(op *IrOp) {
 		return;
 	}
 	if (op.kind == IR_STORE && op.dst.kind == OP_OP2 && op.src0.kind == OP_ACC) {
-		arm64_store_at(op2_reg(op.dst.reg), X0, op.dst.ty);
+		arm64_store_at(arm64_op2(op.dst.reg), X0, op.dst.ty);
 		return;
 	}
 	if (op.kind == IR_CALL && op.src0.kind == OP_FUNC) {
@@ -1209,7 +1494,7 @@ fn arm64_lower_op(op *IrOp) {
 		return;
 	}
 	if (op.kind == IR_STORE && op.dst.kind == OP_STACKSLOT && op.src0.kind == OP_OP2) {
-		arm64_st_local(op.dst.off, op2_reg(op.src0.reg));
+		arm64_st_local(op.dst.off, arm64_op2(op.src0.reg));
 		return;
 	}
 	if (op.kind == IR_CAST && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC) {
@@ -1251,15 +1536,19 @@ fn arm64_lower_op(op *IrOp) {
 		return;
 	}
 	if (op.kind == IR_PUSH && op.src0.kind == OP_ACC) {
+		if (op.pooled) { arm64_mov_reg(op.poolreg, X0); return; }
 		arm64_push(X0);
 		return;
 	}
 	if (op.kind == IR_PUSH && op.src0.kind == OP_OP2) {
-		arm64_push(op2_reg(op.src0.reg));
+		if (op.pooled) { arm64_mov_reg(op.poolreg, arm64_op2(op.src0.reg)); return; }
+		arm64_push(arm64_op2(op.src0.reg));
 		return;
 	}
 	if (op.kind == IR_PUSH && op.src0.kind == OP_MEM) {
-		// gen_args' two-word aggregate staging: push [X0 + off].
+		// gen_args' two-word aggregate staging: push [X0 + off]. Pooled, the
+		// load goes straight into the staging register.
+		if (op.pooled) { arm64_ld_at(op.poolreg, X0, op.src0.off); return; }
 		arm64_ld_at(X9, X0, op.src0.off);
 		arm64_push(X9);
 		return;
@@ -1269,19 +1558,22 @@ fn arm64_lower_op(op *IrOp) {
 		return;
 	}
 	if (op.kind == IR_POP && op.dst.kind == OP_OP2) {
+		if (op.pooled) { arm64_op2_ov = op.poolreg; return; }
 		arm64_pop(op2_reg(op.dst.reg));
 		return;
 	}
 	if (op.kind == IR_POP && op.dst.kind == OP_REG) {
+		if (op.pooled) { return; }
 		arm64_pop(op.dst.reg);
 		return;
 	}
 	if (op.kind == IR_PUSH && op.src0.kind == OP_REG) {
+		if (op.pooled) { arm64_mov_reg(op.poolreg, op.src0.reg); return; }
 		arm64_push(op.src0.reg);
 		return;
 	}
 	if (op.kind == IR_ALU && op.dst.kind == OP_ACC && op.src0.kind == OP_ACC && op.src1.kind == OP_OP2) {
-		var op2 int = op2_reg(op.src1.reg);
+		var op2 int = arm64_op2(op.src1.reg);
 		if (op.aux == ALU_FADD || op.aux == ALU_FSUB || op.aux == ALU_FMUL || op.aux == ALU_FDIV) {
 			// gen_binop_float's round trip: bits ride X0/X1, the op happens in
 			// D0/D1, the result lands back in X0 -- mirrors x86_emit.qela's
@@ -1344,13 +1636,13 @@ fn arm64_lower_op(op *IrOp) {
 	if (op.kind == IR_CMP && op.src0.kind == OP_ACC && op.src1.kind == OP_OP2) {
 		if (op.src0.ty as i64 != 0 && is_float(op.src0.ty)) {
 			var sz i64 = op.src0.ty.size;
-			var op2f int = op2_reg(op.src1.reg);
+			var op2f int = arm64_op2(op.src1.reg);
 			arm64_fmov_from_gpr(D0, X0, sz);
 			arm64_fmov_from_gpr(D1, op2f, sz);
 			arm64_fcmp(D0, D1, sz);
 			return;
 		}
-		arm64_cmp_reg(X0, op2_reg(op.src1.reg));
+		arm64_cmp_reg(X0, arm64_op2(op.src1.reg));
 		return;
 	}
 	if (op.kind == IR_CMP && op.src0.kind == OP_ACC && op.src1.kind == OP_IMM) {
@@ -1369,7 +1661,7 @@ fn arm64_lower_op(op *IrOp) {
 		return;
 	}
 	if (op.kind == IR_CMP && op.src0.kind == OP_OP2 && op.src1.kind == OP_IMM) {
-		arm64_cmp_imm(op2_reg(op.src0.reg), op.src1.off);
+		arm64_cmp_imm(arm64_op2(op.src0.reg), op.src1.off);
 		return;
 	}
 	if (op.kind == IR_CMP && op.src0.kind == OP_OP2 && op.src1.kind == OP_ACC) {
@@ -1377,7 +1669,7 @@ fn arm64_lower_op(op *IrOp) {
 		// index is in the staging register, the end in the accumulator.
 		// CMP op2, X0 sets flags for op2 - X0, and the trip condition
 		// (CC_UGT) reads out as b.hi, i.e. start > end.
-		arm64_cmp_reg(op2_reg(op.src0.reg), X0);
+		arm64_cmp_reg(arm64_op2(op.src0.reg), X0);
 		return;
 	}
 	if (op.kind == IR_CMP && op.src0.kind == OP_MEM && op.src1.kind == OP_IMM) {
