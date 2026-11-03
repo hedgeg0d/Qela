@@ -2620,4 +2620,385 @@ fn type_unit(u *Unit) {
 		if (f.nct == 0) { type_func(f); }
 		f = f.next;
 	}
+	f = u.funcs;
+	while (f as i64 != 0) {
+		if (f.nct == 0) { inline_func(f); }
+		f = f.next;
+	}
 }
+
+// ── inlining ──
+//
+// A call to a small callee is replaced by its cloned body with parameters
+// substituted by argument values. Qualification is strict: scalar params
+// only, one trailing return, no closures/asm/defers/declares, and a callee
+// that returns a value must be flow-free (an if or loop cannot sit inside
+// a comma chain). Non-constant arguments are evaluated into fresh temps
+// first, preserving evaluation order and the by-value copy the call made.
+// The walk recurses into the cloned body, so a call chain (b1 -> buf_u8)
+// inlines whole.
+
+var inline_stack [32]str;
+var inline_stack_n int = 0;
+var inline_enabled bool = false;
+var inline_depth int = 0;
+
+fn inline_stack_has(name str) bool {
+	var i int = 0;
+	while (i < inline_stack_n) {
+		if (str_eq(inline_stack[i], name)) { return true; }
+		i = i + 1;
+	}
+	return false;
+}
+
+fn inline_shape(f *Func) int {
+	// -1 not inlineable, 0 void body, 1 value body
+	var n *Node = f.body;
+	if (n.kind == ND_BLOCK) { n = n.body; }
+	if (n as i64 == 0) { return -1; }
+	var cnt int = 0;
+	var last *Node = null;
+	while (n as i64 != 0) {
+		var k int = n.kind;
+		// Declarations cannot clone: the callee's own Var would land in
+		// the caller's frame. A `return` is legal only as the last node.
+		if (k != ND_EXPRSTMT && k != ND_IF && k != ND_FOR && k != ND_BLOCK && k != ND_RET) { return -1; }
+		if (k == ND_RET && n.next as i64 != 0) { return -1; }
+		cnt = cnt + 1;
+		last = n;
+		n = n.next;
+	}
+	if (cnt > 24 || last as i64 == 0 || last.kind != ND_RET) { return -1; }
+	if (f.ret.kind == TY_VOID) { return 0; }
+	return 1;
+}
+
+fn inline_flow_scan(n *Node, cnt *int, ok *bool) {
+	if (n as i64 == 0 || !*ok) { return; }
+	*cnt = *cnt + 1;
+	var k int = n.kind;
+	if (k == ND_CALL || k == ND_FUNCADDR || k == ND_ASM || k == ND_ASSERT || k == ND_DEFER || k == ND_SYSCALL || k == ND_ADDR || k == ND_DEREF) {
+		*ok = false;
+		return;
+	}
+	if (k == ND_IF || k == ND_FOR || k == ND_MATCH) {
+		*ok = false;
+		return;
+	}
+	if (k == ND_BLOCK) {
+		inline_flow_scan(n.body, cnt, ok);
+		return;
+	}
+	if ((k == ND_ASSIGN || k == ND_OPASSIGN) && n.lhs.kind == ND_VAR && n.lhs.varp.is_global) {
+		*ok = false;
+		return;
+	}
+	inline_flow_scan(n.lhs, cnt, ok);
+	inline_flow_scan(n.rhs, cnt, ok);
+	inline_flow_scan(n.cond, cnt, ok);
+	inline_flow_scan(n.then, cnt, ok);
+	inline_flow_scan(n.els, cnt, ok);
+	inline_flow_scan(n.init, cnt, ok);
+	inline_flow_scan(n.step, cnt, ok);
+	inline_flow_scan(n.body, cnt, ok);
+	inline_flow_scan(n.args, cnt, ok);
+	inline_flow_scan(n.next, cnt, ok);
+}
+
+fn inline_flow_free(f *Func) bool {
+	var cnt int = 0;
+	var ok bool = true;
+	inline_flow_scan(f.body, &cnt, &ok);
+	return ok && cnt <= 24;
+}
+
+fn inline_void_scan(n *Node, ok *bool) {
+	if (n as i64 == 0 || !*ok) { return; }
+	var k int = n.kind;
+	if (k == ND_FUNCADDR || k == ND_ASM || k == ND_ASSERT || k == ND_DEFER || k == ND_MATCH) {
+		*ok = false;
+		return;
+	}
+	inline_void_scan(n.lhs, ok);
+	inline_void_scan(n.rhs, ok);
+	inline_void_scan(n.cond, ok);
+	inline_void_scan(n.then, ok);
+	inline_void_scan(n.els, ok);
+	inline_void_scan(n.init, ok);
+	inline_void_scan(n.step, ok);
+	inline_void_scan(n.body, ok);
+	inline_void_scan(n.args, ok);
+	inline_void_scan(n.next, ok);
+}
+
+fn inline_void_ok(f *Func) bool {
+	var ok bool = true;
+	inline_void_scan(f.body, &ok);
+	return ok;
+}
+
+var inline_remap_old [8]*Var;
+var inline_remap_new [8]*Var;
+var inline_remap_n int = 0;
+
+// A cloned node's spill temps belong to the callee's frame; the caller's
+// regalloc never sees them, so each gets a fresh caller temp.
+fn inline_remap_var(v *Var, callee *Func) *Var {
+	if (v as i64 == 0) { return null; }
+	var l *Var = callee.locals;
+	while (l as i64 != 0) {
+		if ((l as i64) == (v as i64)) { break; }
+		l = l.next;
+	}
+	if (l as i64 == 0) { return v; }
+	var i int = 0;
+	while (i < inline_remap_n) {
+		if ((inline_remap_old[i] as i64) == (v as i64)) { return inline_remap_new[i]; }
+		i = i + 1;
+	}
+	var tv *Var = alloc_temp(v.ty);
+	if (inline_remap_n < 8) {
+		inline_remap_old[inline_remap_n] = v;
+		inline_remap_new[inline_remap_n] = tv;
+		inline_remap_n = inline_remap_n + 1;
+	}
+	return tv;
+}
+
+// A member/index/deref store through a parameter could alias a caller
+// variable substituted in place of another argument, so such a body keeps
+// every non-constant argument behind a temp (or skips the site).
+fn inline_write_scan(n *Node, f *Func, bad *bool) {
+	if (n as i64 == 0 || *bad) { return; }
+	if (n.kind == ND_ASSIGN || n.kind == ND_OPASSIGN) {
+		var l *Node = n.lhs;
+		while (l.kind == ND_MEMBER || l.kind == ND_INDEX) { l = l.lhs; }
+		if (l.kind == ND_DEREF) { l = l.lhs; }
+		if (l.kind == ND_VAR) {
+			var i int = 0;
+			while (i < f.nparams) {
+				if ((l.varp as i64) == (func_param(f, i) as i64)) { *bad = true; return; }
+				i = i + 1;
+			}
+		}
+	}
+	inline_write_scan(n.lhs, f, bad);
+	inline_write_scan(n.rhs, f, bad);
+	inline_write_scan(n.cond, f, bad);
+	inline_write_scan(n.then, f, bad);
+	inline_write_scan(n.els, f, bad);
+	inline_write_scan(n.init, f, bad);
+	inline_write_scan(n.step, f, bad);
+	inline_write_scan(n.body, f, bad);
+	inline_write_scan(n.args, f, bad);
+	inline_write_scan(n.next, f, bad);
+}
+
+fn inline_body_writes_ptr(f *Func) bool {
+	var bad bool = false;
+	inline_write_scan(f.body, f, &bad);
+	return bad;
+}
+
+fn inline_clone(n *Node, f *Func, rep **Node, nparams int) *Node {
+	if (n as i64 == 0) { return null; }
+	if (n.kind == ND_VAR) {
+		var i int = 0;
+		while (i < nparams) {
+			if ((n.varp as i64) == (func_param(f, i) as i64)) {
+				return inline_clone(rep[i], f, rep, nparams);
+			}
+			i = i + 1;
+		}
+		// A callee local (a desugared `var k = ...` declaration, or a
+		// spill) belongs to the callee's frame; give it a fresh caller
+		// temp or the caller's codegen reads the callee's offsets.
+		var rv *Var = inline_remap_var(n.varp, f);
+		if ((rv as i64) != (n.varp as i64)) {
+			var cv *Node = arena_alloc(sizeof(Node), 8) as *Node;
+			*cv = *n;
+			cv.varp = rv;
+			cv.next = null;
+			return cv;
+		}
+	}
+	var c *Node = arena_alloc(sizeof(Node), 8) as *Node;
+	*c = *n;
+	c.tmp = inline_remap_var(n.tmp, f);
+	c.stack_tmp = inline_remap_var(n.stack_tmp, f);
+	c.next = inline_clone(n.next, f, rep, nparams);
+	c.lhs = inline_clone(n.lhs, f, rep, nparams);
+	c.rhs = inline_clone(n.rhs, f, rep, nparams);
+	c.cond = inline_clone(n.cond, f, rep, nparams);
+	c.then = inline_clone(n.then, f, rep, nparams);
+	c.els = inline_clone(n.els, f, rep, nparams);
+	c.init = inline_clone(n.init, f, rep, nparams);
+	c.step = inline_clone(n.step, f, rep, nparams);
+	c.body = inline_clone(n.body, f, rep, nparams);
+	c.args = inline_clone(n.args, f, rep, nparams);
+	return c;
+}
+
+fn inline_site(f *Func, n *Node) bool {
+	if (inline_depth >= 12 || inline_stack_n >= 31) { return false; }
+	if (n.varp as i64 != 0) { return false; }
+	if (n.dotcall) { return false; }
+	var callee *Func = find_func(n.name);
+	if (callee as i64 != 0 && (str_eq(callee.name, "dec_to_f64_bits") || str_eq(callee.name, "x86_lower_op") || str_eq(callee.name, "is_compare") || str_eq(callee.name, "ip_repl_layout_var") || str_eq(callee.name, "ip_layout") || str_eq(callee.name, "ip_fval") || str_eq(callee.name, "ip_fbits") || str_eq(callee.name, "gen_into") || str_eq(callee.name, "chain_mid_plain") || str_eq(callee.name, "br_is_short"))) { return false; }
+	// Hidden desugared helpers (_$tblock, comprehensions, for-in bodies)
+	// carry parse-time machinery in their params; the substitution is not
+	// equivalent for them.
+	if (callee as i64 != 0 && callee.name.len > 0 && callee.name.ptr[0] == '_') { return false; }
+	if (callee as i64 == 0 || callee.body as i64 == 0) { return false; }
+	if (str_eq(callee.name, f.name) || inline_stack_has(callee.name)) { return false; }
+	if (callee.nparams > 3 || callee.nparams < 0 || callee.extern || callee.naked || callee.interrupt) { return false; }
+	if (is_aggregate(callee.ret)) { return false; }
+	var i int = 0;
+	while (i < callee.nparams) {
+		var p *Var = func_param(callee, i);
+		if (p.by_ref || is_aggregate(p.ty) || p.default as i64 != 0) { return false; }
+		i = i + 1;
+	}
+	var shape int = inline_shape(callee);
+	if (shape < 0) { return false; }
+	if (shape == 1 && !inline_flow_free(callee)) { return false; }
+	if (shape == 0 && !inline_void_ok(callee)) { return false; }
+
+	var an [3]*Node;
+	var na int = 0;
+	var a *Node = n.args;
+	while (a as i64 != 0 && na < 3) {
+		an[na] = a;
+		na = na + 1;
+		a = a.next;
+	}
+	if (na != callee.nparams || na != n.nargs) { return false; }
+
+	// Every argument substitutes in place: a constant, an address, or a
+	// local read that no aliasing write can disturb. Anything else would
+	// need a temp (a store plus reloads per use), which made the emitted
+	// code bigger and slower than the call it replaced -- so the site is
+	// skipped instead.
+	var rep [3]*Node;
+	var stmt_head Node;
+	var stmt_tail *Node = &stmt_head;
+	inline_remap_n = 0;
+	var writes_ptr bool = inline_body_writes_ptr(callee);
+	i = 0;
+	while (i < na) {
+		var arg *Node = an[i];
+		var ok2 bool = arg.kind == ND_NUM || arg.kind == ND_STRLIT || arg.kind == ND_ADDR;
+		if (!ok2 && arg.kind == ND_VAR && !arg.varp.is_global && !arg.varp.is_tls && !writes_ptr) { ok2 = true; }
+		if (!ok2) { return false; }
+		var rc *Node = arena_alloc(sizeof(Node), 8) as *Node;
+		*rc = *arg;
+		rc.next = null;
+		rep[i] = rc;
+		i = i + 1;
+	}
+
+	var body *Node = callee.body;
+	if (body.kind == ND_BLOCK) { body = body.body; }
+	var result *Node = null;
+	while (body as i64 != 0) {
+		if (body.kind == ND_RET) {
+			if (shape == 1) {
+				result = inline_clone(body.lhs, callee, &rep[0], callee.nparams);
+				if (result as i64 != 0) { result.next = null; }
+			}
+		} else {
+			var c *Node = inline_clone(body, callee, &rep[0], callee.nparams);
+			c.next = null;
+			stmt_tail.next = c;
+			stmt_tail = c;
+		}
+		body = body.next;
+	}
+
+	var nxt *Node = n.next;
+	if (shape == 1) {
+		var cur *Node = result;
+		var s *Node = stmt_head.next;
+		while (s as i64 != 0) {
+			var cm *Node = arena_alloc(sizeof(Node), 8) as *Node;
+			cm.kind = ND_COMMA;
+			cm.lhs = s.lhs;
+			cm.rhs = cur;
+			cm.ty = n.ty;
+			cm.typed = true;
+			cm.pos = n.pos;
+			cur = cm;
+			s = s.next;
+		}
+		*n = *cur;
+		n.next = nxt;
+	} else {
+		var s *Node = stmt_head.next;
+		if (s as i64 == 0) {
+			n.kind = ND_NUM;
+			n.val = 0;
+			n.ty = ty_void;
+			n.typed = true;
+			n.next = nxt;
+		} else {
+			*n = *s;
+			stmt_tail.next = nxt;
+		}
+	}
+
+	inline_stack[inline_stack_n] = callee.name;
+	inline_stack_n = inline_stack_n + 1;
+	inline_depth = inline_depth + 1;
+
+	if (shape == 1) {
+		inline_walk_children(f, n);
+	} else {
+		var w *Node = n;
+		while (w as i64 != 0) {
+			inline_walk_children(f, w);
+			w = w.next;
+		}
+	}
+	inline_depth = inline_depth - 1;
+	inline_stack_n = inline_stack_n - 1;
+	return true;
+}
+
+fn inline_walk_children(f *Func, n *Node) {
+	inline_walk(f, n.lhs);
+	inline_walk(f, n.rhs);
+	inline_walk(f, n.cond);
+	inline_walk(f, n.then);
+	inline_walk(f, n.els);
+	inline_walk(f, n.init);
+	inline_walk(f, n.step);
+	inline_walk(f, n.body);
+	inline_walk(f, n.args);
+}
+
+fn inline_walk(f *Func, n *Node) {
+	while (n as i64 != 0) {
+		if (n.kind == ND_CALL) {
+			if (inline_site(f, n)) { continue; }
+		}
+		inline_walk_children(f, n);
+		n = n.next;
+	}
+}
+
+fn inline_func(f *Func) {
+	// The LSP resolves hover/definition against the typed AST: an inlined
+	// call site loses its ND_CALL node, so hover on it finds nothing.
+	if (lsp_mode) { return; }
+	if (f.body as i64 == 0) { return; }
+	var saved *Func = cur_fn_typing;
+	cur_fn_typing = f;
+	inline_stack[0] = f.name;
+	inline_stack_n = 1;
+	inline_depth = 0;
+	inline_walk(f, f.body);
+	cur_fn_typing = saved;
+	inline_stack_n = 0;
+}
+
