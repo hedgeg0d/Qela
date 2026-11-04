@@ -68,7 +68,6 @@ var cur_defers *DeferScope;
 var defer_depth int;
 
 
-var opt_no_bounds bool = false;
 
 var gen_unit *Unit;
 

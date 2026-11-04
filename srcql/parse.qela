@@ -611,6 +611,81 @@ fn resolve_comptime(t **Token) {
 	while (is_comptime_if(*t)) { parse_comptime_if(t); }
 }
 
+// ── $flag: compiler flags set in the source ──
+//
+// `$flag --pie` at the top level (or inside a $if branch, which splices
+// its tokens into the same stream) applies the flag to the whole unit --
+// the file, its imports and, for `qela .`, every merged project file.
+// The directive reads the rest of its line, so it ends at the newline or
+// an explicit `;`. An explicit command-line flag wins over the source:
+// the source flag is a default the invocation may override.
+var flag_pie_cli bool = false;
+var flag_backtrace_cli bool = false;
+var flag_nobc_cli bool = false;
+var flag_base_cli bool = false;
+
+fn parse_source_flag(t **Token) {
+	var tok *Token = (*t).next.next;
+	var fp i64 = tok.pos;
+	var fline int = diag_line_for(diag_file_of(fp), diag_offset_of(fp));
+	var b Buf;
+	var prev str = "";
+	while (tok.kind != TK_EOF && !tok_eq(tok, ";") &&
+	    diag_line_for(diag_file_of(tok.pos), diag_offset_of(tok.pos)) == fline) {
+		// A lone '-' continues the flag it started: --pie lexes as
+		// '-' '-' 'pie', so no space after a dash. Everything else
+		// joins with one.
+		if (b.n != 0 && !str_eq(prev, "-")) { buf_u8(&b, ' '); }
+		fmt_str(&b, tok.text);
+		prev = tok.text;
+		tok = tok.next;
+	}
+	if (tok_eq(tok, ";")) { tok = tok.next; }
+	*t = tok;
+	apply_source_flag(buf_str(&b), fp);
+}
+
+fn apply_source_flag(s str, pos i64) {
+	if (str_eq(s, "--pie")) {
+		if (!flag_pie_cli) { opt_pie = true; }
+		return;
+	}
+	if (str_eq(s, "--backtrace")) {
+		if (!flag_backtrace_cli) { opt_backtrace = true; }
+		return;
+	}
+	if (str_eq(s, "--no-bounds-checks")) {
+		if (!flag_nobc_cli) { opt_no_bounds = true; }
+		return;
+	}
+	if (s.len > 7 && str_eq(str_slice(s, 0, 7), "--base ")) {
+		if (!flag_base_cli) {
+			opt_base = parse_addr(str_slice(s, 7, s.len));
+			if ((opt_base & 4095) != 0) {
+				error_at(pos, "$flag --base must be page aligned");
+			}
+		}
+		return;
+	}
+	if (s.len > 3 && str_eq(str_slice(s, 0, 2), "-D") && s.ptr[2] == ' ') {
+		var rest str = str_slice(s, 3, s.len);
+		var i i64 = 0;
+		while (i < rest.len && rest.ptr[i] == ' ') { i = i + 1; }
+		rest = str_slice(rest, i, rest.len);
+		var eq i64 = str_find(rest, ' ');
+		if (eq < 0) { eq = rest.len; }
+		var eq2 i64 = str_find(rest, '=');
+		if (eq2 >= 0 && eq2 < eq) { eq = eq2; }
+		var nm str = str_slice(rest, 0, eq);
+		var j i64 = eq;
+		while (j < rest.len && (rest.ptr[j] == ' ' || rest.ptr[j] == '=')) { j = j + 1; }
+		if (j == eq || nm.len == 0) { error_at(pos, "$flag -D needs NAME=VALUE"); }
+		comptime_set(nm, str_slice(rest, j, rest.len));
+		return;
+	}
+	error_at(pos, "$flag: unknown flag (allowed: --pie, --backtrace, --no-bounds-checks, --base ADDR, -D NAME=VALUE)");
+}
+
 // ── node constructors ──
 
 fn new_node(kind int, pos i64) *Node {
@@ -5295,6 +5370,7 @@ fn parse(tok *Token) *Unit {
 		if (tok_eq(tok, "asm") && tok.next.kind == TK_PUNCT && tok_eq(tok.next, "{")) {
 			parse_top_asm(&tok); continue;
 		}
+		if (tok_eq(tok, "$") && tok_eq(tok.next, "flag")) { parse_source_flag(&tok); continue; }
 		if (tok_eq(tok, "entry")) { parse_entry(&tok); continue; }
 		if (tok_eq(tok, "macro")) { parse_macro(&tok); continue; }
 		if (tok_eq(tok, "struct")) { parse_struct(&tok); continue; }
