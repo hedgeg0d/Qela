@@ -321,9 +321,19 @@ struct Unit {
 
 let ELF_BASE   = 0x400000;
 var opt_base i64 = 0x400000;
+var opt_pie bool = false;
 
 fn base_is_wide() bool {
 	return opt_base < 0 || opt_base > 4294967295;
+}
+
+// The image base for layout and patching. A PIE lays out with vaddr ==
+// file offset (base zero): the kernel loads ET_DYN anywhere, and every
+// address the linker writes is a delta from the image start, so the
+// runtime base cancels out of every computation.
+fn eff_base() i64 {
+	if (opt_pie) { return 0; }
+	return opt_base;
 }
 let EHDR_SZ    = 64;
 let PHDR_SZ    = 56;
