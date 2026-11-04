@@ -68,10 +68,9 @@ fn fs_listdir(path str) []str {
 fn fs_file_size(path str) i64 {
 	var st Stat;
 	if (sys_stat(cstr(path), &st as *u8) != 0) { return -1; }
+	// st_size sits at offset 48 in every layout this compiler targets
+	// (x86-64's struct stat and the asm-generic one both).
 	var size i64 = st.d6;
-	$if (TARGET != "x86_64") {
-		size = st.d5;
-	}
 	return size;
 }
 
