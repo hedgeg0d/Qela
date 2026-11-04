@@ -1519,6 +1519,10 @@ fn dot_receiver(a *Node, want *Type, pos i64) *Node {
 
 fn type_call(n *Node) {
 	if (type_intrinsic(n)) { return; }
+	if (n.varp as i64 == 0 && n.name.len > 0 &&
+	    (str_eq(n.name, "json_marshal") || str_eq(n.name, "json_unmarshal"))) {
+		jmgen_call(n);
+	}
 	if (n.varp as i64 != 0) { type_indirect_call(n); return; }
 	var f *Func = find_func(n.name);
 	// `x.method(args)` where no function named 'method' exists: the

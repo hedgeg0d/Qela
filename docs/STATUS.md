@@ -19,6 +19,29 @@ server conversation.
 
 ## Done
 
+**Typed JSON marshalling (2026-08-15).** Go-style `json_marshal(v)` and
+`json_unmarshal(s, &v)` on top of the existing DOM in `std/json.qela`:
+the compiler generates a marshal and an unmarshal function per type the
+way `fmtgen.qela` generates printers, so a type pays for its code only
+when a program actually serializes it — a program that imports
+`std/json.qela` but never calls either weighs 488 B, one that marshals a
+two-field struct 3 080 B. `json_marshal` covers bools, ints, floats,
+strings, pointers (null -> `"null"`), arrays, slices and named structs,
+nested to any depth; `json_unmarshal` covers structs whose fields are
+bools, ints, floats, strings, arrays, slices, pointers to structs or
+nested structs. A field missing from the JSON, of the wrong kind, or
+beyond the length of a fixed array keeps its current value, and unmarshal
+returns false only when the document is not an object; field names are
+the JSON keys (no tags yet). The rewrite lives in `srcql/jmgen.qela`
+plus a hook at the top of `type_call`; the generated code compares node
+kinds against plain numbers because it parses in a fresh scope that
+cannot see `std/json.qela`'s `let` constants. S2 676 536 -> 696 264 B
+(+19 728, 66.4% of the 1 MiB budget). Corpus 194 -> 195
+(`tests/jsonmarshal.qela`), compiled and interpreted; torture 200/200.
+Full writeup in this file.
+
+## Done
+
 **Cross-thread deadlock detection (2026-08-14).** A pool world no
 longer just hangs: a channel stall consults a cross-thread registry and
 is a real deadlock only when every registered thread is parked inside
