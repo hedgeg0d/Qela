@@ -214,6 +214,7 @@ fn punct_len(src str, i i64) i64 {
 		var c u8 = src.ptr[i];
 		if (c == '<' && src.ptr[i+1] == '<' && src.ptr[i+2] == '=') { return 3; }
 		if (c == '>' && src.ptr[i+1] == '>' && src.ptr[i+2] == '=') { return 3; }
+		if (c == '.' && src.ptr[i+1] == '.' && src.ptr[i+2] == '.') { return 3; }
 	}
 	if (i + 2 <= len) {
 		var c0 u8 = src.ptr[i]; var c1 u8 = src.ptr[i+1];
@@ -434,13 +435,14 @@ fn lex(src str, base i64) *Token {
 			continue;
 		}
 
-		// number (decimal or hex). Underscores separate digit groups:
-		// 1_000_000, 0xFFFF_FF00 -- never leading or trailing, so a
-		// separator is only skipped between two digits.
+		// number (decimal, hex or binary). Underscores separate digit
+		// groups: 1_000_000, 0xFFFF_FF00, 0b1010_0101 -- never leading
+		// or trailing, so a separator is only skipped between two digits.
 		if (is_digit(src.ptr[i])) {
 			var start i64 = i;
 			var val i64 = 0;
 			var is_hex bool = false;
+			var is_bin bool = false;
 			if (src.ptr[i] == '0' && i + 1 < src.len && (src.ptr[i+1] == 'x' || src.ptr[i+1] == 'X')) {
 				is_hex = true;
 				i = i + 2;
@@ -458,6 +460,21 @@ fn lex(src str, base i64) *Token {
 					val = val * 16 + d;
 					i = i + 1;
 				}
+			} else if (src.ptr[i] == '0' && i + 1 < src.len && (src.ptr[i+1] == 'b' || src.ptr[i+1] == 'B')) {
+				is_bin = true;
+				i = i + 2;
+				while (i < src.len) {
+					var c u8 = src.ptr[i];
+					if (c == '0' || c == '1') {
+						val = val * 2 + (c as i64 - '0' as i64);
+						i = i + 1;
+					} else if (c == '_' && i + 1 < src.len && (src.ptr[i+1] == '0' || src.ptr[i+1] == '1')) {
+						i = i + 1;
+					} else {
+						break;
+					}
+				}
+				if (i == start + 2) { error_at(lex_base + start, "a binary literal needs digits"); }
 			} else {
 				while (i < src.len) {
 					if (is_digit(src.ptr[i])) {
@@ -477,7 +494,7 @@ fn lex(src str, base i64) *Token {
 			var has_dot bool = false;
 			var frac_start i64 = i;
 			var frac_len i64 = 0;
-			if (!is_hex && i < src.len && src.ptr[i] == '.' && i + 1 < src.len && is_digit(src.ptr[i+1])) {
+			if (!is_hex && !is_bin && i < src.len && src.ptr[i] == '.' && i + 1 < src.len && is_digit(src.ptr[i+1])) {
 				has_dot = true;
 				i = i + 1;
 				frac_start = i;
@@ -494,7 +511,7 @@ fn lex(src str, base i64) *Token {
 			// negative exponent, a dot or the 'f' suffix does.
 			var has_exp bool = false;
 			var exp_val i64 = 0;
-			if (!is_hex && i < src.len && (src.ptr[i] == 'e' || src.ptr[i] == 'E')) {
+			if (!is_hex && !is_bin && i < src.len && (src.ptr[i] == 'e' || src.ptr[i] == 'E')) {
 				var j i64 = i + 1;
 				var eneg bool = false;
 				if (j < src.len && (src.ptr[j] == '+' || src.ptr[j] == '-')) {
@@ -519,7 +536,7 @@ fn lex(src str, base i64) *Token {
 			// Not followed by an identifier char, so "5for" stays illegal
 			// rather than silently eating a keyword's first letter.
 			var has_suffix bool = false;
-			if (!is_hex && i < src.len && (src.ptr[i] == 'f' || src.ptr[i] == 'F') &&
+			if (!is_hex && !is_bin && i < src.len && (src.ptr[i] == 'f' || src.ptr[i] == 'F') &&
 			    (i + 1 >= src.len || !is_ident_char(src.ptr[i+1]))) {
 				has_suffix = true;
 				i = i + 1;

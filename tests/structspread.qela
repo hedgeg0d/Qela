@@ -1,0 +1,31 @@
+// expect-exit: 0
+// expect-out: 1 7 base
+// expect-out: 1 7 new
+// expect-out: 9
+// expect-out: 0 7 base
+// Struct spread: `P{...q, f: v}` copies q's fields into a new value,
+// evaluating q once; an explicit field beats the spread, a later spread
+// beats an earlier one, and a pointer spread dereferences.
+import "std/io.qela";
+
+struct P {
+	x i64,
+	y i64,
+	name str,
+}
+
+fn main() int {
+	var a P;
+	a.x = 1;
+	a.y = 2;
+	a.name = "base";
+	var b P = P{...a, y: 7};
+	println("${b.x} ${b.y} ${b.name}");
+	var c P = P{...b, name: "new"};
+	println("${c.x} ${c.y} ${c.name}");
+	var d P = P{...&a, y: 9};
+	println("${d.y}");
+	var e P = P{...a, ...b, x: 0};
+	println("${e.x} ${e.y} ${e.name}");
+	return 0;
+}
