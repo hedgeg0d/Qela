@@ -505,7 +505,16 @@ fn tok_eq(t *Token, text str) bool {
 }
 
 fn tok_expect(t **Token, text str) {
-	if (!tok_eq(*t, text)) { error_at((*t).pos, "expected something else"); }
+	if (!tok_eq(*t, text)) {
+		var b Buf;
+		fmt_str(&b, "expected '");
+		fmt_str(&b, text);
+		fmt_str(&b, "', found '");
+		if ((*t).kind == TK_EOF) { fmt_str(&b, "end of file"); }
+		else { fmt_str(&b, (*t).text); }
+		fmt_str(&b, "'");
+		error_at((*t).pos, buf_str(&b));
+	}
 	*t = (*t).next;
 }
 
@@ -829,7 +838,13 @@ fn parse_type(t **Token) *Type {
 		return generic_instance(tm, a0, a1);
 	}
 	var ty *Type = type_lookup((*t).text);
-	if (ty as i64 == 0) { error_at((*t).pos, "unknown type"); }
+	if (ty as i64 == 0) {
+		var ub Buf;
+		fmt_str(&ub, "unknown type '");
+		fmt_str(&ub, (*t).text);
+		fmt_str(&ub, "'");
+		error_at((*t).pos, buf_str(&ub));
+	}
 	*t = (*t).next;
 	return ty;
 }
