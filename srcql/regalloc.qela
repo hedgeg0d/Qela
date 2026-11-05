@@ -381,6 +381,10 @@ fn unused_hidden(v *Var) bool {
 	return v.name.len == 0 || v.name.ptr[0] == '_';
 }
 
+// Positions already reported, so monomorphization's re-runs stay silent.
+var warned_pos [64]i64;
+var nwarned_pos int = 0;
+
 fn warn_unused(f *Func) {
 	if (f as i64 == 0) { return; }
 	// An extern declaration has no body, so its parameters can never be
@@ -438,6 +442,17 @@ fn warn_unused(f *Func) {
 }
 
 fn warn_unused_one(v *Var, kind str) {
+	// A monomorphized clone re-runs this pass with the same positions, so
+	// the original body is reported once, on its first instantiation.
+	var i int = 0;
+	while (i < nwarned_pos) {
+		if (warned_pos[i] == v.pos) { return; }
+		i = i + 1;
+	}
+	if (nwarned_pos < 64) {
+		warned_pos[nwarned_pos] = v.pos;
+		nwarned_pos = nwarned_pos + 1;
+	}
 	var b Buf;
 	fmt_str(&b, "unused ");
 	fmt_str(&b, kind);
