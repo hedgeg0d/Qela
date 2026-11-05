@@ -196,14 +196,15 @@ fn sys_mmap(addr i64, len i64, prot i64, flags i64, fd i64, off i64) i64 {
 	}
 }
 
-/// Creates a directory; returns 0 or an errno.
+/// Creates a usable directory with mode 0777 subject to the process umask;
+/// returns 0 or an errno.
 fn sys_mkdir(path *u8) i64 {
 	$if (TARGET != "x86_64") {
 		// mkdirat: the generic number takes dirfd first; the old x86
 		// number is plain mkdir(path, mode). AT_FDCWD = -100.
-		return syscall(SYS_MKDIR_N, -100, path as i64, 0);
+		return syscall(SYS_MKDIR_N, -100, path as i64, 511);
 	} $else {
-		return syscall(SYS_MKDIR, path as i64, 0, 0);
+		return syscall(SYS_MKDIR, path as i64, 511, 0);
 	}
 }
 
@@ -373,8 +374,9 @@ fn sys_unlink(path *u8) i64 {
 	}
 }
 
-// Reads /proc/self/environ and returns the value of `name` if set, "" if
-// not. The string is the slice between this 'name=' and the next NUL byte.
+// Reads /proc/self/environ and returns an owned copy of the value of `name`
+// if set, "" if not. The string is the slice between this 'name=' and the
+// next NUL byte.
 // Used by diagnostics to honour NO_COLOR and check TERM. Empty when not on
 // Linux; the caller treats "" as "not set".
 /// Reads /proc/self/environ and returns the value of name, or "" if unset.
@@ -409,7 +411,7 @@ fn sys_getenv(name str) str {
 				var r str;
 				r.ptr = &buf[0] + eq + 1;
 				r.len = end - eq - 1;
-				return r;
+				return str_dup(r);
 			}
 		}
 		i = end + 1;
