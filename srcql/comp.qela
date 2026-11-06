@@ -334,6 +334,11 @@ var opt_pie bool = false;
 var opt_backtrace bool = false;
 var opt_no_bounds bool = false;
 
+// Relocatable objects (.o/.a) to statically link into the image. Filled
+// from the command line before codegen; srcql/linker.qela consumes them.
+var link_paths [32]str;
+var link_npaths int = 0;
+
 fn base_is_wide() bool {
 	return opt_base < 0 || opt_base > 4294967295;
 }
