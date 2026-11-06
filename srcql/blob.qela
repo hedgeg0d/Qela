@@ -46,6 +46,54 @@ fn blob_unpack() *u8 {
 	return out;
 }
 
+// The module directory. Bytes, not a comparison chain: the names are
+// NUL-terminated in module order in std.names, and std.index holds one
+// (u32 offset, u16 length) record per module, little-endian, which is the
+// byte order of every target. Both come from tools/genblob.py.
+var STD_INDEX_ENTRY i64 = 6;
+
+fn std_blob_off(i int) i64 {
+	if (i < 0 || i >= std_blob_count()) { return -1; }
+	var idx str = std_blob_index();
+	var at i64 = (i as i64) * STD_INDEX_ENTRY;
+	if (at + STD_INDEX_ENTRY > idx.len) { return -1; }
+	var p *u8 = idx.ptr + at;
+	return (p[0] as i64) | ((p[1] as i64) << 8) |
+	       ((p[2] as i64) << 16) | ((p[3] as i64) << 24);
+}
+
+fn std_blob_len(i int) i64 {
+	if (i < 0 || i >= std_blob_count()) { return 0; }
+	var idx str = std_blob_index();
+	var at i64 = (i as i64) * STD_INDEX_ENTRY;
+	if (at + STD_INDEX_ENTRY > idx.len) { return 0; }
+	var p *u8 = idx.ptr + at + 4;
+	return (p[0] as i64) | ((p[1] as i64) << 8);
+}
+
+fn std_blob_name(i int) str {
+	var names str = std_blob_names();
+	var p *u8 = names.ptr;
+	var k int = 0;
+	var start i64 = 0;
+	var j i64 = 0;
+	while (j < names.len) {
+		if (p[j] == 0) {
+			if (k == i) {
+				var s str;
+				s.ptr = p + start;
+				s.len = j - start;
+				return s;
+			}
+			k = k + 1;
+			start = j + 1;
+		}
+		j = j + 1;
+	}
+	var e str;
+	return e;
+}
+
 fn std_blob_src(i int) str {
 	var s str;
 	s.ptr = null;
