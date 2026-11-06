@@ -5280,6 +5280,13 @@ fn parse_struct(t **Token) {
 			mtail.next = m; mtail = m;
 			continue;
 		}
+		// A postfix string literal tags the field: `x i64 "json-key"` names
+		// the JSON key, "-" omits the field. Stage1-only: stage0's struct
+		// parser does not know it, and no bootstrap-subset file uses it.
+		if ((*t).kind == TK_STR) {
+			m.tag = (*t).sval;
+			*t = (*t).next;
+		}
 		bitunit = null;
 		bitpos = 0;
 		if (!packed) { off = (off + fty.align - 1) & ~(fty.align - 1); }
