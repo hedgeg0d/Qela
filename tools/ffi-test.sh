@@ -2,7 +2,8 @@
 # The FFI gate: C objects (compiled by gcc, the only C toolchain use) are
 # statically linked into a Qela binary by the compiler itself -- extern fn
 # calls both ways, structs by value, floats, extern globals, bss, and a .a
-# archive. Runs against the shipped S2.
+# archive. Runs against the shipped S2 on x86_64, and under qemu on arm64
+# and riscv64 when the cross toolchains are installed.
 set -u
 ROOT=$(dirname "$0")/..
 S2="${1:-$ROOT/build/bootstrap/s2}"
@@ -33,10 +34,6 @@ cat > carch.c <<'EOF'
 #include <stdint.h>
 int64_t c_arch_add(int64_t x, int64_t y) { return x + y; }
 EOF
-
-gcc -c -fno-pic -fno-asynchronous-unwind-tables cbits.c -o cbits.o || exit 1
-gcc -c -fno-pic -fno-asynchronous-unwind-tables carch.c -o carch.o || exit 1
-ar rcs libcarch.a carch.o || exit 1
 
 cat > main.qela <<'EOF'
 struct Pair { a i64, b i64 }
@@ -73,14 +70,32 @@ fn main() int {
 }
 EOF
 
-"$S2" main.qela cbits.o libcarch.a -o app || exit 1
-./app || exit 1
-
-# The same extern without the object must fail with the linker message.
 cat > broken.qela <<'EOF'
 extern fn c_add(a i64, b i64) i64;
 fn main() int { return c_add(1, 2) as int; }
 EOF
-"$S2" broken.qela -o broken_bin 2>/dev/null && exit 1
 
-printf '    ok\n'
+run_target() {
+	target="$1"
+	cc="$2"
+	qemu="$3"
+	[ -x "$(command -v "$cc")" ] || { printf '    skip %s (no %s)\n' "$target" "$cc"; return 0; }
+	"$cc" -c -fno-pic -fno-asynchronous-unwind-tables cbits.c -o cbits.o || exit 1
+	"$cc" -c -fno-pic -fno-asynchronous-unwind-tables carch.c -o carch.o || exit 1
+	ar rcs libcarch.a carch.o || exit 1
+	"$S2" --target "$target" main.qela cbits.o libcarch.a -o app || exit 1
+	if [ -n "$qemu" ]; then
+		"$qemu" ./app || exit 1
+	else
+		./app || exit 1
+	fi
+	if "$S2" --target "$target" broken.qela -o broken_bin 2>/dev/null; then
+		exit 1
+	fi
+	printf '    ok   %s\n' "$target"
+}
+
+run_target x86_64 gcc ""
+run_target arm64 aarch64-linux-gnu-gcc qemu-aarch64
+run_target riscv64 riscv64-linux-gnu-gcc qemu-riscv64
+
