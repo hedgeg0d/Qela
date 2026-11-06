@@ -413,31 +413,86 @@ var opt_target int = 0;
 var opt_interp bool = false;
 
 struct ComptimeDef;
-struct ComptimeDef { next *ComptimeDef, name str, val str, }
+struct ComptimeDef { next *ComptimeDef, name str, val str, cli bool, builtin bool, }
 
 var comptime_defs *ComptimeDef;
 
-fn comptime_get(name str) str {
+fn comptime_find(name str) *ComptimeDef {
 	var d *ComptimeDef = comptime_defs;
 	while (d as i64 != 0) {
-		if (str_eq(d.name, name)) { return d.val; }
+		if (str_eq(d.name, name)) { return d; }
 		d = d.next;
 	}
+	return null;
+}
+
+fn comptime_get(name str) str {
+	var d *ComptimeDef = comptime_find(name);
+	if (d as i64 != 0) { return d.val; }
 	var e str;
 	return e;
 }
 
+// A definition reaches this from the source ($flag -D) or from the
+// compiler itself. One from the command line is already there and wins:
+// an explicit command-line flag beats the source, as documented.
 fn comptime_set(name str, val str) {
-	var d *ComptimeDef = comptime_defs;
-	while (d as i64 != 0) {
-		if (str_eq(d.name, name)) { d.val = val; return; }
-		d = d.next;
+	var d *ComptimeDef = comptime_find(name);
+	if (d as i64 != 0) {
+		if (d.cli) { return; }
+		d.val = val;
+		return;
 	}
 	var nd *ComptimeDef = arena_alloc(sizeof(ComptimeDef), 8) as *ComptimeDef;
 	nd.name = name;
 	nd.val = val;
 	nd.next = comptime_defs;
 	comptime_defs = nd;
+}
+
+// A -D from the command line. It wins over a $flag -D in the source, and
+// it is what a `let` constant takes its value from.
+fn comptime_set_cli(name str, val str) {
+	var d *ComptimeDef = comptime_find(name);
+	if (d as i64 != 0) {
+		d.val = val;
+		d.cli = true;
+		d.builtin = false;
+		return;
+	}
+	var nd *ComptimeDef = arena_alloc(sizeof(ComptimeDef), 8) as *ComptimeDef;
+	nd.name = name;
+	nd.val = val;
+	nd.cli = true;
+	nd.next = comptime_defs;
+	comptime_defs = nd;
+}
+
+// A definition the compiler makes for itself (TARGET, INTERP): readable in
+// $if like any other, but never the source of a constant's value -- a user
+// constant that happens to share the name must not be rewritten.
+fn comptime_set_builtin(name str, val str) {
+	var d *ComptimeDef = comptime_find(name);
+	if (d as i64 != 0) {
+		if (d.cli) { return; }
+		d.val = val;
+		d.builtin = true;
+		return;
+	}
+	var nd *ComptimeDef = arena_alloc(sizeof(ComptimeDef), 8) as *ComptimeDef;
+	nd.name = name;
+	nd.val = val;
+	nd.builtin = true;
+	nd.next = comptime_defs;
+	comptime_defs = nd;
+}
+
+// Whether a top-level `let` with this name takes its value from -D.
+fn comptime_overrides(name str) bool {
+	var d *ComptimeDef = comptime_find(name);
+	if (d as i64 == 0) { return false; }
+	if (d.builtin) { return false; }
+	return true;
 }
 
 // SysV AMD64 and AAPCS64 both pass an aggregate by reference once it is
