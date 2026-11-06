@@ -118,6 +118,7 @@ fn reset_compile() {
 	lex_keep_comments = false;
 	need_fmt = false;
 	need_dyn = false;
+	need_arena = false;
 	ty_dynval_cache = null;
 	dyn_types_head = null;
 	dyn_types_n = 0;
@@ -976,7 +977,7 @@ fn repl_init() {
 	type_set_fn(null);
 	enter_scope();
 
-	var boot str = "import \"std/io.qela\";\nimport \"std/fmt.qela\";\nimport \"std/rand.qela\";\n";
+	var boot str = "import \"std/io.qela\";\nimport \"std/fmt.qela\";\nimport \"std/rand.qela\";\nimport \"std/arena.qela\";\n";
 	var file int = diag_add_file("<repl bootstrap>", boot);
 	set_module_dir("<repl>");
 	parse(lex(boot, (file as i64) << FILE_SHIFT));

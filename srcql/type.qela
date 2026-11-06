@@ -540,9 +540,80 @@ fn reject_float_mismatch(v *Node, want *Type, pos i64) {
 	}
 }
 
+// The final node of an array-literal comma chain is the hidden frame temp
+// type_arrlit allocated; only those temps carry lit_temp.
+fn lit_spine_var(n *Node) *Var {
+	while (n.kind == ND_COMMA) { n = n.rhs; }
+	if (n.kind != ND_VAR) { return null; }
+	if (!n.varp.lit_temp) { return null; }
+	return n.varp;
+}
+
+// Moves a literal's backing to the arena: `(chain..., pv = arena_alloc(size,
+// 8) as *[N]T, *pv = tmp, &*pv)` -- ordinary assigns in a comma chain ending
+// in the heap array, so the descriptor coerce builds points at arena memory
+// that survives the frame. Every node kind here already runs in both
+// backends, including a comma chain evaluated in address context.
+fn lit_to_arena(n *Node) *Node {
+	var fin *Node = n;
+	while (fin.kind == ND_COMMA) { fin = fin.rhs; }
+	var arrty *Type = fin.ty;
+	var pvty *Type = type_ptr(arrty);
+	var pv *Var = alloc_temp(pvty);
+
+	var szn *Node = node_alloc();
+	szn.kind = ND_NUM; szn.val = arrty.size as i64; szn.ty = ty_i64; szn.typed = true; szn.pos = n.pos;
+	var aln *Node = node_alloc();
+	aln.kind = ND_NUM; aln.val = 8; aln.ty = ty_i64; aln.typed = true; aln.pos = n.pos;
+	var call *Node = mk_call0("arena_alloc");
+	call.args = szn; szn.next = aln;
+	call.nargs = 2;
+	call.pos = n.pos;
+	call.typed = true;
+	type_call(call);
+
+	var pv1 *Node = node_alloc();
+	pv1.kind = ND_VAR; pv1.varp = pv; pv1.ty = pvty; pv1.typed = true; pv1.pos = n.pos;
+	var asg1 *Node = node_alloc();
+	asg1.kind = ND_ASSIGN; asg1.lhs = pv1; asg1.rhs = cast_to(call, pvty);
+	asg1.ty = pvty; asg1.typed = true; asg1.pos = n.pos;
+
+	var pv2 *Node = node_alloc();
+	pv2.kind = ND_VAR; pv2.varp = pv; pv2.ty = pvty; pv2.typed = true; pv2.pos = n.pos;
+	var dst *Node = node_alloc();
+	dst.kind = ND_DEREF; dst.lhs = pv2; dst.ty = arrty; dst.typed = true; dst.pos = n.pos;
+	var tmpv *Node = node_alloc();
+	tmpv.kind = ND_VAR; tmpv.varp = fin.varp; tmpv.ty = arrty; tmpv.typed = true; tmpv.pos = n.pos;
+	var copy *Node = node_alloc();
+	copy.kind = ND_ASSIGN; copy.lhs = dst; copy.rhs = tmpv; copy.ty = arrty; copy.typed = true; copy.pos = n.pos;
+
+	var pv3 *Node = node_alloc();
+	pv3.kind = ND_VAR; pv3.varp = pv; pv3.ty = pvty; pv3.typed = true; pv3.pos = n.pos;
+	var view *Node = node_alloc();
+	view.kind = ND_DEREF; view.lhs = pv3; view.ty = arrty; view.typed = true; view.pos = n.pos;
+
+	var c1 *Node = node_alloc();
+	c1.kind = ND_COMMA; c1.lhs = n; c1.rhs = asg1; c1.ty = pvty; c1.typed = true; c1.pos = n.pos;
+	var c2 *Node = node_alloc();
+	c2.kind = ND_COMMA; c2.lhs = c1; c2.rhs = copy; c2.ty = arrty; c2.typed = true; c2.pos = n.pos;
+	var c3 *Node = node_alloc();
+	c3.kind = ND_COMMA; c3.lhs = c2; c3.rhs = view; c3.ty = arrty; c3.typed = true; c3.pos = n.pos;
+	return c3;
+}
+
 fn coerce(n *Node, want *Type) *Node {
 	if (want.kind != TY_SLICE || n.ty.kind != TY_ARRAY) { return n; }
 	if (!same_type(want.base, n.ty.base)) { return n; }
+	// A literal's frame temp dies with the frame; if the slice can outlive
+	// it (a return, a struct field, a call argument), re-back the literal
+	// onto the arena first. A named array keeps aliasing here.
+	if (lit_spine_var(n) as i64 != 0) {
+		if (find_func("arena_alloc") as i64 == 0) {
+			emsg("an escaping array literal needs std/arena.qela");
+			efail(n.pos);
+		}
+		n = lit_to_arena(n);
+	}
 	var s *Node = node_alloc();
 	s.kind = ND_SLICE;
 	s.typed = true;
@@ -2731,6 +2802,7 @@ fn type_arrlit(n *Node) {
 	var arrty *Type = type_array(elem, n.nargs as i64);
 	var tmp *Var = alloc_temp(arrty);
 	if (tmp as i64 == 0) { error_at(n.pos, "an array literal needs a function scope"); }
+	tmp.lit_temp = true;
 
 	var chain *Node = null;
 	var a *Node = n.args;
