@@ -3682,10 +3682,18 @@ fn func_param_index(f *Func, name str) int {
 
 fn interp_pod_ok(ty *Type) bool {
 	if (ty.kind == TY_ARRAY) { return interp_pod_ok(ty.base); }
+	if (ty.kind == TY_STRUCT) { return interp_struct_pod(ty); }
 	if (ty.kind == TY_ENUM) {
+		// A payload enum's memory image is tag plus the widest payload
+		// union; it crosses the wire raw as long as no payload field can
+		// hold a pointer.
 		var v *Variant = ty.variants;
 		while (v as i64 != 0) {
-			if (v.fields as i64 != 0) { return false; }
+			var m *Member = v.fields;
+			while (m as i64 != 0) {
+				if (!interp_pod_ok(m.ty)) { return false; }
+				m = m.next;
+			}
 			v = v.next;
 		}
 		return true;
@@ -3707,7 +3715,7 @@ fn interp_struct_ok(ty *Type) bool {
 	while (m as i64 != 0) {
 		var mt *Type = m.ty;
 		if (interp_pod_ok(mt)) { m = m.next; continue; }
-		if (mt.kind == TY_SLICE && mt.base as i64 == ty_u8 as i64) { m = m.next; continue; }
+		if (mt.kind == TY_SLICE && interp_pod_ok(mt.base)) { m = m.next; continue; }
 		if (mt.kind == TY_STRUCT && interp_struct_ok(mt)) { m = m.next; continue; }
 		return false;
 	}
@@ -3715,7 +3723,7 @@ fn interp_struct_ok(ty *Type) bool {
 }
 
 fn interp_marshal_ok(ty *Type) bool {
-	if (ty.kind == TY_SLICE) { return ty.base as i64 == ty_u8 as i64; }
+	if (ty.kind == TY_SLICE) { return interp_pod_ok(ty.base); }
 	if (ty.kind == TY_STRUCT) { return interp_struct_ok(ty); }
 	return interp_pod_ok(ty);
 }
@@ -3746,8 +3754,27 @@ fn interp_sig_reject(ty *Type, pos i64, what str) {
 	fmt_str(&b, type_name(ty));
 	fmt_str(&b, "' ");
 	fmt_str(&b, what);
-	fmt_str(&b, " cannot cross the interpreted/dynamic ABI: only scalars, str, floats and structs of those are supported (see docs/INTERPRETED.md)");
+	fmt_str(&b, " cannot cross the interpreted/dynamic ABI: only scalars, str, floats, slices of POD elements, and structs/enums of those are supported (see docs/INTERPRETED.md)");
 	error_at(pos, buf_str(&b));
+}
+
+// An eval var's value crosses as a payload the host's generated
+// dispatchers decode into the real global. A non-str slice would leave
+// its elements pointing into the host's reusable receive buffer (str is
+// special-cased with a duplicate on decode), so eval vars stay str-only
+// for slices.
+fn interp_sig_reject_var(ty *Type, pos i64, what str) {
+	if (ty.kind == TY_VOID) { return; }
+	if (interp_scalar_ok(ty)) { return; }
+	if (ty.kind == TY_SLICE && ty.base as i64 != ty_u8 as i64) {
+		var b Buf;
+		fmt_str(&b, "an 'eval var' of type '");
+		fmt_str(&b, type_name(ty));
+		fmt_str(&b, "' cannot cross the runtime ABI: slice globals are limited to str for now (see docs/INTERPRETED.md)");
+		error_at(pos, buf_str(&b));
+	}
+	if (interp_marshal_ok(ty)) { return; }
+	interp_sig_reject(ty, pos, what);
 }
 
 // The eval fn/eval var ABI is still scalar-only (phase 2 of the
@@ -3789,11 +3816,15 @@ fn interp_gen_marshal(b *Buf, expr str, ty *Type) {
 	if (ty.kind == TY_SLICE) {
 		fmt_str(b, " buf_u64(&__b, ");
 		fmt_str(b, expr);
-		fmt_str(b, ".len); buf_bytes(&__b, ");
+		fmt_str(b, ".len); if (");
 		fmt_str(b, expr);
-		fmt_str(b, ".ptr, ");
+		fmt_str(b, ".len > 0) { buf_bytes(&__b, ");
 		fmt_str(b, expr);
-		fmt_str(b, ".len);");
+		fmt_str(b, ".ptr as *u8, ");
+		fmt_str(b, expr);
+		fmt_str(b, ".len * ");
+		fmt_i64(b, ty.base.size as i64);
+		fmt_str(b, "); }");
 		return;
 	}
 	if (ty.kind == TY_STRUCT && !interp_struct_pod(ty)) {
@@ -3842,13 +3873,19 @@ fn interp_gen_eval_decode(b *Buf, idx int, ty *Type) {
 	fmt_str(b, " var ");
 	interp_gen_pname(b, idx);
 	if (ty.kind == TY_SLICE) {
-		fmt_str(b, " str; ");
+		fmt_str(b, " ");
+		fmt_str(b, type_name(ty));
+		fmt_str(b, "; ");
 		interp_gen_pname(b, idx);
 		fmt_str(b, ".len = *(__cur as *i64); ");
 		interp_gen_pname(b, idx);
-		fmt_str(b, ".ptr = __cur + 8; __cur = __cur + 8 + ");
+		fmt_str(b, ".ptr = (__cur + 8) as *");
+		fmt_str(b, type_name(ty.base));
+		fmt_str(b, "; __cur = __cur + 8 + ");
 		interp_gen_pname(b, idx);
-		fmt_str(b, ".len;");
+		fmt_str(b, ".len * ");
+		fmt_i64(b, ty.base.size as i64);
+		fmt_str(b, ";");
 		return;
 	}
 	if (ty.kind == TY_STRUCT && !interp_struct_pod(ty)) {
@@ -3901,9 +3938,13 @@ fn interp_gen_eval_body(b *Buf, ef *Func) {
 		return;
 	}
 	if (ef.ret.kind == TY_SLICE) {
-		fmt_str(b, "var __r0 str = ");
+		fmt_str(b, "var __r0 ");
+		fmt_str(b, type_name(ef.ret));
+		fmt_str(b, " = ");
 		fmt_str(b, call);
-		fmt_str(b, "; buf_u64(__b, __r0.len); buf_bytes(__b, __r0.ptr, __r0.len);");
+		fmt_str(b, "; buf_u64(__b, __r0.len); if (__r0.len > 0) { buf_bytes(__b, __r0.ptr as *u8, __r0.len * ");
+		fmt_i64(b, ef.ret.base.size as i64);
+		fmt_str(b, "); }");
 		return;
 	}
 	if (is_float(ef.ret)) {
@@ -4100,11 +4141,15 @@ fn interp_gen_mem_ret(b *Buf, base str, ty *Type) {
 // struct field by field, everything else as its own-type read.
 fn interp_gen_wire_ret(b *Buf, base str, ty *Type) {
 	if (ty.kind == TY_SLICE) {
-		fmt_str(b, " var __rs str; __rs.len = *(");
+		fmt_str(b, " var __rs ");
+		fmt_str(b, type_name(ty));
+		fmt_str(b, "; __rs.len = *(");
 		fmt_str(b, base);
-		fmt_str(b, " as *i64); __rs.ptr = ");
+		fmt_str(b, " as *i64); __rs.ptr = (");
 		fmt_str(b, base);
-		fmt_str(b, " + 8; return __rs;");
+		fmt_str(b, " + 8) as *");
+		fmt_str(b, type_name(ty.base));
+		fmt_str(b, "; return __rs;");
 		return;
 	}
 	if (ty.kind == TY_STRUCT && !interp_struct_pod(ty)) {
@@ -4134,12 +4179,16 @@ fn interp_gen_wire_fields(b *Buf, path str, ty *Type) {
 			fmt_str(b, fpath);
 			fmt_str(b, ".len = *(__cur as *i64); ");
 			fmt_str(b, fpath);
-			fmt_str(b, ".ptr = __cur + 8; __cur = __cur + 8 + ");
+			fmt_str(b, ".ptr = (__cur + 8) as *");
+			fmt_str(b, type_name(mt.base));
+			fmt_str(b, "; __cur = __cur + 8 + ");
 			fmt_str(b, fpath);
-			fmt_str(b, ".len;");
+			fmt_str(b, ".len * ");
+			fmt_i64(b, mt.base.size as i64);
+			fmt_str(b, ";");
 		} else if (mt.kind == TY_STRUCT && !interp_struct_pod(mt)) {
 			interp_gen_wire_fields(b, fpath, mt);
-		} else if (mt.kind == TY_STRUCT || mt.kind == TY_ARRAY) {
+		} else if (mt.kind == TY_STRUCT || mt.kind == TY_ARRAY || mt.kind == TY_ENUM) {
 			fmt_str(b, " ");
 			fmt_str(b, fpath);
 			fmt_str(b, " = *(__cur as *");
@@ -5352,7 +5401,7 @@ fn parse(tok *Token) *Unit {
 		var gv *Var = global_vars;
 		while (gv as i64 != 0) {
 			if (gv.eval_export) {
-				interp_sig_reject(gv.ty, gv.pos, "global type");
+				interp_sig_reject_var(gv.ty, gv.pos, "global type");
 				fmt_str(&gb, " if (str_eq(__name, \"");
 				fmt_str(&gb, gv.name);
 				fmt_str(&gb, "\")) { var __b Buf;");
@@ -5379,7 +5428,7 @@ fn parse(tok *Token) *Unit {
 		var sv *Var = global_vars;
 		while (sv as i64 != 0) {
 			if (sv.eval_export) {
-				interp_sig_reject(sv.ty, sv.pos, "global type");
+				interp_sig_reject_var(sv.ty, sv.pos, "global type");
 				fmt_str(&sb, " if (str_eq(__name, \"");
 				fmt_str(&sb, sv.name);
 				fmt_str(&sb, "\")) { var __cur *u8 = __p;");
