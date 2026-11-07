@@ -63,12 +63,21 @@ struct Tmpl;
 
 // A parameterized type. `proto` is the body parsed once with the parameters
 // bound to type variables; instantiating clones it with them substituted.
+// Four explicit slots, like Func's p0..p5: stage0 has no arrays in structs.
+// `ctN` is the constraint `T: <type>`: the argument must be that type or an
+// implicit widening of it (same rule as an assignment).
 struct Tmpl {
 	next    *Tmpl,
 	name    str,
 	nparams int,
 	tv0     *Type,
 	tv1     *Type,
+	tv2     *Type,
+	tv3     *Type,
+	ct0     *Type,
+	ct1     *Type,
+	ct2     *Type,
+	ct3     *Type,
 	proto   *Type,
 }
 
@@ -110,6 +119,8 @@ struct Type {
 	tmpl        *Tmpl,
 	ga0         *Type,
 	ga1         *Type,
+	ga2         *Type,
+	ga3         *Type,
 	packed      bool,
 }
 
