@@ -851,6 +851,11 @@ fn riscv_add_call(name str, pos i64) {
 	b4(0x6f | (RA << 7));
 }
 
+fn riscv_add_call_fn(f *Func, pos i64) {
+	riscv_add_call(f.name, pos);
+	if (calls_tail as i64 != 0) { calls_tail.fptr = f; }
+}
+
 // AUIPC+ADDI: the address pair every absolute reference uses -- AUIPC
 // loads the 20-bit page offset (PC-relative), ADDI the signed 12-bit low
 // part. The exe patches both words at finalize (the image base and the
@@ -1826,7 +1831,7 @@ fn riscv_lower_op(op *IrOp) {
 		return;
 	}
 	if (op.kind == IR_CALL && op.src0.kind == OP_FUNC) {
-		riscv_add_call((op.src0.off as *Func).name, op.pos);
+		riscv_add_call_fn(op.src0.off as *Func, op.pos);
 		return;
 	}
 	if (op.kind == IR_CALL && op.src0.kind == OP_VREG) {
