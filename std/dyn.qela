@@ -1,7 +1,9 @@
 // Runtime support for `~` (opt-in dynamic typing). `DynVal` itself is not
 // declared here: the compiler registers it programmatically (type_dynval in
 // srcql/type.qela) before this file is spliced in, so every `~` site and
-// every call here agree on the exact same Type object.
+// every call here agree on the exact same Type object. The box is
+// {type_id, size, ptr}: the size rides along so dyn_clone can deep-copy a
+// box whose payload type is known only at runtime.
 import "heap.qela";
 
 // Boxes `size` bytes starting at `src` onto the heap and tags them `id`
@@ -11,6 +13,7 @@ import "heap.qela";
 fn dyn_box(id i64, src *u8, size i64) DynVal {
 	var d DynVal;
 	d.type_id = id;
+	d.size = size;
 	if (size <= 0) { d.ptr = null; return d; }
 	var p *u8 = heap_alloc(size);
 	var i i64 = 0;
@@ -20,6 +23,29 @@ fn dyn_box(id i64, src *u8, size i64) DynVal {
 	}
 	d.ptr = p;
 	return d;
+}
+
+// Deep-copies a boxed payload into a caller-owned slot, whatever its
+// runtime type: allocates d.size bytes and copies them. A `~` parameter
+// calls this at entry (`dyn_clone_into(x, &x)`) so the callee owns its
+// box -- the caller's DynVal that arrived is only a shallow copy of the
+// box pointer. Written as a call into a slot, not `x = dyn_clone(x)`,
+// because a dynamic-to-dynamic assignment is rejected (it could alias
+// two boxes); the compiler prepends the call itself.
+/// Copies a dynamic value's payload into a fresh box in place.
+fn dyn_clone_into(d DynVal, dst *DynVal) {
+	var p *u8 = null;
+	if (d.size > 0) {
+		p = heap_alloc(d.size);
+		var i i64 = 0;
+		while (i < d.size) {
+			*(p + i) = *(d.ptr + i);
+			i = i + 1;
+		}
+	}
+	dst.type_id = d.type_id;
+	dst.size = d.size;
+	dst.ptr = p;
 }
 
 // The runtime half of `n as T`: T's compile-time id is compared against the
