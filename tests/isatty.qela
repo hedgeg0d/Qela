@@ -1,0 +1,12 @@
+// expect-exit: 0
+// expect-out: pipe=true
+// Under the test harness stdout is never a terminal, so sys_isatty has
+// to report nonzero. (On a real tty it returns 0; that half is not
+// covered here.)
+import "std/sys.qela";
+import "std/io.qela";
+
+fn main() int {
+	println("pipe=${sys_isatty() != 0}");
+	return 0;
+}
