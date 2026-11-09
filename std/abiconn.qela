@@ -8,6 +8,7 @@ import "abiwire.qela";
 var abi_pid i64 = -1;
 var abi_in i64 = -1;
 var abi_out i64 = -1;
+var abi_child_signal i64 = 0;
 
 // A handle into the child's parsed-AST cache. Every handle is opaque and
 // sequential: the child's ids run from 1 in parse order, which is exactly
@@ -145,6 +146,17 @@ fn abi_respawn() bool {
 	return true;
 }
 
+fn abi_reap_dead() {
+	var raw i64 = 0;
+	if (abi_pid >= 0) {
+		sys_wait4(abi_pid, &raw as *u8);
+		abi_pid = -1;
+	}
+	abi_child_signal = raw & 127;
+	if (abi_in >= 0) { sys_close(abi_in); abi_in = -1; }
+	if (abi_out >= 0) { sys_close(abi_out); abi_out = -1; }
+}
+
 // The embedded compiler copy: the compiler itself fills these in when it
 // builds a program that pulls in the ABI (see codegen's embed handling),
 // so a shipped binary can spawn its own child without qela installed.
@@ -184,6 +196,7 @@ fn abi_find_on_path(name str) str {
 /// Launches the qela child process and opens pipes.
 fn abi_spawn() {
 	if (abi_pid >= 0) { return; }
+	abi_child_signal = 0;
 	// $QELAPATH is an explicit override; otherwise the embedded compiler
 	// copy (if the build embedded one), then a $PATH search.
 	var qp str = sys_getenv("QELAPATH");
@@ -359,10 +372,11 @@ fn abi_wait_result(kind *u8, buf *u8, cap i64) i64 {
 fn abi_wait_result_payload(kind *u8) str {
 	while (true) {
 		var total i64 = abi_peek_len(abi_out);
-		if (total < 0) { *kind = 0; var e str; return e; }
+		if (total < 0) { abi_reap_dead(); *kind = 0; var e str; return e; }
 		var pb *u8 = arena_alloc(total, 8);
 		var k u8 = 0;
 		if (!abi_recv_rest(abi_out, &k, pb, total - 1)) {
+			abi_reap_dead();
 			*kind = 0;
 			var e str;
 			return e;
