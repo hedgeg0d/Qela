@@ -70,14 +70,17 @@ S2 742 216 -> 753 456 B (+11 240 across the six). Corpus 202 -> 208.
 arm64 959 680 -> 974 488 B (92.9% of the 1 MiB budget; about 74 KB of
 headroom left).
 
-Preemption/coroutine migration was attempted and abandoned (2026-08-16):
-a coroutine suspended inside its own call chain cannot be resumed on
-another OS thread -- the switch stub returns into a frame whose spilled
-locals belong to the old thread, and every safe-point scheme (owner
-park + CAS, direct theft, owner hand-off from a "clean" preamble)
-crashed or deadlocked under load. A real migration needs Go-style
-codegen support (restartable coroutine entry), which is beyond the
-headroom. The writeup is in docs/TASKS.md.
+**Live coroutine migration (2026-08-16).** Idle pool workers request work
+through a mailbox. A busy worker serves the request during `coro_yield` by
+transferring a different parked context's `{sp, top}` and retiring its local
+slot; the destination imports it under a new local id. The continuation stack
+and saved registers are process memory, so no Go-style restartable codegen is
+needed. Channel-blocked coroutines and generators stay pinned because they
+carry worker-local wait or directed-switch ids. A migrated coroutine sees the
+destination worker's `tvar` values. `tests/thread_migrate.qela` verifies a
+local value survives the transfer and observes a new `pool_worker_id`;
+runner-form stress passed 20/20 on x86 and 10/10 under both qemu-aarch64 and
+qemu-riscv64. Full protocol in this file.
 
  The compiler knows what
 it is. One source of truth: `fn qela_version()` in `srcql/comp.qela`
