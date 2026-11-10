@@ -7,7 +7,7 @@ Updated 2026-08-16. Read `BOOTSTRAP.md` first; it constrains everything below.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **764 680 B** (72.9% of the 1 MiB budget) |
+| **S2 — the shipped compiler, Qela compiled by itself** | **765 088 B** (73.0% of the 1 MiB budget) |
 | stage1 sources | ~21 900 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
 
@@ -20,13 +20,16 @@ server conversation.
 ## Done
 
 **ARM64 size batch (2026-08-16).** Five measured optimizations reduced the
-self-hosted ARM64 compiler from 983 000 to 904 256 B (-78 744, 86.2% of the
-1 MiB budget, 144 320 B headroom): zero compares fuse with their branch as
+self-hosted ARM64 compiler from 983 000 to 904 400 B (-78 600, 86.2% of the
+1 MiB budget, 144 176 B headroom): zero compares fuse with their branch as
 CBZ/CBNZ; framed functions with several returns share one epilogue; aggregate
 zero/copy uses STP/LDP and 4/2-byte tails; promoted callee-saved registers save
 and restore in pairs; and every backend stops emitting the rest of a block
-after a direct return/break/continue. The ARM64 fixed point is byte-identical.
-The x86 compiler grew 761 840 -> 764 680 B because it carries the ARM backend.
+after a direct return/break/continue. A speed follow-up retained shifted CMP,
+logical-immediate constant loads and multiply-by-2^k+1: +144 B bought 1.5%
+on ARM self-compile and 0.6% on a targeted loop. The ARM64 fixed point is
+byte-identical. The x86 compiler grew 761 840 -> 765 088 B because it carries
+the ARM backend.
 Gate: 212/212 compiled, 195/195 interpreted, FFI on all three targets, torture
 200/200, subset clean. The ARM corpus passed 204 tests; its three failures
 (interp_marshal SIGILL, jsonmarshal SIGSEGV, signal timeout) reproduce with the
