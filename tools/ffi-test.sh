@@ -35,6 +35,19 @@ Vec2f c_v2_mk(float x, float y) { Vec2f v = {x, y}; return v; }
 Vec2d c_v2d_add(Vec2d a, Vec2d b) { Vec2d r = {a.x + b.x, a.y + b.y}; return r; }
 Vec2d qela_v2d_zero(void);
 Vec2d c_call_qela_v2d(void) { Vec2d r = qela_v2d_zero(); r.x = r.x + 1.0; r.y = r.y + 2.0; return r; }
+typedef struct { int64_t a, b, c, d; } Big;
+int64_t c_big_sum(Big b) { return b.a + b.b + b.c + b.d; }
+Big c_big_inc(Big b) { b.a = b.a + 100; return b; }
+Big c_six_ret(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, int64_t f, int64_t g) { Big r = {a, b, c, 0}; r.d = d + e + f + g; return r; }
+int64_t c_spill7(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, int64_t f, int64_t g, int64_t h, int64_t i) { return a + b + c + d + e + f + g + h + i; }
+int64_t c_big_early(Big b, int64_t x, int64_t y, int64_t z, int64_t w) { return b.a + b.b + b.c + b.d + x + y + z + w; }
+int64_t c_six_one(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, int64_t f, double x, int64_t g) { return a + b + c + d + e + f + g + (int64_t)x; }
+double c_fsum9(float a, float b, float c, float d, float e, float f, float g, float h, float i) { return a + b + c + d + e + f + g + h + i; }
+Big qela_big_sum(Big b);
+Big qela_big_round(Big b);
+int64_t c_call_qela_big(void) { Big b = {1, 2, 3, 4}; Big s = qela_big_sum(b); Big r = qela_big_round(b); return s.a + s.b + s.c + s.d + r.a * 1000; }
+int64_t qela_spill_q(long a, long b, long c, long d, long e, long f, long g, long h, long i);
+int64_t c_call_qela_spill(void) { return qela_spill_q(1, 2, 3, 4, 5, 6, 7, 8, 9); }
 EOF
 
 cat > carch.c <<'EOF'
@@ -60,6 +73,27 @@ extern fn c_v2_mk(x f32, y f32) Vec2f;
 extern fn c_v2d_add(a Vec2d, b Vec2d) Vec2d;
 extern fn c_call_qela_v2d() Vec2d;
 extern var c_global i64;
+struct Big { a i64, b i64, c i64, d i64 }
+
+extern fn c_big_sum(b Big) i64;
+extern fn c_big_inc(b Big) Big;
+extern fn c_six_ret(a i64, b i64, c i64, d i64, e i64, f i64, g i64) Big;
+extern fn c_spill7(a i64, b i64, c i64, d i64, e i64, f i64, g i64, h i64, i i64) i64;
+extern fn c_big_early(b Big, x i64, y i64, z i64, w i64) i64;
+extern fn c_six_one(a i64, b i64, c i64, d i64, e i64, f i64, x f64, g i64) i64;
+extern fn c_fsum9(a f32, b f32, c f32, d f32, e f32, f f32, g f32, h f32, i f32) f64;
+extern fn c_call_qela_big() i64;
+extern fn c_call_qela_spill() i64;
+extern fn qela_big_sum(b Big) Big {
+	return b;
+}
+extern fn qela_big_round(b Big) Big {
+	b.a = 777;
+	return b;
+}
+extern fn qela_spill_q(a i64, b i64, c i64, d i64, e i64, f i64, g i64, h i64, i i64) i64 {
+	return a + b + c + d + e + f + g + h + i;
+}
 
 fn qela_ping() i64 { return 7; }
 
@@ -96,6 +130,23 @@ fn main() int {
 	if (vd3.x != 4.0 || vd3.y != 6.0) { fails = fails + 1; }
 	var vd4 Vec2d = c_call_qela_v2d();
 	if (vd4.x != 1.0 || vd4.y != 2.0) { fails = fails + 1; }
+
+	// Parameters and returns past the register budgets, and aggregates
+	// wider than 16 bytes by value, must match gcc's SysV exactly.
+	var big Big = Big{a: 1, b: 2, c: 3, d: 4};
+	if (c_big_sum(big) != 10) { fails = fails + 1; }
+	var bc Big = c_big_inc(big);
+	if (bc.a != 101 || bc.d != 4) { fails = fails + 1; }
+	if (c_spill7(1, 2, 3, 4, 5, 6, 7, 8, 9) != 45) { fails = fails + 1; }
+	if (c_big_early(big, 10, 20, 30, 40) != 110) { fails = fails + 1; }
+	if (c_six_one(1, 2, 3, 4, 5, 6, 2.0, 9) != 32) { fails = fails + 1; }
+	var sr Big = c_six_ret(1, 2, 3, 4, 5, 6, 7);
+	if (sr.a != 1 || sr.d != 22) { fails = fails + 1; }
+	var fs f64 = c_fsum9(1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5);
+	if (fs < 49.4 || fs > 49.6) { fails = fails + 1; }
+	// C calling Qela with the same shapes (a Big by value both ways).
+	if (c_call_qela_big() != 777010) { fails = fails + 1; }
+	if (c_call_qela_spill() != 45) { fails = fails + 1; }
 	return fails as int;
 }
 EOF
@@ -110,8 +161,8 @@ run_target() {
 	cc="$2"
 	qemu="$3"
 	[ -x "$(command -v "$cc")" ] || { printf '    skip %s (no %s)\n' "$target" "$cc"; return 0; }
-	"$cc" -c -fno-pic -fno-asynchronous-unwind-tables cbits.c -o cbits.o || exit 1
-	"$cc" -c -fno-pic -fno-asynchronous-unwind-tables carch.c -o carch.o || exit 1
+	"$cc" -c -fno-pic -fno-asynchronous-unwind-tables -fno-stack-protector cbits.c -o cbits.o || exit 1
+	"$cc" -c -fno-pic -fno-asynchronous-unwind-tables -fno-stack-protector carch.c -o carch.o || exit 1
 	ar rcs libcarch.a carch.o || exit 1
 	"$S2" --target "$target" main.qela cbits.o libcarch.a -o app || exit 1
 	if [ -n "$qemu" ]; then

@@ -1,11 +1,14 @@
-// expect-compile-error x86
-// expect-exit: 0
+// interp-skip
+// expect-compile-error
 // stage1-only
-// SysV marshalling is register-only for now: an extern function whose
-// parameter would spill to the stack is rejected rather than silently
-// mismatched with the C convention. AAPCS64's eight s-registers accept
-// all seven arguments, so on arm64 the declaration must simply compile.
-extern fn bad(a f32, b f32, c f32, d f32, e f32, f f32, g f32) f32;
+// A scalar float past the FP budget spills to the stack (x86/AArch64) or
+// back into the integer registers (LP64D), but a *struct* argument that
+// would land past the FP registers has no correct representation: SysV
+// packs 8-byte SSE chunks into xmm registers on x86 and HFA elements into
+// s/d registers on AArch64/LP64D, none of which Qela can stage there. The
+// declaration is rejected on every target rather than silently mismatched.
+struct Vec { x f32, y f32 }
+extern fn bad(a f32, b f32, c f32, d f32, e f32, f f32, g f32, h f32, v Vec) f32;
 fn main() int {
 	return 0;
 }
