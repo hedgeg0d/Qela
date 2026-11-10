@@ -1,6 +1,6 @@
 # Where the project stands
 
-Updated 2026-08-17 (commit `c0eac74`). Read `BOOTSTRAP.md` first; it
+Updated 2026-08-17 (commit `c809031`). Read `BOOTSTRAP.md` first; it
 constrains everything below. The dated entries below are implementation
 history; the numbers in this section are the current snapshot.
 
@@ -9,17 +9,17 @@ history; the numbers in this section are the current snapshot.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **765 088 B** (73.0% of the 1 MiB budget) |
+| **S2 — the shipped compiler, Qela compiled by itself** | **769 744 B** (73.4% of the 1 MiB budget) |
 | stage1 sources | 32 077 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
 
-The last successful gate verifies S2 == S3 byte-for-byte, the 212-test corpus under S2, the embedded stdlib resolving outside the source tree,
+The last successful gate verifies S2 == S3 byte-for-byte, the 215-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
 backtrace, interpolation and the repl, the compiler flags (`-g`,
 `--backtrace`, `--no-bounds-checks`, `--dump-std`), and a scripted language
 server conversation.
 
-On the current workspace, `make build` reproduced the fixed point at 765 088 B.
+On the current workspace, `make build` reproduced the fixed point at 769 744 B.
 The local sandbox cannot bind loopback sockets, so `tests/http.qela` and
 `tests/netproc.qela` exit at `net_listen`; this is an environment failure, not
 a changed compiler result. The last unrestricted gate remains 212/212.
@@ -37,7 +37,7 @@ logical-immediate constant loads and multiply-by-2^k+1: +144 B bought 1.5%
 on ARM self-compile and 0.6% on a targeted loop. The ARM64 fixed point is
 byte-identical. The x86 compiler grew 761 840 -> 765 088 B because it carries
 the ARM backend.
-Gate: 212/212 compiled, 195/195 interpreted, FFI on all three targets, torture
+Gate: 215/215 compiled, 194/194 interpreted, FFI on all three targets, torture
 200/200, subset clean. The ARM corpus passed 204 tests; its three failures
 (interp_marshal SIGILL, jsonmarshal SIGSEGV, signal timeout) reproduce with the
 old compiler unchanged. Full measurements and rejected experiments are in
