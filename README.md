@@ -21,9 +21,10 @@ $ ldd hello
 	not a dynamic executable
 ```
 
-The design goal is the most language per byte. The compiler is currently
-261 032 B — 60 196 B packed with `upx --lzma`, about 5.8% of its own
-1 MiB budget.
+The design goal is the most language per byte. The shipped self-hosted compiler
+is currently 765 088 B on x86-64 (73.0% of the 1 MiB budget); the current
+ARM64 fixed point is 904 400 B. See [`docs/STATUS.md`](docs/STATUS.md) for
+measured gate results and known environment-specific test limitations.
 
 ## What it has
 
@@ -45,7 +46,8 @@ direction: `u8`→`i64` is fine, `i64`↔`u64` and any narrowing need an explici
 error, not a silent wrap.
 
 Generics by monomorphization, over functions and over types, with the type
-argument inferred from the call:
+argument inferred from the call. Up to four type parameters and constrained
+parameters are supported:
 
 ```qela
 struct Pair(T) { a T, b T, }
@@ -55,6 +57,11 @@ fn first(comptime T: type, p *Pair(T)) T { return p.a; }
 var p Pair(i64);
 var x i64 = first(&p);   // T is i64, nobody had to say so
 ```
+
+The compiler also supports overloads, JSON field tags (`"name"` and `"-"`),
+comptime constants such as `$c("1 + 41")`, and dynamic `~` parameters,
+fields and returns. The exact restrictions and examples are in
+[`docs/GUIDE.md`](docs/GUIDE.md).
 
 Coroutines on their own stacks with `spawn`, and channels of any type:
 
@@ -151,3 +158,8 @@ docs/       BOOTSTRAP.md, STATUS.md
 - `docs/BOOTSTRAP.md` — the subset the compiler's own sources may use, and why
 - `docs/STATUS.md` — what works, what is left, with measurements
 - `docs/ASM.md` — the x86 encodings Qela's `asm` covers, as one-`let` rows
+- `docs/INTERPRETED.md` — the runtime ABI, `interpreted`/`dynamic` and `eval`
+
+The test corpus currently contains 220 source files. `make build` regenerates
+the embedded 39-module standard library, checks the S2/S3 fixed point, runs the
+compiled and interpreted corpus, and executes the portability gates.
