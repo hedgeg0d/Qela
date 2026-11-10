@@ -2311,10 +2311,23 @@ fn add_type(n *Node) {
 		if (lt.kind == TY_STRUCT || (lt.kind == TY_PTR && lt.base.kind == TY_STRUCT)) {
 			if (index_sugar(n, "_get")) { return; }
 		}
+		if (lt.kind == TY_POISON) {
+			// Same as a member access on a poisoned base: the error is in.
+			n.kind = ND_NUM;
+			n.val = 0;
+			n.ty = ty_poison;
+			return;
+		}
 		if (lt.kind != TY_ARRAY && lt.kind != TY_PTR && lt.kind != TY_SLICE) {
 			emsg("cannot index a value of type '"); emsg_ty(lt); emsg("'"); efail(n.pos);
 		}
 		if (lt.base.kind == TY_VOID) { error_at(n.pos, "cannot index a *void"); }
+		if (n.rhs.ty == ty_poison) {
+			n.kind = ND_NUM;
+			n.val = 0;
+			n.ty = ty_poison;
+			return;
+		}
 		if (!is_integer(n.rhs.ty)) { error_at(n.pos, "an index must be an integer"); }
 		n.ty = lt.base;
 		return;
@@ -2357,6 +2370,15 @@ fn add_type(n *Node) {
 			n.ty = ty_i64;
 			return;
 		}
+		if (lt.kind == TY_POISON) {
+			// The base's own error was already reported and the node was
+			// poisoned to a literal: a second "type 'poison' has no fields"
+			// would only repeat the same root cause.
+			n.kind = ND_NUM;
+			n.val = 0;
+			n.ty = ty_poison;
+			return;
+		}
 		if (lt.kind != TY_STRUCT && lt.kind != TY_SLICE) {
 			emsg("type '"); emsg_ty(n.lhs.ty); emsg("' has no fields"); efail(n.pos);
 		}
@@ -2384,6 +2406,14 @@ fn add_type(n *Node) {
 	if (k == ND_ADDR) { n.ty = type_ptr(n.lhs.ty); return; }
 
 	if (k == ND_DEREF) {
+		if (n.lhs.ty.kind == TY_POISON) {
+			// The operand's error is already reported; as with the member and
+			// index cases, the node is poisoned instead of reported twice.
+			n.kind = ND_NUM;
+			n.val = 0;
+			n.ty = ty_poison;
+			return;
+		}
 		if (n.lhs.ty.kind != TY_PTR) {
 			emsg("cannot dereference a value of type '"); emsg_ty(n.lhs.ty); emsg("'"); efail(n.pos);
 		}
