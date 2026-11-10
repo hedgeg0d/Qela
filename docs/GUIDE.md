@@ -372,7 +372,8 @@ does not stage). Integer and two-word aggregate arguments that spill move
 to the stack exactly as SysV lays them out.) Interpolation prints floats
 (`"${a}"` → `1.5`). Decimal
 literals retain subnormals; fixed-point printing rounds to nearest with ties
-to even. (Comptime folding itself stays integer-only — see section 16.)
+to even. Comptime blocks and `$c` evaluate float arithmetic through integer-only
+IEEE-754 helpers, so they work during bootstrap too; see section 16.
 
 
 ## 5. Variables
@@ -1323,9 +1324,11 @@ let bytes = $c("sizeof(Pair(i64)) * 2");
 ```
 
 The expression is evaluated while parsing; no evaluator or expression code is
-emitted into the resulting program. The folding is integer-only: a float
-literal or arithmetic inside a comptime block is an error, since the
-evaluator lives in the bootstrap subset where stage0 has no float.
+emitted into the resulting program. Both forms support `f32`/`f64` literals,
+`+ - * /`, unary minus, comparisons, float-width casts, infinities, NaNs and
+subnormals. The evaluator represents floats as IEEE-754 bits and implements
+round-to-nearest-even using integers only, because it lives in the bootstrap
+subset where stage0 has no native float support.
 
 ## 17. assert, panic, and bounds checks
 
