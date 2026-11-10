@@ -1,0 +1,46 @@
+// expect-exit: 0
+// expect-out: a|b|c
+// expect-out: 1|2,5|x
+// expect-out: 3|4|5
+// expect-out: csv ok
+// CSV parsing: quoted fields with commas and doubled quotes, unterminated
+// quotes, CRLF, chunked next_line scanning, and escaping on write.
+import "std/io.qela";
+import "std/csv.qela";
+
+fn show(fields []str, n i64) {
+	var i i64 = 0;
+	while (i < n) {
+		if (i > 0) { write_str(STDOUT, "|"); }
+		write_str(STDOUT, fields[i]);
+		i = i + 1;
+	}
+	write_str(STDOUT, "\n");
+}
+
+fn main() int {
+	var f1 []str = csv_parse_line("a,b,c");
+	if (f1.len != 3 || !str_eq(f1[0], "a") || !str_eq(f1[1], "b") || !str_eq(f1[2], "c")) { return 1; }
+	show(f1, 3);
+	var f2 []str = csv_parse_line("1,\"2,5\",x");
+	if (f2.len != 3 || !str_eq(f2[1], "2,5")) { return 2; }
+	show(f2, 3);
+	var f3 []str = csv_parse_line("3,4,5");
+	if (f3.len != 3 || !str_eq(f3[2], "5")) { return 3; }
+	show(f3, 3);
+	var f4 []str = csv_parse_line("\"say \"\"hi\"\"\",end");
+	if (f4.len != 2 || !str_eq(f4[0], "say \"hi\"")) { return 4; }
+	var f5 []str = csv_parse_line("\"unterminated");
+	if (f5.len != 1 || !str_eq(f5[0], "unterminated")) { return 5; }
+	var esc str = csv_join(["a", "b,c", "say \"hi\""], 3);
+	if (!str_eq(esc, "a,\"b,c\",\"say \"\"hi\"\"\"")) { return 6; }
+	var buf str = "x,y\n\"p,q\",2\nlast\n";
+	var start i64 = 0;
+	var l1 str = csv_next_line(buf, &start);
+	var l2 str = csv_next_line(buf, &start);
+	var l3 str = csv_next_line(buf, &start);
+	if (!str_eq(l1, "x,y") || !str_eq(l2, "\"p,q\",2") || !str_eq(l3, "last")) { return 7; }
+	if (start != buf.len) { return 8; }
+	write_str(STDOUT, "csv ok\n");
+	return 0;
+}

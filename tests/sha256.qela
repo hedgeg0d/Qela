@@ -1,0 +1,26 @@
+// expect-exit: 0
+// expect-out: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+// expect-out: ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+// expect-out: 248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1
+// expect-out: sha ok
+// SHA-256 against the three NIST test vectors: empty, "abc", and the
+// multi-block 448-bit message (two full blocks plus padding).
+import "std/io.qela";
+import "std/sha256.qela";
+
+fn main() int {
+	var v1 str = sha256("");
+	write_str(STDOUT, v1);
+	write_str(STDOUT, "\n");
+	if (!str_eq(v1, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")) { return 1; }
+	var v2 str = sha256("abc");
+	write_str(STDOUT, v2);
+	write_str(STDOUT, "\n");
+	if (!str_eq(v2, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")) { return 2; }
+	var v3 str = sha256("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq");
+	write_str(STDOUT, v3);
+	write_str(STDOUT, "\n");
+	if (!str_eq(v3, "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1")) { return 3; }
+	write_str(STDOUT, "sha ok\n");
+	return 0;
+}
