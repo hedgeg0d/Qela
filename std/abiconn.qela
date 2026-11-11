@@ -50,6 +50,17 @@ let ABI_REQ_AST_CHILD = 10;
 let ABI_REQ_AST_NEXT = 11;
 let ABI_REQ_AST_SET = 12;
 
+// The parent tells the child which target it was compiled for, one byte
+// before the registration bundle: the child must parse the bundle and
+// JIT-compile dynamic functions with the parent's target, not with its
+// own host architecture -- under qemu the host is x86 while the parent
+// may be running arm64/riscv64 code, and a JIT unit of the wrong arch
+// is an illegal instruction in the parent.
+let ABI_REQ_TARGET = 13;
+$if (TARGET == "arm64") { let ABI_TARGET_BYTE = 1; }
+$if (TARGET == "riscv64") { let ABI_TARGET_BYTE = 2; }
+$if (TARGET == "x86_64") { let ABI_TARGET_BYTE = 0; }
+
 /// Records an abstract handle for later replay.
 fn abi_ast_register(a *Ast) {
 	if (abi_asts_tail as i64 == 0) { abi_asts = a; }
@@ -234,6 +245,10 @@ fn abi_spawn() {
 	abi_pid = pid;
 	abi_in = in_pipe[1] as i64;
 	abi_out = out_pipe[0] as i64;
+
+	var tb [1]u8;
+	tb[0] = ABI_TARGET_BYTE as u8;
+	abi_send_frame(abi_in, ABI_REQ_TARGET as u8, &tb[0], 1);
 
 	var bundle str = __interp_all_src();
 	if (bundle.len > 0) {
