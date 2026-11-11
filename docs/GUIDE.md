@@ -348,6 +348,20 @@ var w i32 = 70000;
 var n i16 = w as i16;      // 70000 -> 4464, wraps
 ```
 
+Binary integer operators are computed in the 64-bit word: when *both* operands
+are narrower than eight bytes, `+ - * / % & | ^ <<` widen them, and the result
+is `i64`. A narrower destination therefore takes a cast:
+
+```qela
+fn cube(n i32) i32 { return (n * n * n) as i32; }   // n * n is i64
+```
+
+That is one step wider than C's promotion (`int * int` stays `int` there), and
+it is deliberate -- one machine-word arithmetic keeps the operator tables
+single (`common()` in `srcql/type.qela`) -- but it is the one place the
+"ordinary arithmetic rules" reach past what C does with a narrow type.
+Comparisons are unaffected: they compare the operands and yield `bool`.
+
 Integer arithmetic wraps on overflow — the language does not check it, by
 design (the compiler itself wants the wrapping).
 
