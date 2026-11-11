@@ -165,8 +165,10 @@ fn diag_col_for(file_id int, off i64) int {
 fn diag_want_color() bool {
 	if (opt_color == 1) { return true; }
 	if (opt_color == 2) { return false; }
-	// auto: not a tty or NO_COLOR set or TERM=dumb => no colour
-	if (sys_isatty() != 0) { return false; }
+	// auto: no colour unless the stream the diagnostics go to is a tty
+	// (stderr, not stdin: `qela x.qela 2>log` must not write escapes into
+	// the log), or NO_COLOR is set, or TERM=dumb.
+	if (sys_isatty_fd(2) != 0) { return false; }
 	var nc str = sys_getenv("NO_COLOR");
 	if (nc.len > 0) { return false; }
 	var term str = sys_getenv("TERM");
