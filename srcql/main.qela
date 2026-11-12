@@ -137,11 +137,7 @@ fn reset_compile() {
 	// between compiles. The colour decision is re-evaluated at the top of
 	// compile_src (so multi-compile processes like `qela test` see the right
 	// tty state for each compile).
-	sec_set = false;
-	sec_pos = -1;
-	macro_top = null;
-	diag_setup_done = false;
-	diag_colored = false;
+	diag_reset();
 	// Keyword list for "did you mean" suggestions is built once and the
 	// str slots point into rodata, so no reset needed across compiles.
 }
@@ -311,6 +307,10 @@ fn cmd_build_dir(dir str, output str) {
 	var unit *Unit = parse_dir(dir);
 	var img Image;
 	codegen(unit, &img);
+	// No binary may be written over soft errors: the tree it was generated
+	// from has literals where the offending calls were. compile_src fails
+	// at this same point, and `qela .` must not be the path that forgets.
+	diag_fail_if_errors();
 	write_elf(output, &img);
 }
 
@@ -878,6 +878,11 @@ fn repl_process(src str, name str, path_a bool) {
 		var devnull i64 = sys_open_append(cstr("/dev/null"));
 		sys_dup2(devnull, STDOUT);
 		repl_run_source(src, name, path_a);
+		// The parent re-runs whatever this child accepted, so a line that
+		// reported errors has to fail here: otherwise it runs twice, the
+		// diagnostics print twice, and the parent's count grows with every
+		// rejected line.
+		if (diag_errcount() > 0) { sys_exit(1); }
 		sys_exit(0);
 	}
 	var status [1]i64;
@@ -937,6 +942,10 @@ fn repl_print_type(expr str) {
 		var t *Token = lex(expr, (file as i64) << FILE_SHIFT);
 		var n *Node = parse_assign(&t);
 		add_type(n);
+		// The diagnostics are already on stderr; printing the poisoned
+		// node's placeholder type as if the expression were real would be
+		// the nonsense a hard error used to prevent by exiting first.
+		if (diag_errcount() > 0) { sys_exit(1); }
 		write_str(STDOUT, type_name(n.ty));
 		write_str(STDOUT, "\n");
 		sys_exit(0);
@@ -1809,6 +1818,9 @@ fn abi_try_parse_expr(src str, name str) bool {
 		resolve_comptime(&t);
 		var pn *Node = parse_stmt(&t);
 		add_type(pn);
+		// Soft errors must fail this validation the way hard ones always
+		// did, or the caller parses a tree it was just told is broken.
+		if (diag_errcount() > 0) { sys_exit(1); }
 		sys_exit(0);
 	}
 	var status [1]i64;
@@ -1986,6 +1998,10 @@ fn abi_try_run(src str, name str, path_a bool) bool {
 		sys_close(cap[1] as i64);
 		ip_abi_validating = true;
 		repl_run_source(src, name, path_a);
+		// Same rule as the other validators: the caller re-runs whatever
+		// this child accepted, and stderr is already captured into the
+		// frame the host is sent.
+		if (diag_errcount() > 0) { sys_exit(1); }
 		sys_exit(0);
 	}
 	sys_close(cap[1] as i64);
@@ -2066,6 +2082,18 @@ fn abi_handle_jit(f *Func) {
 		var junit *Unit = parse(lex(body_src, (jfile as i64) << FILE_SHIFT));
 		var img Image;
 		codegen(junit, &img);
+
+		// Soft errors poisoned part of this tree -- a name the isolated unit
+		// cannot see, typed to a literal so later phases stay well-formed.
+		// Codegen then emits an image that silently drops the call, which is
+		// how a foreign write_str lost its side effect while the rest of the
+		// function still computed. Reject here and the host falls back to the
+		// interpreter, exactly as a hard error would have.
+		if (diag_errcount() > 0) {
+			var msg str = "dynamic: the isolated reparse reported errors -- the interpreted fallback takes over";
+			abi_send_frame(ABI_FD_CHILD_TO_HOST, ABI_RESP_ERR as u8, msg.ptr, msg.len);
+			sys_exit(0);
+		}
 
 		// Self-contained means: no relocation at all, or nothing but calls
 		// to the function itself. The host can patch those locally -- it

@@ -250,8 +250,40 @@ EOF
   "$root/$OUT/s2" interp_fmt.qela -o interp &&
   [ "$(./interp)" = "n = 42, s = hi, sum = 3" ] &&
   [ "$(printf '1 + 2\n"x"\n' | "$root/$OUT/s2" repl)" = "3x" ] &&
-  [ "$(printf 'rand_range(1, 7)\n' | "$root/$OUT/s2" repl)" = "5" ] ) ||
+  [ "$(printf 'rand_range(1, 7)\n' | "$root/$OUT/s2" repl)" = "5" ] &&
+  # A soft error must be reported once, not twice: the validating fork and
+  # then the real run. Two prints meant the child had accepted the line.
+  [ "$(printf 'nosuchfn(1)\n1 + 1\n' | "$root/$OUT/s2" repl 2>&1 |
+       grep -c "undefined function 'nosuchfn'")" = "1" ] &&
+  [ "$(printf 'nosuchfn(1)\n1 + 1\n' | "$root/$OUT/s2" repl 2>/dev/null)" = "2" ] &&
+  # :type on a broken expression prints the diagnostic and no invented type.
+  [ -z "$(printf ':type nosuchfn(1)\n' | "$root/$OUT/s2" repl 2>/dev/null)" ] ) ||
 	fail "interpolation or the repl misbehaves"
+printf '    ok\n'
+
+step "soft errors are reported together and never reach a binary"
+cat > "$tmp2/softmulti.qela" <<'EOF'
+import "std/io.qela";
+fn main() int {
+	nosuchfn(1);
+	alsosuchfn(2);
+	return 0;
+}
+EOF
+# One run reports every mistake (a hard error stopped at the first), and no
+# binary, interpreter run or directory build may consume a tree whose
+# offending calls were poisoned to literals. The jit fallback is pinned
+# separately by tests/dynforeign.qela, which the corpus runs with QELAPATH.
+( cd "$tmp2" &&
+  n=$("$root/$OUT/s2" softmulti.qela -o softmulti 2>&1 | grep -c "undefined function") &&
+  [ "$n" -ge 2 ] &&
+  [ ! -f softmulti ] &&
+  ! "$root/$OUT/s2" irun softmulti.qela 2>/dev/null &&
+  mkdir -p sdir &&
+  cp softmulti.qela sdir/main.qela &&
+  ! "$root/$OUT/s2" sdir -o sdirprog 2>/dev/null &&
+  [ ! -f sdirprog ] ) ||
+	fail "a soft error leaked past a compile, irun or 'qela .'"
 printf '    ok\n'
 
 
