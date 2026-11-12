@@ -578,13 +578,6 @@ fn add_dataref(v *Var) {
 		push_reloc(at, v.name, REL_PCREL32);
 		return;
 	}
-	if (v.extern && !v.has_init) {
-		var sb Buf;
-		fmt_str(&sb, "extern '");
-		fmt_str(&sb, v.name);
-		fmt_str(&sb, "' is not linked (extern needs -c and the linker)");
-		error_at(v.pos, buf_str(&sb));
-	}
 	if (base_is_wide()) {
 		b1(0x48);
 		b1(0xb8);
