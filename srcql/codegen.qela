@@ -248,6 +248,34 @@ fn arg_direct_ok(a *Node) bool {
 // other side): scalar float arguments land in xmm registers with their own
 // counter, and the integer arguments are packed into the GPR registers by
 // their own counter, exactly as SysV classifies them.
+// How a small all-float struct crosses the extern boundary. x86's SysV
+// classifies by 8-byte chunks (one xmm register per chunk, regardless of
+// the field widths inside); AAPCS64 and LP64D pass an HFA one element per
+// FP register, sized by the field type -- {f32,f32} travels in s0/s1, not
+// in one d0. Mixed-width fields are rejected (v1). Returns
+// (unit << 32) | count, where unit is the bytes per register and count
+// the register count; 0 when the struct keeps taking the integer path.
+fn agg_fp_shape(ty *Type) i64 {
+	if (ty as i64 == 0 || ty.kind != TY_STRUCT || ty.size < 1 || ty.size > 16) { return 0; }
+	var es i64 = 0;
+	var n i64 = 0;
+	var m *Member = ty.members;
+	while (m as i64 != 0) {
+		if (!is_float(m.ty)) { return 0; }
+		if (es == 0) { es = m.ty.size as i64; }
+		else if (es != m.ty.size as i64) { return 0; }
+		n = n + 1;
+		m = m.next;
+	}
+	if (es == 0) { return 0; }
+	if (opt_target == TARGET_X86_64) { return (8 << 32) | ((ty.size as i64 + 7) >> 3); }
+	if (es == 8) { return (8 << 32) | n; }
+	return (4 << 32) | n;
+}
+
+fn agg_fp_unit(shape i64) i64 { return shape >> 32; }
+fn agg_fp_count(shape i64) i64 { return shape & 0xffffffff; }
+
 fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) int {
 	var dest [14]int;
 	var src [14]i64;
@@ -340,6 +368,61 @@ fn gen_args(n *Node, sys bool, first_in_rax bool, hidden i64, marshall bool) int
 			nd = nd + 1;
 			ri = ri + 1;
 		} else if (is_aggregate(a.ty)) {
+			// An extern call passes an all-float struct by its FP
+			// classification: one register per unit (SysV's 8-byte SSE
+			// chunk on x86, one HFA element on ARM64/RISC-V). Each unit
+			// is pushed like a scalar float and the pop loop below moves
+			// it into the FP register file with its own counter.
+			var shape i64 = 0;
+			if (marshall) { shape = agg_fp_shape(a.ty); }
+			if (shape != 0) {
+				if (a.stack_tmp as i64 != 0) {
+					error_at(a.pos, "an all-float struct argument cannot spill (pass it earlier)");
+				}
+				var unit i64 = agg_fp_unit(shape);
+				var count i64 = agg_fp_count(shape);
+				if (opt_target == TARGET_ARM64 && unit == 4) {
+					// An HFA of f32 elements: ARM64's 64-bit ldr cannot
+					// address a 4-byte offset (the imm is off/8), so each
+					// element loads with a 32-bit ldr straight into its
+					// s-register, off the staging stack entirely.
+					var w i64 = 0;
+					while (w < count) {
+						arm64_ldw_off(X9, X0, w * 4);
+						arm64_fmov_from_gpr(w as int, X9, 4);
+						w = w + 1;
+					}
+					xi = xi + count;
+					a = a.next;
+					continue;
+				}
+				if (opt_target == TARGET_RISCV64 && unit == 4) {
+					// Same shape on LP64D: each element in its own 32-bit
+					// fa-register; the load's I-type offset is fine.
+					var w i64 = 0;
+					while (w < count) {
+						riscv_ld_at(T0, A0, w * 4);
+						riscv_fmv_wx_to_f(FA0 + w, T0, 4);
+						w = w + 1;
+					}
+					xi = xi + count;
+					a = a.next;
+					continue;
+				}
+				var w i64 = 0;
+				while (w < count) {
+					ir_push_at_acc(w * unit, a.pos);
+					fmm[nd] = xi;
+					fsz[nd] = unit as int;
+					xi = xi + 1;
+					dest[nd] = RAX;
+					src[nd] = 0;
+					nd = nd + 1;
+					w = w + 1;
+				}
+				a = a.next;
+				continue;
+			}
 			// v1 never spills a >8-byte, <=16-byte (2-word) aggregate --
 			// parse.qela rejects that -- so a spilled aggregate here is
 			// always a single word.
@@ -689,6 +772,57 @@ fn gen_call(n *Node) {
 		if (opt_target == TARGET_ARM64) { arm64_fmov_to_gpr(X0, 0, n.ty.size); }
 		else if (opt_target == TARGET_RISCV64) { riscv_fmv_f_to_wx(A0, FA0, n.ty.size); }
 		else { xmm_to_gpr(RAX, 0, n.ty.size); }
+	}
+	// An all-float struct result arrives in the FP registers: word 0 in
+	// the first (SysV: 8-byte chunks in xmm0/xmm1; AAPCS64/LP64D: one HFA
+	// element per s/d/fa register, up to four for a 16-byte f32 struct).
+	if (marshall && !ret_mem && agg_fp_shape(n.ty) != 0) {
+		var unit i64 = agg_fp_unit(agg_fp_shape(n.ty));
+		var count i64 = agg_fp_count(agg_fp_shape(n.ty));
+		if (unit == 4 && opt_target != TARGET_X86_64) {
+			// f32 HFA elements arrive one per 32-bit FP register; pair
+			// them into the 8-byte words the aggregate path below expects
+			// (X0 low / X1 high on ARM64, A0/A1 on RISC-V).
+			var r i64 = 0;
+			while (r < count && r < 4) {
+				if (opt_target == TARGET_ARM64) { arm64_fmov_to_gpr(X0 + r, r as int, 4); }
+				else { riscv_fmv_f_to_wx(A0 + r, FA0 + r, 4); }
+				r = r + 1;
+			}
+			if (count >= 2) {
+				if (opt_target == TARGET_ARM64) {
+					b4(0xd3607c21);                       // lsl x1, x1, #32
+					arm64_alu_reg(ALU_OR, X0, X0, X1);
+				} else {
+					riscv_slli(A1, A1, 32);
+					riscv_alu_reg(ALU_OR, A0, A0, A1);
+				}
+			}
+			if (count >= 4) {
+				if (opt_target == TARGET_ARM64) {
+					b4(0xd3607c63);                       // lsl x3, x3, #32
+					arm64_alu_reg(ALU_OR, X2, X2, X3);
+					arm64_mov_reg(X1, X2);
+				} else {
+					riscv_slli(A3, A3, 32);
+					riscv_alu_reg(ALU_OR, A2, A2, A3);
+					riscv_mov_reg(A1, A2);
+				}
+			}
+		} else {
+			var r i64 = 0;
+			while (r < count && r < 4) {
+				if (opt_target == TARGET_ARM64) { arm64_fmov_to_gpr(X0 + r, r as int, unit); }
+				else if (opt_target == TARGET_RISCV64) { riscv_fmv_f_to_wx(A0 + r, FA0 + r, unit); }
+				else {
+					// SysV returns at most two 8-byte chunks, in xmm0/xmm1,
+					// which land in rax and rdx -- not rax and rbx.
+					if (r == 0) { xmm_to_gpr(RAX, 0, 8); }
+					else { xmm_to_gpr(RDX, 1, 8); }
+				}
+				r = r + 1;
+			}
+		}
 	}
 	// A marshalled sret callee writes through the hidden pointer and leaves
 	// the accumulator dead; Qela's own ABI hands the buffer address back in
@@ -2690,6 +2824,27 @@ fn gen_epilogue(pos i64) {
 		else if (opt_target == TARGET_ARM64) { arm64_fmov_from_gpr(0, X0, gen_fn.ret.size); }
 		else { gpr_to_xmm(0, RAX, gen_fn.ret.size); }
 	}
+	// An all-float struct return: the body left the units in the
+	// accumulator and the registers after it (RDX on x86; X1/X2/X3 and
+	// A1/A2/A3 on ARM64/RISC-V); the FP file expects one unit per
+	// register from the first on.
+	if (gen_fn.extern && gen_fn.ret as i64 != 0 && agg_fp_shape(gen_fn.ret) != 0) {
+		var shape i64 = agg_fp_shape(gen_fn.ret);
+		var unit i64 = agg_fp_unit(shape);
+		var count i64 = agg_fp_count(shape);
+		var r i64 = 0;
+		while (r < count && r < 4) {
+			var src i64 = RAX + r;
+			if (opt_target == TARGET_X86_64) {
+				if (r == 1) { src = RDX; }
+				if (r >= 2) { break; }
+			}
+			if (opt_target == TARGET_RISCV64) { riscv_fmv_wx_to_f(FA0 + r, src, unit); }
+			else if (opt_target == TARGET_ARM64) { arm64_fmov_from_gpr(r as int, src, unit); }
+			else { gpr_to_xmm(r as int, src, unit); }
+			r = r + 1;
+		}
+	}
 	if (!gen_frameless && opt_target == TARGET_RISCV64) { riscv_leave_frame(); }
 	else if (!gen_frameless && opt_target == TARGET_ARM64) { arm64_leave_frame(); }
 	else if (!gen_frameless) { b1(0xc9); }
@@ -2732,6 +2887,9 @@ fn gen_extern_params(f *Func) {
 		var v *Var = func_param(f, i);
 		if (v.arg_stack) { i = i + 1; continue; }
 		if (is_float(v.ty)) { i = i + 1; continue; }
+		// An all-float struct rides the FP registers, not the GPRs -- it
+		// consumes nothing here and comes out of the FP file below.
+		if (agg_fp_shape(v.ty) != 0) { i = i + 1; continue; }
 		if (is_aggregate(v.ty) && !v.by_ref && v.ty.size > 8) { nreg = nreg + 2; }
 		else { nreg = nreg + 1; }
 		i = i + 1;
@@ -2753,6 +2911,27 @@ fn gen_extern_params(f *Func) {
 			xi = xi + 1;
 			if (v.has_reg) { mov_reg_reg(v.reg, RAX); }
 			else { st_local(v.offset as i64, RAX); }
+		} else if (agg_fp_shape(v.ty) != 0) {
+			// The parameter arrives in the FP registers, one unit per
+			// register (SysV's 8-byte chunks on x86, one HFA element on
+			// ARM64/RISC-V), and lands in the slot pair the two-word
+			// integer path below uses: the low half at v.offset - 8, the
+			// high half at v.offset (a 16-byte struct), or the single
+			// slot at v.offset (an 8-byte one).
+			var shape i64 = agg_fp_shape(v.ty);
+			var unit i64 = agg_fp_unit(shape);
+			var count i64 = agg_fp_count(shape);
+			var base i64 = v.offset as i64;
+			if (v.ty.size > 8) { base = base - 8; }
+			var r i64 = 0;
+			while (r < count && r < 4) {
+				if (opt_target == TARGET_ARM64) { arm64_fmov_to_gpr(X0, r as int, unit); }
+				else if (opt_target == TARGET_RISCV64) { riscv_fmv_f_to_wx(A0, FA0 + r, unit); }
+				else { xmm_to_gpr(RAX, r as int, unit); }
+				st_local(base + r * unit, RAX);
+				r = r + 1;
+			}
+			xi = xi + count;
 		} else if (is_aggregate(v.ty) && !v.by_ref && v.ty.size > 8) {
 			pop_reg(RAX);
 			pop_reg(RDX);
@@ -2777,8 +2956,8 @@ fn gen_extern_params(f *Func) {
 // their frame slots, and an sret pointer arrives in x8 rather than the
 // first argument register. No re-staging pass is needed (unlike x86):
 // loading one integer parameter's register can never clobber a later one,
-// and the FP file is never written. Aggregate floats (a struct of floats,
-// AAPCS64's HFA) are not marshalled.
+// and the FP file is never written. An all-float struct is AAPCS64's HFA:
+// it arrives in consecutive d-registers, one 8-byte word per register.
 fn gen_extern_params_arm64(f *Func) {
 	var ri int = 0;
 	var fi int = 0;
@@ -2794,6 +2973,19 @@ fn gen_extern_params_arm64(f *Func) {
 			fi = fi + 1;
 			if (v.has_reg) { arm64_mov_reg(v.reg, X0); }
 			else { arm64_st_local(v.offset as i64, X0); }
+		} else if (agg_fp_shape(v.ty) != 0) {
+			var shape i64 = agg_fp_shape(v.ty);
+			var unit i64 = agg_fp_unit(shape);
+			var count i64 = agg_fp_count(shape);
+			var base i64 = v.offset as i64;
+			if (v.ty.size > 8) { base = base - 8; }
+			var r i64 = 0;
+			while (r < count && r < 4) {
+				arm64_fmov_to_gpr(X0, r as int, unit);
+				arm64_st_local(base + r * unit, X0);
+				r = r + 1;
+			}
+			fi = fi + count;
 		} else if (is_aggregate(v.ty) && !v.by_ref && v.ty.size > 8) {
 			arm64_st_local(v.offset as i64, call_reg(ri));
 			arm64_st_local((v.offset as i64) - 8, call_reg(ri + 1));
