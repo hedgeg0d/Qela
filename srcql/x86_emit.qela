@@ -1173,10 +1173,23 @@ fn direct_operand(n *Node) IrOperand {
 
 
 fn cmp_at_rax_imm(ty *Type, v i64) {
-	if (ty.size == 1) { b1(0x80); modrm(0, 7, RAX); b1(v); return; }
-	if (ty.size == 2) { b1(0x66); b1(0x81); modrm(0, 7, RAX); b1(v); b1(v >> 8); return; }
-	if (ty.size == 4) { b1(0x81); modrm(0, 7, RAX); b4(v); return; }
-	b1(0x48); b1(0x81); modrm(0, 7, RAX); b4(v);
+	x86_cmp_mem_imm(ty, v, RAX, 0);
+}
+
+fn x86_cmp_mem_imm(ty *Type, v i64, base int, disp i64) {
+	if (ty.size == 2) { b1(0x66); }
+	var rex i64 = 0x40;
+	if (ty.size == 8) { rex = rex | 8; }
+	if (base >= 8) { rex = rex | 1; }
+	if (rex != 0x40) { b1(rex); }
+	if (ty.size == 1) { b1(0x80); x86_mem_modrm(7, base, disp); b1(v); return; }
+	if (v >= -128 && v <= 127) {
+		b1(0x83); x86_mem_modrm(7, base, disp); b1(v);
+	} else {
+		b1(0x81); x86_mem_modrm(7, base, disp);
+		if (ty.size == 2) { b1(v); b1(v >> 8); }
+		else { b4(v); }
+	}
 }
 
 
@@ -2154,11 +2167,76 @@ fn x86_lower_op(op *IrOp) {
 }
 
 
+// Fold an address-only prefix into a scalar load or a memory comparison.
+// No label, call or other consumer may intervene. Loads replace RAX;
+// gen_compare's memory form consumes the address only for its flags.
+fn x86_fold_mem(op *IrOp) *IrOp {
+	var base int = RAX;
+	var disp i64 = 0;
+	var end *IrOp = op;
+	if (op.dst.kind == OP_ACC) {
+		if (op.kind == IR_LOAD && op.src0.kind == OP_VREG) {
+			base = op.src0.reg;
+			end = op.next;
+		} else if (op.kind == IR_LEA && op.src0.kind == OP_STACKSLOT && op.src1.kind == OP_NONE) {
+			base = RBP;
+			disp = -op.src0.off;
+			end = op.next;
+		}
+	}
+	while (end as i64 != 0 && end.kind == IR_LEA &&
+	       end.dst.kind == OP_ACC && end.src0.kind == OP_ACC && end.src1.kind == OP_NONE) {
+		if (!fits_imm32(end.dst.off) || !fits_imm32(disp)) { return null; }
+		disp = disp + end.dst.off;
+		end = end.next;
+	}
+	if (end == op || end as i64 == 0 || !fits_imm32(disp)) { return null; }
+	if (end.kind == IR_LOAD && end.dst.kind == OP_ACC && end.src0.kind == OP_ACC) {
+		x86_load_mem(end.dst.ty, base, disp);
+	} else if (end.kind == IR_CMP && end.src0.kind == OP_MEM && end.src1.kind == OP_IMM) {
+		x86_cmp_mem_imm(end.src0.ty, end.src1.off, base, disp);
+	} else { return null; }
+	return end;
+}
+
+fn x86_load_mem(ty *Type, base int, disp i64) {
+	var wide bool = ty.size == 8 || (!ty.is_unsigned && ty.kind != TY_BOOL && ty.kind != TY_FLOAT);
+	var rex i64 = 0x40;
+	if (wide) { rex = rex | 8; }
+	if (base >= 8) { rex = rex | 1; }
+	if (rex != 0x40) { b1(rex); }
+	if (ty.size == 1 || ty.size == 2) {
+		b1(0x0f);
+		var opcode i64 = 0xb6;
+		if (wide) { opcode = 0xbe; }
+		if (ty.size == 2) { opcode = opcode + 1; }
+		b1(opcode);
+	} else if (ty.size == 4 && wide) { b1(0x63); }
+	else { b1(0x8b); }
+	x86_mem_modrm(RAX, base, disp);
+}
+
+fn x86_mem_modrm(reg int, base int, disp i64) {
+	var mode int = 0;
+	if (disp != 0 || (base & 7) == RBP) {
+		mode = 2;
+		if (disp >= -128 && disp <= 127) { mode = 1; }
+	}
+	modrm(mode, reg, base);
+	if ((base & 7) == RSP) { b1(0x24); }
+	if (mode == 1) { b1(disp); }
+	if (mode == 2) { b4(disp); }
+}
+
 fn ir_flush() {
 	if (ir_flushing) { return; }	ir_flushing = true;
 	if (opt_target == TARGET_ARM64) { arm64_pool_pass(ir_head); }
 	var op *IrOp = ir_head;
 	while (op as i64 != 0) {
+		if (opt_target == TARGET_X86_64) {
+			var folded *IrOp = x86_fold_mem(op);
+			if (folded as i64 != 0) { op = folded.next; continue; }
+		}
 		if (opt_target == TARGET_ARM64 && arm64_cmp_zero_branch(op)) {
 			op = op.next.next;
 			continue;
