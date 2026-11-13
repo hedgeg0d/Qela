@@ -5801,6 +5801,14 @@ fn splice_import(tok *Token, path str, pos i64) *Token {
 	if (file_exists(path)) {
 		isrc = read_file(path);
 	} else {
+		if (absorbed_find(path, &isrc)) {
+			var afid int = diag_add_file(path, isrc);
+			var ahead *Token = lex(isrc, (afid as i64) << FILE_SHIFT);
+			var atail *Token = ahead;
+			while (atail.next as i64 != 0 && atail.next.kind != TK_EOF) { atail = atail.next; }
+			atail.next = tok;
+			return ahead;
+		}
 		var bi int = blob_find(path);
 		if (bi < 0) {
 			emsg("cannot open "); emsg(path); efail(pos);

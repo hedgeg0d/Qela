@@ -146,9 +146,21 @@ qela repl                   # one-liner REPL: type an expression, see its value
 qela test file.qela         # run file, check its // expect-* comments (section 21)
 qela fmt file.qela          # reformat over the token stream, idempotent
 qela doc std name           # look up a /// doc comment by name (fuzzy)
+qela absorb somelib/        # embed a package into this qela executable
+qela absorbed               # list embedded packages
+qela absorbed drop [name]   # remove one package, or all when name is omitted
 qela --lsp                  # language server: diagnostics, hover, go-to-def
 qela --dump-std <module>    # print a standard module's embedded source
 ```
+
+`absorb` stores every `.qela` file below a directory under its basename:
+`qela absorb vendor/somelib/` supplies imports such as
+`import "somelib/http.qela"` even when the directory is absent. Files on
+disk take priority, so the same package can still be edited locally. The
+default atomically replaces the running compiler; `-o ./qela+` writes a new
+compiler instead. `qela absorbed drop somelib` removes that package, while
+`qela absorbed drop` removes the complete user archive and restores the
+original compiler bytes.
 
 Flags: `-g` (DWARF for gdb), `--backtrace`, `--no-bounds-checks`,
 `--no-warn`, `--color=auto|always|never`, `-o <file>`, `--target, -t <t>`
