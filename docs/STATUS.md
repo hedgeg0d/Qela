@@ -19,7 +19,59 @@ server conversation.
 
 ## Done
 
-**Versioning: `qela --version` (2026-08-16).** The compiler knows what
+**The missing-features batch (2026-08-16).** Six items that were on the
+"крупные фишки" list, each landed with the gate green (S2 == S3, corpus,
+interp, ffi-test on all three targets) and its own S2_arm64 measurement.
+
+- **Versioning** — `qela --version`, alpha-0.1.0, single source
+  `qela_version()` in comp.qela. S2 +664 B.
+- **JSON field tags** — `x i64 "json-key"` renames the key in both
+  directions, `"-"` omits the field; a plain field tag on `Member`.
+  S2 +384 B. `tests/jsontag.qela`.
+- **Generics** — four type parameters (explicit slots, stage0 has no
+  arrays in structs) and constraints `struct Foo(V: str)`: the argument
+  must be the type or an implicit widening of it, checked at concrete
+  instantiation. S2 +2 920 B. `tests/generic4.qela`,
+  `tests/generic4reject.qela`.
+- **`~` beyond locals** — the dynamic type in parameters (the callee
+  deep-copies the box at entry via `dyn_clone_into(x, &x)`, so writing the
+  parameter never frees the caller's payload), struct fields, array
+  elements and return types (values box at the return site); plain call
+  arguments auto-box into `~` parameters; `DynVal` grew a `size` field to
+  make the runtime copy possible; dyn-to-dyn assignment stays rejected, as
+  does `extern` and global `~`. S2 +2 144 B. `tests/dynsig.qela`.
+- **Comptime constants** — `$c("1 + 41")` folds a constant expression at
+  parse time (lex, parse, eval_const): arithmetic, bit ops, comparisons,
+  ternary, sizeof, casts and constant-global references; nothing of the
+  expression ships. S2 +968 B. `tests/comptimec.qela`.
+- **Overloads** — several functions share a name; the call picks the best
+  argument match (exact beats implicit widening, ties keep the first
+  declared). Resolution happens in type.qela and the chosen function rides
+  the call node (`Node.ovfunc`); the call fixup records the resolved
+  function so the patch pass does not re-resolve by name; reachability
+  marks it; identical signatures stay a redefinition error. S2 +1 272 B.
+  `tests/overload.qela`.
+- **All-float structs over the extern boundary** — `Vec2f`/`Vec2d` and
+  friends cross as SysV SSE chunks on x86 (8 bytes per xmm) and one HFA
+  element per FP register on ARM64/RISC-V (an f32 element is 32 bits in
+  its own s/fa register — ARM64's 64-bit ldr cannot address a 4-byte
+  offset, so f32 HFAs load straight into the FP file), both directions,
+  including exported Qela functions returning them (the epilogue packs
+  rax/rdx back into the FP registers and pairs f32 elements with
+  lsl+orr). S2 +1 272 B. The ffi-test grew Vec2f/Vec2d cases, verified on
+  all three targets. **A pre-existing linker bug fell out of this**: the
+  ARM64 ADRP patch rounded to the *nearest* page (`(s+0x800) & ~0xfff`)
+  instead of down, which is right only while a target's low 12 bits stay
+  under 0x800 — the added code shifted the data segment past that and
+  every linked-object data reference landed one page high, crashing under
+  qemu. Fixed in linker.qela to `s & ~0xfff`.
+
+S2 742 216 -> 753 456 B (+11 240 across the six). Corpus 202 -> 208.
+arm64 959 680 -> 974 488 B (92.9% of the 1 MiB budget; about 74 KB of
+headroom left -- enough for one more mid-size feature, not for full
+preemption).
+
+ The compiler knows what
 it is. One source of truth: `fn qela_version()` in `srcql/comp.qela`
 returns the version string (a plain function-returning-literal, because a
 global `let` of a string is rejected — the constant-expression checker
