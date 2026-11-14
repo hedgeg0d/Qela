@@ -1,0 +1,138 @@
+import "buf.qela";
+import "fmt.qela";
+import "net.qela";
+
+// A minimal HTTP/1.1 server on top of std/net.qela: one request per
+// accepted connection, method/path/body extracted, a canned response
+// built from a status code. Headers beyond Content-Length are not
+// parsed -- the body is whatever Content-Length promises (chunked
+// transfer and keep-alive are not supported; every response closes the
+// connection).
+
+/// A parsed HTTP request: the method, the request target and the body.
+struct HttpReq {
+	method str,
+	path  str,
+	body  str,
+}
+
+/// The status phrase for a code, or a generic fallback.
+fn http_status_text(code i64) str {
+	if (code == 200) { return "OK"; }
+	if (code == 201) { return "Created"; }
+	if (code == 204) { return "No Content"; }
+	if (code == 400) { return "Bad Request"; }
+	if (code == 403) { return "Forbidden"; }
+	if (code == 404) { return "Not Found"; }
+	if (code == 405) { return "Method Not Allowed"; }
+	if (code == 500) { return "Internal Server Error"; }
+	if (code == 501) { return "Not Implemented"; }
+	return "Unknown";
+}
+
+// Reads from the socket until the request head is complete, then the
+// body. buf must be large enough for the head; returns a null request
+// on a closed connection or a malformed head.
+fn http_recv_req(fd i64, buf *u8, cap i64) HttpReq {
+	var req HttpReq;
+	var n i64 = 0;
+	while (true) {
+		if (n >= cap) { return req; }
+		var got i64 = net_recv(fd, buf + n, cap - n);
+		if (got <= 0) { return req; }
+		n = n + got;
+		// Head complete at "\r\n\r\n" (or the bare "\n\n" some clients
+		// send).
+		var i i64 = 1;
+		var done bool = false;
+		while (i < n) {
+			if (buf[i] == '\n' && buf[i - 1] == '\n') { done = true; }
+			else if (i >= 3 && buf[i] == '\n' && buf[i - 1] == '\r' &&
+			         buf[i - 2] == '\n' && buf[i - 3] == '\r') { done = true; }
+			if (done) { break; }
+			i = i + 1;
+		}
+		if (!done) { continue; }
+		var head_end i64 = i + 1;
+		// The request line: METHOD SP TARGET SP HTTP/x.y
+		var line_end i64 = 0;
+		while (line_end < n && buf[line_end] != '\n') { line_end = line_end + 1; }
+		var sp1 i64 = 0;
+		while (sp1 < line_end && buf[sp1] != ' ' && buf[sp1] != '\t') { sp1 = sp1 + 1; }
+		var sp2 i64 = sp1 + 1;
+		while (sp2 < line_end && buf[sp2] != ' ' && buf[sp2] != '\t') { sp2 = sp2 + 1; }
+		if (sp1 == 0 || sp2 <= sp1 + 1) { return req; }
+		var m str;
+		m.ptr = &buf[0];
+		m.len = sp1;
+		var p str;
+		p.ptr = &buf[sp1 + 1];
+		p.len = sp2 - sp1 - 1;
+		req.method = m;
+		req.path = p;
+
+		// Content-Length: header value, if present.
+		var cl i64 = 0;
+		var h i64 = line_end + 1;
+		while (h < head_end) {
+			if (buf[h] == 'C' || buf[h] == 'c') {
+				if (h + 14 <= head_end) {
+					var lc bool = true;
+					var j i64 = 0;
+					var low = "content-length";
+					while (j < 14) {
+						var c u8 = buf[h + j];
+						if (c >= 'A' && c <= 'Z') { c = (c as i64 + 32) as u8; }
+						if (c != low.ptr[j]) { lc = false; }
+						j = j + 1;
+					}
+					if (lc) {
+						var k i64 = h + 14;
+						if (k < head_end && buf[k] == ':') {
+							k = k + 1;
+							while (k < head_end && (buf[k] == ' ' || buf[k] == '\t')) { k = k + 1; }
+							var v i64 = 0;
+							while (k < head_end && buf[k] >= '0' && buf[k] <= '9') {
+								v = v * 10 + (buf[k] as i64 - '0' as i64);
+								k = k + 1;
+							}
+							cl = v;
+						}
+					}
+				}
+			}
+			h = h + 1;
+		}
+		// Read the body.
+		if (cl > 0) {
+			var body str;
+			body.ptr = &buf[head_end];
+			body.len = cl;
+			while (n < head_end + cl) {
+				var got2 i64 = net_recv(fd, buf + n, cap - n);
+				if (got2 <= 0) { return req; }
+				n = n + got2;
+			}
+			req.body = body;
+		}
+		return req;
+	}
+}
+
+/// Writes a full response and closes the connection.
+fn http_respond(fd i64, code i64, ctype str, body str) {
+	var b Buf;
+	fmt_str(&b, "HTTP/1.1 ");
+	fmt_i64(&b, code);
+	buf_u8(&b, ' ');
+	fmt_str(&b, http_status_text(code));
+	fmt_str(&b, "\r\nContent-Type: ");
+	fmt_str(&b, ctype);
+	fmt_str(&b, "\r\nContent-Length: ");
+	fmt_i64(&b, body.len);
+	fmt_str(&b, "\r\nConnection: close\r\n\r\n");
+	fmt_str(&b, body);
+	var out str = buf_str(&b);
+	net_send(fd, out);
+	net_close(fd);
+}

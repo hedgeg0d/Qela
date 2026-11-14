@@ -1,0 +1,274 @@
+import "buf.qela";
+
+// SHA-256, FIPS 180-4. Output is the lowercase hex digest of the input
+// bytes, 64 characters. Everything is pure integer math on i64 holding
+// 32-bit unsigned values -- every operation masks back to 32 bits, and
+// the unsigned right shift is spelled (x >> n) & 0xffffffff.
+
+let SHA_K0  = 0x428a2f98;
+let SHA_K1  = 0x71374491;
+let SHA_K2  = 0xb5c0fbcf;
+let SHA_K3  = 0xe9b5dba5;
+let SHA_K4  = 0x3956c25b;
+let SHA_K5  = 0x59f111f1;
+let SHA_K6  = 0x923f82a4;
+let SHA_K7  = 0xab1c5ed5;
+let SHA_K8  = 0xd807aa98;
+let SHA_K9  = 0x12835b01;
+let SHA_K10 = 0x243185be;
+let SHA_K11 = 0x550c7dc3;
+let SHA_K12 = 0x72be5d74;
+let SHA_K13 = 0x80deb1fe;
+let SHA_K14 = 0x9bdc06a7;
+let SHA_K15 = 0xc19bf174;
+let SHA_K16 = 0xe49b69c1;
+let SHA_K17 = 0xefbe4786;
+let SHA_K18 = 0x0fc19dc6;
+let SHA_K19 = 0x240ca1cc;
+let SHA_K20 = 0x2de92c6f;
+let SHA_K21 = 0x4a7484aa;
+let SHA_K22 = 0x5cb0a9dc;
+let SHA_K23 = 0x76f988da;
+let SHA_K24 = 0x983e5152;
+let SHA_K25 = 0xa831c66d;
+let SHA_K26 = 0xb00327c8;
+let SHA_K27 = 0xbf597fc7;
+let SHA_K28 = 0xc6e00bf3;
+let SHA_K29 = 0xd5a79147;
+let SHA_K30 = 0x06ca6351;
+let SHA_K31 = 0x14292967;
+let SHA_K32 = 0x27b70a85;
+let SHA_K33 = 0x2e1b2138;
+let SHA_K34 = 0x4d2c6dfc;
+let SHA_K35 = 0x53380d13;
+let SHA_K36 = 0x650a7354;
+let SHA_K37 = 0x766a0abb;
+let SHA_K38 = 0x81c2c92e;
+let SHA_K39 = 0x92722c85;
+let SHA_K40 = 0xa2bfe8a1;
+let SHA_K41 = 0xa81a664b;
+let SHA_K42 = 0xc24b8b70;
+let SHA_K43 = 0xc76c51a3;
+let SHA_K44 = 0xd192e819;
+let SHA_K45 = 0xd6990624;
+let SHA_K46 = 0xf40e3585;
+let SHA_K47 = 0x106aa070;
+let SHA_K48 = 0x19a4c116;
+let SHA_K49 = 0x1e376c08;
+let SHA_K50 = 0x2748774c;
+let SHA_K51 = 0x34b0bcb5;
+let SHA_K52 = 0x391c0cb3;
+let SHA_K53 = 0x4ed8aa4a;
+let SHA_K54 = 0x5b9cca4f;
+let SHA_K55 = 0x682e6ff3;
+let SHA_K56 = 0x748f82ee;
+let SHA_K57 = 0x78a5636f;
+let SHA_K58 = 0x84c87814;
+let SHA_K59 = 0x8cc70208;
+let SHA_K60 = 0x90befffa;
+let SHA_K61 = 0xa4506ceb;
+let SHA_K62 = 0xbef9a3f7;
+let SHA_K63 = 0xc67178f2;
+
+let SHA_H0 = 0x6a09e667;
+let SHA_H1 = 0xbb67ae85;
+let SHA_H2 = 0x3c6ef372;
+let SHA_H3 = 0xa54ff53a;
+let SHA_H4 = 0x510e527f;
+let SHA_H5 = 0x9b05688c;
+let SHA_H6 = 0x1f83d9ab;
+let SHA_H7 = 0x5be0cd19;
+
+fn sha_rotr(x i64, n i64) i64 {
+	return ((x >> n) | (x << (32 - n))) & 0xffffffff;
+}
+
+fn sha_k(i i64) i64 {
+	if (i == 0)  { return SHA_K0; }
+	if (i == 1)  { return SHA_K1; }
+	if (i == 2)  { return SHA_K2; }
+	if (i == 3)  { return SHA_K3; }
+	if (i == 4)  { return SHA_K4; }
+	if (i == 5)  { return SHA_K5; }
+	if (i == 6)  { return SHA_K6; }
+	if (i == 7)  { return SHA_K7; }
+	if (i == 8)  { return SHA_K8; }
+	if (i == 9)  { return SHA_K9; }
+	if (i == 10) { return SHA_K10; }
+	if (i == 11) { return SHA_K11; }
+	if (i == 12) { return SHA_K12; }
+	if (i == 13) { return SHA_K13; }
+	if (i == 14) { return SHA_K14; }
+	if (i == 15) { return SHA_K15; }
+	if (i == 16) { return SHA_K16; }
+	if (i == 17) { return SHA_K17; }
+	if (i == 18) { return SHA_K18; }
+	if (i == 19) { return SHA_K19; }
+	if (i == 20) { return SHA_K20; }
+	if (i == 21) { return SHA_K21; }
+	if (i == 22) { return SHA_K22; }
+	if (i == 23) { return SHA_K23; }
+	if (i == 24) { return SHA_K24; }
+	if (i == 25) { return SHA_K25; }
+	if (i == 26) { return SHA_K26; }
+	if (i == 27) { return SHA_K27; }
+	if (i == 28) { return SHA_K28; }
+	if (i == 29) { return SHA_K29; }
+	if (i == 30) { return SHA_K30; }
+	if (i == 31) { return SHA_K31; }
+	if (i == 32) { return SHA_K32; }
+	if (i == 33) { return SHA_K33; }
+	if (i == 34) { return SHA_K34; }
+	if (i == 35) { return SHA_K35; }
+	if (i == 36) { return SHA_K36; }
+	if (i == 37) { return SHA_K37; }
+	if (i == 38) { return SHA_K38; }
+	if (i == 39) { return SHA_K39; }
+	if (i == 40) { return SHA_K40; }
+	if (i == 41) { return SHA_K41; }
+	if (i == 42) { return SHA_K42; }
+	if (i == 43) { return SHA_K43; }
+	if (i == 44) { return SHA_K44; }
+	if (i == 45) { return SHA_K45; }
+	if (i == 46) { return SHA_K46; }
+	if (i == 47) { return SHA_K47; }
+	if (i == 48) { return SHA_K48; }
+	if (i == 49) { return SHA_K49; }
+	if (i == 50) { return SHA_K50; }
+	if (i == 51) { return SHA_K51; }
+	if (i == 52) { return SHA_K52; }
+	if (i == 53) { return SHA_K53; }
+	if (i == 54) { return SHA_K54; }
+	if (i == 55) { return SHA_K55; }
+	if (i == 56) { return SHA_K56; }
+	if (i == 57) { return SHA_K57; }
+	if (i == 58) { return SHA_K58; }
+	if (i == 59) { return SHA_K59; }
+	if (i == 60) { return SHA_K60; }
+	if (i == 61) { return SHA_K61; }
+	if (i == 62) { return SHA_K62; }
+	return SHA_K63;
+}
+
+// Global scratch: sha256 is not re-entrant. block is passed by pointer
+// (u8-indexing works on pointers; array parameters do not exist).
+var sha_w [64]i64;
+var sha_h [8]i64;
+
+fn sha_block(block *u8) {
+	var i i64 = 0;
+	while (i < 16) {
+		var j i64 = i * 4;
+		sha_w[i] = ((block[j] as i64) << 24) | ((block[j + 1] as i64) << 16) |
+		       ((block[j + 2] as i64) << 8) | (block[j + 3] as i64);
+		i = i + 1;
+	}
+	i = 16;
+	while (i < 64) {
+		var s0 = sha_rotr(sha_w[i - 15], 7) ^ sha_rotr(sha_w[i - 15], 18) ^ ((sha_w[i - 15] >> 3) & 0xffffffff);
+		var s1 = sha_rotr(sha_w[i - 2], 17) ^ sha_rotr(sha_w[i - 2], 19) ^ ((sha_w[i - 2] >> 10) & 0xffffffff);
+		sha_w[i] = (sha_w[i - 16] + s0 + sha_w[i - 7] + s1) & 0xffffffff;
+		i = i + 1;
+	}
+	var a = sha_h[0];
+	var b = sha_h[1];
+	var c = sha_h[2];
+	var d = sha_h[3];
+	var e = sha_h[4];
+	var f = sha_h[5];
+	var g = sha_h[6];
+	var hh = sha_h[7];
+	i = 0;
+	while (i < 64) {
+		var s1 = sha_rotr(e, 6) ^ sha_rotr(e, 11) ^ sha_rotr(e, 25);
+		var ch = (e & f) ^ ((~e & 0xffffffff) & g);
+		var t1 = (hh + s1 + ch + sha_k(i) + sha_w[i]) & 0xffffffff;
+		var s0 = sha_rotr(a, 2) ^ sha_rotr(a, 13) ^ sha_rotr(a, 22);
+		var maj = (a & b) ^ (a & c) ^ (b & c);
+		var t2 = (s0 + maj) & 0xffffffff;
+		hh = g;
+		g = f;
+		f = e;
+		e = (d + t1) & 0xffffffff;
+		d = c;
+		c = b;
+		b = a;
+		a = (t1 + t2) & 0xffffffff;
+		i = i + 1;
+	}
+	sha_h[0] = (sha_h[0] + a) & 0xffffffff;
+	sha_h[1] = (sha_h[1] + b) & 0xffffffff;
+	sha_h[2] = (sha_h[2] + c) & 0xffffffff;
+	sha_h[3] = (sha_h[3] + d) & 0xffffffff;
+	sha_h[4] = (sha_h[4] + e) & 0xffffffff;
+	sha_h[5] = (sha_h[5] + f) & 0xffffffff;
+	sha_h[6] = (sha_h[6] + g) & 0xffffffff;
+	sha_h[7] = (sha_h[7] + hh) & 0xffffffff;
+}
+
+/// Returns the SHA-256 hex digest of the input bytes.
+fn sha256(data str) str {
+	sha_h[0] = SHA_H0;
+	sha_h[1] = SHA_H1;
+	sha_h[2] = SHA_H2;
+	sha_h[3] = SHA_H3;
+	sha_h[4] = SHA_H4;
+	sha_h[5] = SHA_H5;
+	sha_h[6] = SHA_H6;
+	sha_h[7] = SHA_H7;
+	// Full blocks.
+	var off i64 = 0;
+	var full = (data.len >> 6) << 6;
+	while (off < full) {
+		sha_block(data.ptr + off);
+		off = off + 64;
+	}
+
+	// The final padded block (or two, when the length does not fit the
+	// first padding block): 0x80, zeros to byte 56, then the 64-bit
+	// bit length, big-endian.
+	var tail [128]u8;
+	var n i64 = 0;
+	while (n < data.len - off) {
+		tail[n] = data.ptr[off + n];
+		n = n + 1;
+	}
+	tail[n] = 0x80;
+	n = n + 1;
+	var bitlen = data.len << 3;
+	if (n > 56) {
+		// The length would not fit this block: hash it, start a fresh one.
+		var z i64 = n;
+		while (z < 64) { tail[z] = 0; z = z + 1; }
+		sha_block(&tail[0]);
+		n = 0;
+	}
+	var z i64 = n;
+	while (z < 56) { tail[z] = 0; z = z + 1; }
+	var nb i64 = 0;
+	while (nb < 8) {
+		tail[56 + nb] = 0;
+		nb = nb + 1;
+	}
+	var bb i64 = 0;
+	while (bb < 8) {
+		tail[56 + bb] = ((bitlen >> (56 - bb * 8)) & 255) as u8;
+		bb = bb + 1;
+	}
+	sha_block(&tail[0]);
+
+	var b Buf;
+	var hi i64 = 0;
+	while (hi < 8) {
+		var v = sha_h[hi];
+		var nib i64 = 0;
+		while (nib < 8) {
+			var digit = (v >> (28 - nib * 4)) & 15;
+			if (digit < 10) { buf_u8(&b, ('0' as i64 + digit) as u8); }
+			else { buf_u8(&b, ('a' as i64 + digit - 10) as u8); }
+			nib = nib + 1;
+		}
+		hi = hi + 1;
+	}
+	return buf_str(&b);
+}
