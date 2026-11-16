@@ -269,8 +269,11 @@ compiled bytes cross the boundary, not the calls). A build today embeds
 *today's* `qela`; upgrading the installed compiler later doesn't change
 already-shipped binaries — a feature (reproducibility), not a bug.
 
-**Implemented so far is the pre-embedding half of this, not the embedding
-itself** — worth being precise about, since it's a real, load-bearing
+**Historical note (superseded 2026-08-09):** this paragraph described the
+pre-embedding half, not the embedding itself. The self-embedding path is now
+implemented; the current behavior is documented in the "Self-embedding"
+entry below. It remains worth being precise about, since it was a real,
+load-bearing
 correction to this section. `/proc/self/exe` only resolves to *the process
 reading it* — at the *host program's own runtime*, that's the host, never
 `qela`. The self-copy therefore has two halves that were conflated above:
@@ -281,17 +284,12 @@ materializes that embedded copy via `memfd_create()`+`fexecve()` and never
 needs to resolve a path at all — the "reproducibility" property above only
 holds once (a) exists, since only then are the bytes frozen at build time
 rather than whatever `qela` happens to be installed when the host runs.
-Half (a) is not built — it needs a general "embed an arbitrary byte blob
-into the output ELF" primitive that does not exist yet (`elf.qela` embeds
-*qela's own* std/ as string literals via `genblob.py`, at qela's own build
-time, which is a different thing). Until it exists, `std/eval.qela`'s
-`abi_spawn()` does the honest fallback instead: `$QELAPATH`, then a `$PATH`
-search for `qela`, then an actionable error — the host needs a real `qela`
-install reachable at its own runtime. This is a real, working, tested
-mechanism (see "What's implemented" below); it is just not yet the
-zero-install, frozen-at-build-time version this section originally
-described. `sys_memfd_create`/`sys_fexecve` (in `std/sys.qela`, done) are
-exactly what half (b) will need once half (a) exists.
+Half (a) was not built at that point — it needed a general "embed an arbitrary
+byte blob into the output ELF" primitive. That primitive and the
+`memfd_create`/`fexecve` path are now implemented (see "Self-embedding" below).
+`abi_spawn()` still keeps the `$QELAPATH`/`$PATH` fallback for binaries that do
+not carry an embedded compiler, so this document describes both supported
+deployment modes.
 
 ## What's implemented (2026-08-08)
 
@@ -582,12 +580,11 @@ earlier in this section:
   unit, not an ABI-server session, and should reject unresolved names
   exactly like the `-c` path already does.
 
-**`parse_ast`/`run_ast` — done**, scoped to a single expression for now
-(not statements or declarations — `parse_ast` rejects anything that
-doesn't classify as a bare expression, the same classification `eval`
-already uses internally). `parse_ast(src) *Ast` fork-validates, parses
-and type-checks the expression once on the child (wrapped as `__abi_result
-= (src);`, the same trick `eval`'s `EXPR` path already used) and caches
+**Historical v1 note (superseded 2026-08-09).** `parse_ast`/`run_ast` was
+initially scoped to a single expression. It now accepts statement sequences
+and blocks; the current public AST API is documented below in the completed
+items. `parse_ast(src) *Ast` fork-validates, parses and type-checks the input
+once on the child and caches
 the resulting `Node` behind an incrementing handle
 (`AstEntry`/`ast_store`/`ast_find` in `srcql/main.qela`); `*Ast` itself is
 a tiny arena-allocated struct on the host side holding just that handle
@@ -601,10 +598,8 @@ motivation — "cache a parsed form and run it repeatedly with different
 bindings") is real and verified: `parse_ast("price * 2")` then
 `run_ast(a)` gives `20` when `price == 10`, then `eval("price = 100;")`,
 then `run_ast(a)` on the *same handle* gives `200` — no reparse. AST
-inspection/mutation (walking or editing the cached tree from host code)
-does not exist — deliberately out of scope, same reasoning the original
-design gave: "its own real sub-effort — a stable, ergonomic AST API is
-more design work than the ABI plumbing itself."
+inspection/mutation was not part of that initial v1. It is now public through
+`ast_info`, `ast_child`, `ast_next` and type-checked `ast_set`.
 
 **Self-embedding the compiler into the output — done** (2026-08-09). A
 program that pulls in the runtime ABI now carries the compiler's own
@@ -711,10 +706,8 @@ materialised copy and sends the whole object back; the host's generated
 dispatchers build and decode the payloads per type. A self-recursive
 `dynamic` function always fell back to `interpreted` (a call to itself
 is a relocation like any other call) — fixed the same day, it JITs in
-place now; `parse_ast` is expression-only; and there is no AST
-inspection/mutation API. None of these are safety gaps — every one of
-them is a clean, reported rejection or fallback, never silent wrong
-behavior.
+place now. The following `parse_ast` and AST-API claims described that
+earlier snapshot; both are complete as recorded in items 4 and 5 below.
 
 ## Size measurements (real numbers, not estimates)
 
