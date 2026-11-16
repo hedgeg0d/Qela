@@ -9,21 +9,20 @@ history; the numbers in this section are the current snapshot.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **779 784 B** (74.4% of the 1 MiB budget) |
-| stage1 sources | 32 689 lines of Qela |
+| **S2 — the shipped compiler, Qela compiled by itself** | **797 432 B** (76.0% of the 1 MiB budget) |
+| stage1 sources | 33 344 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
-| ARM64 self-hosted compiler | **917 080 B** (87.5% of the 1 MiB budget), fixed point intact |
+| ARM64 self-hosted compiler | **937 232 B** (89.4% of the 1 MiB budget), fixed point intact |
 
-The last successful gate verifies S2 == S3 byte-for-byte, the 216-test corpus under S2, the embedded stdlib resolving outside the source tree,
+The last successful gate verifies S2 == S3 byte-for-byte, the 221-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
 backtrace, interpolation and the repl, the compiler flags (`-g`,
 `--backtrace`, `--no-bounds-checks`, `--dump-std`), and a scripted language
 server conversation.
 
-On the current workspace, `make build` reproduced the fixed point at 779 784 B.
-The local sandbox cannot bind loopback sockets, so `tests/http.qela` and
-`tests/netproc.qela` exit at `net_listen`; this is an environment failure, not
-a changed compiler result. The last unrestricted gate remains 212/212.
+On the current workspace, `make build` reproduced the fixed point at 797 432 B,
+with the corpus at 221/221 compiled and 200/200 under `qela irun`, and the
+loopback tests (`http`, `netproc`) binding and passing here.
 
 ## Done
 
