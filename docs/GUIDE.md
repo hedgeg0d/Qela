@@ -365,11 +365,12 @@ for the moment of an operation, so parameters, returns, struct fields and
 arrays work like any 4- or 8-byte value. (On the `extern` boundary — a call
 to or from a C function — scalar floats marshal into the SysV XMM registers
 instead, so `f32`/`f64` arguments and results cross into C directly; an
-extern function whose parameters would spill to the stack is a compile
-error.) Interpolation prints floats (`"${a}"` → `1.5`), and `comptime`
-supports float literals, arithmetic, negation and comparisons. Decimal
+all-float struct that would spill past the FP registers is a compile error
+(pass it earlier). Integer and two-word aggregate arguments that spill move
+to the stack exactly as SysV lays them out.) Interpolation prints floats
+(`"${a}"` → `1.5`). Decimal
 literals retain subnormals; fixed-point printing rounds to nearest with ties
-to even.
+to even. (Comptime folding itself stays integer-only — see section 16.)
 
 
 ## 5. Variables
@@ -1320,7 +1321,9 @@ let bytes = $c("sizeof(Pair(i64)) * 2");
 ```
 
 The expression is evaluated while parsing; no evaluator or expression code is
-emitted into the resulting program.
+emitted into the resulting program. The folding is integer-only: a float
+literal or arithmetic inside a comptime block is an error, since the
+evaluator lives in the bootstrap subset where stage0 has no float.
 
 ## 17. assert, panic, and bounds checks
 
