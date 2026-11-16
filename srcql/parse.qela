@@ -1353,6 +1353,13 @@ fn parse_primary(t **Token) *Node {
 		// variable is in scope by the time the element parses.
 		var comp_for *Token = arrlit_has_for(*t);
 		if (comp_for as i64 != 0) { return parse_comprehension(t, p, *t, comp_for); }
+		// An array literal may coerce into a slice that outlives this frame
+		// -- a return, a struct field, a call argument. Only the type pass
+		// knows whether it does, and it runs after the token stream is done
+		// -- so the arena import is requested here and lands at the next
+		// top-level splice point. Over-triggering is free: mark_reachable
+		// drops arena_alloc when nothing coerced.
+		need_arena = true;
 		var n *Node = new_node(ND_ARRLIT, p);
 		var head Node;
 		var tail *Node = &head;
@@ -5867,7 +5874,11 @@ fn parse(tok *Token) *Unit {
 		}
 		if (need_arena) {
 			need_arena = false;
-			tok = splice_import(tok, "std/arena.qela", tok.pos);
+			// A user-defined arena_alloc (same name, same contract) wins:
+			// splicing std's on top of it would be a redefinition error.
+			if (find_func("arena_alloc") as i64 == 0) {
+				tok = splice_import(tok, "std/arena.qela", tok.pos);
+			}
 		}
 		if (need_interp) {
 			need_interp = false;
