@@ -9,10 +9,10 @@ history; the numbers in this section are the current snapshot.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **779 712 B** (74.4% of the 1 MiB budget) |
+| **S2 — the shipped compiler, Qela compiled by itself** | **779 784 B** (74.4% of the 1 MiB budget) |
 | stage1 sources | 32 689 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
-| ARM64 self-hosted compiler | **916 984 B** (87.5% of the 1 MiB budget), fixed point intact |
+| ARM64 self-hosted compiler | **917 080 B** (87.5% of the 1 MiB budget), fixed point intact |
 
 The last successful gate verifies S2 == S3 byte-for-byte, the 216-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
@@ -20,7 +20,7 @@ backtrace, interpolation and the repl, the compiler flags (`-g`,
 `--backtrace`, `--no-bounds-checks`, `--dump-std`), and a scripted language
 server conversation.
 
-On the current workspace, `make build` reproduced the fixed point at 779 712 B.
+On the current workspace, `make build` reproduced the fixed point at 779 784 B.
 The local sandbox cannot bind loopback sockets, so `tests/http.qela` and
 `tests/netproc.qela` exit at `net_listen`; this is an environment failure, not
 a changed compiler result. The last unrestricted gate remains 212/212.
@@ -54,7 +54,7 @@ cross-compiled for ARM64 running under qemu got x86 JIT code and died on the
 first instruction. The parent now announces its compile target to the child
 before the bundle, and the child parses and JITs with it. That closes the same
 documented qemu limitation that covered the riscv64 eval tests. Gate: `make
-build` green (S2 == S3 at 779 712 B), corpus 216/216 compiled and 195/195
+build` green (S2 == S3 at 779 784 B), corpus 216/216 compiled and 195/195
 interpreted, torture 200/200, subset clean; ARM64 fixed point intact at
 916 984 B; the ARM qemu corpus is fully green (211/211), and riscv64's
 (203/203) — eval tests included — for the first time since they were added.
