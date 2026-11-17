@@ -9,10 +9,10 @@ history; the numbers in this section are the current snapshot.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **756 424 B** (72.1% of the 1 MiB budget) |
+| **S2 — the shipped compiler, Qela compiled by itself** | **755 272 B** (72.0% of the 1 MiB budget) |
 | stage1 sources | 33 344 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
-| ARM64 self-hosted compiler | **896 256 B** (85.5% of the 1 MiB budget), fixed point intact |
+| ARM64 self-hosted compiler | **894 440 B** (85.3% of the 1 MiB budget), fixed point intact |
 
 The last successful gate verifies S2 == S3 byte-for-byte, the 222-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
@@ -20,7 +20,7 @@ backtrace, interpolation and the repl, the compiler flags (`-g`,
 `--backtrace`, `--no-bounds-checks`, `--dump-std`), and a scripted language
 server conversation.
 
-On the current workspace, `make build` reproduced the fixed point at 756 424 B,
+On the current workspace, `make build` reproduced the fixed point at 755 272 B,
 with the corpus at 222/222 compiled and 201/201 under `qela irun`, and the
 loopback tests (`http`, `netproc`) binding and passing here.
 
