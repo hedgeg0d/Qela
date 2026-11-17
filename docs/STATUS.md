@@ -9,9 +9,10 @@ history; the numbers in this section are the current snapshot.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 46 696 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **778 544 B** (74.2% of the 1 MiB budget) |
+| **S2 — the shipped compiler, Qela compiled by itself** | **779 152 B** (74.3% of the 1 MiB budget) |
 | stage1 sources | 32 689 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **231%**, or **192%** without bounds checks (M4 gate wants ≤150%) |
+| ARM64 self-hosted compiler | **916 344 B** (87.4% of the 1 MiB budget), fixed point intact |
 
 The last successful gate verifies S2 == S3 byte-for-byte, the 216-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
@@ -19,7 +20,7 @@ backtrace, interpolation and the repl, the compiler flags (`-g`,
 `--backtrace`, `--no-bounds-checks`, `--dump-std`), and a scripted language
 server conversation.
 
-On the current workspace, `make build` reproduced the fixed point at 778 544 B.
+On the current workspace, `make build` reproduced the fixed point at 779 152 B.
 The local sandbox cannot bind loopback sockets, so `tests/http.qela` and
 `tests/netproc.qela` exit at `net_listen`; this is an environment failure, not
 a changed compiler result. The last unrestricted gate remains 212/212.
@@ -42,6 +43,41 @@ Gate: 215/215 compiled, 194/194 interpreted, FFI on all three targets, torture
 (interp_marshal SIGILL, jsonmarshal SIGSEGV, signal timeout) reproduce with the
 old compiler unchanged. Full measurements and rejected experiments are in
 this file.
+
+## Done
+
+**The ARM64 corpus red items (2026-08-17).** Two of the three ARM64 corpus
+failures the size batch carried were real bugs; both are fixed, pinned and
+gated. The third is a qemu artifact, not a codegen bug. Gate: `make build`
+green (S2 == S3 at 779 152 B), corpus 216/216 compiled and 195/195 interpreted,
+torture 200/200, subset clean; ARM64 fixed point intact at 916 344 B; ARM qemu
+corpus 210 passed, 1 failed (the environmental one).
+
+- **`signal` timed out on ARM64/RISC-V.** `sig_restore` (`std/signal.qela`)
+  hardcoded `syscall(SYS_RT_SIGRETURN)` — x86's syscall number 15, which on the
+  generic table is `lremovexattr`. The handler ran, then `rt_sigreturn` was a
+  bogus syscall and the restore looped forever. The naked restorer now picks
+  `SYS_RT_SIGRETURN_N` (139) on non-x86 via the same `$if (TARGET != "x86_64")`
+  splice `sys.qela`'s wrappers use. Pinned by `tests/signal.qela` on x86, arm64
+  and riscv64.
+- **`jsonmarshal` SIGSEGV'd on ARM64.** The push/pop pooling pass
+  (`arm64_emit.qela`) could stage a call argument's by-ref pointer in X1, then
+  the OP2-override flush (`mov x1, ov`, emitted when a later op wrote the
+  staging register) overwrote it — the argument staging for a by-ref aggregate
+  followed by a value expression put both in x1, so `fmt_put_i64` received
+  `q.y` as its buffer pointer and `buf_grow` dereferenced 7. The pass now
+  refuses to pool a push into the live OP2 staging register (the flush trigger),
+  and retires pending X1 homes at the rare non-push flush points (memcpy/
+  store2), reserving X1 until OP2 is redefined. The surgical shape measured
+  *smaller* than the baseline: ARM64 919 512 -> 916 344 B. Pinned by
+  `tests/jsonmarshal.qela` and a minimized `json_unmarshal` + interpolation
+  case (`mini4`).
+- **`interp_marshal` SIGILL on ARM64 is environmental.** Under qemu, the
+  abi-server child's `host_arch()` reports the x86 host, so it JIT-compiles
+  dynamic functions to x86 code; the ARM64 parent runs it and dies on the first
+  instruction (`udf`). On real ARM hardware the child defaults to arm64 and the
+  test passes; the same limitation already covers riscv64's eval tests in the
+  docs. Not a codegen bug; needs a real-device run to go green under qemu.
 
 ## Done
 
