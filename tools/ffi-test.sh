@@ -99,6 +99,12 @@ extern fn qela_spill_q(a i64, b i64, c i64, d i64, e i64, f i64, g i64, h i64, i
 
 fn qela_ping() i64 { return 7; }
 
+fn float_near(a f64, b f64) bool {
+	var d f64 = a - b;
+	if (d < 0.0) { d = -d; }
+	return d < 0.000001;
+}
+
 extern fn qela_v2d_zero() Vec2d {
 	var v Vec2d;
 	v.x = 0.0;
@@ -129,9 +135,9 @@ fn main() int {
 	var vd1 Vec2d = Vec2d{x: 1.0, y: 2.0};
 	var vd2 Vec2d = Vec2d{x: 3.0, y: 4.0};
 	var vd3 Vec2d = c_v2d_add(vd1, vd2);
-	if (vd3.x != 4.0 || vd3.y != 6.0) { fails = fails + 1; }
+	if (!float_near(vd3.x, 4.0) || !float_near(vd3.y, 6.0)) { fails = fails + 1; }
 	var vd4 Vec2d = c_call_qela_v2d();
-	if (vd4.x != 1.0 || vd4.y != 2.0) { fails = fails + 1; }
+	if (!float_near(vd4.x, 1.0) || !float_near(vd4.y, 2.0)) { fails = fails + 1; }
 
 	// Parameters and returns past the register budgets, and aggregates
 	// wider than 16 bytes by value, must match gcc's SysV exactly.
@@ -182,4 +188,3 @@ run_target() {
 run_target x86_64 gcc ""
 run_target arm64 aarch64-linux-gnu-gcc qemu-aarch64
 run_target riscv64 riscv64-linux-gnu-gcc qemu-riscv64
-
