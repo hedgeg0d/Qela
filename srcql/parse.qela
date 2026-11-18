@@ -4610,18 +4610,126 @@ fn interp_emit_tmpl(b *Buf, tm *Tmpl) {
 	else { interp_emit_enum_body(b, tm.proto); }
 }
 
+// A type the blob has to define: a named struct or enum, not a generic
+// instantiation (those come after, from tmpls).
+fn interp_emittable(nt *Named) bool {
+	if (str_find(nt.name, '(' as u8) >= 0) { return false; }
+	var nty *Type = nt.ty;
+	if (nty.kind == TY_STRUCT && nty.members as i64 != 0) { return true; }
+	if (nty.kind == TY_ENUM && nty.variants as i64 != 0) { return true; }
+	return false;
+}
+
+fn interp_emit_named(b *Buf, nt *Named) {
+	if (nt.ty.kind == TY_STRUCT) { interp_emit_struct(b, nt.ty); }
+	else { interp_emit_enum(b, nt.ty); }
+}
+
+// Whether the named type a member type mentions is already emitted.
+// Scalars, anonymous types, generics and the type itself count as ready:
+// only a *different* named struct or enum can hold the emission back.
+fn interp_dep_ready(t *Type, self *Type, order *i64, done *u8, total i64) bool {
+	var b *Type = t;
+	while (b as i64 != 0 && (b.kind == TY_PTR || b.kind == TY_SLICE || b.kind == TY_ARRAY)) {
+		b = b.base;
+	}
+	if (b as i64 == 0) { return true; }
+	if (b.kind == TY_FUNC) {
+		var m *Member = b.members;
+		while (m as i64 != 0) {
+			if (!interp_dep_ready(m.ty, self, order, done, total)) { return false; }
+			m = m.next;
+		}
+		return interp_dep_ready(b.base, self, order, done, total);
+	}
+	if (b.kind != TY_STRUCT && b.kind != TY_ENUM) { return true; }
+	if (b as i64 == self as i64) { return true; }
+	var i i64 = 0;
+	while (i < total) {
+		var o *Named = (order[i]) as *Named;
+		if (o.ty as i64 == b as i64) { return done[i] != 0; }
+		i = i + 1;
+	}
+	return true;
+}
+
+fn interp_nt_ready(nt *Named, order *i64, done *u8, total i64) bool {
+	var m *Member = nt.ty.members;
+	while (m as i64 != 0) {
+		if (!interp_dep_ready(m.ty, nt.ty, order, done, total)) { return false; }
+		m = m.next;
+	}
+	if (nt.ty.kind == TY_ENUM) {
+		var v *Variant = nt.ty.variants;
+		while (v as i64 != 0) {
+			var f *Member = v.fields;
+			while (f as i64 != 0) {
+				if (!interp_dep_ready(f.ty, nt.ty, order, done, total)) { return false; }
+				f = f.next;
+			}
+			v = v.next;
+		}
+	}
+	return true;
+}
+
 fn interp_emit_types(b *Buf) {
+	// The blob compiles on its own, so its types come in definition order:
+	// named_types prepends, newest first, and has to be walked back to
+	// front for the blob to honour the same define-before-use rule the
+	// plain compile path gets from the merged file order. Definition order
+	// already settles every legal reference; the passes only untangle the
+	// odd forward one instead of hanging on it.
+	var total i64 = 0;
 	var nt *Named = named_types;
 	while (nt as i64 != 0) {
-		var nty *Type = nt.ty;
-		if (str_find(nt.name, '(' as u8) < 0) {
-			if (nty.kind == TY_STRUCT && nty.members as i64 != 0) {
-				interp_emit_struct(b, nty);
-			} else if (nty.kind == TY_ENUM && nty.variants as i64 != 0) {
-				interp_emit_enum(b, nty);
-			}
+		if (interp_emittable(nt)) { total = total + 1; }
+		nt = nt.next;
+	}
+	var order *i64 = arena_alloc(total * 8 + 8, 8) as *i64;
+	var done *u8 = arena_alloc(total + 8, 8) as *u8;
+	var i i64 = 0;
+	while (i < total) { done[i] = 0; i = i + 1; }
+	var fill i64 = total;
+	nt = named_types;
+	while (nt as i64 != 0) {
+		if (interp_emittable(nt)) {
+			fill = fill - 1;
+			order[fill] = nt as i64;
 		}
 		nt = nt.next;
+	}
+	var left i64 = total;
+	while (left > 0) {
+		var progressed bool = false;
+		i = 0;
+		while (i < total) {
+			if (done[i] == 0) {
+				var cur *Named = (order[i]) as *Named;
+				if (interp_nt_ready(cur, order, done, total)) {
+					interp_emit_named(b, cur);
+					done[i] = 1;
+					left = left - 1;
+					progressed = true;
+				}
+			}
+			i = i + 1;
+		}
+		if (!progressed) {
+			// A reference cycle: emit the first one left rather than hang.
+			// The blob still fails on it, but it fails loudly.
+			i = 0;
+			while (i < total) {
+				if (done[i] == 0) {
+					var cur2 *Named = (order[i]) as *Named;
+					interp_emit_named(b, cur2);
+					done[i] = 1;
+					left = left - 1;
+					break;
+				}
+				i = i + 1;
+			}
+		}
 	}
 	var tml *Tmpl = tmpls;
 	while (tml as i64 != 0) {
