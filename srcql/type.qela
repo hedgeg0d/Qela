@@ -2977,6 +2977,15 @@ fn type_interp(n *Node) {
 	while (p as i64 != 0) {
 		var part *Node = p.lhs;
 		var fname str;
+		if (part.ty == ty_poison) {
+			// The part's own error is already reported and its node was
+			// poisoned to a literal; complaining again here would put a
+			// useless "cannot interpolate a value of type 'poison'" on top
+			// of it. The part contributes nothing to the format chain, and
+			// the compile fails on the first error anyway.
+			p = p.next;
+			continue;
+		}
 		// A format spec on an expression part picks its own fmt function;
 		// literal parts and the unspec'd types fall through below.
 		if (p.val == 0 && p.name.len > 0) {
