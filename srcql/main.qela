@@ -856,6 +856,11 @@ fn repl_run_source(src str, name str, path_a bool) {
 	var t *Token = toks;
 	resolve_comptime(&t);
 	while (t.kind != TK_EOF) {
+		// A sequence typed at a prompt may end in `};` or `;;`. The language
+		// has no empty statement, so the stray semicolon used to be a parse
+		// error reported *after* the statements before it had already run;
+		// the eval loop skips it instead. Real mistakes still parse the same.
+		if (jit_punct(t, ";")) { t = t.next; continue; }
 		var n *Node = parse_stmt(&t);
 		while (n as i64 != 0) {
 			add_type(n);
@@ -1889,7 +1894,33 @@ fn abi_has_stmt_semi(src str) bool {
 // expression statement is captured by the parse_ast handler itself (the
 // AST-based `ast_take_tail_expr`), which rewires the parsed chain; a
 // `return` in the sequence stops it, and run_ast takes its value instead.
+// A sequence typed at a prompt often ends in `};` or `;;`, and the language
+// has no empty statement: the stray `;` would be a parse error *after* the
+// statements before it already ran, which is a confusing way to lose a line.
+// Dropping a semicolon that follows a `}` or another `;` costs nothing -- the
+// statements are complete without it -- and the wrapper appends its own.
+fn abi_trim_trailing_semis(src str) str {
+	var end i64 = src.len;
+	while (end > 0) {
+		var j i64 = end;
+		while (j > 0 && (src.ptr[j - 1] == ' ' || src.ptr[j - 1] == '\t' ||
+		                 src.ptr[j - 1] == '\n' || src.ptr[j - 1] == '\r')) {
+			j = j - 1;
+		}
+		if (j == 0 || src.ptr[j - 1] != ';') { break; }
+		var k i64 = j - 1;
+		while (k > 0 && (src.ptr[k - 1] == ' ' || src.ptr[k - 1] == '\t')) { k = k - 1; }
+		if (k == 0) { break; }
+		var pc u8 = src.ptr[k - 1];
+		if (pc != '}' && pc != ';') { break; }
+		end = k - 1;
+	}
+	if (end == src.len) { return src; }
+	return str_slice(src, 0, end);
+}
+
 fn abi_wrap_stmts(src str) str {
+	src = abi_trim_trailing_semis(src);
 	var b Buf;
 	fmt_str(&b, "__abi_result = 0;\n");
 	fmt_str(&b, src);
