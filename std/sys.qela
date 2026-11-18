@@ -116,64 +116,72 @@ let O_WRITE_APPEND = 1089; // O_WRONLY | O_CREAT | O_APPEND
 fn sys_read(fd i64, buf *u8, n i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_READ_N, fd, buf as i64, n);
+	} $else {
+		return syscall(SYS_READ, fd, buf as i64, n);
 	}
-	return syscall(SYS_READ, fd, buf as i64, n);
 }
 
 /// Writes n bytes to fd; returns bytes written or an errno.
 fn sys_write(fd i64, buf *u8, n i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_WRITE_N, fd, buf as i64, n);
+	} $else {
+		return syscall(SYS_WRITE, fd, buf as i64, n);
 	}
-	return syscall(SYS_WRITE, fd, buf as i64, n);
 }
 
 /// Opens path read-only; returns a descriptor or an errno.
 fn sys_open_read(path *u8) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_OPENAT_N, AT_FDCWD, path as i64, 0, 0);
+	} $else {
+		return syscall(SYS_OPEN, path as i64, 0, 0);
 	}
-	return syscall(SYS_OPEN, path as i64, 0, 0);
 }
 
 /// Opens path for writing, truncating; returns a descriptor or an errno.
 fn sys_open_exec(path *u8) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_OPENAT_N, AT_FDCWD, path as i64, O_WRITE_NEW, 493);
+	} $else {
+		return syscall(SYS_OPEN, path as i64, O_WRITE_NEW, 493);
 	}
-	return syscall(SYS_OPEN, path as i64, O_WRITE_NEW, 493);
 }
 
 /// Opens path for appending; returns a descriptor or an errno.
 fn sys_open_append(path *u8) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_OPENAT_N, AT_FDCWD, path as i64, O_WRITE_APPEND, 493);
+	} $else {
+		return syscall(SYS_OPEN, path as i64, O_WRITE_APPEND, 493);
 	}
-	return syscall(SYS_OPEN, path as i64, O_WRITE_APPEND, 493);
 }
 
 /// Closes a descriptor; returns 0 or an errno.
 fn sys_close(fd i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_CLOSE_N, fd, 0, 0);
+	} $else {
+		return syscall(SYS_CLOSE, fd, 0, 0);
 	}
-	return syscall(SYS_CLOSE, fd, 0, 0);
 }
 
 /// Maps n anonymous read-write bytes; returns the address or an errno.
 fn sys_mmap_anon(n i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_MMAP_N, 0, n, 3, 34, -1, 0);
+	} $else {
+		return syscall(SYS_MMAP, 0, n, 3, 34, -1, 0);
 	}
-	return syscall(SYS_MMAP, 0, n, 3, 34, -1, 0);
 }
 
 /// Unmaps n bytes at addr; returns 0 or an errno.
 fn sys_munmap(addr i64, n i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_MUNMAP_N, addr, n, 0);
+	} $else {
+		return syscall(SYS_MUNMAP, addr, n, 0);
 	}
-	return syscall(SYS_MUNMAP, addr, n, 0);
 }
 
 // A full mmap: an anonymous mapping is sys_mmap_anon(0, n, rw, anon,
@@ -183,8 +191,9 @@ fn sys_munmap(addr i64, n i64) i64 {
 fn sys_mmap(addr i64, len i64, prot i64, flags i64, fd i64, off i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_MMAP_N, addr, len, prot, flags, fd, off);
+	} $else {
+		return syscall(SYS_MMAP, addr, len, prot, flags, fd, off);
 	}
-	return syscall(SYS_MMAP, addr, len, prot, flags, fd, off);
 }
 
 /// Creates a directory; returns 0 or an errno.
@@ -193,8 +202,9 @@ fn sys_mkdir(path *u8) i64 {
 		// mkdirat: the generic number takes dirfd first; the old x86
 		// number is plain mkdir(path, mode). AT_FDCWD = -100.
 		return syscall(SYS_MKDIR_N, -100, path as i64, 0);
+	} $else {
+		return syscall(SYS_MKDIR, path as i64, 0, 0);
 	}
-	return syscall(SYS_MKDIR, path as i64, 0, 0);
 }
 
 /// Removes an empty directory; returns 0 or an errno.
@@ -203,8 +213,9 @@ fn sys_rmdir(path *u8) i64 {
 		// unlinkat(AT_FDCWD, path, AT_REMOVEDIR=0x200): the generic
 		// table has no rmdir.
 		return syscall(SYS_RMDIR_N, -100, path as i64, 0x200);
+	} $else {
+		return syscall(SYS_RMDIR, path as i64, 0, 0);
 	}
-	return syscall(SYS_RMDIR, path as i64, 0, 0);
 }
 
 /// Renames a file, old to new; returns 0 or an errno.
@@ -213,16 +224,18 @@ fn sys_rename(old *u8, new *u8) i64 {
 		// renameat2(AT_FDCWD, old, AT_FDCWD, new, 0): the generic
 		// number takes two dirfds first.
 		return syscall(SYS_RENAME_N, -100, old as i64, -100, new as i64, 0);
+	} $else {
+		return syscall(SYS_RENAME, old as i64, new as i64, 0);
 	}
-	return syscall(SYS_RENAME, old as i64, new as i64, 0);
 }
 
 /// Writes the current working directory into buf; returns length or an errno.
 fn sys_getcwd(buf *u8, n i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_GETCWD_N, buf as i64, n, 0);
+	} $else {
+		return syscall(SYS_GETCWD, buf as i64, n, 0);
 	}
-	return syscall(SYS_GETCWD, buf as i64, n, 0);
 }
 
 // The rt_sigaction layout is the same on every target: handler, flags,
@@ -231,24 +244,27 @@ fn sys_getcwd(buf *u8, n i64) i64 {
 fn sys_rt_sigaction(sig i64, act *u8, old *u8) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_RT_SIGACTION_N, sig, act as i64, old as i64, 8);
+	} $else {
+		return syscall(SYS_RT_SIGACTION, sig, act as i64, old as i64, 8);
 	}
-	return syscall(SYS_RT_SIGACTION, sig, act as i64, old as i64, 8);
 }
 
 /// Sends signal sig to pid; returns 0 or an errno.
 fn sys_kill(pid i64, sig i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_KILL_N, pid, sig, 0);
+	} $else {
+		return syscall(SYS_KILL, pid, sig, 0);
 	}
-	return syscall(SYS_KILL, pid, sig, 0);
 }
 
 /// Restores the interrupted context after a signal handler returns.
 fn sys_sigreturn() i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_RT_SIGRETURN_N, 0, 0, 0);
+	} $else {
+		return syscall(SYS_RT_SIGRETURN, 0, 0, 0);
 	}
-	return syscall(SYS_RT_SIGRETURN, 0, 0, 0);
 }
 
 // Raw x86-64 clone() argument order: flags, child stack top, parent tid
@@ -259,8 +275,9 @@ fn sys_sigreturn() i64 {
 fn sys_clone(flags i64, stack i64, ptid i64, ctid i64, tls i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_CLONE_N, flags, stack, ptid, ctid, tls);
+	} $else {
+		return syscall(SYS_CLONE, flags, stack, ptid, ctid, tls);
 	}
-	return syscall(SYS_CLONE, flags, stack, ptid, ctid, tls);
 }
 
 /// Sets or gets an architecture-specific thread state (x86_64 %fs/%gs).
@@ -272,8 +289,9 @@ fn sys_arch_prctl(code i64, addr i64) i64 {
 fn sys_futex(uaddr *i64, op i64, val i64, timeout i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_FUTEX_N, uaddr as i64, op, val, timeout, 0, 0);
+	} $else {
+		return syscall(SYS_FUTEX, uaddr as i64, op, val, timeout, 0, 0);
 	}
-	return syscall(SYS_FUTEX, uaddr as i64, op, val, timeout, 0, 0);
 }
 
 // Gives up the rest of this thread's timeslice, so a spin-wait doesn't
@@ -282,9 +300,9 @@ fn sys_futex(uaddr *i64, op i64, val i64, timeout i64) i64 {
 fn sys_sched_yield() {
 	$if (TARGET != "x86_64") {
 		syscall(SYS_SCHED_YIELD_N, 0, 0, 0, 0, 0, 0);
-		return;
+	} $else {
+		syscall(SYS_SCHED_YIELD, 0, 0, 0, 0, 0, 0);
 	}
-	syscall(SYS_SCHED_YIELD, 0, 0, 0, 0, 0, 0);
 }
 
 // exit_group, not exit: this ends the whole process, not just the calling
@@ -323,32 +341,36 @@ fn sys_exit_thread(code i64) {
 fn sys_fork() i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_CLONE_N, 17, 0, 0, 0, 0);
+	} $else {
+		return syscall(SYS_FORK, 0, 0, 0);
 	}
-	return syscall(SYS_FORK, 0, 0, 0);
 }
 
 /// Replaces this process image with the program at path.
 fn sys_execve(path *u8, argv *u8, envp *u8) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_EXECVE_N, path as i64, argv as i64, envp as i64);
+	} $else {
+		return syscall(SYS_EXECVE, path as i64, argv as i64, envp as i64);
 	}
-	return syscall(SYS_EXECVE, path as i64, argv as i64, envp as i64);
 }
 
 /// Waits for a child and writes its exit status into status.
 fn sys_wait4(pid i64, status *u8) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_WAIT4_N, pid, status as i64, 0, 0);
+	} $else {
+		return syscall(SYS_WAIT4, pid, status as i64, 0, 0);
 	}
-	return syscall(SYS_WAIT4, pid, status as i64, 0, 0);
 }
 
 /// Removes a file; returns 0 or an errno.
 fn sys_unlink(path *u8) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_UNLINKAT_N, AT_FDCWD, path as i64, 0);
+	} $else {
+		return syscall(SYS_UNLINK, path as i64, 0, 0);
 	}
-	return syscall(SYS_UNLINK, path as i64, 0, 0);
 }
 
 // Reads /proc/self/environ and returns the value of `name` if set, "" if
@@ -400,56 +422,63 @@ fn sys_getenv(name str) str {
 fn sys_getpid() i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_GETPID_N, 0, 0, 0);
+	} $else {
+		return syscall(SYS_GETPID, 0, 0, 0);
 	}
-	return syscall(SYS_GETPID, 0, 0, 0);
 }
 
 /// Fills a stat buf with metadata about path; returns 0 or an errno.
 fn sys_stat(path *u8, buf *u8) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_NEWFSTATAT_N, AT_FDCWD, path as i64, buf as i64, 0);
+	} $else {
+		return syscall(SYS_STAT, path as i64, buf as i64, 0);
 	}
-	return syscall(SYS_STAT, path as i64, buf as i64, 0);
 }
 
 /// Reads a chunk of directory entries from fd into buf.
 fn sys_getdents(fd i64, buf *u8, n i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_GETDENTS_N, fd, buf as i64, n);
+	} $else {
+		return syscall(SYS_GETDENTS, fd, buf as i64, n);
 	}
-	return syscall(SYS_GETDENTS, fd, buf as i64, n);
 }
 
 /// Duplicates descriptor old onto new; returns 0 or an errno.
 fn sys_dup2(old i64, new i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_DUP3_N, old, new, 0);
+	} $else {
+		return syscall(SYS_DUP2, old, new, 0);
 	}
-	return syscall(SYS_DUP2, old, new, 0);
 }
 
 /// TIOCGETS succeeds on a terminal: 0 on a tty, -1 elsewhere.
 fn sys_isatty() i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_IOCTL_N, 0, 0x5401, 0);
+	} $else {
+		return syscall(SYS_IOCTL, 0, 0x5401, 0);
 	}
-	return syscall(SYS_IOCTL, 0, 0x5401, 0);
 }
 
 /// Resolves a symlink into buf; returns length or an errno.
 fn sys_readlink(path *u8, buf *u8, n i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_READLINKAT_N, AT_FDCWD, path as i64, buf as i64, n);
+	} $else {
+		return syscall(SYS_READLINK, path as i64, buf as i64, n);
 	}
-	return syscall(SYS_READLINK, path as i64, buf as i64, n);
 }
 
 /// Creates an anonymous in-memory file; returns its descriptor or an errno.
 fn sys_memfd_create(name *u8, flags i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_MEMFD_CREATE_N, name as i64, flags, 0);
+	} $else {
+		return syscall(SYS_MEMFD_CREATE, name as i64, flags, 0);
 	}
-	return syscall(SYS_MEMFD_CREATE, name as i64, flags, 0);
 }
 
 // execveat with AT_EMPTY_PATH wants a valid pointer to an empty string,
@@ -460,32 +489,36 @@ var fexec_empty [1]u8;
 fn sys_fexecve(fd i64, argv *u8, envp *u8) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_EXECVEAT_N, fd, &fexec_empty[0] as i64, argv as i64, envp as i64, AT_EMPTY_PATH, 0);
+	} $else {
+		return syscall(SYS_EXECVEAT, fd, &fexec_empty[0] as i64, argv as i64, envp as i64, AT_EMPTY_PATH, 0);
 	}
-	return syscall(SYS_EXECVEAT, fd, &fexec_empty[0] as i64, argv as i64, envp as i64, AT_EMPTY_PATH, 0);
 }
 
 /// Creates a pipe; the two ends are written into fds[0] and fds[1].
 fn sys_pipe2(fds *i32, flags i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_PIPE2_N, fds as i64, flags, 0);
+	} $else {
+		return syscall(SYS_PIPE2, fds as i64, flags, 0);
 	}
-	return syscall(SYS_PIPE2, fds as i64, flags, 0);
 }
 
 /// Creates a connected pair of sockets; the two ends go in fds.
 fn sys_socketpair(domain i64, kind i64, protocol i64, fds *i32) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_SOCKETPAIR_N, domain, kind, protocol, fds as i64, 0);
+	} $else {
+		return syscall(SYS_SOCKETPAIR, domain, kind, protocol, fds as i64, 0);
 	}
-	return syscall(SYS_SOCKETPAIR, domain, kind, protocol, fds as i64, 0);
 }
 
 /// Changes the protection of len bytes at addr; returns 0 or an errno.
 fn sys_mprotect(addr i64, len i64, prot i64) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_MPROTECT_N, addr, len, prot);
+	} $else {
+		return syscall(SYS_MPROTECT, addr, len, prot);
 	}
-	return syscall(SYS_MPROTECT, addr, len, prot);
 }
 
 // uname(2): fills the 390-byte struct utsname (six 65-byte fields:
@@ -496,8 +529,9 @@ fn sys_mprotect(addr i64, len i64, prot i64) i64 {
 fn sys_uname(buf *u8) i64 {
 	$if (TARGET != "x86_64") {
 		return syscall(SYS_UNAME_N, buf as i64, 0, 0);
+	} $else {
+		return syscall(SYS_UNAME, buf as i64, 0, 0);
 	}
-	return syscall(SYS_UNAME, buf as i64, 0, 0);
 }
 
 // A syscall whose number is only known at runtime, for srcql/interp.qela:
