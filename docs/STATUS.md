@@ -1,6 +1,6 @@
 # Where the project stands
 
-Updated 2026-08-17 (commit `a393c74`). Read `BOOTSTRAP.md` first; it
+Updated 2026-10-02. Read `BOOTSTRAP.md` first; it
 constrains everything below. The dated entries below are implementation
 history; the numbers in this section are the current snapshot.
 
@@ -9,22 +9,46 @@ history; the numbers in this section are the current snapshot.
 | | |
 |---|---|
 | stage0 (`src/*.c`, the throwaway bootstrap) | 50 792 B |
-| **S2 — the shipped compiler, Qela compiled by itself** | **763 936 B** (72.9% of the 1 MiB budget) |
-| stage1 sources | 33 879 lines of Qela |
+| **S2 — the shipped compiler, Qela compiled by itself** | **712 808 B** (68.0% of the 1 MiB budget) |
+| stage1 sources | 33 957 lines of Qela |
 | Emitted code vs `gcc -Os` on `bench/` | **192%** — the same figure with bounds checks off, since every check in the benchmark is elided (M4 gate wants ≤150%) |
-| ARM64 self-hosted compiler | **899 720 B** (85.8% of the 1 MiB budget), fixed point intact |
+| ARM64 self-hosted compiler | **901 592 B** (86.0% of the 1 MiB budget), fixed point intact |
+| RISC-V64 self-hosted compiler | **916 432 B** (87.4% of the 1 MiB budget), fixed point intact |
 
-The last successful gate verifies S2 == S3 byte-for-byte, the 233-test corpus under S2, the embedded stdlib resolving outside the source tree,
+The last successful gate verifies S2 == S3 byte-for-byte, the 234-test corpus under S2, the embedded stdlib resolving outside the source tree,
 coroutines, channels, the collector, `run`/`fmt`, stdin compilation, the panic
 backtrace, interpolation and the repl, the compiler flags (`-g`,
 `--backtrace`, `--no-bounds-checks`, `--dump-std`), and a scripted language
 server conversation.
 
-On the current workspace, `make build` reproduced the fixed point at 763 936 B,
-with the corpus at 233/233 compiled and 211/211 under `qela irun`, and the
+On the current workspace, `make build` reproduced the fixed point at 712 808 B,
+with the corpus at 234/234 compiled and 212/212 under `qela irun`, and the
 loopback tests (`http`, `netproc`) binding and passing here.
 
 ## Done
+
+**x86 address/load fusion (2026-10-02).** A promoted pointer or a frame
+address, together with constant field and index offsets, now folds into the
+scalar load or the memory-immediate comparison that consumes it. The fold
+stops at any other operation -- a call, a label -- and requires every offset
+and the final displacement to fit in signed 32 bits. Narrow loads keep their
+width and signedness: unsigned ones zero-extend, signed ones sign-extend,
+and a memory comparison against a constant in -128..127 uses sign-extended
+imm8. The shared ModRM emitter handles RBP/R13's mandatory displacement and
+RSP/R12's SIB byte. The shipping compiler shrank 763 936 -> 712 808 B
+(-51 128, -6.7%), which is what this move is about -- the three small M4
+benches stay at 192%, because they index arrays rather than reach constant
+fields, and on identical sources alternating self-compile runs showed no
+slowdown (the difference is inside local noise). `make build` is green
+(S2 == S3), the corpus is 234/234 compiled and 212/212 interpreted, and
+`tests/loadaddr.qela` covers every scalar width and signedness including
+floats, zero and large displacements, negative offsets, nested fields,
+promoted, frame and call bases, and the immediate boundaries. The x86-only
+emitter code also grows the cross compilers -- ARM64 901 592 B, RISC-V64
+916 432 B -- without changing the code they emit for user programs: both
+cross fixed points stay byte-identical and their corpora pass under qemu
+(229/229 and 221/221). `tools/bench-compiler.py` reproduces the timing
+comparison against a saved pre-change compiler.
 
 **ARM64 size batch (2026-08-16).** Five measured optimizations reduced the
 self-hosted ARM64 compiler from 983 000 to 904 400 B (-78 600, 86.2% of the
