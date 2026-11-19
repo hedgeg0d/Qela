@@ -1916,7 +1916,11 @@ fn type_call(n *Node) {
 		fmt_str(&b, "undefined function '");
 		fmt_str(&b, n.name);
 		fmt_str(&b, "'");
-		error_suggest(n.pos, buf_str(&b), suggest_name(n.name));
+		err_soft_suggest(n.pos, buf_str(&b), suggest_name(n.name));
+		n.kind = ND_NUM;
+		n.val = 0;
+		n.ty = ty_poison;
+		return;
 	}
 	if (f.nct == 0) {
 		var ov *Func = overload_pick(n);
