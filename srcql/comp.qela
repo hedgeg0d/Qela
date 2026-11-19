@@ -633,6 +633,7 @@ let CV_FLOAT = 4;
 //
 // std/sys.qela
 //   sys_getenv(name str) str              sys_isatty() i64
+//   sys_isatty_fd(fd i64) i64
 //
 // srcql/diag.qela
 //   set_module_dir(path str)
