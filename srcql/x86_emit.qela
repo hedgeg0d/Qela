@@ -169,6 +169,11 @@ var tls_template_off i64 = 0;
 
 var tls_block_size i64 = 8;
 
+// Bytes of an all-zero template to reserve past the file-backed data, or 0
+// when the template carries real bytes and is emitted in .data like any
+// other initialized global.
+var tls_bss_reserve i64 = 0;
+
 var tls_init_refs I64List;
 
 var tls_stub_at i64 = -1;
