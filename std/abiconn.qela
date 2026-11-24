@@ -58,6 +58,15 @@ let ABI_REQ_AST_SET = 12;
 // may be running arm64/riscv64 code, and a JIT unit of the wrong arch
 // is an illegal instruction in the parent.
 let ABI_REQ_TARGET = 13;
+
+// The child asks whether the host declares a name. Without it a typo in an
+// evaluated line reads as zero: the host used to answer a foreign read with
+// eight zero bytes whether the name existed or not, and the answer for a
+// call was a zero as well.
+let ABI_REQ_HAS = 6;
+// The answer to that, and the answer to a call or a read of a name the host
+// does not declare.
+let ABI_RESP_NONAME = 3;
 $if (TARGET == "arm64") { let ABI_TARGET_BYTE = 1; }
 $if (TARGET == "riscv64") { let ABI_TARGET_BYTE = 2; }
 $if (TARGET == "x86_64") { let ABI_TARGET_BYTE = 0; }
@@ -306,12 +315,11 @@ fn abi_serve_host_req(kind u8, buf *u8, n i64) {
 		gname.len = n;
 		var gr str = __eval_get_dispatch(gname);
 		if (gr.len == 0) {
-			// An unknown name reads as zero, as it always has: the
-			// dispatcher's empty payload would leave the caller's buffer
-			// untouched, so answer the old 8 zero bytes explicitly.
+			// Nothing is declared by that name, and saying so is the point:
+			// the evaluator reports it instead of reading a zero.
 			var zb [8]u8;
 			*(&zb[0] as *i64) = 0;
-			abi_send_frame(abi_in, 1 as u8, &zb[0], 8);
+			abi_send_frame(abi_in, ABI_RESP_NONAME as u8, &zb[0], 8);
 			return;
 		}
 		abi_send_frame(abi_in, 1 as u8, gr.ptr, gr.len);
@@ -330,6 +338,19 @@ fn abi_serve_host_req(kind u8, buf *u8, n i64) {
 		abi_send_frame(abi_in, 1 as u8, &srb[0], 8);
 		return;
 	}
+	if (kind == 6) {
+		var hname str;
+		hname.ptr = buf;
+		hname.len = n;
+		var rb [8]u8;
+		*(&rb[0] as *i64) = 0;
+		if (__eval_has_dispatch(hname)) {
+			abi_send_frame(abi_in, 1 as u8, &rb[0], 8);
+		} else {
+			abi_send_frame(abi_in, ABI_RESP_NONAME as u8, &rb[0], 8);
+		}
+		return;
+	}
 	if (kind != 3) { return; }
 	if (n < 1) { return; }
 	var nlen i64 = buf[0] as i64;
@@ -341,6 +362,12 @@ fn abi_serve_host_req(kind u8, buf *u8, n i64) {
 	// own signature and marshals the return value into `resp`; an unknown
 	// name answers a plain zero, which the caller decodes per its own
 	// expected type (an empty str for a str-typed call).
+	if (!__eval_has_dispatch(name)) {
+		var nb [8]u8;
+		*(&nb[0] as *i64) = 0;
+		abi_send_frame(abi_in, ABI_RESP_NONAME as u8, &nb[0], 8);
+		return;
+	}
 	var resp Buf;
 	var found bool = __eval_call_dispatch(name, buf + 1 + nlen, &resp);
 	if (!found) { buf_u64(&resp, 0); }
@@ -382,7 +409,7 @@ fn abi_wait_result_payload(kind *u8) str {
 			return e;
 		}
 		*kind = k;
-		if (k == 4 || k == 5 || k == 3) {
+		if (k == 4 || k == 5 || k == 3 || k == 6) {
 			abi_serve_host_req(k, pb, total - 1);
 			continue;
 		}
