@@ -750,7 +750,7 @@ printf '    ok\n'
 step "language server"
 QELA="$OUT/s2" python3 tools/lsp-test.py ||
 	fail "the language server fails the scripted conversation"
-QELA="$OUT/s2" python3 tools/color-test.py ||
+QELA="$OUT/s2" python3 tools/diag-test.py ||
 	fail "the coloured diagnostics are not ANSI escapes"
 printf '    ok\n'
 rm -rf "$tmp2"
