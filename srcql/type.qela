@@ -487,12 +487,59 @@ fn can_implicit(n *Node, ty *Type) bool {
 	return true;
 }
 
+// True for a binary integer operation whose operands are both narrower than
+// the machine word: `common()` widens them, so the result is i64 even though
+// nothing in the source mentions it.
+fn is_widening_op(n *Node) bool {
+	return n.kind == ND_ADD || n.kind == ND_SUB || n.kind == ND_MUL || n.kind == ND_DIV ||
+	       n.kind == ND_MOD || n.kind == ND_BITAND || n.kind == ND_BITOR ||
+	       n.kind == ND_BITXOR || n.kind == ND_SHL || n.kind == ND_SHR;
+}
+
+// A side counts as narrow when its own type is, or when it is a cast of a
+// narrow operand: the widening is realised by inserting casts, so by the time
+// a store is checked the operands are i64-typed casts over the narrow values.
+fn narrow_side(n *Node) bool {
+	if (n as i64 == 0 || n.ty as i64 == 0) { return false; }
+	if (is_integer(n.ty) && n.ty.size < 8) { return true; }
+	if (n.kind == ND_CAST && n.lhs as i64 != 0 && n.lhs.ty as i64 != 0 &&
+	    is_integer(n.lhs.ty) && n.lhs.ty.size < 8) {
+		return true;
+	}
+	return false;
+}
+
+// `n * n * n` widens twice: the outer product's left operand is already i64,
+// and it is i64 only because the inner one widened. So the question is
+// whether the expression *contains* such a widening, not whether it ends in
+// one.
+fn arith_widened(n *Node) bool {
+	if (n as i64 == 0) { return false; }
+	if (n.kind == ND_CAST) { return arith_widened(n.lhs); }
+	if (n.ty as i64 == 0 || n.ty as i64 != ty_i64 as i64) { return false; }
+	if (!is_widening_op(n)) { return false; }
+	var l *Node = n.lhs;
+	var r *Node = n.rhs;
+	if (l as i64 == 0 || r as i64 == 0) { return false; }
+	if (narrow_side(l) && narrow_side(r)) { return true; }
+	if (arith_widened(l)) { return true; }
+	return arith_widened(r);
+}
+
 fn cast_to(n *Node, ty *Type) *Node {
 	if (n.ty as i64 == ty as i64) { return n; }
 	// Poison flows through silently: the real error is already reported.
 	if (n.ty.kind == TY_POISON || ty.kind == TY_POISON) { return n; }
 	if (!can_implicit(n, ty)) {
-		emsg("implicit conversion from '"); emsg_ty(n.ty); emsg("' to '"); emsg_ty(ty); emsg("' requires an explicit cast"); efail(n.pos);
+		emsg("implicit conversion from '"); emsg_ty(n.ty); emsg("' to '"); emsg_ty(ty); emsg("' requires an explicit cast");
+		if (arith_widened(n)) {
+			// The value is i64 because the language computes in the machine
+			// word, not because of anything written at the call site: say so,
+			// or the message reads as if a literal were at fault.
+			error_hint_at(n.pos, buf_str(&errbuf),
+			              "both operands are narrower than 8 bytes, so this result is i64: write `( ... ) as <type>` around it");
+		}
+		efail(n.pos);
 	}
 	var c *Node = node_alloc();
 	c.kind = ND_CAST;
