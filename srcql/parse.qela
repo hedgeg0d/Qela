@@ -357,6 +357,7 @@ var in_comp_clause bool = false;
 // must not consume it as an assignment operator (tok_eq compares text).
 var in_interp bool = false;
 
+
 // The parser recurses on nested parentheses, unary prefixes, assignments
 // and blocks; each recursion is counted here and capped, so a hostile
 // input overflows the C stack instead of the compiler's heap.
@@ -1888,7 +1889,18 @@ fn parse_cast(t **Token) *Node {
 		var p i64 = (*t).pos;
 		var c *Node = new_node(ND_CAST, p);
 		c.lhs = n;
-		c.ty = parse_type(t);
+		if (tok_consume(t, "_")) {
+			// The destination is not known here (a statement-level call is
+			// parsed more than once, and the re-parse has no context), so the
+			// node carries a marker instead: cast_to fills the type in from
+			// the context that asks for the value, and a marker that survives
+			// to code generation is an error there (codegen and the
+			// interpreter both check).
+			c.ty = null;
+			c.val = 2;
+		} else {
+			c.ty = parse_type(t);
+		}
 		n = c;
 	}
 	return n;
@@ -3341,7 +3353,9 @@ fn parse_stmt_inner(t **Token) *Node {
 	if (tok_consume(t, "return")) {
 		if (in_defer_body) { error_at(p, "cannot return from inside a defer body"); }
 		var n *Node = new_node(ND_RET, p);
-		if (!tok_eq(*t, ";")) { n.lhs = parse_expr(t); }
+		if (!tok_eq(*t, ";")) {
+			n.lhs = parse_expr(t);
+		}
 		tok_expect(t, ";");
 		return n;
 	}
