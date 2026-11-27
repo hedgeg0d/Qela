@@ -1,0 +1,25 @@
+// expect-exit: 0
+// expect-out: side effect
+// expect-out: s=49 r=42
+// stage1-only
+// A dynamic function that calls a foreign function cannot be jitted: the
+// isolated reparse cannot see write_str, poisons that call to a literal, and
+// would emit a body with the call -- and its side effect -- silently gone
+// while the arithmetic still computed. The reparse has to report its errors
+// so the host falls back to the interpreter, where the write happens. The
+// self-contained function in the same run is the control: it still jits and
+// still returns 49.
+import "std/io.qela";
+fn dynamic pure_square(x i64) i64 {
+	return x * x;
+}
+fn dynamic notpure(x i64) i64 {
+	write_str(STDOUT, "side effect\n");
+	return x + 1;
+}
+fn main() int {
+	var s i64 = pure_square(7);
+	var r i64 = notpure(41);
+	write_str(STDOUT, "s=${s} r=${r}\n");
+	return 0;
+}
