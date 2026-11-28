@@ -980,18 +980,27 @@ undefined symbol for the linker to resolve; `extern fn f(a i64) i64 { ... }`
 (with a body) exports `f` for other objects to call. Data crosses too:
 `extern var x i64;` imports a C global, `extern var x i64 = K;` exports one
 (the type is mandatory, `extern let` is an error, and other globals are local
-to the object). `str` crosses the ABI
-as a `{ptr, len}` pair — a two-word C struct; aggregates over 16 bytes pass
-by pointer as always, and struct layout is natural order, so a Qela `struct`
-and the matching C `struct` alias each other. A **scalar float** argument or
+to the object). Match C widths explicitly: Qela `int` is 64-bit, so C `int`
+is `i32`; C `long` is `i64` on supported LP64 targets; C `char*` is `*i8`.
+`str` crosses as a `{ptr, len}` pair, **not** as C `char*`. `cstr(s)` makes
+an arena-owned, NUL-terminated copy; `str_from_cstr(p)` wraps a C string
+without copying. The `cstr` copy remains alive until the arena is rewound
+or program exit. Use `cstr_into(s, dst, capacity)` for allocation-free C
+arguments: it checks capacity (including NUL), rejects embedded NUL bytes,
+and leaves the buffer untouched on rejection. Storage must remain valid for
+as long as C retains its pointer. `str_from_cstr` borrows C-owned memory:
+the pointer must be non-null and readable through its terminating NUL. Struct
+layout follows the target's natural C layout. Aggregate passing is also
+target-specific: x86-64 passes aggregates wider than 16 bytes in the outgoing
+stack area, while ARM64 and RISC-V pass that class indirectly. A **scalar float** argument or
 result crosses in the SysV XMM register, not the GPR it lives in at home: the
 compiler marshals float arguments into `xmm0` and up at the call site,
 re-stages incoming floats out of XMM on the callee side, and returns a float
-result through `xmm0`. So `extern fn GetFrameTime() f32;` and `extern fn
-DrawCircle(x int, y int, r f32, c Color) void;` call raylib directly. An
-extern function whose parameters would spill to the stack is rejected (the
-marshalling is register-only). See [`qela -c`](#qela--c--c-interop) for the
-complete object-file workflow.
+result through `xmm0` on x86-64; other targets use their native C ABI. Scalar
+arguments may spill to the stack when required by that ABI. Qela rejects
+some aggregate shapes it cannot represent (notably certain all-float
+aggregates spilling past FP registers), rather than silently corrupting the
+call. See [`qela -c`](#qela--c--c-interop) for the object-file workflow.
 
 ## 10. Pointers and memory
 
@@ -1548,6 +1557,7 @@ str_slice(s str, lo i64, hi i64) str
 str_find(s str, c u8) i64       // index or -1
 str_dup(s str) str              // arena copy, NUL-terminated
 cstr(s str) *u8                 // NUL-terminated copy, for syscalls
+cstr_into(s str, dst *u8, capacity i64) bool // caller-owned buffer; capacity includes NUL
 ```
 
 ### buf — growable byte buffer
@@ -2059,19 +2069,35 @@ gcc -o app app.o impl.c                # Qela main calling C
 
 (The `.o` is PIE-safe, so plain `gcc` works; `-no-pie` still links too.)
 No startup stub is emitted and no `main` is required, so a Qela file of
-`extern fn` bodies compiles to a plain library. A call to a bodyless extern
-is a compile error in ordinary mode — externs exist only for `-c`.
+`extern fn` bodies compiles to a plain library. In ordinary mode, pass the C
+object or archive to resolve bodyless externs; a missing symbol is an error:
 
-The ABI is SysV, no marshalling: `i64` is `long long`, `bool` is `_Bool`,
-`f64` is `double`, and `str` is a `{ptr, len}` two-word C struct. A Qela
-`struct`'s layout is natural field order — the same as C's — so structs
-alias across the boundary; aggregates over 16 bytes pass by pointer.
+```sh
+gcc -c -fno-pic -fno-stack-protector impl.c -o impl.o
+qela app.qela impl.o -o app
+```
+
+The ABI is the target's native C ABI (SysV AMD64, AAPCS64, or RISC-V LP64D).
+Use exact C widths: `i32` for ordinary C `int`, `i64` for `long` on these
+LP64 targets, `bool` for `_Bool`, `f32` for `float`, and `f64` for `double`.
+Qela's `int` is 64-bit. `str` is a `{ptr, len}` pair, not `char*`;
+`cstr(s)` returns an arena-owned NUL-terminated copy and `str_from_cstr(p)`
+wraps a NUL-terminated pointer without copying. Ordinary C struct layout
+follows target layout; aggregate argument/return classification is
+target-specific, and unsupported FP aggregate cases are rejected.
 `extern var` imports (`extern var x i64;`) and exports (`extern var x i64
 = K;`) globals. Calls into a shared library go through the PLT; data that
 resolves from a `.so` uses a COPY relocation (the executable's copy wins —
 the library's own references to it still point at its own copy, so shared
 mutable data can diverge). Bounds checks and `assert` work in object mode
 too.
+
+The built-in static linker accepts matching-target ELF `.o` files and `.a`
+archives on all three targets. On x86-64 it supports GOTPCREL relocations in
+PIC objects for fixed-base images; `--pie` and `-c` with linked objects are
+still unsupported. The ARM64/RISC-V linker handles its documented relocation
+subset; use `-fno-pic` if a C toolchain emits an unsupported relocation. Use
+the system linker for shared libraries.
 
 ### C struct pointers
 

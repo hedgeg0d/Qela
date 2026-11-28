@@ -56,9 +56,23 @@ fn str_dup(s str) str {
 	return r;
 }
 
-/// Returns a NUL-terminated copy, for paths handed to a syscall.
+/// Returns an arena-owned NUL-terminated copy for C APIs/syscalls; embedded NULs remain.
 fn cstr(s str) *u8 {
 	return str_dup(s).ptr;
+}
+
+/// Copies s plus NUL into caller storage; rejects insufficient capacity or embedded NULs without writing.
+fn cstr_into(s str, dst *u8, capacity i64) bool {
+	if (dst as i64 == 0 || s.len < 0 || s.len >= capacity) { return false; }
+	var i i64 = 0;
+	while (i < s.len) {
+		if (s.ptr[i] == 0) { return false; }
+		i = i + 1;
+	}
+	i = 0;
+	while (i < s.len) { dst[i] = s.ptr[i]; i = i + 1; }
+	dst[s.len] = 0;
+	return true;
 }
 
 /// Builds a one-byte string from a character.

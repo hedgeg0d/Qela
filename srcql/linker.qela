@@ -7,12 +7,15 @@ import "../std/io.qela";
 // A static linker for relocatable objects: `qela main.qela foo.o bar.a`
 // merges the objects' .text/.rodata/.data/.bss into the image and resolves
 // their relocations against each other and against Qela's own symbols, so
-// an extern-based FFI build needs no external ld. x86_64 only for now.
+// an extern-based FFI build needs no external ld. Supports x86_64, arm64,
+// and riscv64 relocation subsets used by the FFI gate.
 //
 // The objects land after Qela's own code and data, so every Qela-internal
-// rel32/abs32 patch stays untouched. Only R_X86_64_64/PC32/PLT32/32/32S
-// are handled; a GOTPCREL (a PIC build) is an error -- compile the C side
-// with -fno-pic.
+// rel32/abs32 patch stays untouched. x86_64 handles R_X86_64_64/PC32/PLT32/
+// 32/32S and GOTPCREL; arm64/riscv64 use the target patchers below. GOT slots
+// are absolute, so PIC C
+// objects can be linked into fixed-base images; dynamic/PIE linking remains
+// outside this linker's scope.
 
 let LK_CODE   = 0;
 let LK_RODATA = 1;
@@ -45,6 +48,8 @@ struct LnkRel {
 	symabv  i64,
 	symname str,
 	addend  i64,
+	is_got  bool,
+	got_off i64,
 }
 
 var lnk_syms *LnkSym;
@@ -118,7 +123,6 @@ fn lnk_resolve(name str) i64 {
 	if (f as i64 != 0) { return eff_base() + lnk_hdr() + f.addr; }
 	var g *Var = find_global(name);
 	if (g as i64 != 0) {
-		eprint(" dbase="); fmt_i64_to_fd(2, lnk_dbase()); eprint("\n");
 		return lnk_dbase() + g.data_off;
 	}
 	return -1;
@@ -152,7 +156,9 @@ fn lnk_wr32(p *u8, off i64, v i64) {
 
 fn lnk_align(v *i64, al i64) {
 	if (al < 1) { al = 1; }
-	if (al > 16) { al = 16; }
+	if (al > 16 || (al & (al - 1)) != 0) {
+		error_at(0, "linked section alignment must be a power of two no larger than 16");
+	}
 	var m i64 = al - 1;
 	*v = (*v + m) & ~m;
 }
@@ -256,23 +262,23 @@ fn lnk_object(data *u8, len i64, _path str) {
 		if (kind == LK_CODE) {
 			off = code.n;
 			lnk_align(&off, salign);
+			while (code.n < off) { buf_u8(&code, 0); }
 			lnk_append(&code, data, soff, ssize);
 		} else if (kind == LK_RODATA) {
 			off = rodata.n;
 			lnk_align(&off, salign);
+			while (rodata.n < off) { buf_u8(&rodata, 0); }
 			lnk_append(&rodata, data, soff, ssize);
 		} else if (kind == LK_DATA) {
 			off = gdata.n;
 			lnk_align(&off, salign);
+			while (gdata.n < off) { buf_u8(&gdata, 0); }
 			lnk_append(&gdata, data, soff, ssize);
 		} else {
-			// bss_size is the distance from the pre-link data start to
-			// the bss end; foreign .data appended above moved the bss
-			// region forward with it.
-			var abs i64 = gdata.n + bss_size;
-			lnk_align(&abs, salign);
-			bss_size = (abs + ssize) - lnk_gdata0;
-			off = abs - lnk_gdata0;
+			// BSS symbols are relative to the final initialized-data end.
+			off = bss_size;
+			lnk_align(&off, salign);
+			bss_size = off + ssize;
 		}
 		local_kind[nlocal] = si;
 		local[nlocal].kind = kind;
@@ -384,6 +390,8 @@ fn lnk_object(data *u8, len i64, _path str) {
 			if (rsym < symtab_n) {
 				var r *LnkRel = arena_alloc(sizeof(LnkRel), 8) as *LnkRel;
 				r.kind = rtype;
+				r.is_got = opt_target == TARGET_X86_64 &&
+				           (rtype == 9 || rtype == 41 || rtype == 42);
 				r.sec = rsect.kind;
 				r.secoff = rsect.off + lnk_u64(data, e);
 				r.symname = sym_name[rsym];
@@ -458,6 +466,32 @@ fn link_load(hdr i64) {
 			lnk_object(raw.ptr, raw.len, p);
 		}
 		i = i + 1;
+	}
+	// The final image has a fixed base, so each x86 GOT reference can use a
+	// private, statically initialized pointer slot. Allocate after all object
+	// data: this leaves symbol offsets and previously collected BSS offsets
+	// unchanged, and BSS is placed after the enlarged initialized-data segment.
+	var r *LnkRel = lnk_rels;
+	while (r as i64 != 0) {
+		if (r.is_got) {
+			r.got_off = gdata.n;
+			buf_u64(&gdata, 0);
+		}
+		r = r.next;
+	}
+	// Keep original Qela BSS after all foreign data and GOT slots.
+	while ((gdata.n & 15) != 0) { buf_u8(&gdata, 0); }
+	while ((code.n & 15) != 0) { buf_u8(&code, 0); }
+	while ((rodata.n & 15) != 0) { buf_u8(&rodata, 0); }
+	var v *Var = gen_unit.globals;
+	while (v as i64 != 0) {
+		if (!v.is_tls && v.init == 0 && !(v.extern && !v.has_init)) {
+			v.data_off = v.data_off + gdata.n - lnk_gdata0;
+		}
+		v = v.next;
+	}
+	if (tls_bss_reserve > 0) {
+		tls_template_off = tls_template_off + gdata.n - lnk_gdata0;
 	}
 }
 
@@ -547,6 +581,29 @@ fn lnk_patch_riscv(r *LnkRel, s i64, p i64) {
 	}
 	var buf *u8 = lnk_buf_of(r.sec);
 	if (buf as i64 == 0) { error_at(0, "relocation into a bss section"); }
+	if (rtype == 44 || rtype == 45) {
+		// Compressed RVC_BRANCH / RVC_JUMP (16-bit instructions).
+		var delta i64 = s - p;
+		var half i64 = lnk_u16(buf, r.secoff) as i64;
+		if ((delta & 1) != 0 || (rtype == 44 && (delta < -256 || delta > 254)) ||
+		    (rtype == 45 && (delta < -2048 || delta > 2046))) {
+			error_at(0, "compressed RISC-V relocation is out of range");
+		}
+		if (rtype == 44) {
+			half = (half & 0xe383) | (((delta >> 8) & 1) << 12) |
+			       (((delta >> 3) & 3) << 10) | (((delta >> 6) & 3) << 5) |
+			       (((delta >> 1) & 3) << 3) | (((delta >> 5) & 1) << 2);
+		} else {
+			half = (half & 0xe003) | (((delta >> 11) & 1) << 12) |
+			       (((delta >> 4) & 1) << 11) | (((delta >> 8) & 3) << 9) |
+			       (((delta >> 10) & 1) << 8) | (((delta >> 6) & 1) << 7) |
+			       (((delta >> 7) & 1) << 6) | (((delta >> 1) & 7) << 3) |
+			       (((delta >> 5) & 1) << 2);
+		}
+		buf[r.secoff] = (half & 255) as u8;
+		buf[r.secoff + 1] = ((half >> 8) & 255) as u8;
+		return;
+	}
 	var w i64 = lnk_rd32(buf, r.secoff);
 	if (rtype == 16) {
 		// B-type branch, 13-bit signed delta in units of 2.
@@ -603,7 +660,7 @@ fn lnk_bad_reloc(rtype int) {
 	var eb Buf;
 	fmt_str(&eb, "unsupported relocation type ");
 	fmt_i64(&eb, rtype as i64);
-	fmt_str(&eb, " in a linked object (compile the C side with -fno-pic)");
+	fmt_str(&eb, " in a linked object (see C interop relocation limits)");
 	error_at(0, buf_str(&eb));
 }
 
@@ -623,6 +680,16 @@ fn link_apply(hdr i64, _dbase i64) {
 				fmt_str(&eb, "' in a linked object");
 				error_at(0, buf_str(&eb));
 			}
+		}
+		if (r.is_got) {
+			// GOTPCREL's addend is the displacement-field bias (-4), not
+			// part of the pointer stored in the GOT slot.
+			lnk_patch_abs(LK_DATA, r.got_off, s);
+			lnk_patch32(r.sec, r.secoff,
+			            lnk_sym_vaddr(LK_DATA, r.got_off) + r.addend -
+			            lnk_sym_vaddr(r.sec, r.secoff));
+			r = r.next;
+			continue;
 		}
 		s = s + r.addend;
 		var p i64 = lnk_sym_vaddr(r.sec, r.secoff);
